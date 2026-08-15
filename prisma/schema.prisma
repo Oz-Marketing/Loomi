@@ -253,6 +253,11 @@ model Account {
   clientAgreements         ClientAgreement[]
   budgetLinesBilled        BudgetLine[]                 @relation("BudgetLineBilled")
   budgetLinesSpend         BudgetLine[]                 @relation("BudgetLineSpend")
+  gbpConnection            GbpConnection?
+  callEvents               CallEvent[]
+  reviews                  ReviewEvent[]
+  mailerCampaigns          MailerCampaign[]
+  billboards               Billboard[]
 
   @@index([accountRepId])
   @@index([parentAccountKey])
@@ -3443,4 +3448,269 @@ model BudgetLineEvent {
   @@index([lineId, createdAt])
   @@index([groupId])
   @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Google Business Profile connection — one per account.
+//
+// THE ONLY PER-ACCOUNT OAUTH IN LOOMI. Every other Google integration here
+// (Google Ads, GA4) authenticates as the agency: one refresh token or service
+// account in env, used for every dealer. Business Profile can't work that way —
+// a location's insights are readable only by a Google identity that manages
+// that listing, and that identity is the dealer's, not ours. So each account
+// carries its own grant.
+//
+// Consequences worth knowing before touching this:
+//   - The token belongs to a PERSON at the dealership. If they leave, or revoke
+//     access in their Google account, this connection dies and the report has to
+//     prompt for a reconnect. That is normal, not a bug.
+//   - `refreshToken` is encrypted at rest with the same AES-256-GCM helper as
+//     CrmDestination.accessToken, and must never leave the server.
+//   - Connecting is a STAFF action (MANAGEMENT_ROLES); reading the report is
+//     client-visible. See src/lib/integrations/gbp.ts.
+model GbpConnection {
+  id         String  @id @default(cuid())
+  accountKey String  @unique
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// AES-256-GCM ciphertext (iv:authTag:ciphertext). NEVER serialize this.
+  refreshToken   String
+  /// Which Google identity granted access — shown to staff so they know who to
+  /// chase when the grant dies.
+  connectedEmail String?
+
+  /// "locations/12345678901234567890". Null until someone picks a location:
+  /// the OAuth grant can cover several listings, so the connection exists
+  /// before the choice does.
+  locationId      String?
+  locationName    String?
+  locationAddress String?
+
+  connectedByUserId String?
+
+  /// Last failure talking to Google, so the UI can distinguish "never worked"
+  /// from "worked until Tuesday" without digging through logs.
+  lastError   String?
+  lastErrorAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────
+// Tracked phone call — one row per call, pushed by the Oz Reports bridge
+// (`/loomi/pushcalls`) from its `calls` table.
+//
+// WHAT IS DELIBERATELY NOT HERE: caller name, caller phone number, and the
+// call-recording URL. Oz Reports stores all three; none of them is needed to
+// report call volume, answer rate, or the tracker/city/hour breakdowns, and
+// copying a caller's number and a recording of their conversation into a
+// second system is not something a reporting feature should do on its own
+// initiative. The city/state/ZIP kept below are what the geographic
+// breakdowns need and are already coarse.
+//
+// If a future feature genuinely needs the caller's number — the BDC call list
+// in Marketing Lists is the obvious candidate — that is a deliberate decision
+// to widen this model, with its own retention question, not something to slip
+// in because the column exists upstream.
+model CallEvent {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Stable id from the call tracker ("ozreports:calls:<id>"), so a re-push
+  /// updates rather than duplicating and the Sunday sweep stays safe to re-run.
+  idempotencyKey String @unique
+
+  occurredAt DateTime
+  /// The tracker's own status string, lowercased at ingest: "answered",
+  /// "missed", "abandoned", … Not an enum — a new status from the vendor must
+  /// show up in the report as itself, not crash the ingest or vanish.
+  status     String
+
+  /// Talk time in seconds. Null when the tracker didn't report one; only
+  /// answered calls have a meaningful duration.
+  durationSeconds Int?
+
+  /// The tracking campaign the number belongs to, e.g. "Spring Service".
+  trackerName String?
+
+  callerCity  String?
+  callerState String?
+  callerZip   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, occurredAt])
+  @@index([accountKey, status])
+  @@index([accountKey, trackerName])
+}
+
+// ─────────────────────────────────────────────────────
+// A single published review, pushed by the Oz Reports bridge
+// (`/loomi/pushreviews`) from the reputation database's `google_reviews`.
+//
+// WHY THIS EXISTS ALONGSIDE THE LIVE PLACES CALL. The Reputation report
+// already reads Google Places live, which gives the CURRENT rating and the
+// handful of reviews Google chooses to return. Places will not give you
+// history: it has no "reviews in March", no star distribution over a range,
+// and no idea whether anyone replied. Those three are the whole point of this
+// table, and none of them can be backfilled later from the live API — a review
+// unrecorded today is gone.
+//
+// So the two sources answer different questions and both stay: live Places for
+// "what does our listing say right now", this for "what happened over time".
+model ReviewEvent {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// "ozrep:google_reviews:<id>" — stable, so a re-push updates a review whose
+  /// reply status changed rather than duplicating it.
+  idempotencyKey String @unique
+
+  /// When the review was published, not when we ingested it.
+  publishedAt DateTime
+  /// 1–5. Validated at ingest; a review outside that range is skipped rather
+  /// than silently dragging the average.
+  stars       Int
+
+  /// Whether the store has replied. The reply RATE is the metric this table
+  /// exists for that Places cannot answer at all.
+  replied Boolean @default(false)
+
+  /// Review body. Nullable — a star-only review with no text is common and is
+  /// still a review.
+  text       String? @db.Text
+  /// Display name as published by Google. No email, no profile URL.
+  authorName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, publishedAt])
+  @@index([accountKey, stars])
+  @@index([accountKey, replied])
+}
+
+// ─────────────────────────────────────────────────────
+// Direct-mail campaign matchback RESULT — one row per campaign per rooftop,
+// pushed by the Oz Reports bridge (`/loomi/pushmailer`).
+//
+// ── WHY THIS STORES RESULTS, NOT SOURCE ROWS ────────────────────────────────
+// Every other bridge feed ships raw rows and lets Loomi do the arithmetic. This
+// one cannot, for a reason that is structural rather than convenient: the
+// matchback joins mailed recipients to repair orders on `custno`, the DMS
+// customer number — and Loomi has no custno. `ContactEvent` keys on
+// `contactId`, resolved by email/phone at ingest; the mail file and the RO
+// share only the DMS's own identifier, which lives on the Oz Reports host and
+// nowhere else.
+//
+// Pushing raw recipients instead would ship the name and address of everyone
+// mailed — tens of thousands of people per campaign — AND still not work,
+// because the join key would be missing on arrival. So the match runs where
+// both databases and the key are, and only its result crosses.
+//
+// The consequence to be honest about: this table cannot be recomputed from
+// Loomi's own data. If the matchback logic changes, the fix ships in PHP and
+// the campaigns are re-pushed.
+model MailerCampaign {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// "ozpurls:campaign:<id>:<dealerMatchback>" — a campaign spans rooftops, so
+  /// the dealer code is part of the identity.
+  idempotencyKey String @unique
+
+  campaignName String
+  /// "LS" (Lost Souls) | "FLF" | whatever the mail vendor calls it.
+  mailerType   String?
+  /// Earliest and latest in-home date across the mailed file.
+  mailedFrom   DateTime
+  mailedTo     DateTime
+
+  /// Pieces mailed to this rooftop's customers.
+  marketed      Int
+  /// Recipients who visited their personal URL.
+  engaged       Int
+  /// LS campaigns only; null elsewhere so "no offers" and "not applicable"
+  /// stay distinguishable.
+  offerRequests Int?
+
+  /// Distinct recipients with at least one matched repair order.
+  matchedCustomers Int
+  /// Matched repair orders — higher than matchedCustomers when someone came
+  /// back twice.
+  matchedRos       Int
+  /// Matched ROs where the serviced VIN equals the mailed VIN.
+  directMatches    Int
+  /// Matched ROs for the same customer on a different vehicle.
+  indirectMatches  Int
+
+  /// Attributed repair-order revenue, split the way the service feed splits it.
+  customerPay Decimal @db.Decimal(12, 2)
+  warrantyPay Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, mailedFrom])
+}
+
+// ─────────────────────────────────────────────────────
+// Out-of-home board. NATIVE Loomi data, not a bridge feed.
+//
+// Oz Dealer Tools owned these in its own `billboards` table, which no bridge
+// touches — and since ODT is being retired, pointing a sync at a system that
+// is going away would be building a dependency with an expiry date. So these
+// move once and Loomi owns them: full CRUD lives here, and the ODT rows come
+// across through a one-time import (scripts/import-billboards.ts).
+//
+// SHARING. ODT had an `is_group_level` flag: a board owned by a group is
+// visible to every org beneath it. Loomi already has that concept — the
+// account hierarchy — so `sharedWithChildren` means the same thing without a
+// new sharing system. A board on a group account with the flag set is visible
+// to its descendants; without it, only to the account that owns it.
+model Billboard {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Visible to accounts beneath this one in the hierarchy. Only meaningful on
+  /// a group account — harmless and inert on a leaf.
+  sharedWithChildren Boolean @default(false)
+
+  providerName    String
+  billboardNumber String
+  artworkUrl      String?
+  facingDirection String?
+  avgDailyTraffic Int?
+
+  pricePerPeriod Decimal? @db.Decimal(10, 2)
+  numPeriods     Int      @default(1)
+  /// "4-week", "monthly", … free text, as in ODT.
+  periodType     String   @default("4-week")
+
+  expirationDate DateTime? @db.Date
+  renewedAt      DateTime?
+
+  latitude  Float
+  longitude Float
+
+  /// active | expired | archived. ODT also had `deleted`; Loomi deletes rows
+  /// instead of tombstoning them, so that state has no equivalent here.
+  status String  @default("active")
+  notes  String? @db.Text
+
+  /// Set when imported from ODT ("odt:billboards:<id>"), so the one-time
+  /// import is safe to re-run. Null for boards created in Loomi.
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, status])
+  @@index([accountKey, expirationDate])
 }

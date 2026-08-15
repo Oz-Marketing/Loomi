@@ -20,6 +20,12 @@ import {
   DocumentTextIcon,
   StarIcon,
   ChatBubbleLeftRightIcon,
+  TruckIcon,
+  SparklesIcon,
+  ArchiveBoxIcon,
+  TagIcon,
+  WrenchScrewdriverIcon,
+  PhoneIcon,
 } from '@heroicons/react/24/outline';
 import { usd, num, pctText } from '../ads/_components/shared';
 import type { RollupConfig } from './org-report-rollup';
@@ -81,18 +87,37 @@ export const GOOGLE_ROLLUP: RollupConfig = {
   ],
 };
 
-/** Email (GoHighLevel) — /api/reporting/email → stats (total_* + rates). */
-export const EMAIL_ROLLUP: RollupConfig = {
-  label: 'Email',
-  route: '/api/reporting/email',
-  extract: (d) => pick(d, 'stats'),
+/**
+ * Email & Text Blasts — /api/reporting/blasts.
+ *
+ * Repointed from the old `/api/reporting/email` route, which carried ONLY the
+ * previous provider's sends. Left as it was, the Executive Dashboard would have
+ * quietly reported an account's pre-Loomi history as its whole email programme
+ * and shown zero for a rooftop that has sent exclusively through Loomi.
+ *
+ * The extract splices text SEND VOLUME onto the merged email totals. Text
+ * carries no opens or clicks — the events don't exist — so the engagement rows
+ * below stay email-only rather than acquiring a denominator that grows every
+ * time someone sends a text. See lib/reporting/blasts.ts.
+ */
+export const BLASTS_ROLLUP: RollupConfig = {
+  label: 'Email & text',
+  route: '/api/reporting/blasts',
+  supportsDates: true,
+  extract: (d) => {
+    const email = pick(d, 'email');
+    if (!email) return null;
+    const text = pick(d, 'text');
+    return { ...email, textSent: text?.sent ?? 0 };
+  },
   metrics: [
-    { key: 'sent', label: 'Sent', kind: 'sum', field: 'total_sent', format: num, icon: EnvelopeIcon, tone: 'primary' },
-    { key: 'delivered', label: 'Delivered', kind: 'sum', field: 'total_delivered', format: num, icon: InboxArrowDownIcon, tone: 'sky' },
-    { key: 'opened', label: 'Opened', kind: 'sum', field: 'total_opened', format: num, icon: EyeIcon, tone: 'violet' },
-    { key: 'clicked', label: 'Clicked', kind: 'sum', field: 'total_clicked', format: num, icon: CursorArrowRaysIcon, tone: 'amber' },
-    { key: 'openRate', label: 'Open rate', kind: 'rate', numerator: 'total_opened', denominator: 'total_delivered', scale: 100, format: pctText, icon: ChartBarIcon, tone: 'emerald' },
-    { key: 'clickRate', label: 'Click rate', kind: 'rate', numerator: 'total_clicked', denominator: 'total_delivered', scale: 100, format: pctText, icon: BoltIcon, tone: 'zinc' },
+    { key: 'sent', label: 'Emails sent', kind: 'sum', field: 'sent', format: num, icon: EnvelopeIcon, tone: 'primary' },
+    { key: 'delivered', label: 'Delivered', kind: 'sum', field: 'delivered', format: num, icon: InboxArrowDownIcon, tone: 'sky' },
+    { key: 'opened', label: 'Opened', kind: 'sum', field: 'uniqueOpens', format: num, icon: EyeIcon, tone: 'violet' },
+    { key: 'clicked', label: 'Clicked', kind: 'sum', field: 'uniqueClicks', format: num, icon: CursorArrowRaysIcon, tone: 'amber' },
+    { key: 'openRate', label: 'Open rate', kind: 'rate', numerator: 'uniqueOpens', denominator: 'delivered', scale: 100, format: pctText, icon: ChartBarIcon, tone: 'emerald' },
+    { key: 'clickRate', label: 'Click rate', kind: 'rate', numerator: 'uniqueClicks', denominator: 'delivered', scale: 100, format: pctText, icon: BoltIcon, tone: 'zinc' },
+    { key: 'textSent', label: 'Texts sent', kind: 'sum', field: 'textSent', format: num, icon: ChatBubbleLeftRightIcon, tone: 'zinc' },
   ],
 };
 
@@ -136,5 +161,111 @@ export const ADS_ROLLUP_CONFIGS: Record<string, RollupConfig> = {
   meta: META_ROLLUP,
   stackadapt: STACKADAPT_ROLLUP,
   google: GOOGLE_ROLLUP,
-  email: EMAIL_ROLLUP,
+  blasts: BLASTS_ROLLUP,
 };
+
+// ── Dealer-data roll-ups (Executive Dashboard) ──
+//
+// The six configs above cover the platform reports. These cover the reports
+// built on the Oz Reports bridge, so the Executive Dashboard can roll up the
+// whole book of business rather than just the ad channels.
+//
+// `extract` points at whatever each route nests its account totals under —
+// these were written against the actual response shapes, not guessed. Rates are
+// always `kind:'rate'` so the roll-up recomputes them from summed numerator and
+// denominator: averaging per-rooftop rates would let a store with four repair
+// orders swing the group's answer rate as hard as one with four hundred.
+
+/** Sales Trend — /api/reporting/sales-trend → summary. */
+export const SALES_ROLLUP: RollupConfig = {
+  label: 'Sales',
+  route: '/api/reporting/sales-trend',
+  supportsDates: true,
+  extract: (d) => pick(d, 'summary'),
+  metrics: [
+    { key: 'totalUnits', label: 'Units', kind: 'sum', field: 'totalUnits', format: num, icon: TruckIcon, tone: 'primary' },
+    { key: 'newUnits', label: 'New', kind: 'sum', field: 'newUnits', format: num, icon: SparklesIcon, tone: 'emerald' },
+    { key: 'usedUnits', label: 'Used', kind: 'sum', field: 'usedUnits', format: num, icon: ArchiveBoxIcon, tone: 'sky' },
+    // Transaction revenue, not dealer gross — the bridge doesn't carry gross.
+    { key: 'totalRevenue', label: 'Revenue', kind: 'sum', field: 'totalRevenue', format: usd, icon: CurrencyDollarIcon, tone: 'violet' },
+    { key: 'avgPrice', label: 'Avg per unit', kind: 'rate', numerator: 'totalRevenue', denominator: 'totalUnits', format: usd, icon: TagIcon, tone: 'zinc' },
+  ],
+};
+
+/** Service Trend — /api/reporting/service-trend → summary. */
+export const SERVICE_ROLLUP: RollupConfig = {
+  label: 'Service',
+  route: '/api/reporting/service-trend',
+  supportsDates: true,
+  extract: (d) => pick(d, 'summary'),
+  metrics: [
+    { key: 'roCount', label: 'Repair orders', kind: 'sum', field: 'roCount', format: num, icon: WrenchScrewdriverIcon, tone: 'primary' },
+    { key: 'totalRevenue', label: 'Revenue', kind: 'sum', field: 'totalRevenue', format: usd, icon: CurrencyDollarIcon, tone: 'violet' },
+    { key: 'customerPay', label: 'Customer pay', kind: 'sum', field: 'customerPay', format: usd, icon: UsersIcon, tone: 'emerald' },
+    { key: 'warrantyPay', label: 'Warranty', kind: 'sum', field: 'warrantyPay', format: usd, icon: CheckBadgeIcon, tone: 'sky' },
+    { key: 'avgRoValue', label: 'Avg per RO', kind: 'rate', numerator: 'totalRevenue', denominator: 'roCount', format: usd, icon: TagIcon, tone: 'zinc' },
+  ],
+};
+
+/** Call Tracking — /api/reporting/call-tracking → summary. */
+export const CALLS_ROLLUP: RollupConfig = {
+  label: 'Call tracking',
+  route: '/api/reporting/call-tracking',
+  supportsDates: true,
+  extract: (d) => pick(d, 'summary'),
+  metrics: [
+    { key: 'calls', label: 'Calls', kind: 'sum', field: 'calls', format: num, icon: PhoneIcon, tone: 'primary' },
+    { key: 'answered', label: 'Answered', kind: 'sum', field: 'answered', format: num, icon: CheckBadgeIcon, tone: 'emerald' },
+    { key: 'missed', label: 'Missed', kind: 'sum', field: 'missed', format: num, icon: BoltIcon, tone: 'amber', lowerIsBetter: true },
+    { key: 'answerRate', label: 'Answer rate', kind: 'rate', numerator: 'answered', denominator: 'calls', scale: 100, format: pctText, icon: ChartBarIcon, tone: 'sky' },
+  ],
+};
+
+/** Direct Mail ROI — /api/reporting/direct-mail → totals. */
+export const DIRECT_MAIL_ROLLUP: RollupConfig = {
+  label: 'Direct mail',
+  route: '/api/reporting/direct-mail',
+  supportsDates: true,
+  extract: (d) => pick(d, 'totals'),
+  metrics: [
+    { key: 'marketed', label: 'Mailed', kind: 'sum', field: 'marketed', format: num, icon: EnvelopeIcon, tone: 'primary' },
+    { key: 'matchedCustomers', label: 'Came in', kind: 'sum', field: 'matchedCustomers', format: num, icon: UsersIcon, tone: 'emerald' },
+    { key: 'matchbackRate', label: 'Matchback', kind: 'rate', numerator: 'matchedCustomers', denominator: 'marketed', scale: 100, format: pctText, icon: ChartBarIcon, tone: 'sky' },
+    { key: 'revenue', label: 'Revenue', kind: 'sum', field: 'revenue', format: usd, icon: CurrencyDollarIcon, tone: 'violet' },
+  ],
+};
+
+/**
+ * Budget — /api/reporting/budget → top-level, so `extract` is identity-ish.
+ *
+ * No dates: the ledger is annual and the route takes a `year`, so it reports
+ * the current one regardless of the range above. The Executive Dashboard says
+ * so rather than letting a narrowed range imply a narrowed budget.
+ */
+export const BUDGET_ROLLUP: RollupConfig = {
+  label: 'Budget',
+  route: '/api/reporting/budget',
+  supportsDates: false,
+  extract: (d) =>
+    d && typeof d === 'object' ? (d as Record<string, number>) : null,
+  metrics: [
+    { key: 'planned', label: 'Planned', kind: 'sum', field: 'planned', format: usd, icon: CurrencyDollarIcon, tone: 'primary' },
+    { key: 'scheduled', label: 'Scheduled', kind: 'sum', field: 'scheduled', format: usd, icon: CheckBadgeIcon, tone: 'emerald' },
+    { key: 'unscheduled', label: 'Unscheduled', kind: 'sum', field: 'unscheduled', format: usd, icon: InboxArrowDownIcon, tone: 'amber' },
+  ],
+};
+
+/** Every roll-up the Executive Dashboard shows, in display order. */
+export const EXECUTIVE_ROLLUPS: RollupConfig[] = [
+  GOOGLE_ROLLUP,
+  META_ROLLUP,
+  STACKADAPT_ROLLUP,
+  BLASTS_ROLLUP,
+  GA4_ROLLUP,
+  REPUTATION_ROLLUP,
+  SALES_ROLLUP,
+  SERVICE_ROLLUP,
+  CALLS_ROLLUP,
+  DIRECT_MAIL_ROLLUP,
+  BUDGET_ROLLUP,
+];

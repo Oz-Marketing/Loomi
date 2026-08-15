@@ -67,6 +67,47 @@ export function resolvePlaceConfig(accountKey: string): PlaceConfig | null {
   }
 }
 
+/**
+ * The inverse of `resolvePlaceConfig`: which account owns a Google place id.
+ *
+ * The review ingest needs this because the reputation database knows a
+ * rooftop's place id but not its Loomi account — see the route's header. The
+ * map is authored account-first, so inverting it can surface a config error
+ * that the forward lookup never would: two accounts pointing at one listing.
+ * That is reported rather than resolved, because picking one would silently
+ * attribute a rooftop's reviews to its neighbour.
+ *
+ * Only the primary `placeId` is matched. A `competitorPlaceId` is a listing we
+ * watch, not one we own, and reviews on it are emphatically not ours.
+ */
+export type PlaceAccountLookup =
+  | { status: 'ok'; accountKey: string }
+  | { status: 'unmapped' }
+  | { status: 'ambiguous'; accountKeys: string[] };
+
+export function resolveAccountByPlaceId(placeId: string): PlaceAccountLookup {
+  const raw = process.env.GOOGLE_PLACES_MAP?.trim();
+  if (!raw) return { status: 'unmapped' };
+
+  let map: Record<string, string | { placeId?: string; competitorPlaceId?: string }>;
+  try {
+    map = JSON.parse(raw);
+  } catch {
+    return { status: 'unmapped' };
+  }
+
+  const wanted = placeId.trim();
+  const matches: string[] = [];
+  for (const [accountKey, v] of Object.entries(map)) {
+    const id = typeof v === 'string' ? v : v?.placeId;
+    if (id && id.trim() === wanted) matches.push(accountKey);
+  }
+
+  if (matches.length === 0) return { status: 'unmapped' };
+  if (matches.length > 1) return { status: 'ambiguous', accountKeys: matches.sort() };
+  return { status: 'ok', accountKey: matches[0] };
+}
+
 export interface PlaceReview {
   author: string;
   rating: number;

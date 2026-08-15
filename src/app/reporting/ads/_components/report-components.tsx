@@ -11,11 +11,11 @@ import type { ReportComponentProps } from './reports-config';
 import { MetaReport } from './meta-report';
 import { StackAdaptReport } from './stackadapt-report';
 import { GoogleReport } from './google-report';
-import { EmailReport } from './email-report';
+import { BlastsReport } from './blasts-report';
 
 export const REPORT_COMPONENTS: Record<string, ComponentType<ReportComponentProps>> = {
   meta: MetaReport,
   stackadapt: StackAdaptReport,
   google: GoogleReport,
-  email: EmailReport,
+  blasts: BlastsReport,
 };

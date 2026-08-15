@@ -14,7 +14,7 @@ import {
   MegaphoneIcon,
   TvIcon,
   MagnifyingGlassIcon,
-  EnvelopeIcon,
+  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
 import type { DateRangeKey } from './shared';
 
@@ -41,7 +41,10 @@ export const DIGITAL_ADS_REPORTS: ReportDef[] = [
   { key: 'meta', label: 'Meta', blurb: 'Facebook & Instagram paid performance', icon: MegaphoneIcon, status: 'live' },
   { key: 'stackadapt', label: 'OTT / CTV', blurb: 'StackAdapt programmatic display & connected TV', icon: TvIcon, status: 'live' },
   { key: 'google', label: 'Google Ads', blurb: 'Search, Display & Performance Max', icon: MagnifyingGlassIcon, status: 'live' },
-  { key: 'email', label: 'Email Campaigns', blurb: 'GoHighLevel email performance', icon: EnvelopeIcon, status: 'live' },
+  // Replaces the old email-only report. Covers Loomi email + text sends and
+  // the email history carried over from the provider used before Loomi — see
+  // lib/reporting/blasts.ts. The previous vendor is never named in the UI.
+  { key: 'blasts', label: 'Email & Text Blasts', blurb: 'Email and text sends, plus flow performance', icon: PaperAirplaneIcon, status: 'live' },
 ];
 
 export function findReport(key: string): ReportDef | undefined {

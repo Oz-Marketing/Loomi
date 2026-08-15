@@ -58,7 +58,11 @@ export function ChangelogPanel({ onClose }: ChangelogPanelProps) {
       const res = await fetch('/api/changelog');
       if (res.ok) {
         const data = await res.json();
-        setEntries(data.entries || []);
+        // Published only. The API hands staff their drafts too, but this is the
+        // "what's new" popover — unannounced work-in-progress belongs on the
+        // full /changelog page where it can be reviewed and published.
+        const all: ChangelogEntry[] = data.entries || [];
+        setEntries(all.filter((e) => e.status === 'published'));
       }
     } catch {
       /* ignore */

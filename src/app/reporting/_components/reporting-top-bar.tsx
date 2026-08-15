@@ -19,6 +19,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
+import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
 import type { UserRole } from '@/lib/roles';
 
@@ -100,14 +101,7 @@ export function ReportingTopBar({
       const res = await fetch('/api/changelog');
       if (!res.ok) return;
       const data = await res.json();
-      const entries = data.entries || [];
-      if (entries.length === 0) {
-        setHasChangelogUnread(false);
-        return;
-      }
-      const latest = entries[0].publishedAt;
-      const seen = localStorage.getItem('loomi-changelog-seen');
-      setHasChangelogUnread(!seen || new Date(latest) > new Date(seen));
+      setHasChangelogUnread(hasUnseenChangelog(data.entries || []));
     } catch {
       /* ignore */
     }

@@ -303,6 +303,22 @@ Nothing below is useful without these. See §10.
 No new UI. This alone upgrades every existing template and is independently
 shippable.
 
+**⚠️ Adding a system field is not enough on its own.** `blankTemplateDoc` stamps
+`fields: SYSTEM_FIELDS` into a doc at CREATION and `adTemplateFromDoc` reads
+`doc.fields` back, so a doc's schema is frozen when it is made — a new system
+field reaches new docs and nothing else. Every one of the 10 templates in the dev
+library was missing all 11 Programme fields, which meant they existed in code,
+passed their tests, and were invisible in the app.
+
+`scripts/backfill-doc-system-fields.ts` appends any missing system field to each
+stored doc (dry-run by default, `--apply` to write, idempotent). It must be run
+**per environment**, like the other Ad Generator seed data.
+
+Creatives carry their own doc snapshot as well, so an existing ad only picks the
+fields up via **Apply update** — the template-sync banner. That is the designed
+path and it works, but it means the fields do not appear retroactively on ads
+already built.
+
 ### Phase 2 — the custom offer flow
 
 **Scope corrected during implementation.** Three of the five items were already

@@ -16,13 +16,13 @@ import {
   Squares2X2Icon,
   UserCircleIcon,
 } from '@heroicons/react/24/outline';
-import { toast } from '@/lib/toast';
 import { useTheme } from '@/contexts/theme-context';
 import { useAccount } from '@/contexts/account-context';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
 import { NotificationsPanel } from '@/components/notifications-panel';
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
+import { openSupportModal } from '@/lib/ui-events';
 import { accountKeyToSlug, subaccountPath } from '@/lib/account-slugs';
 import type { UserRole } from '@/lib/roles';
 
@@ -219,10 +219,7 @@ export function ReportingTopBar({
           )}
         </div>
 
-        <UtilityIconButton
-          title="Report a bug"
-          onClick={() => toast.info('Bug reporting portal coming soon')}
-        >
+        <UtilityIconButton title="Get help / report a bug" onClick={openSupportModal}>
           <BugAntIcon className="h-5 w-5" />
         </UtilityIconButton>
 

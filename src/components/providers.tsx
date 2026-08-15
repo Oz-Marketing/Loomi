@@ -8,6 +8,7 @@ import { LoomiDialogProvider } from '@/contexts/loomi-dialog-context';
 import { SidebarCollapseProvider } from '@/contexts/sidebar-collapse-context';
 import { Toaster } from 'sonner';
 import { AiBubble } from '@/components/ai-bubble';
+import { SupportModal } from '@/components/support-modal';
 
 function ThemedToaster() {
   const { theme } = useTheme();
@@ -55,6 +56,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
               <SidebarCollapseProvider>
                 {children}
                 <ThemedToaster />
+                {/* Deliberately OUTSIDE NonClientOnly: clients get no sidebar
+                    and no utility bar, so the help desk is the one dev-facing
+                    affordance they must still be able to reach. */}
+                <SupportModal />
                 <NonClientOnly>
                   <AiBubble />
                 </NonClientOnly>

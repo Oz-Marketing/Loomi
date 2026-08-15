@@ -18,14 +18,13 @@ import {
   UserCircleIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { toast } from '@/lib/toast';
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useTheme } from '@/contexts/theme-context';
 import { UserAvatar } from '@/components/user-avatar';
 import { DevImpersonate } from '@/components/dev-impersonate';
-import { AI_ASSIST_OPEN_EVENT } from '@/lib/ui-events';
+import { AI_ASSIST_OPEN_EVENT, openSupportModal } from '@/lib/ui-events';
 import { ChangelogPanel } from '@/components/changelog-panel';
 import { NotificationsPanel } from '@/components/notifications-panel';
 
@@ -229,10 +228,7 @@ export function TopUtilityBar() {
           )}
         </div>
 
-        <UtilityIconButton
-          title="Report a Bug"
-          onClick={() => toast.info('Bug reporting portal coming soon')}
-        >
+        <UtilityIconButton title="Get help / report a bug" onClick={openSupportModal}>
           <BugAntIcon className="w-5 h-5" />
         </UtilityIconButton>
 

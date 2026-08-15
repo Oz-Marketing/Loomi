@@ -27,6 +27,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { DevImpersonate } from '@/components/dev-impersonate';
 import { AI_ASSIST_OPEN_EVENT } from '@/lib/ui-events';
 import { ChangelogPanel } from '@/components/changelog-panel';
+import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
 
 function UtilityIconButton({
@@ -71,11 +72,7 @@ export function TopUtilityBar() {
       const res = await fetch('/api/changelog');
       if (!res.ok) return;
       const data = await res.json();
-      const entries = data.entries || [];
-      if (entries.length === 0) { setHasUnread(false); return; }
-      const latest = entries[0].publishedAt;
-      const seen = localStorage.getItem('loomi-changelog-seen');
-      setHasUnread(!seen || new Date(latest) > new Date(seen));
+      setHasUnread(hasUnseenChangelog(data.entries || []));
     } catch { /* ignore */ }
   }, []);
 

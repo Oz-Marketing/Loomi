@@ -1,0 +1,83 @@
+name: Import Changelog from Merged PR
+
+# Files a draft changelog entry whenever a PR with a `## Changelog` block merges
+# into main. Drafts only — the entry is invisible and nobody is notified until
+# somebody presses Publish in Loomi.
+#
+# Deliberately NOT part of deploy.yml: this must not be able to fail a
+# production deploy, and it wants the PR description, which the push event
+# doesn't carry.
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+  # Backfill a PR whose block was added or fixed after the merge.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to (re-)import'
+        required: true
+        type: string
+
+concurrency:
+  group: changelog-import-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  import:
+    # `closed` fires on abandoned PRs too; only a merge ships anything.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: File draft changelog entries
+        env:
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENDPOINT: https://studio.loomilm.com/api/internal/changelog/import
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${INTERNAL_JOB_SECRET}" ]; then
+            echo "::error::INTERNAL_JOB_SECRET secret is not set in this repo"
+            exit 1
+          fi
+
+          # Read the description from the API rather than the event payload, so
+          # the same step serves both triggers and a manual re-run always picks
+          # up the CURRENT body — the point of re-running is usually that the
+          # block was wrong at merge time.
+          gh api "repos/${REPO}/pulls/${PR_NUMBER}" \
+            --jq '{prNumber: .number, prBody: (.body // ""), author: (.user.login // "")}' \
+            > /tmp/changelog-payload.json
+
+          if ! grep -qi '#\+ *changelog' /tmp/changelog-payload.json; then
+            echo "PR #${PR_NUMBER} has no ## Changelog block — nothing to import."
+            exit 0
+          fi
+
+          status=$(curl --silent --show-error --location \
+            --output /tmp/changelog-response.json \
+            --write-out "%{http_code}" \
+            --max-time 60 \
+            -X POST \
+            -H "x-internal-job-secret: ${INTERNAL_JOB_SECRET}" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/changelog-payload.json \
+            "${ENDPOINT}")
+
+          echo "HTTP ${status}"
+          cat /tmp/changelog-response.json || true
+          echo
+
+          if [ "${status}" != "200" ]; then
+            # A missed release note is not worth a red X on the repo, but it
+            # should be visible on the run page.
+            echo "::warning::Changelog import failed with HTTP ${status}"
+            exit 0
+          fi
+
+          echo "::notice::Changelog drafts filed from PR #${PR_NUMBER} — publish them in Loomi."

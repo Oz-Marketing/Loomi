@@ -37,6 +37,7 @@ import { Select, type SelectOption } from '@/components/select';
 import { isFieldVisible, isClientField, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { OfferCard, type VehicleSlot } from '@/components/ad-generator/client-form/offer-card';
+import { OfferSummaryCard } from '@/components/ad-generator/client-form/offer-summary-card';
 import { Field, DisclaimerField, evoxSeedFor } from '@/components/ad-generator/client-form/fields';
 import { VehicleColorPicker } from '@/components/ad-generator/client-form/vehicle-colors';
 import { LaunchModal } from '@/components/ad-generator/launch-modal';
@@ -939,6 +940,18 @@ export default function AdGeneratorPage() {
               </section>
               );
             })}
+
+          {/* Custom-offer handoff — the arithmetic behind the disclaimer, and the
+              board values to carry across. Manual entry only: an applied OEM
+              incentive carries the manufacturer's own fine print verbatim, so
+              there's no derivation of ours for anyone to check. */}
+          {showAutomotiveTools && offerSource === 'manual' && (
+            <OfferSummaryCard
+              data={renderData}
+              disclaimer={renderData.disclaimer ?? ''}
+              missingFields={missing}
+            />
+          )}
         </div>
 
         {/* Preview + export */}

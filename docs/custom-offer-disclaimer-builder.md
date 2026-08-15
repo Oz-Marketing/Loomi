@@ -291,15 +291,39 @@ shippable.
 
 ### Phase 2 — the custom offer flow
 
-- An explicit **offer source** on the creative form: *OEM incentive* (existing
-  MarketCheck path) or *Custom dealer offer* (new). This is the distinction the
-  mock is built around and Loomi currently has no name for.
-- A **Dealer** section (DBA, dealer code) and a **Programme** section (states,
-  invoice total, MAAP allowance).
-- A results summary: composed disclaimer, calculated values with their
-  arithmetic shown, missing required fields, and the Monday copy panel.
-- Co-op eligibility reads from the existing
-  [`AdTemplateCoopApproval`](../prisma/schema.prisma) state, not from a model.
+**Scope corrected during implementation.** Three of the five items were already
+built; only the summary was actually missing.
+
+Already present, no work needed:
+
+- **The explicit offer source.** `offerSource: 'oem' | 'manual'` already exists
+  on the creative page as a tab pair — *OEM Incentive* / *Manual entry*
+  ([offer-card.tsx:99](../src/components/ad-generator/client-form/offer-card.tsx)).
+  The earlier claim that Loomi "has no name for" this distinction was wrong; it
+  has the same name the mock uses.
+- **The Programme section.** Phase 1's fields carry `group: 'Programme'`, and the
+  form renders group sections generically, so the card appeared without any page
+  change.
+- **Missing required fields.** `missingRequired` already surfaces them and blocks
+  export.
+
+Built in this phase:
+
+- **`deriveOfferFigures`** extracted in `disclaimer.ts` and shared, so the summary
+  panel and the disclaimer cannot state different numbers.
+- **`offer-summary.ts`** — the calculated rows and the board handoff, pure and
+  tested.
+- **`OfferSummaryCard`** — shows each derived figure with its arithmetic
+  ("$389 × 36 mo"), then the Monthly Offer board values with per-row and
+  copy-all buttons. Manual entry only: an applied OEM incentive uses the
+  manufacturer's verbatim fine print, so there is no derivation of ours to check.
+
+Deferred to Phase 3:
+
+- **Co-op standing on the creative page.** It lives per TEMPLATE in
+  [`AdTemplateCoopApproval`](../prisma/schema.prisma), needs a fetch this page
+  doesn't currently make, and is deliberately ABSENT from the board handoff
+  rather than guessed — see the note in `boardValues`.
 
 ### Phase 3 — MAAP and caps
 

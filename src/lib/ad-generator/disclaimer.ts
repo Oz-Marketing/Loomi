@@ -85,10 +85,63 @@ function num(v: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Format a Number as whole dollars. */
+function fmtMoney(n: number): string {
+  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+
+/** Format a Number as a whole-number count (miles, months — not money). */
+function fmtCount(n: number): string {
+  return Math.round(n).toLocaleString('en-US');
+}
+
 /** A whole-number count with thousands separators (miles, not money). */
 function count(n: number | null): string | null {
-  if (n == null) return null;
-  return Math.round(n).toLocaleString('en-US');
+  return n == null ? null : fmtCount(n);
+}
+
+/** A figure the disclaimer states but nobody types, carried with its arithmetic. */
+export interface DerivedFigure {
+  /** Human label, for the "show your work" panel. */
+  label: string;
+  /** Formatted value — exactly what the disclaimer carries. */
+  value: string;
+  /** The arithmetic that produced it, e.g. "$389 × 36 mo". */
+  math: string;
+}
+
+/**
+ * Figures computed from the offer rather than entered: the payments total and
+ * the lease's total mileage allowance.
+ *
+ * Exported so the form's summary panel can show the SAME values the disclaimer
+ * carries. Deriving them twice would let the panel and the legal line disagree,
+ * and a panel that disagrees with the disclaimer is worse than no panel — it
+ * invites someone to trust the wrong one.
+ */
+export function deriveOfferFigures(data: AdData): Record<string, DerivedFigure> {
+  const out: Record<string, DerivedFigure> = {};
+  // The term lives under a different key per offer type; resolve it once rather
+  // than letting each derivation guess.
+  const term = num(data.offerType === 'apr' ? data.aprTerm : data.leaseTerm);
+  const payment = num(data.monthlyPayment);
+  if (term != null && payment != null) {
+    out.monthly_payments_total = {
+      label: 'Monthly payments total',
+      value: fmtMoney(payment * term),
+      math: `${fmtMoney(payment)} × ${fmtCount(term)} mo`,
+    };
+  }
+  // Lease only — an APR offer has no mileage allowance to exceed.
+  const perYear = num(data.milesPerYear);
+  if (data.offerType === 'lease' && term != null && perYear != null) {
+    out.total_miles = {
+      label: 'Total lease miles',
+      value: fmtCount(perYear * (term / 12)),
+      math: `${fmtCount(perYear)}/yr × (${fmtCount(term)} ÷ 12)`,
+    };
+  }
+  return out;
 }
 
 /** A rate value with a trailing `%` (idempotent). ODT's disclaimer templates
@@ -135,18 +188,8 @@ export function buildTokenValues(data: AdData): Record<string, string> {
   set('dealer_code', plain(data.dealerCode));
 
   // ── derived ──
-  // The term lives under a different key per offer type, so resolve it once
-  // rather than letting each derivation guess.
-  const term = num(data.offerType === 'apr' ? data.aprTerm : data.leaseTerm);
-  const payment = num(data.monthlyPayment);
-  if (term != null && payment != null) {
-    set('monthly_payments_total', money(String(payment * term)));
-  }
-  // Lease only: an APR offer has no mileage allowance to exceed.
-  const perYear = num(data.milesPerYear);
-  if (data.offerType === 'lease' && term != null && perYear != null) {
-    set('total_miles', count(perYear * (term / 12)));
-  }
+  // One source of truth, shared with the form's summary panel.
+  for (const [slug, fig] of Object.entries(deriveOfferFigures(data))) set(slug, fig.value);
   return v;
 }
 

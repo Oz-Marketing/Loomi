@@ -12,10 +12,12 @@ import { MetaReport } from './meta-report';
 import { StackAdaptReport } from './stackadapt-report';
 import { GoogleReport } from './google-report';
 import { EmailReport } from './email-report';
+import { AdTemplatesReport } from './ad-templates-report';
 
 export const REPORT_COMPONENTS: Record<string, ComponentType<ReportComponentProps>> = {
   meta: MetaReport,
   stackadapt: StackAdaptReport,
   google: GoogleReport,
   email: EmailReport,
+  'ad-templates': AdTemplatesReport,
 };

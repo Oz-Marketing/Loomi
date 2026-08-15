@@ -98,6 +98,7 @@ import {
   clearElementOverride,
   effectiveElement,
   overriddenKeys,
+  refitAllSizes,
   styleVariants,
   type EditScope,
 } from '@/lib/ad-generator/size-scope';
@@ -107,6 +108,7 @@ import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
+import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -154,6 +156,22 @@ const COALESCE_MS = 450; // window in which same-key edits (typing, a slider dra
 // Remembered across sessions: a designer who works one board at a time (or always
 // pushes globally) shouldn't re-pick on every open.
 const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope';
+/**
+ * What the Arrange buttons align/distribute AGAINST.
+ *
+ * Aligning to the selection's own bounding box is the Figma default, but it is
+ * almost never what an ad designer wants: "centre this" means centre it on the
+ * ARTBOARD, not on whatever two blocks happen to be selected. So the artboard is
+ * the default here, with the safe-area margin box as the third option (align to
+ * the guide you already set rather than to the bleed edge).
+ */
+type ArrangeTarget = 'selection' | 'artboard' | 'margins';
+const ARRANGE_TARGET_KEY = 'loomi.adBuilder.arrangeTarget';
+const ARRANGE_TARGETS: { value: ArrangeTarget; label: string; hint: string }[] = [
+  { value: 'artboard', label: 'Artboard', hint: 'Align to the full artboard edges' },
+  { value: 'margins', label: 'Margins', hint: 'Align to the safe-area margin box' },
+  { value: 'selection', label: 'Selection', hint: "Align within the selection's own bounds" },
+];
 /** Human names for the style keys a size can diverge on (for the override note). */
 const STYLE_KEY_LABEL: Record<string, string> = {
   fontFamily: 'font',
@@ -1000,6 +1018,13 @@ export default function AdBuilderPage() {
     setEditScope(next);
     window.localStorage.setItem(EDIT_SCOPE_KEY, next);
   }, []);
+  // What Arrange aligns to (artboard by default — see ArrangeTarget). Remembered
+  // per browser like the edit scope.
+  const [arrangeTarget, setArrangeTarget] = useState<ArrangeTarget>('artboard');
+  useEffect(() => {
+    const stored = window.localStorage.getItem(ARRANGE_TARGET_KEY);
+    if (stored === 'selection' || stored === 'artboard' || stored === 'margins') setArrangeTarget(stored);
+  }, []);
   // Multi-size templates only: with one board there's nothing to broadcast to, so
   // the control would be a switch that does nothing.
   const scopeApplies = doc.sizes.length > 1;
@@ -1666,9 +1691,20 @@ export default function AdBuilderPage() {
   // SYSTEM fields + computed offer tokens + brand data (see buildContentSources).
   // Sourced from the system schema, not doc.fields: designers bind to system
   // fields, they don't author their own.
+  //
+  // The one exception is the SECOND OFFER (`o2_*`). The system schema is the
+  // single-offer field set, so on a dual template — seeded by "Two vehicles" at
+  // creation, or by inserting a dual offer block — Offer 2's questions exist on
+  // the form but had no bindable entry here, leaving the second offer
+  // unreachable. Those keys are system-defined twins (not designer-authored), so
+  // admitting them keeps the fixed-schema rule intact.
+  const bindableFields = useMemo<FieldSpec[]>(() => {
+    const o2 = doc.fields.filter((f) => f.key.startsWith('o2_'));
+    return o2.length ? [...SYSTEM_FIELDS, ...o2] : SYSTEM_FIELDS;
+  }, [doc.fields]);
   const contentSources = useMemo<SearchableSelectOption[]>(
-    () => (selected ? buildContentSources(selected, SYSTEM_FIELDS) : []),
-    [selected],
+    () => (selected ? buildContentSources(selected, bindableFields) : []),
+    [selected, bindableFields],
   );
 
   // Write the selected element's content back to its source: static → the literal,
@@ -2629,6 +2665,70 @@ export default function AdBuilderPage() {
       return { ...prev, safeArea: { ...cur, ...patch } };
     });
   }
+  // ── how many offers this template advertises ──
+  //
+  // Structural, not cosmetic: "two offers" means the doc carries the parallel
+  // `o2_*` question set, which is what the client form, the offer engine
+  // (`assembleOffer(data,'o2_')`), preflight and the ad facets all gate on. It
+  // used to be pickable ONLY when creating an ad from scratch, so a template
+  // could never be made dual after the fact.
+  const offerCount: 1 | 2 = doc.fields.some((f) => f.key.startsWith('o2_')) ? 2 : 1;
+  /**
+   * Elements using the second offer — what would be orphaned by going back to
+   * one offer.
+   *
+   * Two shapes to match, not one: IMAGE elements carry a real `field` binding,
+   * but text/button elements are authored as STATIC `{{token}}` strings (see
+   * setSelectedContent), so a headline showing Offer 2's payment has
+   * `kind: 'static'`. Checking only `field` misses every text element — which is
+   * nearly all of them.
+   */
+  const secondOfferElements = doc.elements.filter((e) => {
+    const b = e.binding;
+    if (b?.kind === 'field') return /^_?o2_/.test(b.key);
+    if (b?.kind === 'static') return /\{\{\s*_?o2_/i.test(b.value);
+    return false;
+  }).length;
+
+  function setOfferCount(next: 1 | 2) {
+    if (next === offerCount) return;
+    if (next === 2) {
+      // Purely additive — merges the missing `o2_*` fields + their defaults.
+      setDoc((prev) => addFieldKit(prev, 'dual'), 'offerCount');
+      toast.success('Offer 2 added — bind elements to it from an element’s "Shows" list');
+      return;
+    }
+    // Back to one: drop the second offer's questions and defaults. Elements
+    // bound to them are LEFT ALONE rather than deleted (deleting a designer's
+    // work on a settings toggle is worse than leaving it blank) — but say so,
+    // and ⌘Z puts it all back.
+    setDoc((prev) => {
+      const fields = prev.fields.filter((f) => !f.key.startsWith('o2_'));
+      const defaults = Object.fromEntries(Object.entries(prev.defaults).filter(([k]) => !k.startsWith('o2_')));
+      return { ...prev, fields, defaults };
+    }, 'offerCount');
+    if (secondOfferElements > 0) {
+      toast.warning(
+        `Offer 2 removed — ${secondOfferElements} element${secondOfferElements === 1 ? '' : 's'} still bound to it will render blank. ⌘Z to undo.`,
+      );
+    } else {
+      toast.success('Back to a single offer');
+    }
+  }
+
+  /**
+   * Push this board's geometry onto every other board, preserving each element's
+   * shape. The repair for templates laid out before `rescaleBox` — their stored
+   * boxes are already distorted and nothing rewrites them until someone does.
+   */
+  function refitOtherSizes() {
+    const others = doc.sizes.length - 1;
+    if (others < 1) return;
+    setDoc((prev) => refitAllSizes(prev, size.id), 'refit');
+    toast.success(`Re-fitted ${others} other size${others === 1 ? '' : 's'} from ${size.label.split(' ')[0]}. ⌘Z to undo.`);
+    setSettingsOpen(false);
+  }
+
   // Publish schedule (lives in the doc JSON). Undefined = live indefinitely.
   function setSchedule(next: { start?: string | null; end?: string | null } | undefined) {
     setDoc((prev) => ({ ...prev, schedule: next }));
@@ -3387,13 +3487,54 @@ export default function AdBuilderPage() {
     );
   }
 
+  /**
+   * `arrangeTarget`, corrected for what the selection can actually support: with
+   * one element there is no selection bounding box, so fall back to the artboard
+   * rather than leaving the buttons inert.
+   */
+  const arrangeTargetEff: ArrangeTarget = arrangeTarget === 'selection' && selectedIds.length < 2 ? 'artboard' : arrangeTarget;
+
+  /** Pick what Arrange aligns to. Choosing Margins with no margin set seeds the
+   *  default and turns the guide on, so the target is visible on the canvas. */
+  function chooseArrangeTarget(next: ArrangeTarget) {
+    setArrangeTarget(next);
+    window.localStorage.setItem(ARRANGE_TARGET_KEY, next);
+    if (next === 'margins') {
+      if (!doc.safeArea) setMargin({ value: 5, unit: 'percent' });
+      setShowSafe(true);
+    }
+  }
+
+  /**
+   * The rectangle Arrange aligns against, in 0–1 fractions of the current size.
+   *
+   * Artboard = the whole board; Margins = inset by the safe-area guide (falling
+   * back to the full board when no margin is set, so the buttons still do
+   * something sane); Selection = the union of the selected boxes (the old
+   * behaviour, which needs 2+ to mean anything).
+   */
+  function arrangeBounds(boxes: { box: DocLayoutBox }[]) {
+    if (arrangeTargetEff !== 'selection') {
+      const sa = arrangeTargetEff === 'margins' ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
+      const mx = sa?.x ?? 0;
+      const my = sa?.y ?? 0;
+      return { left: mx, right: 1 - mx, top: my, bottom: 1 - my };
+    }
+    return {
+      left: Math.min(...boxes.map((b) => b.box.x)),
+      right: Math.max(...boxes.map((b) => b.box.x + b.box.w)),
+      top: Math.min(...boxes.map((b) => b.box.y)),
+      bottom: Math.max(...boxes.map((b) => b.box.y + b.box.h)),
+    };
+  }
+
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
     const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    if (boxes.length < 2) return;
-    const left = Math.min(...boxes.map((b) => b.box.x));
-    const right = Math.max(...boxes.map((b) => b.box.x + b.box.w));
-    const top = Math.min(...boxes.map((b) => b.box.y));
-    const bottom = Math.max(...boxes.map((b) => b.box.y + b.box.h));
+    // Selection-relative needs two boxes to have a bounding box; artboard /
+    // margins are absolute, so a single element is enough (and is the common
+    // case — "centre this headline").
+    if (boxes.length < (arrangeTargetEff === 'selection' ? 2 : 1)) return;
+    const { left, right, top, bottom } = arrangeBounds(boxes);
     const cx = (left + right) / 2;
     const cy = (top + bottom) / 2;
     const patch: Record<string, DocLayoutBox> = {};
@@ -3412,28 +3553,32 @@ export default function AdBuilderPage() {
 
   function distributeSelected(axis: 'h' | 'v') {
     const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    if (boxes.length < 3) return; // equal gaps need 3+
+    // Spreading INSIDE the selection needs 3+ (the outer two define the span and
+    // don't move). Against the artboard / margins the span is given, so two
+    // elements is enough — they land flush against each edge.
+    if (boxes.length < (arrangeTargetEff === 'selection' ? 3 : 2)) return;
+    const bounds = arrangeBounds(boxes);
     const patch: Record<string, DocLayoutBox> = {};
     if (axis === 'h') {
       boxes.sort((a, b) => a.box.x - b.box.x);
-      const start = boxes[0].box.x;
-      const end = boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w;
+      const start = arrangeTargetEff === 'selection' ? boxes[0].box.x : bounds.left;
+      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w : bounds.right;
       const totalW = boxes.reduce((s, b) => s + b.box.w, 0);
       const gap = (end - start - totalW) / (boxes.length - 1);
       let cur = start;
       for (const { id, box } of boxes) {
-        patch[id] = { ...box, x: cur };
+        patch[id] = { ...box, x: clamp(cur, 0, 1 - box.w) };
         cur += box.w + gap;
       }
     } else {
       boxes.sort((a, b) => a.box.y - b.box.y);
-      const start = boxes[0].box.y;
-      const end = boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h;
+      const start = arrangeTargetEff === 'selection' ? boxes[0].box.y : bounds.top;
+      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h : bounds.bottom;
       const totalH = boxes.reduce((s, b) => s + b.box.h, 0);
       const gap = (end - start - totalH) / (boxes.length - 1);
       let cur = start;
       for (const { id, box } of boxes) {
-        patch[id] = { ...box, y: cur };
+        patch[id] = { ...box, y: clamp(cur, 0, 1 - box.h) };
         cur += box.h + gap;
       }
     }
@@ -3708,6 +3853,40 @@ export default function AdBuilderPage() {
                     />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
+                    {/* Offers — adds/removes the parallel `o2_` question set, so
+                        a template can be made dual after it was started. */}
+                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Offers</h3>
+                        <Tooltip label="Two offers adds a parallel “Offer 2” question set (its own vehicle, offer type, payment and terms). Bind elements to it from any element’s “Shows” list, and use Show for to style each offer type.">
+                          <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                        </Tooltip>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {([1, 2] as const).map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => setOfferCount(n)}
+                            className={`flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              offerCount === n
+                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                            }`}
+                          >
+                            {n === 1 ? 'One offer' : 'Two offers'}
+                          </button>
+                        ))}
+                      </div>
+                      {offerCount === 2 && (
+                        <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                          {secondOfferElements > 0
+                            ? `${secondOfferElements} element${secondOfferElements === 1 ? '' : 's'} bound to Offer 2.`
+                            : 'Nothing bound to Offer 2 yet — pick “· Offer 2” entries in an element’s Shows list.'}
+                        </p>
+                      )}
+                    </div>
+
                     {templateIsAutomotive && (
                       <div className="mt-4 border-t border-[var(--border)] pt-3">
                         <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Make / OEM</h3>
@@ -3733,6 +3912,27 @@ export default function AdBuilderPage() {
                           Manage disclaimer templates
                           <ArrowUpRightIcon className="h-3 w-3" />
                         </a>
+                      </div>
+                    )}
+
+                    {/* Repair action for templates whose boards drifted before
+                        geometry was shape-preserving (see rescaleBox). */}
+                    {doc.sizes.length > 1 && (
+                      <div className="mt-4 border-t border-[var(--border)] pt-3">
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes</h3>
+                          <Tooltip label={`Copies every element's placement from ${size.label.split(' ')[0]} onto the other boards, re-deriving each one's height so nothing is stretched out of shape. Per-board stacking, framing and font sizes are left alone. Undoable with ⌘Z.`}>
+                            <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                          </Tooltip>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={refitOtherSizes}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                        >
+                          <Squares2X2Icon className="h-4 w-4" />
+                          Re-fit other sizes from {size.label.split(' ')[0]}
+                        </button>
                       </div>
                     )}
 
@@ -4810,6 +5010,9 @@ export default function AdBuilderPage() {
                   onSetSizing={(mode) => updEl({ shrink: mode === 'shrink' ? true : undefined, wrap: undefined, autoSize: undefined })}
                   fitFontPx={fitFontPx}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
+                  arrangeTarget={arrangeTargetEff}
+                  onArrangeTarget={chooseArrangeTarget}
+                  onAlign={alignSelected}
                   onClose={clearSelection}
                   onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
                   shifted={false}
@@ -4839,6 +5042,8 @@ export default function AdBuilderPage() {
                   onElAll={patchSelectedElements}
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
+                  arrangeTarget={arrangeTargetEff}
+                  onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
                   onDistribute={distributeSelected}
                   onDuplicate={() => duplicateElements(selectedIds)}
@@ -4974,13 +5179,15 @@ export default function AdBuilderPage() {
                         {selectionIsGroup ? 'Ungroup' : 'Group'}
                       </Item>
                       <Sep />
+                      {/* Aligns to whatever the panel's Arrange target is set to
+                          (artboard by default), so both surfaces agree. */}
                       <div className="flex items-center gap-0.5 px-2 py-1">
                         {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
-                          <button key={edge} onClick={run(() => alignSelected(edge))} title={`Align ${edge}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
+                          <button key={edge} onClick={run(() => alignSelected(edge))} title={`Align ${edge} to ${arrangeTargetEff === 'selection' ? 'selection' : arrangeTargetEff}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
                             <AlignIcon edge={edge} />
                           </button>
                         ))}
-                        {selectedIds.length >= 3 && (
+                        {selectedIds.length >= (arrangeTargetEff === 'selection' ? 3 : 2) && (
                           <>
                             <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
                             <button onClick={run(() => distributeSelected('h'))} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
@@ -5418,6 +5625,8 @@ function MultiSelectPanel({
   onElAll,
   onBoxAll,
   onBumpSize,
+  arrangeTarget,
+  onArrangeTarget,
   onAlign,
   onDistribute,
   onDuplicate,
@@ -5434,9 +5643,12 @@ function MultiSelectPanel({
   onElAll: (patch: Partial<DocElement>) => void;
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
+  /** What align/distribute measure against (artboard / margins / selection). */
+  arrangeTarget: ArrangeTarget;
+  onArrangeTarget: (t: ArrangeTarget) => void;
   /** Position-align the whole selection to a shared edge/center. */
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
-  /** Evenly distribute the selection along an axis (needs 3+). */
+  /** Evenly distribute the selection along an axis. */
   onDistribute: (axis: 'h' | 'v') => void;
   onDuplicate: () => void;
   onSaveAsBlock: () => void;
@@ -5460,33 +5672,9 @@ function MultiSelectPanel({
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         {/* Position align / distribute — applies to any 2+ selection (all element
-            types), mirroring the right-click menu. */}
-        <PanelSection title="Arrange">
-          <div className="flex items-center gap-1">
-            {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
-              <button
-                key={edge}
-                type="button"
-                onClick={() => onAlign(edge)}
-                title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')}`}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-              >
-                <AlignIcon edge={edge} />
-              </button>
-            ))}
-            {elements.length >= 3 && (
-              <>
-                <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
-                <button type="button" onClick={() => onDistribute('h')} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                  <AlignIcon edge="dist-h" />
-                </button>
-                <button type="button" onClick={() => onDistribute('v')} title="Distribute vertically" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                  <AlignIcon edge="dist-v" />
-                </button>
-              </>
-            )}
-          </div>
-        </PanelSection>
+            types), mirroring the right-click menu. The target picker decides
+            whether that means the selection, the artboard, or the margin box. */}
+        <ArrangeSection count={elements.length} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
         {/* Show for — per-offer-type visibility, applied to the WHOLE selection at
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
@@ -5623,6 +5811,9 @@ function SelectionPanel({
   onSetSizing,
   fitFontPx,
   hasOfferField,
+  arrangeTarget,
+  onArrangeTarget,
+  onAlign,
   onClose,
   onCollapse,
   collapsed,
@@ -5656,6 +5847,11 @@ function SelectionPanel({
   /** Whether the template has an `offerType` field — gates the per-offer-type
    *  "Show for" (element visibleWhen) control. */
   hasOfferField: boolean;
+  /** What Arrange aligns this element to (artboard / margins). "Selection" is
+   *  meaningless for one element, so the picker hides it here. */
+  arrangeTarget: ArrangeTarget;
+  onArrangeTarget: (t: ArrangeTarget) => void;
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onClose: () => void;
   /** Collapse the panel (hide it, keep the selection) to reclaim canvas width. */
   onCollapse: () => void;
@@ -5904,6 +6100,10 @@ function SelectionPanel({
             </label>
           </div>
         </PanelSection>
+
+        {/* Snap this one element to an artboard (or margin-box) edge/centre —
+            the single-element half of the multi-select Arrange controls. */}
+        <ArrangeSection count={1} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} />
 
         {/* Show for — per-offer-type visibility (element `visibleWhen`). Only for
             templates with an offerType question. All checked = always shown; check
@@ -6339,12 +6539,91 @@ function FillArtboardButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
+function PanelSection({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="py-3">
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
+      <div className="mb-2 flex min-h-[18px] items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</span>
+        {action}
+      </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * Align / distribute, plus the target picker that says WHAT they align to.
+ *
+ * Shared by the single-element and multi-select panels: aligning one element to
+ * the artboard ("centre this headline") is at least as common as aligning a
+ * cluster to itself, so both panels get the same control.
+ */
+function ArrangeSection({
+  count,
+  target,
+  onTargetChange,
+  onAlign,
+  onDistribute,
+}: {
+  /** How many elements are selected — gates Selection + the distribute buttons. */
+  count: number;
+  target: ArrangeTarget;
+  onTargetChange: (t: ArrangeTarget) => void;
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
+  onDistribute: (axis: 'h' | 'v') => void;
+}) {
+  // Selection-relative needs a real bounding box, so hide it for one element.
+  const options = ARRANGE_TARGETS.filter((o) => o.value !== 'selection' || count >= 2);
+  const canDistribute = count >= (target === 'selection' ? 3 : 2);
+  const targetWord = target === 'selection' ? 'selection' : target === 'margins' ? 'margins' : 'artboard';
+  return (
+    <PanelSection
+      title="Arrange"
+      action={
+        <div className="flex items-center gap-0.5 rounded-md border border-[var(--border)] p-0.5">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onTargetChange(o.value)}
+              title={o.hint}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                target === o.value
+                  ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
+                  : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <div className="flex items-center gap-1">
+        {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
+          <button
+            key={edge}
+            type="button"
+            onClick={() => onAlign(edge)}
+            title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')} to ${targetWord}`}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            <AlignIcon edge={edge} />
+          </button>
+        ))}
+        {canDistribute && (
+          <>
+            <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
+            <button type="button" onClick={() => onDistribute('h')} title={`Distribute horizontally across ${targetWord}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+              <AlignIcon edge="dist-h" />
+            </button>
+            <button type="button" onClick={() => onDistribute('v')} title={`Distribute vertically across ${targetWord}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+              <AlignIcon edge="dist-v" />
+            </button>
+          </>
+        )}
+      </div>
+    </PanelSection>
   );
 }
 

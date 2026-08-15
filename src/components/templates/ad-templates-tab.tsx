@@ -22,7 +22,10 @@ import {
   CheckCircleIcon,
   CheckBadgeIcon,
   ArrowUturnLeftIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
+import { templateReportHref } from '@/app/reporting/ads/_components/reports-config';
+import type { TemplateUsage } from '@/app/api/ad-generator/templates-doc/usage/route';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { ScheduleTemplateModal } from '@/components/ad-generator/schedule-template-modal';
 import { CoopApprovalModal } from '@/components/ad-generator/coop-approval-modal';
@@ -108,6 +111,20 @@ export function AdTemplatesTab({
     [data, accountKey, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
+  // How often each template is actually used, for the card's usage bar and the
+  // Analytics deep-link. Its own request so a slow/absent count never delays the
+  // library itself — the bar just appears a moment later.
+  const { data: usageData } = useSWR<{ usage?: TemplateUsage[] }>(
+    accountKey
+      ? `/api/ad-generator/templates-doc/usage?accountKey=${encodeURIComponent(accountKey)}`
+      : '/api/ad-generator/templates-doc/usage',
+    fetcher,
+  );
+  const usageById = useMemo(
+    () => new Map((usageData?.usage ?? []).map((u) => [u.templateId, u])),
+    [usageData],
+  );
+
   // Shared taxonomy vocabulary (categories + tags across every template kind).
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
   const taxonomy = useMemo(
@@ -364,6 +381,14 @@ export function AdTemplatesTab({
       icon: CheckBadgeIcon,
       run: () => setApproveFor(t),
     },
+    // Usage reporting for this one template, over in Reporting where every other
+    // performance question already lives.
+    {
+      key: 'analytics',
+      label: 'Analytics',
+      icon: ChartBarIcon,
+      run: () => router.push(templateReportHref(t.id, accountKey)),
+    },
     // Inside a subaccount you can also USE the template (make an ad from it).
     ...(accountKey
       ? [{ key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) } as TemplateCardAction]
@@ -432,6 +457,13 @@ export function AdTemplatesTab({
                     taxonomy={taxonomy}
                     author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
                     editable
+                    usage={(() => {
+                      const u = usageById.get(t.id);
+                      // Undefined while the counts are still loading (no bar);
+                      // an absent ROW once loaded genuinely means zero.
+                      if (!usageData) return undefined;
+                      return { total: u?.total ?? 0, auto: u?.auto ?? 0, archived: u?.archived ?? 0 };
+                    })()}
                     badges={
                       <>
                         {/* Sharing is invisible otherwise — you'd have to open the

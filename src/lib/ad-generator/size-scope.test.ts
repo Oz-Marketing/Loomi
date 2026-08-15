@@ -8,6 +8,7 @@ import {
   overridableKeys,
   overriddenKeys,
   styleVariants,
+  refitAllSizes,
 } from './size-scope';
 import { renderDoc } from './doc-renderer';
 import type { TemplateDoc } from './doc-types';
@@ -147,9 +148,17 @@ describe('applyBox', () => {
     expect(d.layouts.story.headline.x).toBe(0.05);
   });
 
-  it('scope "all" broadcasts the fractional geometry', () => {
+  it('scope "all" broadcasts position verbatim and re-derives height to keep the shape', () => {
     const d = applyBox(doc(), 'headline', { ...moved, fontSize: 108, z: 2 }, 'all', 'square');
-    expect(d.layouts.story.headline).toMatchObject(moved);
+    const story = d.layouts.story.headline;
+    // Position and width are fractions of the same axis, so they carry across.
+    expect(story).toMatchObject({ x: 0.3, y: 0.3, w: 0.4 });
+    // Height is NOT copied: 0.1 of a 1080-tall square is 108px, and this used to
+    // arrive as 0.1 of a 1920-tall story — 192px, a different shape. It now lands
+    // as the fraction that reproduces 108px on this board.
+    expect(story.h).toBeCloseTo(0.05625, 6);
+    expect(Math.round(story.h * 1920)).toBe(108);
+    expect(Math.round(story.w * 1080)).toBe(432);
   });
 
   it('scope "all" leaves stacking and omission alone', () => {
@@ -240,5 +249,84 @@ describe('effectiveElements', () => {
     const els = effectiveElements(d, 'story');
     expect(els.find((e) => e.id === 'headline')?.color).toBe('#ff0000');
     expect(els.find((e) => e.id === 'sub')?.color).toBe('#475569');
+  });
+});
+
+// ── shape preservation across artboards ──
+//
+// Regression cover for the bug designers reported as "the size I set doesn't
+// carry across artboards": `w` is a fraction of width and `h` a fraction of
+// height, so copying the pair verbatim turned a square into a rectangle on every
+// board with a different aspect ratio.
+
+const LANDSCAPE = { id: 'landscape', label: 'Landscape 1200×628', width: 1200, height: 628 };
+
+/** On-screen size of a box on a given board, in whole pixels. */
+const pxOf = (b: { w: number; h: number }, s: { width: number; height: number }) => ({
+  w: Math.round(b.w * s.width),
+  h: Math.round(b.h * s.height),
+});
+
+function shapeDoc(): TemplateDoc {
+  const square = { x: 0.1, y: 0.1, w: 400 / 1080, h: 400 / 1080 };
+  return {
+    id: 'tmpl', name: 'Shapes', fields: [],
+    elements: [
+      { id: 'badge', type: 'shape', name: 'Badge', fill: '#f00' },
+      { id: 'bg', type: 'shape', name: 'Background', fill: '#000' },
+    ],
+    sizes: [SQUARE, LANDSCAPE, STORY],
+    layouts: {
+      square: { badge: { ...square }, bg: { x: 0, y: 0, w: 1, h: 1 } },
+      landscape: { badge: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, bg: { x: 0, y: 0, w: 1, h: 1 } },
+      story: { badge: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, bg: { x: 0, y: 0, w: 1, h: 1 } },
+    },
+    background: { color: '#fff' }, defaults: {},
+  } as unknown as TemplateDoc;
+}
+
+describe('rescaleBox / broadcast shape preservation', () => {
+  it('keeps a square square on every artboard (was 444×233 and 400×711)', () => {
+    const d = shapeDoc();
+    const out = applyBox(d, 'badge', d.layouts.square.badge, 'all', 'square');
+    expect(pxOf(out.layouts.square.badge, SQUARE)).toEqual({ w: 400, h: 400 });
+    // Scales with the board's width, but stays a SQUARE.
+    expect(pxOf(out.layouts.landscape.badge, LANDSCAPE)).toEqual({ w: 444, h: 444 });
+    expect(pxOf(out.layouts.story.badge, STORY)).toEqual({ w: 400, h: 400 });
+  });
+
+  it('leaves an edge-to-edge background stretching to fill each board', () => {
+    const d = shapeDoc();
+    const out = applyBox(d, 'bg', d.layouts.square.bg, 'all', 'square');
+    for (const s of [SQUARE, LANDSCAPE, STORY]) {
+      const b = out.layouts[s.id].bg;
+      expect(pxOf(b, s)).toEqual({ w: s.width, h: s.height });
+    }
+  });
+
+  it('clamps rather than overflowing when the shape cannot fit the target', () => {
+    const d = shapeDoc();
+    const tall = { x: 0.1, y: 0.05, w: 0.9, h: 0.9 };
+    const out = applyBox({ ...d, layouts: { ...d.layouts, square: { ...d.layouts.square, badge: tall } } },
+      'badge', tall, 'all', 'square');
+    const b = out.layouts.landscape.badge;
+    expect(b.h).toBeLessThanOrEqual(1);
+    expect(b.y + b.h).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it('refitAllSizes repairs a template whose boards already drifted', () => {
+    const d = shapeDoc();
+    // Landscape currently holds a distorted 240×126 badge.
+    expect(pxOf(d.layouts.landscape.badge, LANDSCAPE)).toEqual({ w: 240, h: 126 });
+    const out = refitAllSizes(d, 'square');
+    expect(pxOf(out.layouts.landscape.badge, LANDSCAPE)).toEqual({ w: 444, h: 444 });
+    expect(pxOf(out.layouts.story.badge, STORY)).toEqual({ w: 400, h: 400 });
+  });
+
+  it('refitAllSizes does not add an element to a board it was left off', () => {
+    const d = shapeDoc();
+    delete (d.layouts.story as Record<string, unknown>).badge;
+    const out = refitAllSizes(d, 'square');
+    expect(out.layouts.story.badge).toBeUndefined();
   });
 });

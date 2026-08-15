@@ -15,7 +15,11 @@
  * deliberately not acted on — generation is a separate, explicit step.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useAccount } from '@/contexts/account-context';
+import { brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
+import { AutomationTemplatePicker, type PickerTemplate } from './template-picker';
+import type { AdData } from '@/lib/ad-generator/types';
 import Link from 'next/link';
 import {
   ArrowPathIcon,
@@ -308,11 +312,39 @@ export function ShadowPanel({
   automation: Automation;
 }) {
   const { report, loading, busy, form, dirty, set, reset, act, save } = automation;
+  // Previews render in the sub-account's own logo and colour, so what an admin
+  // approves here is what that dealer's ads will actually look like.
+  const { accountData } = useAccount();
+  const branding = brandingFromAccount(accountData) as AdData;
   const [feedUrl, setFeedUrl] = useState('');
   const [feedName, setFeedName] = useState('');
 
   const templates = report?.templates ?? [];
   const templateSizes = templates.find((t) => t.id === form.templateId)?.sizes ?? [];
+
+  // Designs WITH their docs, so the picker can render a real preview of each.
+  // The shadow report carries only names and sizes; this is the endpoint built
+  // for the dealer-facing picker, and reusing it keeps both surfaces showing the
+  // same list resolved the same way.
+  const [pickerTemplates, setPickerTemplates] = useState<PickerTemplate[]>([]);
+  useEffect(() => {
+    if (!accountKey) {
+      setPickerTemplates([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/automation/template?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { templates: [] }))
+      .then((d: { templates?: PickerTemplate[] }) => {
+        if (!cancelled) setPickerTemplates(d.templates ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setPickerTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
   const drafts = useMemo(() => report?.drafts ?? [], [report]);
 
   /**
@@ -502,22 +534,30 @@ export function ShadowPanel({
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 3 · How ads are built
               </h3>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label="Template" help={<p>The design every generated ad uses. <strong>Required</strong> — with none mapped, generation skips every vehicle.</p>}>
-                  <Select
-                    value={form.templateId}
-                    onChange={(v) => set('templateId', v)}
-                    previewFont={false}
-                    options={[
-                      { value: '', label: 'Not mapped — generation will skip' },
-                      ...templates.map((tpl) => ({
-                        value: tpl.id,
-                        label: `${tpl.name}${tpl.owned ? '' : ' (shared)'}`,
-                      })),
-                    ]}
-                  />
-                </Field>
 
+              {/* The design is the one setting whose value is a PICTURE. A list of
+                  names made a wrong pick invisible until the ads came out, so it
+                  gets previews and the width to show them — and it's the dealer's
+                  own choice too, rendered by the same component they see. */}
+              <div className="mb-4">
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                  <span className="text-[11px] font-medium text-[var(--foreground)]">Template</span>
+                  {!form.templateId && (
+                    <span className="text-[10px] text-amber-500">
+                      Not mapped — generation will skip every vehicle
+                    </span>
+                  )}
+                </div>
+                <AutomationTemplatePicker
+                  templates={pickerTemplates}
+                  value={form.templateId}
+                  onChange={(v) => set('templateId', v)}
+                  branding={branding}
+                  showUnusable
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Max ads per run" help={<p>Ceiling on how many ads one <strong>Generate drafts</strong> produces, so a big feed change can&apos;t flood the review queue with a hundred ads at once.</p>}>
                   <input value={form.maxAds} onChange={(e) => set('maxAds', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
                 </Field>

@@ -6,24 +6,21 @@ import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
 import {
   ArrowRightStartOnRectangleIcon,
-  ArrowTopRightOnSquareIcon,
   BellIcon,
   BugAntIcon,
   ClockIcon,
   MoonIcon,
   QuestionMarkCircleIcon,
   SunIcon,
-  Squares2X2Icon,
   UserCircleIcon,
 } from '@heroicons/react/24/outline';
-import { toast } from '@/lib/toast';
 import { useTheme } from '@/contexts/theme-context';
-import { useAccount } from '@/contexts/account-context';
+import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
+import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
-import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
-import { accountKeyToSlug, subaccountPath } from '@/lib/account-slugs';
+import { openSupportModal } from '@/lib/ui-events';
 import type { UserRole } from '@/lib/roles';
 
 /**
@@ -70,33 +67,12 @@ export function ReportingTopBar({
 }) {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
-  const { account, accounts } = useAccount();
 
   // User dropdown
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const canViewRoleBadge =
     userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-
-  // Cross-site (studio) URL. When an account is active on reporting, land
-  // the user on studio's /subaccount/<slug>/dashboard so studio's own
-  // URL-based account routing picks up the same account on arrival.
-  // Falls back to studio root for admin mode.
-  const [studioUrl, setStudioUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let url: string | null = null;
-    if (account.mode === 'account' && account.accountKey) {
-      const slug = accountKeyToSlug(account.accountKey, accounts);
-      url = slug
-        ? getOtherSurfaceUrl(subaccountPath(slug, 'dashboard'))
-        : getOtherSurfaceUrl();
-    } else {
-      url = getOtherSurfaceUrl();
-    }
-    // Carry theme so studio matches reporting's current setting.
-    if (url) url = appendThemeParam(url, theme);
-    setStudioUrl(url);
-  }, [account, accounts, theme]);
 
   // Notifications
   const [showNotifications, setShowNotifications] = useState(false);
@@ -125,14 +101,7 @@ export function ReportingTopBar({
       const res = await fetch('/api/changelog');
       if (!res.ok) return;
       const data = await res.json();
-      const entries = data.entries || [];
-      if (entries.length === 0) {
-        setHasChangelogUnread(false);
-        return;
-      }
-      const latest = entries[0].publishedAt;
-      const seen = localStorage.getItem('loomi-changelog-seen');
-      setHasChangelogUnread(!seen || new Date(latest) > new Date(seen));
+      setHasChangelogUnread(hasUnseenChangelog(data.entries || []));
     } catch {
       /* ignore */
     }
@@ -219,12 +188,9 @@ export function ReportingTopBar({
           )}
         </div>
 
-        <UtilityIconButton
-          title="Report a bug"
-          onClick={() => toast.info('Bug reporting portal coming soon')}
-        >
-          <BugAntIcon className="h-5 w-5" />
-        </UtilityIconButton>
+        {/* Agency Settings — the platform-management tier. Took the bug
+            reporter's slot; bug reporting moved into the user dropdown. */}
+        <AgencySettingsButton />
 
         {/* User avatar + dropdown */}
         <div ref={userMenuRef} className="relative">
@@ -292,17 +258,20 @@ export function ReportingTopBar({
                   )}
                   {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                 </button>
-                {studioUrl && (
-                  <a
-                    href={studioUrl}
-                    onClick={() => setUserMenuOpen(false)}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-                  >
-                    <Squares2X2Icon className="h-4 w-4" />
-                    <span className="flex-1 text-left">Studio</span>
-                    <ArrowTopRightOnSquareIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
-                  </a>
-                )}
+                {/* Cross-surface jump lives in the sidebar's surface switcher,
+                    which offers all three — a single "Studio" link here was a
+                    second, narrower door to the same place. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    openSupportModal();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                >
+                  <BugAntIcon className="h-4 w-4" />
+                  Report a Bug
+                </button>
                 <button
                   type="button"
                   onClick={() => signOut({ callbackUrl: '/login' })}

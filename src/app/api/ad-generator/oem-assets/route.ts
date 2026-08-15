@@ -17,6 +17,13 @@ import { prisma } from '@/lib/prisma';
 import { buildOemAssetsReport } from '@/lib/ad-generator/oem-assets-report';
 import { loadActiveCoopPack } from '@/lib/ad-generator/coop-pack-store';
 import { summarizeTemplateCoop } from '@/lib/ad-generator/coop-template-check';
+import {
+  packIsValid,
+  toCoopPack,
+  validatePack,
+  type DraftPack,
+  type DraftRule,
+} from '@/lib/ad-generator/coop-rule-authoring';
 import { invalidatePackChecks, resolveTemplateCoopCheck } from '@/lib/ad-generator/coop-template-check-store';
 import { getGuidelineDoc, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -103,6 +110,10 @@ export async function POST(req: NextRequest) {
     notes?: string;
     // recheck_template
     templateId?: string;
+    // save_pack / delete_pack
+    version?: string;
+    source?: string;
+    rules?: unknown;
   };
   try {
     body = await req.json();
@@ -179,6 +190,96 @@ export async function POST(req: NextRequest) {
         // run recompute.
         const dropped = await invalidatePackChecks(row.id);
         return NextResponse.json({ ok: true, pack: { id: row.id, verified: row.verified }, rechecksQueued: dropped });
+      }
+
+      // ── authoring a rule pack ──────────────────────────────────────────
+      // Previously a pack could only be created by a developer writing a seed
+      // script, which put the one job the Co-op team is qualified for behind a
+      // deploy. Three brands got packs in a year.
+      //
+      // Validated with the SAME pure validator the editor uses, so the browser
+      // and the server can't disagree about what is storable — and a request
+      // that bypasses the UI entirely still can't write a rule the engine would
+      // silently fail to evaluate.
+      case 'save_pack': {
+        const make = (body.make ?? '').trim();
+        const version = (body.version ?? '').trim();
+        const source = (body.source ?? '').trim();
+        const from = parseDay(body.effectiveFrom);
+        const to = parseDay(body.effectiveTo, true);
+
+        const draftRules = Array.isArray(body.rules) ? (body.rules as DraftRule[]) : [];
+        const draft: DraftPack = {
+          make,
+          version,
+          source,
+          effectiveFrom: body.effectiveFrom ?? null,
+          effectiveTo: body.effectiveTo ?? null,
+          rules: draftRules,
+        };
+        const problems = validatePack(draft);
+        if (!packIsValid(problems)) {
+          return NextResponse.json(
+            {
+              error: problems.pack[0] ?? 'One or more rules are incomplete.',
+              packErrors: problems.pack,
+              ruleErrors: problems.rules,
+            },
+            { status: 400 },
+          );
+        }
+
+        const pack = toCoopPack(draft);
+        const rulesJson = JSON.stringify(pack);
+        const existing = await prisma.adCoopRulePack.findFirst({ where: { make, version } });
+
+        if (existing) {
+          const updated = await prisma.adCoopRulePack.update({
+            where: { id: existing.id },
+            data: {
+              rules: rulesJson,
+              source,
+              effectiveFrom: from,
+              effectiveTo: to,
+              // EDITING A PACK RETRACTS ITS VERIFICATION. The sign-off says a
+              // person checked THESE rules against the document; changing them
+              // makes that statement false, and silently keeping the tick would
+              // let an edited rule block ads under someone else's name.
+              verified: false,
+              verifiedBy: null,
+              verifiedAt: null,
+            },
+          });
+          const dropped = await invalidatePackChecks(updated.id);
+          return NextResponse.json({ ok: true, packId: updated.id, unverified: existing.verified, rechecksQueued: dropped });
+        }
+
+        const created = await prisma.adCoopRulePack.create({
+          data: {
+            make,
+            version,
+            source,
+            rules: rulesJson,
+            effectiveFrom: from,
+            effectiveTo: to,
+            verified: false,
+            createdBy:
+              (session?.user as { name?: string | null; email?: string | null } | undefined)?.name ||
+              (session?.user as { email?: string | null } | undefined)?.email ||
+              null,
+          },
+        });
+        return NextResponse.json({ ok: true, packId: created.id, created: true });
+      }
+
+      case 'delete_pack': {
+        const packId = (body.packId ?? '').trim();
+        if (!packId) return NextResponse.json({ error: 'packId is required' }, { status: 400 });
+        // Deactivated rather than deleted: an ad approved last quarter has to
+        // stay explicable against the rules that were in force then.
+        const row = await prisma.adCoopRulePack.update({ where: { id: packId }, data: { isActive: false } });
+        const dropped = await invalidatePackChecks(row.id);
+        return NextResponse.json({ ok: true, rechecksQueued: dropped });
       }
 
       case 'attach_source': {

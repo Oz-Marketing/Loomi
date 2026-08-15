@@ -33,6 +33,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { CoopPackEditor } from './coop-pack-editor';
+import { toDraftRule, type DraftPack } from '@/lib/ad-generator/coop-rule-authoring';
+import type { CoopRule } from '@/lib/ad-generator/coop-rules';
 import {
   ArrowPathIcon,
   BookOpenIcon,
@@ -82,6 +85,10 @@ interface PackRow {
   warningCount: number;
   errorCount: number;
   updatedAt: string;
+  /** The rules themselves, so an existing pack can be opened in the editor. */
+  rules: CoopRule[];
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
 }
 
 interface GuidelineDocRow {
@@ -323,6 +330,9 @@ export function CoopGuidelinesTab() {
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   /** Cover thumbnails, fetched per document on demand — the list omits them. */
   const [covers, setCovers] = useState<Record<string, string | null>>({});
+
+  /** Open editor: a DraftPack to edit, or `true` for a brand-new pack. */
+  const [editing, setEditing] = useState<DraftPack | true | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -776,9 +786,17 @@ export function CoopGuidelinesTab() {
                 </h3>
 
                 {active.packs.length === 0 ? (
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    None for {active.make}. Ads generate as drafts for a person to approve.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      None for {active.make}. Ads generate as drafts for a person to approve.
+                    </p>
+                    <button
+                      onClick={() => setEditing(true)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
+                    >
+                      <PlusIcon className="h-3 w-3" /> Write {active.make} rules
+                    </button>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     {active.packs.map((p) => (
@@ -795,6 +813,21 @@ export function CoopGuidelinesTab() {
                               <span className="text-[11px] text-[var(--muted-foreground)]">
                                 {p.ruleCount} rules · {p.errorCount} can block
                               </span>
+                              <button
+                                onClick={() =>
+                                  setEditing({
+                                    make: active.make,
+                                    version: p.version,
+                                    source: p.source ?? '',
+                                    effectiveFrom: p.effectiveFrom,
+                                    effectiveTo: p.effectiveTo,
+                                    rules: p.rules.map(toDraftRule),
+                                  })
+                                }
+                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                              >
+                                Edit rules
+                              </button>
                             </div>
                             <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                               {p.verified
@@ -1291,6 +1324,16 @@ export function CoopGuidelinesTab() {
           uploadCategory="oem"
         />
       )}
+
+    {editing && (
+      <CoopPackEditor
+        make={active?.make ?? ''}
+        initial={editing === true ? undefined : editing}
+        onClose={() => setEditing(null)}
+        onSaved={() => { void load(); }}
+      />
+    )}
+
     </div>
   );
 }

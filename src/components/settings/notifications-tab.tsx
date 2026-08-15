@@ -13,12 +13,19 @@ interface PreferenceItem {
   category: string;
   channel: 'digest' | 'immediate';
   defaultEnabled: boolean;
+  defaultEmailEnabled: boolean;
+  /** In-app: shows in the bell panel. */
   enabled: boolean;
+  /** Email: also lands in the inbox. Independent of `enabled`. */
+  emailEnabled: boolean;
 }
+
+/** The two independently-togglable delivery channels. */
+type Channel = 'enabled' | 'emailEnabled';
 
 /** Map a category to its surface; unknown categories default to App so a new
  *  category is never silently hidden everywhere. */
-function categorySurface(category: string): 'studio' | 'app' {
+function categorySurface(category: string): 'studio' | 'app' | 'both' {
   return NOTIFICATION_CATEGORY_SURFACE[category as NotificationCategory] ?? 'app';
 }
 
@@ -75,16 +82,16 @@ export function NotificationsTab() {
       .finally(() => setLoading(false));
   }, []);
 
-  const updateOne = async (type: string, enabled: boolean) => {
+  const updateOne = async (type: string, channel: Channel, value: boolean) => {
     // Optimistic UI
     const previous = items;
-    setItems((prev) => prev.map((i) => (i.type === type ? { ...i, enabled } : i)));
+    setItems((prev) => prev.map((i) => (i.type === type ? { ...i, [channel]: value } : i)));
     setSaving(type);
     try {
       const res = await fetch('/api/notifications/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ preferences: [{ type, enabled }] }),
+        body: JSON.stringify({ preferences: [{ type, [channel]: value }] }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch {
@@ -95,31 +102,38 @@ export function NotificationsTab() {
     }
   };
 
-  const setAll = async (enabled: boolean, targets: PreferenceItem[]) => {
+  const setAll = async (channel: Channel, value: boolean, targets: PreferenceItem[]) => {
     if (targets.length === 0) return;
     const previous = items;
     const targetTypes = new Set(targets.map((t) => t.type));
-    setItems((prev) => prev.map((i) => (targetTypes.has(i.type) ? { ...i, enabled } : i)));
+    setItems((prev) =>
+      prev.map((i) => (targetTypes.has(i.type) ? { ...i, [channel]: value } : i)),
+    );
     try {
       const res = await fetch('/api/notifications/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          preferences: targets.map((i) => ({ type: i.type, enabled })),
+          preferences: targets.map((i) => ({ type: i.type, [channel]: value })),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      toast.success(enabled ? 'Notifications enabled' : 'Notifications disabled');
+      const noun = channel === 'emailEnabled' ? 'Emails' : 'In-app notifications';
+      toast.success(value ? `${noun} enabled` : `${noun} disabled`);
     } catch {
       toast.error('Could not save preferences — reverting');
       setItems(previous);
     }
   };
 
-  // Only this surface's notification categories (Studio vs App).
+  // Only this surface's notification categories (Studio vs App), plus the
+  // `both` categories that aren't owned by either side.
   const surfaceItems = useMemo(() => {
     if (effSurface === null) return [];
-    return items.filter((i) => categorySurface(i.category) === effSurface);
+    return items.filter((i) => {
+      const s = categorySurface(i.category);
+      return s === 'both' || s === effSurface;
+    });
   }, [items, effSurface]);
 
   // Group the surface's items by category — each becomes a tab.
@@ -140,6 +154,7 @@ export function NotificationsTab() {
 
   const activeItems = activeCat ? byCategory[activeCat] ?? [] : [];
   const activeEnabled = activeItems.filter((i) => i.enabled).length;
+  const activeEmailed = activeItems.filter((i) => i.emailEnabled).length;
 
   // Surface unknown (pre-hydration) or still fetching → loading.
   if (loading || effSurface === null) {
@@ -163,7 +178,9 @@ export function NotificationsTab() {
   return (
     <div>
       <p className="mb-4 text-xs text-[var(--muted-foreground)]">
-        Choose which alerts you receive in-app and by email. Defaults are on.
+        Choose how you receive each alert. <strong className="font-semibold">In-app</strong> shows
+        it in the bell panel; <strong className="font-semibold">Email</strong> also sends it to your
+        inbox. The two are independent — you can keep an alert in the panel without the email.
       </p>
 
       {/* Category tabs */}
@@ -193,24 +210,34 @@ export function NotificationsTab() {
 
       {/* Active category */}
       <div className="mt-5 max-w-3xl">
-        <div className="mb-3 flex items-center justify-end gap-2">
-          <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">
-            {activeEnabled} of {activeItems.length} on
+        <div className="mb-3 flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
+          <span className="mr-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
+            {activeEnabled} of {activeItems.length} in-app · {activeEmailed} by email
           </span>
-          <button
-            type="button"
-            onClick={() => setAll(true, activeItems)}
-            className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-          >
-            Enable all
-          </button>
-          <button
-            type="button"
-            onClick={() => setAll(false, activeItems)}
-            className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-          >
-            Disable all
-          </button>
+          {(
+            [
+              { channel: 'enabled', label: 'in-app' },
+              { channel: 'emailEnabled', label: 'email' },
+            ] as Array<{ channel: Channel; label: string }>
+          ).map(({ channel, label }) => (
+            <span key={channel} className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setAll(channel, true, activeItems)}
+                className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+              >
+                All {label}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAll(channel, false, activeItems)}
+                className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                aria-label={`Turn off all ${label} notifications in this category`}
+              >
+                None
+              </button>
+            </span>
+          ))}
         </div>
 
         <div className="space-y-3">
@@ -247,19 +274,34 @@ export function NotificationsTab() {
                 </div>
                 <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{item.description}</p>
               </div>
-              <ToggleSwitch
-                checked={item.enabled}
-                onChange={(next) => updateOne(item.type, next)}
-                disabled={saving === item.type}
-              />
+              <div className="flex flex-shrink-0 items-center gap-4">
+                {(
+                  [
+                    { channel: 'enabled', label: 'In-app', on: item.enabled },
+                    { channel: 'emailEnabled', label: 'Email', on: item.emailEnabled },
+                  ] as Array<{ channel: Channel; label: string; on: boolean }>
+                ).map(({ channel, label, on }) => (
+                  <label key={channel} className="flex flex-col items-center gap-1">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+                      {label}
+                    </span>
+                    <ToggleSwitch
+                      checked={on}
+                      onChange={(next) => updateOne(item.type, channel, next)}
+                      disabled={saving === item.type}
+                    />
+                  </label>
+                ))}
+              </div>
             </div>
           ))}
         </div>
 
         <p className="mt-6 text-[11px] text-[var(--muted-foreground)]">
           In-app notifications appear in the bell-icon panel in the top-right.
-          Immediate alerts also email you in real time. Daily-digest alerts are
-          bundled into a single 8am email and continue to show in the bell panel.
+          With Email on, immediate alerts are mailed in real time and daily-digest
+          alerts are bundled into a single 8am email. Turning In-app off stops
+          both — there is nothing to email if the alert is never raised.
         </p>
       </div>
     </div>

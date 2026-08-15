@@ -16,6 +16,7 @@ import {
   ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { useAccount } from '@/contexts/account-context';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
@@ -38,6 +39,11 @@ import { LoomiWordmark } from './loomi-wordmark';
  * active-account cookie): picking a sub-account scopes Initiatives, Tasks,
  * Calendar, and the Ad Pacer to it; Admin shows everything. My Work stays
  * personal (your assigned tasks across every account).
+ *
+ * Two modes displace the nav, matching Studio and Reporting:
+ *   • AGENCY VIEW — the platform-management rail (Manage/Configure), identical
+ *     on every surface. No swap, no back button; the rail IS the settings rail.
+ *   • SUB-ACCOUNT SETTINGS — the nav swaps to SettingsNav with a back button.
  */
 
 type IconType = React.ComponentType<{ className?: string }>;
@@ -90,11 +96,18 @@ function itemActive(item: NavItem, pathname: string): boolean {
 export function AppSidebar() {
   const pathname = usePathname();
   const { collapsed } = useSidebarCollapse();
+  const { isAccount, accountKey } = useAccount();
   const isMobile = useIsMobile();
   // The icon-rail collapse is desktop-only; the mobile drawer always renders
   // nav items expanded regardless of the persisted collapse preference.
   const showCollapsed = collapsed && !isMobile;
   const settingsActive = pathname.startsWith('/settings');
+  // Sub-account settings render the SAME sector-gated sections as Studio, via
+  // the shared sub-account detail page. Studio reaches it at
+  // /subaccount/<slug>/settings; this surface has no such route tree, so it
+  // uses the admin-browse shape (section in ?tab=) against the active account.
+  const subaccountSettingsHref =
+    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings';
 
   return (
     <SidebarFrame
@@ -112,7 +125,7 @@ export function AppSidebar() {
           </div>
           <div className={showCollapsed ? 'p-2' : 'px-2 py-2'}>
             <BottomLink
-              href="/settings"
+              href={subaccountSettingsHref}
               label="Settings"
               icon={CogIcon}
               active={settingsActive}
@@ -123,7 +136,7 @@ export function AppSidebar() {
       }
     >
       {isSettingsPath(pathname) ? (
-        <SettingsNav backHref="/projects" backLabel="Back to App" collapsed={showCollapsed} />
+        <SettingsNav backHref="/projects" backLabel="Back to Projects" collapsed={showCollapsed} />
       ) : (
         <>
           {/* New ticket — primary CTA */}

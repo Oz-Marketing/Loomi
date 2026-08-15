@@ -27,7 +27,9 @@ export type NotificationType =
   | 'coop_guideline_changed'
   // Media Library (Studio surface) — rights management
   | 'asset_rights_expiring'
-  | 'asset_rights_expired';
+  | 'asset_rights_expired'
+  // Changelog (both surfaces) — product release notes
+  | 'product_update';
 
 export interface NotificationTypeMeta {
   type: NotificationType;
@@ -35,7 +37,20 @@ export interface NotificationTypeMeta {
   description: string;
   category: NotificationCategory;
   channel: 'digest' | 'immediate';
+  /** Default for the in-app bell panel. */
   defaultEnabled: boolean;
+  /**
+   * Default for email. Separate from `defaultEnabled` so a type can show in the
+   * panel by default without also defaulting to mail. Omit to follow
+   * `defaultEnabled`, which is what every pre-split type does.
+   */
+  defaultEmailEnabled?: boolean;
+}
+
+/** A user's resolved delivery choice for one notification type. */
+export interface NotificationChannels {
+  inApp: boolean;
+  email: boolean;
 }
 
 /** Single source of truth for the notification catalog. UI reads this, the
@@ -233,6 +248,22 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     channel: 'immediate',
     defaultEnabled: true,
   },
+  {
+    type: 'product_update',
+    label: 'New in Loomi',
+    description:
+      'Release notes when something ships — new features, improvements, and fixes. One notification per release, not one per change.',
+    category: 'Product Updates',
+    // Immediate, but the fan-out batches a whole release into a single
+    // notification, so "immediate" here means "when Publish is pressed", not
+    // once per entry.
+    channel: 'immediate',
+    defaultEnabled: true,
+    // In the panel by default, but not in the inbox: an unsolicited product
+    // email is a different kind of intrusion from an alert someone's work
+    // depends on. Users opt in from Settings → Notifications.
+    defaultEmailEnabled: false,
+  },
 ];
 
 const REGISTRY_BY_TYPE: Record<NotificationType, NotificationTypeMeta> = Object.fromEntries(
@@ -243,43 +274,47 @@ export function getNotificationTypeMeta(type: NotificationType): NotificationTyp
   return REGISTRY_BY_TYPE[type];
 }
 
+/** Registry defaults for a type, with `defaultEmailEnabled` falling back to the in-app default. */
+export function defaultChannels(type: NotificationType): NotificationChannels {
+  const meta = REGISTRY_BY_TYPE[type];
+  const inApp = meta?.defaultEnabled ?? true;
+  return { inApp, email: meta?.defaultEmailEnabled ?? inApp };
+}
+
 /**
- * Resolve effective enabled state for a (userId, type) pair. Defaults follow
- * `defaultEnabled` from the registry when there's no explicit row.
+ * Resolve effective delivery channels for a (userId, type) pair. Defaults come
+ * from the registry when there's no explicit row.
  */
-export async function isNotificationEnabled(
+export async function resolveChannels(
   userId: string,
   type: NotificationType,
-): Promise<boolean> {
+): Promise<NotificationChannels> {
   const pref = await prisma.notificationPreference.findUnique({
     where: { userId_type: { userId, type } },
   });
-  if (pref) return pref.enabled;
-  return REGISTRY_BY_TYPE[type]?.defaultEnabled ?? true;
+  if (pref) return { inApp: pref.enabled, email: pref.emailEnabled };
+  return defaultChannels(type);
 }
 
-/** Bulk-resolve preferences for many users — used by the scan job to avoid N queries. */
-export async function loadEnabledMap(
+/** Bulk-resolve channels for many users — one query instead of N. */
+export async function loadChannelMap(
   userIds: string[],
-): Promise<Map<string, Set<NotificationType>>> {
-  if (userIds.length === 0) return new Map();
+  type: NotificationType,
+): Promise<Map<string, NotificationChannels>> {
+  const result = new Map<string, NotificationChannels>();
+  if (userIds.length === 0) return result;
+
   const prefs = await prisma.notificationPreference.findMany({
-    where: { userId: { in: userIds } },
+    where: { userId: { in: userIds }, type },
+    select: { userId: true, enabled: true, emailEnabled: true },
   });
-  const explicit = new Map<string, Map<string, boolean>>();
-  for (const p of prefs) {
-    if (!explicit.has(p.userId)) explicit.set(p.userId, new Map());
-    explicit.get(p.userId)!.set(p.type, p.enabled);
-  }
-  const result = new Map<string, Set<NotificationType>>();
+  const explicit = new Map(
+    prefs.map((p) => [p.userId, { inApp: p.enabled, email: p.emailEnabled }]),
+  );
+
+  const fallback = defaultChannels(type);
   for (const userId of userIds) {
-    const enabledTypes = new Set<NotificationType>();
-    for (const meta of NOTIFICATION_TYPE_REGISTRY) {
-      const explicitVal = explicit.get(userId)?.get(meta.type);
-      const on = explicitVal === undefined ? meta.defaultEnabled : explicitVal;
-      if (on) enabledTypes.add(meta.type);
-    }
-    result.set(userId, enabledTypes);
+    result.set(userId, explicit.get(userId) ?? fallback);
   }
   return result;
 }

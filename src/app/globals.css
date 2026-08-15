@@ -255,12 +255,18 @@ select[class*="bg-[var(--background)]"] {
 }
 
 /* Offer-type pills.
-   Tailwind's `dark:` variant is not bound to this app's `[data-theme]` switch —
-   with no `@custom-variant dark`, it still resolves against the OS. So a dark OS
-   with the light theme chosen applied every `dark:` colour anyway, and the
-   selected pill's label washed out against its own 15% tint. Driving the label
-   from a token defined under each theme block makes it follow the theme the user
-   actually picked. (The same mismatch is why the amber patches below exist.) */
+   The selected pill's label reads from `--offer-pill-ink`, which each pill sets
+   to its own hue via an arbitrary property in `client-form/fields.tsx`
+   (`[--offer-pill-ink:var(--pill-ink-indigo)]`). The `--pill-ink-*` values are
+   defined per theme below, so one rule serves four hues across both themes.
+
+   Historical note: this was originally a workaround. `dark:` used to resolve
+   against `prefers-color-scheme` while everything else themed off
+   `[data-theme]`, so on a dark OS with the light theme chosen every `dark:`
+   color fired anyway and the label washed out against its own 15% tint. That
+   mismatch is fixed at the source now — see `@custom-variant dark` at the top of
+   this file — but the token indirection is kept deliberately: it is what lets a
+   single `.offer-pill-on` rule carry a different ink per hue. */
 .offer-pill-on {
   color: var(--offer-pill-ink);
 }
@@ -350,7 +356,10 @@ body {
   background: var(--gradient-bg);
   background-attachment: fixed;
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  /* Driven by the Appearance tab's font choice — see the `[data-font]` blocks
+     in the personalization layer at the end of this file. Falls back to the
+     historical system stack when no preference is set. */
+  font-family: var(--font-sans, system-ui, -apple-system, sans-serif);
   min-height: 100vh;
 }
 
@@ -677,11 +686,19 @@ body {
   background: rgba(255, 255, 255, 0.9);
 }
 
+/* Follows the chosen accent. The gradient's second stop is derived from
+   --primary rather than hardcoded, so every accent keeps the same lit-pill
+   depth cue; --primary-foreground keeps the label readable on bright accents
+   like yellow and lime, where white text would vanish. */
 .surface-switch-seg-active {
-  color: #ffffff;
-  background-image: linear-gradient(135deg, #6366f1 0%, #7c6cf5 48%, #8b5cf6 100%);
+  color: var(--primary-foreground);
+  background-image: linear-gradient(
+    135deg,
+    var(--primary) 0%,
+    color-mix(in oklab, var(--primary) 78%, white) 100%
+  );
   box-shadow:
-    0 3px 10px rgba(99, 102, 241, 0.42),
+    0 3px 10px color-mix(in srgb, var(--primary) 42%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.26);
 }
 
@@ -1217,7 +1234,7 @@ button.glass-card:hover,
   border-color: var(--primary);
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15),
-    0 0 0 1px rgba(99, 102, 241, 0.1),
+    0 0 0 1px color-mix(in srgb, var(--primary) 10%, transparent),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
 }
 /* When a glass-card has an open dropdown inside it, lift the whole
@@ -1258,16 +1275,16 @@ button.glass-card:hover,
 /* ── Bulk action dock ── */
 .loomi-bulk-dock {
   background: rgba(10, 12, 24, 0.95);
-  border-color: rgba(99, 102, 241, 0.34);
+  border-color: color-mix(in srgb, var(--primary) 34%, transparent);
   box-shadow:
     0 20px 52px rgba(0, 0, 0, 0.56),
-    0 0 0 1px rgba(99, 102, 241, 0.22),
-    0 0 28px rgba(99, 102, 241, 0.18),
+    0 0 0 1px color-mix(in srgb, var(--primary) 22%, transparent),
+    0 0 28px color-mix(in srgb, var(--primary) 18%, transparent),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
 }
 
 .loomi-bulk-dock-count {
-  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.45);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--primary) 45%, transparent);
 }
 
 .loomi-bulk-dock-sep {
@@ -1279,7 +1296,7 @@ button.glass-card:hover,
 }
 
 .loomi-bulk-dock-action:hover {
-  background: rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .loomi-bulk-dock-action-danger {
@@ -1296,7 +1313,7 @@ button.glass-card:hover,
 
 .loomi-bulk-dock-close:hover {
   color: #ffffff;
-  background: rgba(99, 102, 241, 0.18);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 [data-theme='light'] .loomi-bulk-dock {
@@ -2272,9 +2289,12 @@ input, select, textarea {
   border-color: rgba(245, 158, 11, 0.4) !important;
 }
 
+/* 'info' is the only status colour tied to the brand rather than a semantic
+   hue, so it follows the accent. success / warning / error deliberately keep
+   their fixed green / amber / red — those encode meaning, not taste. */
 [data-theme='dark'] [data-sonner-toast][data-type='info'] {
-  background: rgba(15, 30, 60, 0.85) !important;
-  border-color: rgba(99, 102, 241, 0.4) !important;
+  background: color-mix(in srgb, var(--primary) 18%, rgba(9, 9, 11, 0.9)) !important;
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent) !important;
 }
 
 [data-theme='light'] [data-sonner-toast][data-type='success'] {
@@ -2293,8 +2313,8 @@ input, select, textarea {
 }
 
 [data-theme='light'] [data-sonner-toast][data-type='info'] {
-  background: #eff6ff !important;
-  border-color: rgba(99, 102, 241, 0.4) !important;
+  background: color-mix(in srgb, var(--primary) 10%, #ffffff) !important;
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent) !important;
 }
 
 /* ── Toast icon colors — match type primary color ── */
@@ -2309,7 +2329,7 @@ input, select, textarea {
   color: #f59e0b !important;
 }
 [data-sonner-toast][data-type='info'] [data-icon] svg {
-  color: #6366f1 !important;
+  color: var(--primary) !important;
 }
 
 /* ── Toast close button — plain X inside card, top-right ── */
@@ -2344,7 +2364,7 @@ input, select, textarea {
   color: #f59e0b !important;
 }
 [data-sonner-toast][data-type='info'] [data-close-button] {
-  color: #6366f1 !important;
+  color: var(--primary) !important;
 }
 [data-theme="dark"] select {
   background-color: #090813!important;
@@ -2359,4 +2379,132 @@ input, select, textarea {
 [data-theme="dark"] select optgroup {
   background-color: #090813!important;
   color: #a0a0a0!important;
+}
+/* ═══════════════════════════════════════════════════════════════════════
+   PERSONALIZATION LAYER — Appearance settings
+   ═══════════════════════════════════════════════════════════════════════
+   Everything below is driven by `data-*` attributes the theme context writes
+   onto <html> (see `applyAppearanceToDocument` in src/lib/appearance/presets.ts).
+   The catalog of valid values lives in that same file — keep the two in sync.
+
+   This layer is deliberately LAST in the file. The accent blocks and the
+   `:root` / `[data-theme]` token blocks have identical specificity (0,1,0),
+   so source order is what lets an accent override the default indigo.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Font ──
+   All sans-serif on purpose: Loomi is a dense data UI, and serif/monospace
+   faces cost legibility in tables at these sizes.
+
+   The `--font-*` variables come from `next/font` (src/lib/appearance/fonts.ts),
+   declared together on <html> in the root layout. Every face is loaded up front,
+   which is what makes switching instant. Only `--font-sans` changes here; every
+   surface inherits it through `body`. Each stack keeps a system fallback so text
+   still renders if a font file fails to load. */
+[data-font='system'] {
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+[data-font='inter'] {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+}
+[data-font='space-grotesk'] {
+  --font-sans: var(--font-space-grotesk), system-ui, sans-serif;
+}
+[data-font='rubik'] {
+  --font-sans: var(--font-rubik), system-ui, sans-serif;
+}
+[data-font='lexend'] {
+  --font-sans: var(--font-lexend), system-ui, sans-serif;
+}
+[data-font='syne'] {
+  --font-sans: var(--font-syne), system-ui, sans-serif;
+}
+[data-font='bricolage'] {
+  --font-sans: var(--font-bricolage), system-ui, sans-serif;
+}
+
+/* ── Density ──
+   Tailwind v4 sizes spacing AND type in `rem`, so scaling the root font size
+   rescales padding, gaps, control heights and text together — proportionally,
+   with no per-utility migration.
+
+   Media-query breakpoints are unaffected on purpose: `rem` inside a media query
+   resolves against the browser's initial font size, not this override, so `md:`
+   still flips at the same viewport width in every density. */
+[data-density='compact'] {
+  font-size: 14px;
+}
+[data-density='comfortable'] {
+  font-size: 16px;
+}
+[data-density='spacious'] {
+  font-size: 17px;
+}
+
+/* ── Accent ──
+   Intentionally NOT defined here.
+
+   Accents are written as inline custom properties on <html> by
+   `applyAppearanceToDocument` (src/lib/appearance/presets.ts), which sets
+   --primary, --primary-foreground, --ring and --sidebar-ring. That is what
+   lets all 22 Tailwind hues AND an arbitrary user-picked color share one code
+   path — as CSS blocks this would be 44 hand-written rules that still couldn't
+   express a custom color. Inline properties also outrank the :root and
+   [data-theme] token blocks without needing !important.
+
+   `data-accent` is still set on <html> if you need a hook here. */
+
+
+/* ── Reduce transparency ──
+   Loomi's chrome leans hard on frosted glass (~180 backdrop-blur usages). This
+   swaps the translucent surface tokens for solid ones and kills the blur
+   outright, which helps both readability and low-end GPU performance.
+
+   The blur removal has to be a blanket `!important` rule: the effect comes from
+   Tailwind `backdrop-blur-*` utilities scattered across components, so there is
+   no single class to redefine. */
+[data-reduce-transparency] {
+  --card: #18181b;
+  --card-strong: #18181b;
+  --surface: #1e1a25;
+  --sidebar-bg: #0c0c14;
+}
+[data-theme='light'][data-reduce-transparency] {
+  --card: #ffffff;
+  --card-strong: #ffffff;
+  --surface: #ffffff;
+  --sidebar-bg: #ffffff;
+}
+
+[data-reduce-transparency] *,
+[data-reduce-transparency] *::before,
+[data-reduce-transparency] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* `.frost-heavy` and the toast surfaces hardcode their own rgba backgrounds
+   rather than reading a token, so they need explicit opaque counterparts. */
+[data-reduce-transparency] .frost-heavy {
+  background: #1c1c24;
+}
+[data-theme='light'][data-reduce-transparency] .frost-heavy {
+  background: #ffffff;
+}
+[data-reduce-transparency] [data-sonner-toast] {
+  background: var(--card-strong) !important;
+}
+
+/* ── Reduce motion ──
+   Collapses transitions and animations to effectively zero rather than removing
+   them, so anything that relies on a `transitionend`/`animationend` callback to
+   advance still fires. Mirrors the standard `prefers-reduced-motion` recipe,
+   but driven by the explicit in-app setting. */
+[data-reduce-motion] *,
+[data-reduce-motion] *::before,
+[data-reduce-motion] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
 }

@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { headers } from 'next/headers';
 import { Providers } from '@/components/providers';
 import { LayoutShell, type Surface } from '@/components/layout-shell';
+import { appearanceFontVariables } from '@/lib/appearance/fonts';
 
 export const metadata: Metadata = {
   title: 'Loomi Studio',
@@ -78,7 +79,7 @@ export default async function RootLayout({
   // hydration flash and no light ancestor to override the jewel-tone aurora.
   if (isMarketingPage) {
     return (
-      <html lang="en" data-theme="dark">
+      <html lang="en" data-theme="dark" className={appearanceFontVariables}>
         <body className="min-h-screen">{children}</body>
       </html>
     );
@@ -90,8 +91,11 @@ export default async function RootLayout({
   // (published by the App layout for the reverse direction). Empty in dev/prod
   // → the client falls back to its prefix/localhost logic.
   const appHost = configuredAppHost();
+  // The font classes declare every pickable typeface as a CSS variable up front;
+  // the Appearance tab's `data-font` attribute chooses which one `--font-sans`
+  // resolves to. See src/lib/appearance/fonts.ts.
   return (
-    <html lang="en">
+    <html lang="en" className={appearanceFontVariables}>
       <body className="flex min-h-screen">
         {appHost && (
           <script

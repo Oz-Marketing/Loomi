@@ -46,10 +46,10 @@ export const ACCOUNT_SOURCES: SourceDef[] = [
   { key: 'google', label: 'Google Ads', path: '/api/reporting/google', dated: true },
   { key: 'meta', label: 'Meta', path: '/api/reporting/ads', dated: true },
   { key: 'stackadapt', label: 'OTT / CTV', path: '/api/reporting/stackadapt', dated: true },
-  // Repointed from /api/reporting/email, which carried only the previous
-  // provider's sends AND nested them under `stats` — a key extractMetrics
-  // below never reads, so this channel has been coming back empty whatever the
-  // account had. The merged route exposes `summary`, which it does read.
+  // Repointed from the old standalone email route (now deleted), which carried
+  // only the previous provider's sends AND nested them under `stats` — a key
+  // extractMetrics below never reads, so this channel came back empty whatever
+  // the account had. The merged route exposes `summary`, which it does read.
   { key: 'email', label: 'Email & text', path: '/api/reporting/blasts', dated: true },
   { key: 'ga4', label: 'Website', path: '/api/reporting/ga4', dated: true },
   { key: 'reputation', label: 'Reputation', path: '/api/reporting/reputation', dated: false },

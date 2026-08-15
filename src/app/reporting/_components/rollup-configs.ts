@@ -90,10 +90,10 @@ export const GOOGLE_ROLLUP: RollupConfig = {
 /**
  * Email & Text Blasts — /api/reporting/blasts.
  *
- * Repointed from the old `/api/reporting/email` route, which carried ONLY the
- * previous provider's sends. Left as it was, the Executive Dashboard would have
- * quietly reported an account's pre-Loomi history as its whole email programme
- * and shown zero for a rooftop that has sent exclusively through Loomi.
+ * Repointed from the old standalone email route (now deleted), which carried
+ * ONLY the previous provider's sends. Left as it was, the Executive Dashboard
+ * would have quietly reported an account's pre-Loomi history as its whole email
+ * programme and shown zero for a rooftop that has sent only through Loomi.
  *
  * The extract splices text SEND VOLUME onto the merged email totals. Text
  * carries no opens or clicks — the events don't exist — so the engagement rows

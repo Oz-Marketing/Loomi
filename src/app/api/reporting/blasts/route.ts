@@ -3,9 +3,8 @@
  *
  * One report over every one-off send for an account, from three sources:
  * Loomi email, Loomi text, and the email history carried over from the
- * provider used before Loomi. Replaces the old GoHighLevel-only email report
- * (`/api/reporting/email`), which is kept for now as a raw view of the
- * historical feed alone.
+ * provider used before Loomi. Replaced the standalone email report, which read
+ * the previous provider and nothing else; that route and its page are gone.
  *
  * ── THE HISTORICAL FEED IS BEST-EFFORT ──────────────────────────────────────
  * The previous provider is a live third-party API that many accounts are no

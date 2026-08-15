@@ -14,13 +14,13 @@ import {
   SunIcon,
   UserCircleIcon,
 } from '@heroicons/react/24/outline';
-import { toast } from '@/lib/toast';
 import { useTheme } from '@/contexts/theme-context';
 import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
 import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
+import { openSupportModal } from '@/lib/ui-events';
 import type { UserRole } from '@/lib/roles';
 
 /**
@@ -265,7 +265,7 @@ export function ReportingTopBar({
                   type="button"
                   onClick={() => {
                     setUserMenuOpen(false);
-                    toast.info('Bug reporting portal coming soon');
+                    openSupportModal();
                   }}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
                 >

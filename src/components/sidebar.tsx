@@ -25,6 +25,7 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
+  LifebuoyIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -37,6 +38,7 @@ import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav'
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
+import { openSupportModal } from '@/lib/ui-events';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -281,6 +283,30 @@ export function Sidebar() {
               <SurfaceSwitch collapsed={collapsed} />
             </div>
           )}
+
+          {/* Help desk. Sits above Settings rather than in the nav proper —
+              it's a way OUT of the product (to a person), not a destination
+              inside it, so it belongs with the other footer utilities. Opens
+              the modal in place: you report a bug from the screen it's on. */}
+          <div className="px-2">
+            {(() => {
+              const helpButton = (
+                <button
+                  type="button"
+                  onClick={openSupportModal}
+                  className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+                >
+                  <LifebuoyIcon className="w-5 h-5" />
+                  {!collapsed && 'Get Help'}
+                </button>
+              );
+              return collapsed ? (
+                <SidebarTooltip label="Get Help">{helpButton}</SidebarTooltip>
+              ) : (
+                helpButton
+              );
+            })()}
+          </div>
 
           {/* Settings / Theme Toggle */}
           <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>

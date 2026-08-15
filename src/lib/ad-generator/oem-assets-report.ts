@@ -60,6 +60,12 @@ export interface PackRow {
   warningCount: number;
   errorCount: number;
   updatedAt: string;
+  /** The rules themselves, so the editor can open an existing pack. Parsed here
+   *  rather than shipping the raw JSON string, so a corrupt row reads as an
+   *  empty pack instead of breaking the page. */
+  rules: CoopRule[];
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
 }
 
 export interface MakeAssets {
@@ -211,6 +217,9 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
           ruleCount: parsed?.rules.length ?? 0,
           ...counts,
           updatedAt: p.updatedAt.toISOString(),
+          rules: parsed?.rules ?? [],
+          effectiveFrom: p.effectiveFrom?.toISOString().slice(0, 10) ?? null,
+          effectiveTo: p.effectiveTo?.toISOString().slice(0, 10) ?? null,
         };
       });
 

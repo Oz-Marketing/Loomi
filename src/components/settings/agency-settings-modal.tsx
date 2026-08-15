@@ -14,7 +14,7 @@ import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
-import { KnowledgeBaseTab } from '@/app/settings/page';
+import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
 import {
   useAgencySettingsNav,
   type SettingsTabKey,
@@ -78,11 +78,8 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
         className="glass-modal glass-modal-solid flex h-full max-h-[92vh] w-full max-w-[1400px]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Rail */}
-        {/* No solid background on the rail — a filled panel would sit on top of
-            the frost instead of being part of it. `--accent` is the themed
-            hairline tint (white in dark, black in light); a hardcoded white/2%
-            was invisible against the light panel. */}
+        {/* Rail. `--accent` is the themed hairline tint (white in dark, black
+            in light) — a hardcoded white/2% was invisible on the light panel. */}
         <nav className="hidden w-60 flex-shrink-0 flex-col overflow-y-auto border-r border-[var(--border)] bg-[var(--accent)] p-3 md:flex">
           <p className="px-3 pb-2 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             Agency Settings

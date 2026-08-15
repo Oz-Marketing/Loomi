@@ -17,6 +17,7 @@ function tpl(
     make?: string;
     schedule?: { start?: string | null; end?: string | null };
     updatedAt?: string;
+    usage?: 'oem' | 'custom' | 'both';
   } = {},
 ): TemplateCandidate {
   const doc = {
@@ -29,6 +30,7 @@ function tpl(
     defaults: {},
     ...(over.make ? { make: over.make } : {}),
     ...(over.schedule ? { schedule: over.schedule } : {}),
+    ...(over.usage ? { usage: over.usage } : {}),
   } as TemplateDoc;
   return {
     id,
@@ -219,5 +221,104 @@ describe('determinism — the property idempotency depends on', () => {
     });
     // Ownership outranks recency.
     expect(r.template?.id).toBe('mine');
+  });
+});
+
+
+describe('usage filtering', () => {
+  const base = { candidates: [] as TemplateCandidate[], accountKey: 'acct', offerType: 'lease', make: 'Mazda', runDate: RUN };
+
+  // The hazard this closes: automation's last resort is a make match, so a plate
+  // a designer built for a person to fill was already a candidate for unattended
+  // ads of the same brand.
+  it('will not brand-fallback onto a custom-only template', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('custom-mazda', { make: 'Mazda', usage: 'custom' })],
+    });
+    expect(r.template).toBeNull();
+    expect(r.reason).toBe('none');
+    expect(r.explanation).toContain('all are marked custom-only');
+  });
+
+  it('brand-falls back onto an oem template', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('oem-mazda', { make: 'Mazda', usage: 'oem' })],
+    });
+    expect(r.template?.id).toBe('oem-mazda');
+    expect(r.reason).toBe('brand_fallback');
+  });
+
+  it("treats 'both' as usable", () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('shared', { make: 'Mazda', usage: 'both' })],
+    });
+    expect(r.template?.id).toBe('shared');
+  });
+
+  // Existing templates predate the field and must keep working.
+  it('treats an unset usage as usable', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('legacy', { make: 'Mazda' })],
+    });
+    expect(r.template?.id).toBe('legacy');
+  });
+
+  it('skips a custom-only template and picks the oem one beside it', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [
+        tpl('custom-newer', { make: 'Mazda', usage: 'custom', updatedAt: '2026-07-01T00:00:00Z' }),
+        tpl('oem-older', { make: 'Mazda', usage: 'oem', updatedAt: '2026-01-01T00:00:00Z' }),
+      ],
+    });
+    // Without the filter the newer custom plate would have won the sort.
+    expect(r.template?.id).toBe('oem-older');
+  });
+
+  // An explicit pin is the strongest signal in the module, and it still must not
+  // reach a custom plate — but the refusal has to say WHY, or it reads as a
+  // deleted template.
+  it('refuses a pin onto a custom-only template, distinctly from a missing one', () => {
+    const custom = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('pinned-custom', { usage: 'custom' })],
+      monthlyPins: { '2026-08': 'pinned-custom' },
+    });
+    expect(custom.template).toBeNull();
+    expect(custom.explanation).toContain('marked custom-only');
+
+    const missing = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('something-else', { usage: 'oem' })],
+      monthlyPins: { '2026-08': 'deleted-id' },
+    });
+    expect(missing.template).toBeNull();
+    expect(missing.explanation).toContain('no longer available');
+  });
+
+  it('will not use a custom-only template even when mapped as the default', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('mapped-custom', { usage: 'custom' })],
+      templateMap: { lease: 'mapped-custom' },
+    });
+    expect(r.template).toBeNull();
+  });
+
+  it('will not use a custom-only template even inside its schedule window', () => {
+    const r = resolveAutomationTemplate({
+      ...base,
+      candidates: [tpl('seasonal-custom', { usage: 'custom', schedule: { start: '2026-07-01', end: '2026-09-01' } })],
+    });
+    expect(r.template).toBeNull();
+  });
+
+  it('reports no templates in scope differently from all-custom', () => {
+    const r = resolveAutomationTemplate({ ...base, candidates: [] });
+    expect(r.explanation).toContain('No published templates are in scope');
   });
 });

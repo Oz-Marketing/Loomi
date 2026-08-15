@@ -104,7 +104,7 @@ import {
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
+import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
@@ -3707,6 +3707,26 @@ export default function AdBuilderPage() {
                       menuZIndex={260}
                     />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
+
+                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Used for</h3>
+                      <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                        Unattended OEM generation has no human to fill a blank, so every field an
+                        &ldquo;OEM&rdquo; template renders must come from the offer feed. Pick
+                        &ldquo;Both&rdquo; only once that&apos;s true — it is the stricter bar, not the
+                        safe middle.
+                      </p>
+                      <Select
+                        value={templateUsage(doc)}
+                        onChange={(v) => setDoc((prev) => ({ ...prev, usage: v as TemplateUsage }), 'usage')}
+                        options={[
+                          { value: 'custom', label: 'Custom ads only — a person fills the form' },
+                          { value: 'oem', label: 'OEM automation only — filled from the offer feed' },
+                          { value: 'both', label: 'Both' },
+                        ]}
+                        previewFont={false}
+                      />
+                    </div>
 
                     {templateIsAutomotive && (
                       <div className="mt-4 border-t border-[var(--border)] pt-3">

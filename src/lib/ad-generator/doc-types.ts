@@ -247,6 +247,33 @@ export interface DocBackground {
   accentBar?: boolean;
 }
 
+/** Which producer a template is built for. See `TemplateDoc.usage`. */
+export type TemplateUsage = 'oem' | 'custom' | 'both';
+
+/**
+ * A doc's usage, with the compatibility default.
+ *
+ * Undefined reads as `both`, which is what every template written before this
+ * field existed effectively was. The alternative — defaulting to `custom` —
+ * would have stopped automation finding any template the moment this shipped.
+ * New templates are created as `custom` (see `blankTemplateDoc`), so the
+ * permissive default applies only to the existing library, which the Co-op team
+ * narrows deliberately rather than by outage.
+ */
+export function templateUsage(doc: Pick<TemplateDoc, 'usage'>): TemplateUsage {
+  return doc.usage ?? 'both';
+}
+
+/** Can this template be used by unattended OEM generation? */
+export function usableByAutomation(doc: Pick<TemplateDoc, 'usage'>): boolean {
+  return templateUsage(doc) !== 'custom';
+}
+
+/** Can a person build a custom ad from this template? */
+export function usableForCustom(doc: Pick<TemplateDoc, 'usage'>): boolean {
+  return templateUsage(doc) !== 'oem';
+}
+
 export interface TemplateDoc {
   id: string;
   name: string;
@@ -261,6 +288,33 @@ export interface TemplateDoc {
    *  which required fields must be present before ads from it can be exported.
    *  Automotive only; matched case-insensitively to AdOemOfferRule.make. */
   make?: string;
+  /**
+   * WHAT this template is for — the two audiences produce ads very differently.
+   *
+   * `oem`     Unattended automation only. Every field it renders has to come from
+   *           the offer feed, because there is no human to fill a blank.
+   * `custom`  Human-built ads only. May carry fields only a person can supply.
+   * `both`    Meets the automation bar AND is offered in the human picker. A real
+   *           case for a generic offer plate — but it IS the stricter bar, not a
+   *           shrug: a template nobody has checked against the feed belongs in
+   *           `custom`.
+   *
+   * WHY THIS EXISTS. Automation's last resort is a brand fallback — any published
+   * template whose `make` matches the vehicle. Nothing else distinguished "built
+   * for the feed" from "built for a person", so a custom Mazda plate was already a
+   * candidate for unattended Mazda ads. That contradicts this module's own rule
+   * that rendering an offer through an unintended template is worse than producing
+   * no ad.
+   *
+   * This is INTENT, and deliberately separate from co-op approval, which is
+   * PERMISSION (per make, and goes stale when the design or the guidelines move).
+   * A template can be intended for OEM use and still be blocked by a stale
+   * approval; collapsing the two would lose that state.
+   *
+   * Undefined is read as `both` so existing templates keep working — see
+   * `templateUsage`.
+   */
+  usage?: TemplateUsage;
   /** Shared template taxonomy: a single category + freeform tags, used to
    *  organize/filter this template alongside every other kind on /templates. */
   category?: string;

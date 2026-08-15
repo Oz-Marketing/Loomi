@@ -49,6 +49,11 @@ export function blankTemplateDoc(
     // to these rather than authoring their own. Canonical defaults make the
     // canvas read real immediately.
     fields: SYSTEM_FIELDS,
+    // New templates are CUSTOM until someone says otherwise. The permissive
+    // default (`usage` undefined ⇒ 'both') exists only so the pre-existing
+    // library keeps working; a template created from now on has to be marked
+    // deliberately before unattended generation can render an offer through it.
+    usage: 'custom',
     background: { color: '#ffffff' },
     elements: [],
     layouts,

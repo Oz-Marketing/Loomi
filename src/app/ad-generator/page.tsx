@@ -15,9 +15,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { openSupportModal } from '@/lib/ui-events';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
 import BulkActionDock from '@/components/bulk-action-dock';
@@ -607,7 +608,20 @@ export default function AdGeneratorListPage() {
       {!isManager && (
         <div className="mb-5 flex items-center justify-between gap-3 border-b border-[var(--border)] pb-4">
           <AccountLogo className="h-11 w-auto max-w-[220px] object-contain" />
-          <ImpersonationEscape />
+          <div className="flex items-center gap-2">
+            {/* Clients have no sidebar and no utility bar, so this is their only
+                route to the help desk — without it they'd have nowhere in the
+                product to report that the one page they use is broken. */}
+            <button
+              type="button"
+              onClick={openSupportModal}
+              className="inline-flex items-center gap-1.5 px-3 h-9 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <LifebuoyIcon className="w-4 h-4" />
+              Get help
+            </button>
+            <ImpersonationEscape />
+          </div>
         </div>
       )}
       <div className="page-sticky-header mb-6">

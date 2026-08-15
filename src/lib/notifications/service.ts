@@ -5,7 +5,7 @@ import {
   type NotificationEmailItem,
 } from '@/lib/notifications/email';
 import {
-  isNotificationEnabled,
+  resolveChannels,
   type NotificationType,
 } from '@/lib/notifications/types';
 import { purgeOldAuditEntries } from '@/lib/meta-ads-audit';
@@ -42,12 +42,14 @@ interface CreateNotificationInput {
  * Create a notification (in-app), optionally sending an immediate email.
  * Idempotent when `dedupeKey` is provided — re-creates only after the window.
  *
- * Honors the user's NotificationPreference for the given type — returns null
- * when the user has disabled this notification kind.
+ * Honors the user's NotificationPreference for the given type. The panel and
+ * the inbox are separate switches: with in-app off there is nothing to create,
+ * so this returns null; with in-app on but email off, the row is written and
+ * `sendEmailNow` is ignored.
  */
 export async function createNotification(input: CreateNotificationInput) {
-  const enabled = await isNotificationEnabled(input.userId, input.type);
-  if (!enabled) return null;
+  const channels = await resolveChannels(input.userId, input.type);
+  if (!channels.inApp) return null;
 
   const window = input.dedupeWindowHours ?? 0;
   if (input.dedupeKey && window > 0) {
@@ -78,7 +80,7 @@ export async function createNotification(input: CreateNotificationInput) {
     },
   });
 
-  if (input.sendEmailNow) {
+  if (input.sendEmailNow && channels.email) {
     const user = await prisma.user.findUnique({
       where: { id: input.userId },
       select: { email: true, name: true },
@@ -228,8 +230,28 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
 
   // Collected per-user, used for the digest at the end
   const digestByUser = new Map<string, NotificationEmailItem[]>();
+  // (userId:type) → wants email. The same pair recurs across every ad in the
+  // scan, so resolve once rather than re-querying per notification.
+  const wantsEmailCache = new Map<string, boolean>();
 
-  function pushToDigest(userId: string, item: NotificationEmailItem) {
+  /**
+   * Queue a created notification for tonight's digest email — unless the user
+   * has email switched off for that type. In-app and email are independent
+   * switches, so a row existing in the panel is not on its own a license to mail.
+   */
+  async function pushToDigest(
+    notification: { userId: string; type: string },
+    item: NotificationEmailItem,
+  ) {
+    const { userId, type } = notification;
+    const cacheKey = `${userId}:${type}`;
+    let wantsEmail = wantsEmailCache.get(cacheKey);
+    if (wantsEmail === undefined) {
+      wantsEmail = (await resolveChannels(userId, type as NotificationType)).email;
+      wantsEmailCache.set(cacheKey, wantsEmail);
+    }
+    if (!wantsEmail) return;
+
     const arr = digestByUser.get(userId) ?? [];
     arr.push(item);
     digestByUser.set(userId, arr);
@@ -316,7 +338,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity });
+        await pushToDigest(created, { title, body, link, severity });
       }
     }
   }
@@ -354,7 +376,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity: 'warning' });
+        await pushToDigest(created, { title, body, link, severity: 'warning' });
       }
     }
   }
@@ -385,7 +407,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity: 'critical' });
+        await pushToDigest(created, { title, body, link, severity: 'critical' });
       }
     }
   }
@@ -455,7 +477,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity });
+        await pushToDigest(created, { title, body, link, severity });
       }
     }
   }
@@ -492,7 +514,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity: 'critical' });
+        await pushToDigest(created, { title, body, link, severity: 'critical' });
       }
     }
   }
@@ -525,7 +547,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       });
       if (created) {
         result.notificationsCreated += 1;
-        pushToDigest(userId, { title, body, link, severity: 'info' });
+        await pushToDigest(created, { title, body, link, severity: 'info' });
       }
     }
   }
@@ -600,7 +622,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
         });
         if (created) {
           result.notificationsCreated += 1;
-          pushToDigest(userId, { title, body, link, severity: 'warning' });
+          await pushToDigest(created, { title, body, link, severity: 'warning' });
         }
       }
     }

@@ -1,4 +1,19 @@
 @import "tailwindcss";
+
+/* Bind Tailwind's `dark:` variant to the app's own theme switch.
+ *
+ * Without this, `dark:` defaults to `prefers-color-scheme` — the OS — while
+ * everything else here themes off `[data-theme]`. The two disagree whenever a
+ * user picks a theme that isn't their OS setting, and then every `dark:`
+ * utility in the app fires under the wrong theme: on a dark OS with the light
+ * theme chosen, `dark:text-emerald-300` won and the selected offer pill washed
+ * out against its own tint.
+ *
+ * `data-theme` is always present — layout.tsx renders it and ThemeProvider
+ * rewrites it after hydration — so there is no unstamped state for this
+ * selector to miss.
+ */
+@custom-variant dark ([data-theme="dark"] &);
 /* @xyflow/react ships light-mode-only chrome by default. Importing
    here (rather than in the FlowBuilder component) lets our overrides
    below win the cascade — otherwise the per-component import loads
@@ -1398,6 +1413,20 @@ button.glass-card:hover,
 [data-theme='light'] .glass-modal:hover {
   transform: none;
   border-color: rgba(255, 255, 255, 0.65);
+}
+
+/* ── Solid modal surface ──
+   For LARGE panels (Agency Settings). A translucent fill fails at this size:
+   the panel covers most of the viewport, so whatever is behind it shows through
+   the content area and competes with the settings you're reading. This is a
+   near-opaque neutral surface — the blur only softens the few pixels at the
+   edges, it isn't doing the work. */
+.glass-modal-solid {
+  background: rgba(20, 20, 26, 0.97);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+[data-theme='light'] .glass-modal-solid {
+  background: rgba(253, 253, 255, 0.98);
 }
 
 /* (glass-dropdown is defined above — single source of truth) */

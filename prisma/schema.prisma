@@ -1986,16 +1986,36 @@ model EmailSuppression {
 // ─────────────────────────────────────────────────────
 
 model ChangelogEntry {
-  id          String   @id @default(cuid())
-  title       String
-  content     String // Plain text body describing the change
-  type        String   @default("improvement") // feature | improvement | fix
-  publishedAt DateTime @default(now())
+  id      String @id @default(cuid())
+  title   String
+  content String // Plain text body describing the change
+  type    String @default("improvement") // feature | improvement | fix
+
+  // Nothing reaches a reader — or an inbox — until a person publishes it.
+  // Entries arriving from the merge-to-main automation land as `draft`; the
+  // manual "New entry" form still publishes straight away.
+  status String @default("published") // draft | published
+
+  // Who the entry is written for. `staff` hides it from client-role users
+  // and keeps them off the notification fan-out, so an internal-plumbing
+  // note doesn't land in a dealer's inbox.
+  audience String @default("everyone") // everyone | staff
+
+  // Idempotency handle for automated entries, e.g. "pr:412". Unique so a
+  // re-run of the workflow (re-open → re-merge, replay) can't duplicate the
+  // entry. The importer only ever CREATES against this key — it never
+  // updates — so edits made in Loomi are never clobbered by a later run.
+  sourceKey String? @unique
+
+  publishedAt DateTime  @default(now())
   createdBy   String? // user name or "Claude"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  publishedBy String? // who pressed Publish (null for auto/manual-create)
+  notifiedAt  DateTime? // set once the publish fan-out has run; guards re-notify
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([publishedAt])
+  @@index([status, publishedAt])
 }
 
 // ─────────────────────────────────────────────────────
@@ -2961,13 +2981,19 @@ model Notification {
 }
 
 model NotificationPreference {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      String
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   String
+  /// In-app: show this kind in the bell panel.
+  enabled Boolean @default(true)
+  /// Email: also send it to the user's inbox. Independent of `enabled` — a
+  /// user can keep the panel entry and mute the email, or vice versa.
+  /// Backfilled from `enabled` for rows that predate the split, so nobody
+  /// started receiving mail they had previously switched off.
+  emailEnabled Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([userId, type])
   @@index([userId])

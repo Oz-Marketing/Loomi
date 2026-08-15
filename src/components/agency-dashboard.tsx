@@ -58,7 +58,7 @@ export function AgencyDashboard() {
     <div className="animate-fade-in-up pt-4 max-w-6xl">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-[var(--foreground)]">
-          {userName ? `Welcome back, ${userName.split(' ')[0]}.` : 'Agency View'}
+          {userName ? `Welcome back, ${userName.split(' ')[0]}.` : 'Agency'}
         </h1>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
           Manage the platform, the shared template library, and every client.

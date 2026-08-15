@@ -37,7 +37,6 @@ import {
   ArrowRightIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
-import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { DashboardToolbar } from '@/components/filters/dashboard-toolbar';
 import { DEFAULT_DATE_RANGE } from '@/lib/date-ranges';
@@ -74,16 +73,6 @@ interface DealerSummaries {
 const n = (v: unknown): number => {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? x : 0;
-};
-
-/** Where each channel's own report lives, for the "open it" links. */
-const REPORT_HREF: Record<string, string> = {
-  google: '/ads/google',
-  meta: '/ads/meta',
-  stackadapt: '/ads/stackadapt',
-  email: '/ads/blasts',
-  ga4: '/websites',
-  reputation: '/reputation',
 };
 
 export function MarketingOverview({ accountKey, dealer }: { accountKey: string; dealer: string }) {

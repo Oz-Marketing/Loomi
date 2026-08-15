@@ -2260,7 +2260,10 @@ export default function MediaPage() {
             This route renders its own chrome, so it has to provide it. */}
         <div aria-hidden className="content-dock-lead" />
       {/* Header */}
-      <div className="page-sticky-header mb-6">
+      {/* mb-2, not mb-6: `.page-sticky-header` already carries 0.75rem of its own
+          bottom padding, so a 1.5rem margin on top of it left ~36px between the
+          title block and the tabs. */}
+      <div className="page-sticky-header mb-2">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <PhotoIcon className="w-7 h-7 text-[var(--primary)]" />
@@ -2415,7 +2418,11 @@ export default function MediaPage() {
                 forces the x axis from visible to auto, which is where the
                 horizontal scrollbar came from. overflow-x-hidden makes that
                 impossible regardless of what a future child does. */}
-            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[112px] lg:w-52 lg:max-h-[calc(100vh-12rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
+            {/* lg:top tracks the docked header: its height plus the header's
+                bottom margin plus a 4px breath. Changing either the header's
+                height or its mb-* means changing this too, or the rail docks
+                with a gap above it. */}
+            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[96px] lg:w-52 lg:max-h-[calc(100vh-11rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
               {/* Search leads the rail, above scope. It narrows the same slice
                   the controls below it define, so it belongs with them rather
                   than floating over the grid. */}

@@ -3,11 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
-import { AdminOnly } from '@/components/route-guard';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { BlastPageList, type AccountMeta } from '@/components/campaigns/blast-page-list';
-import type { BlastFilterState, BlastFilterOptions, RepFilterOption } from '@/components/filters/blast-toolbar';
-import { BlastFilterSidebar } from '@/components/filters/blast-filter-sidebar';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
 import { ListToolbar } from '@/components/list-toolbar';
 import type {
@@ -18,16 +15,14 @@ import { DEFAULT_DATE_RANGE, getDateRangeBounds, type DateRangeKey } from '@/lib
 import { resolveAccountLocationId, resolveAccountProvider } from '@/lib/account-resolvers';
 import {
   PaperAirplaneIcon,
-  FunnelIcon,
   PlusIcon,
   Cog6ToothIcon,
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
-import { getAccountOems, industryHasBrands } from '@/lib/oems';
+import { getAccountOems } from '@/lib/oems';
 import PrimaryButton from '@/components/primary-button';
 import { CreateBlastModal } from '@/components/campaigns/create-blast-modal';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
-import { ViewAnalyticsLink } from '@/components/view-analytics-link';
 
 // ── Types ──
 
@@ -50,22 +45,6 @@ interface Campaign {
   parentId?: string;
 }
 
-interface AccountData {
-  dealer: string;
-  category?: string;
-  oem?: string;
-  oems?: string[];
-  espProvider?: string;
-  activeEspProvider?: string;
-  activeLocationId?: string | null;
-  state?: string;
-  city?: string;
-  storefrontImage?: string;
-  logos?: { light?: string; dark?: string; white?: string; black?: string };
-  accountRepId?: string | null;
-  accountRep?: { id: string; name: string; email: string } | null;
-}
-
 type PageTab = 'analytics' | 'list';
 
 /** The three mutually-exclusive views the toolbar dropdown offers over
@@ -83,22 +62,6 @@ function toBlastsView(next: StatusFilterValue): BlastsView {
 }
 
 // ── Helpers ──
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}
-
-function resolveAccountLabel(
-  accountKey: string,
-  accountNames: Record<string, string>,
-  accountMeta: Record<string, AccountMeta>,
-): string {
-  return accountNames[accountKey] || accountMeta[accountKey]?.dealer || accountKey;
-}
-
-function campaignAccountKey(campaign: Campaign): string | null {
-  return campaign.accountKey || null;
-}
 
 function getCampaignDate(campaign: Campaign): Date | null {
   const raw =
@@ -131,479 +94,6 @@ function normalizeCampaignStatus(status: string): string {
 }
 
 // ── Inner Page ──
-
-function AdminCampaignsPage() {
-  const pathname = usePathname();
-  // The sidebar drives view selection: /campaigns → list, /campaigns/analytics → analytics.
-  // The in-page tab toggle is gone; navigation happens at the sidebar level.
-  const activeTab: PageTab = pathname.endsWith('/analytics') ? 'analytics' : 'list';
-  const [sideRailMounted, setSideRailMounted] = useState(false);
-
-  // Loomi-native campaigns (EmailBlast + SmsBlast) are the only
-  // source now — ESP-fetched campaigns are gone.
-  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(true);
-  // Combined "which rows" selector behind the toolbar's dropdown. Three
-  // mutually-exclusive views over one list:
-  //   'all'      → live, human-composed blasts (the default)
-  //   'archived' → soft-deleted blasts
-  //   'flows'    → the automated sends flow email/SMS steps produced.
-  //                Hidden from the default view because each row is a
-  //                flow STEP, not a send: its counters roll up every
-  //                enrollment that ever passed through, and it can't be
-  //                edited, scheduled, duplicated, or re-sent.
-  const [campaignsView, setCampaignsView] = useState<BlastsView>('all');
-  const campaignsStatusFilter: 'all' | 'archived' =
-    campaignsView === 'archived' ? 'archived' : 'all';
-  const campaignsSource = campaignsView === 'flows' ? 'flows' : 'blasts';
-  // Lifted page-level search so the unified ListToolbar drives
-  // BlastPageList from the same value.
-  const [campaignsSearch, setCampaignsSearch] = useState('');
-  useEffect(() => {
-    let cancelled = false;
-    setCampaignsLoading(true);
-    fetch(
-      `/api/blasts/loomi/list?status=${campaignsStatusFilter}&source=${campaignsSource}`,
-    )
-      .then((r) => (r.ok ? r.json() : { campaigns: [] }))
-      .then((data: { campaigns?: Campaign[] }) => {
-        if (cancelled) return;
-        setCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
-        setCampaignsLoading(false);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCampaigns([]);
-        setCampaignsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [campaignsStatusFilter, campaignsSource]);
-
-  const accountNames = useMemo<Record<string, string>>(() => ({}), []);
-
-  const [accountMeta, setAccountMeta] = useState<Record<string, AccountMeta>>({});
-  const [accountProviders, setAccountProviders] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [dateRange, setDateRange] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
-  const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
-
-  // Filter state — lifted to page level
-  const [filters, setFilters] = useState<BlastFilterState>({
-    account: [],
-    status: [],
-    oem: [],
-    industry: [],
-    rep: [],
-  });
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const activeFilterCount = [filters.account, filters.status, filters.oem, filters.industry, filters.rep]
-    .filter((a) => a.length > 0).length;
-  const [showCreateModal, setShowCreateModal] = useState(false);
-
-
-  // Side-rail mount/unmount (delayed unmount for slide-out animation)
-  useEffect(() => {
-    if (filtersOpen) {
-      setSideRailMounted(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setSideRailMounted(false), 260);
-    return () => window.clearTimeout(timer);
-  }, [filtersOpen]);
-
-  // Sync loading state with campaign fetch
-  useEffect(() => {
-    if (!campaignsLoading) setLoading(false);
-  }, [campaignsLoading]);
-
-  // Fetch account metadata (separate from the campaigns fetch)
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadAccountMeta() {
-      try {
-        const accountsHttp = await fetch('/api/accounts');
-        const accountsRes = await accountsHttp.json().catch(() => ({}));
-
-        if (cancelled) return;
-
-        const meta: Record<string, AccountMeta> = {};
-        const providers: Record<string, string> = {};
-        if (accountsRes && typeof accountsRes === 'object') {
-          Object.entries(accountsRes).forEach(([key, acct]) => {
-            const a = acct as AccountData;
-            const accountOems = getAccountOems(a);
-            meta[key] = {
-              dealer: a.dealer || key,
-              category: a.category,
-              oem: accountOems[0],
-              oems: accountOems,
-              state: a.state,
-              city: a.city,
-              storefrontImage: a.storefrontImage,
-              logos: a.logos,
-              locationId: resolveAccountLocationId(a) || undefined,
-              accountRepId: a.accountRepId || a.accountRep?.id || null,
-              accountRepName: a.accountRep?.name || null,
-              accountRepEmail: a.accountRep?.email || null,
-            };
-            const preferredProvider = resolveAccountProvider(a, '');
-            providers[key] = preferredProvider;
-          });
-        }
-        setAccountMeta(meta);
-        setAccountProviders(providers);
-      } catch {
-        // Account meta is non-critical
-      }
-    }
-
-    loadAccountMeta();
-    return () => { cancelled = true; };
-  }, []);
-
-  const bounds = useMemo(
-    () =>
-      dateRange === 'custom' && customRange
-        ? getDateRangeBounds('custom', customRange.start, customRange.end)
-        : getDateRangeBounds(dateRange),
-    [dateRange, customRange],
-  );
-
-  const accessibleAccountKeys = useMemo(() => {
-    const fromAggregate = Object.keys(accountNames);
-    if (fromAggregate.length > 0) return fromAggregate;
-    return Object.keys(accountMeta);
-  }, [accountNames, accountMeta]);
-
-  // Derive filter options from all accessible accounts + campaign data
-  const filterOptions: BlastFilterOptions = useMemo(() => {
-    const accountsByLabel = new Map<string, BlastFilterOptions['accounts'][number]>();
-    const statuses = new Set<string>();
-    const oems = new Set<string>();
-    const industries = new Set<string>();
-
-    function upsertAccountOption(label: string, key?: string) {
-      if (!label) return;
-      const meta = key ? accountMeta[key] : undefined;
-      const existing = accountsByLabel.get(label);
-      accountsByLabel.set(label, {
-        label,
-        key: key ?? existing?.key,
-        storefrontImage: meta?.storefrontImage ?? existing?.storefrontImage,
-        logos: meta?.logos ?? existing?.logos,
-        city: meta?.city ?? existing?.city,
-        state: meta?.state ?? existing?.state,
-      });
-    }
-
-    accessibleAccountKeys.forEach((key) => {
-      upsertAccountOption(resolveAccountLabel(key, accountNames, accountMeta), key);
-      const meta = accountMeta[key];
-      if (meta?.category && industryHasBrands(meta.category)) {
-        getAccountOems(meta).forEach((brand) => oems.add(brand));
-      }
-      if (meta?.category) industries.add(meta.category);
-    });
-
-    campaigns.forEach((c) => {
-      const accountKey = campaignAccountKey(c);
-      const name = accountKey
-        ? resolveAccountLabel(accountKey, accountNames, accountMeta)
-        : c.dealer;
-      if (name) upsertAccountOption(name, accountKey || undefined);
-      if (c.status) statuses.add(capitalize(normalizeCampaignStatus(c.status)));
-    });
-
-    // Build rep options from accountMeta
-    const repMap = new Map<string, RepFilterOption>();
-    let unassignedRepCount = 0;
-    for (const key of accessibleAccountKeys) {
-      const m = accountMeta[key];
-      const repId = m?.accountRepId;
-      if (!repId) { unassignedRepCount++; continue; }
-      const label = m.accountRepName?.trim() || m.accountRepEmail || `Rep ${repId.slice(0, 6)}`;
-      const existing = repMap.get(repId);
-      if (existing) { existing.accountCount++; } else { repMap.set(repId, { id: repId, label, accountCount: 1 }); }
-    }
-    const reps = [...repMap.values()].sort((a, b) => a.label.localeCompare(b.label));
-    if (unassignedRepCount > 0) reps.push({ id: '__unassigned__', label: 'Unassigned', accountCount: unassignedRepCount });
-
-    return {
-      accounts: [...accountsByLabel.values()].sort((a, b) => a.label.localeCompare(b.label)),
-      statuses: [...statuses].sort(),
-      oems: [...oems].sort(),
-      industries: [...industries].sort(),
-      reps,
-    };
-  }, [campaigns, accountNames, accountMeta, accessibleAccountKeys]);
-
-  // Apply page-level filters
-  const filteredCampaigns = useMemo(() => {
-    let result = campaigns;
-
-    if (filters.account.length > 0) {
-      result = result.filter(c => {
-        const accountKey = campaignAccountKey(c);
-        const name = accountKey
-          ? resolveAccountLabel(accountKey, accountNames, accountMeta)
-          : c.dealer;
-        return Boolean(name && filters.account.includes(name));
-      });
-    }
-
-    if (filters.status.length > 0) {
-      result = result.filter(c => filters.status.includes(capitalize(normalizeCampaignStatus(c.status))));
-    }
-
-    if (filters.oem.length > 0) {
-      result = result.filter(c => {
-        const accountKey = campaignAccountKey(c);
-        if (!accountKey) return false;
-        const meta = accountMeta[accountKey];
-        if (meta?.category?.trim().toLowerCase() !== 'automotive') return false;
-        const brands = getAccountOems(meta);
-        return brands.some((brand) => filters.oem.includes(brand));
-      });
-    }
-
-    if (filters.industry.length > 0) {
-      result = result.filter(c => {
-        const accountKey = campaignAccountKey(c);
-        if (!accountKey) return false;
-        const meta = accountMeta[accountKey];
-        return Boolean(meta?.category && filters.industry.includes(meta.category));
-      });
-    }
-
-    if (bounds.start) {
-      result = result.filter(c => inRange(c, bounds.start!, bounds.end));
-    }
-
-    return result;
-  }, [campaigns, filters, accountNames, accountMeta, bounds]);
-
-  // filteredWorkflows + the workflows aggregate fed the old ESP analytics
-  // breakdown. Now that the analytics tab uses the SendGrid-sourced
-  // EngagementSection, those derivations live as dead code in the older
-  // BlastPageAnalytics component (still around for now) but the
-  // admin page doesn't need them anymore.
-
-  const selectedAccountLabel = filters.account.length === 1 ? filters.account[0] : null;
-
-  const selectedAccountKey = useMemo(() => {
-    if (!selectedAccountLabel) return null;
-    return (
-      accessibleAccountKeys.find(
-        (key) => resolveAccountLabel(key, accountNames, accountMeta) === selectedAccountLabel,
-      ) || null
-    );
-  }, [selectedAccountLabel, accessibleAccountKeys, accountNames, accountMeta]);
-
-  const campaignEmptyState = selectedAccountLabel
-    ? {
-        title: `No blasts found for ${selectedAccountLabel}`,
-        subtitle: 'Build and schedule a blast in Loomi to get started for this account.',
-        actionLabel: 'Create Blast',
-        actionHref: '/messaging/blasts/schedule',
-      }
-    : filters.account.length > 1
-      ? {
-          title: 'No blasts found for selected sub-accounts',
-          subtitle: 'Build and schedule blasts in Loomi to get started.',
-        }
-    : null;
-
-  return (
-    <div>
-      {/* Sticky header with title + centered tabs + controls */}
-      <div className="page-sticky-header mb-8">
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
-            <PaperAirplaneIcon className="w-7 h-7 text-[var(--primary)]" />
-            <div>
-              <h2 className="text-2xl font-bold">
-                {activeTab === 'analytics' ? 'Analytics' : 'Blasts'}
-              </h2>
-              <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
-                Email + Text {activeTab === 'analytics' ? 'performance' : 'blasts'} across all accounts
-                {filteredCampaigns.length !== campaigns.length && (
-                  <span className="ml-1 tabular-nums">
-                    · {filteredCampaigns.length} / {campaigns.length}
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-
-          {/* Tab toggle removed — analytics moved out to reporting. The
-              "View Analytics" affordance below cross-links there with
-              the active account preserved. */}
-          <div>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            <ViewAnalyticsLink area="engagement" />
-            {/* Date + Filters live in the header for the analytics view; on
-                the list view they're rendered next to the search input
-                inside BlastPageList (passed via toolbarExtras). */}
-            {activeTab === 'analytics' && (
-              <>
-                <DashboardToolbar
-                  dateRange={dateRange}
-                  onDateRangeChange={setDateRange}
-                  customRange={customRange}
-                  onCustomRangeChange={setCustomRange}
-                  showReset={false}
-                  triggerSize="header"
-                />
-                <button
-                  type="button"
-                  onClick={() => setFiltersOpen((prev) => !prev)}
-                  className={`inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border transition-colors ${
-                    filtersOpen
-                      ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                      : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                  }`}
-                  aria-pressed={filtersOpen}
-                >
-                  <FunnelIcon className="w-4 h-4" />
-                  Filters
-                  {activeFilterCount > 0 && (
-                    <span className="w-5 h-5 rounded-full bg-[var(--primary)] text-white text-[10px] flex items-center justify-center">
-                      {activeFilterCount}
-                    </span>
-                  )}
-                </button>
-              </>
-            )}
-            {/* Create Blast lives on the list view; analytics is read-only. */}
-            {activeTab !== 'analytics' && (
-              <PrimaryButton type="button" onClick={() => setShowCreateModal(true)}>
-                <PlusIcon className="w-4 h-4" />
-                Create Blast
-              </PrimaryButton>
-            )}
-
-          </div>
-        </div>
-      </div>
-
-      <CreateBlastModal
-        open={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        accountKeys={selectedAccountKey ? [selectedAccountKey] : []}
-      />
-
-      {/* Dashboard-style grid: content + inline filter side rail */}
-      <div className={sideRailMounted ? 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start' : ''}>
-        {/* Main content column */}
-        <div className="min-w-0">
-          {/* ESP error banner removed — Loomi is the engine; missing ESP
-              credentials are expected for many sub-accounts and shouldn't
-              dominate the page. */}
-
-          {activeTab === 'analytics' && (
-            <EngagementSection dateRange={dateRange} customRange={customRange} />
-          )}
-
-          {activeTab === 'list' && (
-            <>
-              {/* Unified toolbar — only renders when there's at least
-                  one campaign. Count text takes the left slot since
-                  campaigns don't have a Cards/Table choice. */}
-              {campaigns.length > 0 && (
-                <ListToolbar
-                  leading={
-                    <span className="text-sm text-[var(--muted-foreground)]">
-                      <span className="text-[var(--foreground)] font-medium tabular-nums">
-                        {filteredCampaigns.length}
-                      </span>{' '}
-                      campaign{filteredCampaigns.length === 1 ? '' : 's'}
-                      {filteredCampaigns.length !== campaigns.length && (
-                        <span className="opacity-60"> / {campaigns.length}</span>
-                      )}
-                    </span>
-                  }
-                  search={campaignsSearch}
-                  onSearchChange={setCampaignsSearch}
-                  searchPlaceholder="Search campaigns…"
-                  status={campaignsView}
-                  onStatusChange={(next) => setCampaignsView(toBlastsView(next))}
-                  statusOptions={BLASTS_VIEW_OPTIONS}
-                  trailing={
-                    <>
-                      <DashboardToolbar
-                        dateRange={dateRange}
-                        onDateRangeChange={setDateRange}
-                        customRange={customRange}
-                        onCustomRangeChange={setCustomRange}
-                        showReset={false}
-                        triggerSize="compact"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setFiltersOpen((prev) => !prev)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 h-9 text-xs rounded-lg border transition-colors ${
-                          filtersOpen
-                            ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                            : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                        }`}
-                        aria-pressed={filtersOpen}
-                      >
-                        <FunnelIcon className="w-3.5 h-3.5" />
-                        Filters
-                        {activeFilterCount > 0 && (
-                          <span className="w-4 h-4 rounded-full bg-[var(--primary)] text-white text-[9px] flex items-center justify-center">
-                            {activeFilterCount}
-                          </span>
-                        )}
-                      </button>
-                    </>
-                  }
-                />
-              )}
-              <BlastPageList
-                campaigns={filteredCampaigns}
-                loading={loading}
-                accountNames={accountNames}
-                accountMeta={accountMeta}
-                accountProviders={accountProviders}
-                emptyState={campaignEmptyState}
-                statusFilter={campaignsStatusFilter}
-                // Page renders the unified ListToolbar above; the
-                // internal toolbar is hidden so the two don't stack.
-                hideToolbar={campaigns.length > 0}
-                search={campaignsSearch}
-                onSearchChange={setCampaignsSearch}
-              />
-            </>
-          )}
-        </div>
-
-        {/* Inline filter side rail */}
-        {sideRailMounted && (
-          <BlastFilterSidebar
-            inline
-            onClose={() => setFiltersOpen(false)}
-            filters={filters}
-            onFiltersChange={setFilters}
-            options={filterOptions}
-            className={`glass-panel glass-panel-strong w-full transition-[opacity,transform,max-height] duration-300 ease-out lg:sticky lg:top-24 lg:w-[360px] ${
-              filtersOpen
-                ? 'pointer-events-auto max-h-[calc(100vh-8rem)] translate-x-0 opacity-100 animate-slide-in-right'
-                : 'pointer-events-none max-h-0 translate-x-4 opacity-0'
-            }`}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Account Campaigns Page (single-account, read-only) ──
 
 function AccountCampaignsPage() {
   const subHref = useSubaccountHref();
@@ -903,20 +393,15 @@ function AccountCampaignsPage() {
 
 // ── Exported Page ──
 
+/**
+ * One list, scoped to the active sub-account.
+ *
+ * There used to be a second, near-identical component for agency scope: the
+ * same three views (live / archived / flow sends) over the same endpoint, just
+ * without an accountKey. Agency scope is retired, and an unscoped copy of a
+ * scoped list is a maintenance liability — every fix had to be made twice.
+ */
 export default function CampaignsPage() {
-  const { isAdmin, isAccount } = useAccount();
-
-  if (isAdmin) {
-    return (
-      <AdminOnly>
-        <AdminCampaignsPage />
-      </AdminOnly>
-    );
-  }
-
-  if (isAccount) {
-    return <AccountCampaignsPage />;
-  }
-
-  return null;
+  const { isAccount } = useAccount();
+  return isAccount ? <AccountCampaignsPage /> : null;
 }

@@ -71,29 +71,99 @@ otherwise filter by it is told explicitly that it is in agency scope:
   roster is fleet-wide.
 - The sub-account list is rendered without `restrictKeys`.
 
+**Users here are the AGENCY's people, not a sub-account's.** One list was
+serving both, so agency staff turned up inside every sub-account they cover and
+clients turned up in the platform roster. They're split by role now:
+`agencyScope` lists developer / super_admin / admin; a sub-account's Users tab
+lists its clients. An agency user being *assigned* to sub-accounts is what the
+Sub-Accounts column shows — it makes them an agency member covering that
+account, not one of its users. New users created here start as `admin` for the
+same reason: created as a Client, the row would save and immediately vanish
+from the roster it was added to.
+
 The modal has its own `agency-settings-title-actions` portal slot for tab
 actions. It must not reuse the page's `settings-title-actions` id: opened over a
 settings page, `getElementById` would resolve to the page's slot and render the
 button behind the overlay.
 
+**Drill-ins stay inside the modal.** Opening a sub-account or a user used to
+push a route, which closed the tier in all but name — the record appeared in the
+app shell, behind the overlay, in exactly the place this tier is not supposed to
+live. `AccountsList`, `UsersTab`, `SubAccountDetailPage`, `UserDetail` and
+`NewUser` all take an optional "open this in place" callback (`onOpenAccount` /
+`onOpenUser` / `onCreateUser`) plus an `onBack`; with no callback they navigate
+exactly as before, so the routed pages are unchanged. Switching rail tabs always
+drops back to the list.
+
 The item list lives in one registry (`settings-registry.ts`) that the rail, the
 sub-account settings rail, and the Settings page all render from, so they cannot
 disagree about who sees what.
 
-**Terminology:** "Agency Settings" everywhere — the rail, the cog's tooltip, and
-the account switcher's fleet-wide entry. "Agency View" is retired.
+**Terminology:** "Agency Settings" everywhere — the rail and the cog's tooltip.
+"Agency View" is retired.
 
-#### The three non-settings agency pages
+#### Agency scope is not a place
 
-Agency scope currently also has the roll-up Dashboard, the shared Template
-library, and the agency Media library. These are **not** settings and do not
-belong in this rail. They are to be rehomed onto the **Organization
-sub-account**: the org sub-account gains the agency-level asset library and
-template capabilities, and the dashboard stays at sub-account level.
+The switcher's "Agency Settings" entry is **gone**. It listed a scope you
+stepped into — a shell whose nav was Dashboard / Templates / Assets and whose
+footer Settings link opened the platform config as a *page*. That was the second
+door the modal was meant to replace, and having both is what made the tier feel
+like two different things.
 
-Until that lands they remain reachable under agency scope on a non-settings
-route, so nothing goes dark. Once rehomed, the switcher's Agency Settings entry
-can go too, leaving the cog as the only door.
+What this means concretely:
+
+- The account switcher lists sub-accounts and nothing else.
+- `AccountType`'s `admin` mode survives only as the UNRESOLVED state — the beat
+  between "authenticated" and "we know which sub-account to open".
+  `resolveDefaultAccountKey` closes it as soon as the account list lands,
+  preferring the largest Organization (the widest view anyone gets now) and
+  falling back to the first account by name. A stale `admin` cookie resolves the
+  same way.
+- The sidebar's footer Settings link is always Tier 2; it can no longer point at
+  `/settings/subaccounts` or `/settings/users`. Those tabs are gated on
+  `isAdmin`, so the app-shell Settings page simply stops offering them and
+  redirects old links to the first tab the scope can see.
+- `AgencyDashboard` is deleted. Its content — org list, counts, quick links —
+  was a scope-level home for a scope that no longer exists.
+
+#### The agency-level work pages
+
+The roll-up Dashboard, the shared Template library and the Loomi/OEM asset
+library were the three non-settings things agency scope carried. **They are not
+being rehomed onto a combined org view — there is no cross-account browsing mode
+any more, on purpose.** Settled 2026-08-15:
+
+- Sharing is a SCOPE, not a view. A shared or OEM asset already resolves into
+  every library it covers, so an admin standing in any sub-account sees, filters
+  and manages the shared pool in place. A fleet-wide grid was a second way to
+  look at the same rows.
+- What sharing can't express — "that rooftop's photo, as mine" — is a **copy**:
+  `POST /api/media/[id]/copy`, offered as "Copy to…" on any asset including
+  inherited ones. See docs/asset-management.md §3.
+- Roll-up where it's genuinely aggregate (Contacts, the Projects boards) is the
+  Organization account's job, via `isGroup` + `scopedAccountKeys`.
+
+So the following were **deleted**, not parked: the Asset Library's "All
+Accounts" grid and its scope rail, the all-accounts Flows and Flow-analytics
+views, and the unscoped copy of the Emails & SMS list.
+
+Two things lived inside those views without belonging to them, and kept their
+own door instead of dying with them:
+
+- **Rights & Activity** (the licence sweep's health and what's expiring) is a
+  compliance monitor, not a browsing mode. It's an admin-only toggle in the
+  Asset Library now — its readings are fleet-wide wherever you open it, and a
+  stopped sweep has to be visible to somebody.
+- **Flow templates** (flows with no `accountKey`, which sub-accounts deploy
+  from) are reachable through a **Templates** switch on the Flows page, role-
+  gated. A switch, not a scope: the active sub-account doesn't change.
+- **Collections** moved into the account library's rail, where the assets they
+  hold are. They were browsable only from the agency rail, so "Add to
+  collection" was creating sets nobody could open again.
+
+Publishing to the shared scopes is preserved and now gates on admin *role*
+rather than agency scope: the "Loomi library" and "Shared — all `<brand>`
+sub-accounts" upload targets, and Move-scope, work from inside any sub-account.
 
 ### Tier 2 — Sub-account
 
@@ -120,9 +190,11 @@ because the sub-account has them.
 `company` → `general`; the old key still resolves (`canonicalSubaccountSection`)
 and `/settings/company` redirects, so existing links keep working.
 
-**Users** is scoped to the active sub-account, and when that sub-account is an
-organization it rolls up its children — the filter runs on `scopedAccountKeys`,
-the same hierarchy expansion the other roll-up views use.
+**Users** is that tenant's CLIENT users, scoped to the active sub-account, and
+when that sub-account is an organization it rolls up its children — the filter
+runs on `scopedAccountKeys`, the same hierarchy expansion the other roll-up
+views use. Agency staff assigned to the account are not listed here; they live
+in Agency Settings → Users.
 
 **Notifications** follows the categories: `NOTIFICATION_CATEGORY_SURFACE` maps
 every category to studio or app, so Reporting has none and the tab would open
@@ -206,8 +278,6 @@ preference storage on the user record.
 
 - **Inside a sub-account, admin role** — Tier 2, `/subaccount/<slug>/settings`.
 - **Everyone else** — Tier 3, `/u/<userId>/settings`.
-- **In Agency Settings** — not shown; it would point at the page you're on. The
-  theme toggle takes that slot instead.
 
 A sub-account user never sees platform config, on any surface.
 
@@ -215,6 +285,12 @@ The user dropdown holds Profile, theme, **Report a Bug**, and Logout. It no
 longer carries a cross-surface link — the sidebar's surface switcher offers all
 three, so a single "Studio"/"Reporting" entry was a second, narrower door to the
 same place.
+
+**The help desk** is the "?" in the top utility bar, beside Notifications. It
+was a "Get Help" button in the sidebar footer, which put a way *out* of the
+product (to a person) among the destinations *inside* it. The "?" previously
+opened the AI assistant; that keeps its own floating bubble, which is where
+people already reach for it.
 
 ## Migration slices
 
@@ -224,9 +300,17 @@ same place.
    sidebars. *Done.*
 2. **Agency Settings as a place.** Cog entry, back button, scope stash/restore,
    no switcher, bug reporting moved to the user dropdown. *Done.*
-3. **Rehome the three agency pages** onto the Organization sub-account (asset
-   library + templates at agency level; dashboard at sub-account level), then
-   drop the switcher's "Agency" scope entry.
+3. **Retire agency scope.** Switcher entry gone, default scope resolves to a
+   sub-account, agency tabs no longer render in the app shell, drill-ins stay
+   inside the modal, agency-vs-client rosters split by role, shared-asset
+   publishing re-gated on role, Projects' cross-account board moved onto the
+   `isGroup` roll-up. *Done.*
+4. **Retire the cross-account views** rather than rehoming them: copy replaces
+   the browse grid, Rights and Flow templates keep their own doors, Collections
+   move into the account rail. *Done.* The open question this closed — whether
+   an org account's library should show a merged pool of its children's assets —
+   is answered "no": an org account is a sub-account that happens to have
+   children, and its library is its own.
 4. **Tier 2.** Surface-filter the sub-account panels, retire the `?tab=` URL
    shape, fold messaging settings in, split Integrations by surface.
 5. **Tier 3.** Add `/u/<userId>/settings/*` plus host mirrors, fold `/profile`

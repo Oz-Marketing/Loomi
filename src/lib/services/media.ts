@@ -624,6 +624,70 @@ export function checkScopeMove(
 }
 
 /** Human phrase for a scope, for confirmations and toasts. */
+/**
+ * May this session COPY this asset into this scope?
+ *
+ * Copy is the sibling of a scope move, and the difference is the whole point:
+ * a move changes who can see the one asset, a copy leaves the original where it
+ * is and puts an independent second asset somewhere else. That makes it the
+ * right tool for "this rooftop wants the photo that rooftop has" — the case a
+ * cross-account browsing view used to be needed for.
+ *
+ * The rules follow from where the copy LANDS, not from where it came from:
+ *
+ *   • Into a sub-account — you must be able to write that sub-account. A
+ *     restricted admin can copy between the accounts they cover; a client never
+ *     copies anything (they consume approved work, they don't author).
+ *   • Into the Loomi library or a brand's shared library — unrestricted admins
+ *     only, the same bar a move has, because it publishes to every account.
+ *
+ * Reading the source is deliberately permissive for shared assets: an OEM or
+ * Loomi-library asset is already resolved into the libraries of the accounts it
+ * covers, so being able to see it there is what makes copying it sensible.
+ */
+export function checkAssetCopy(
+  session: { user: { role: string; accountKeys?: string[] } },
+  asset: { accountKey: string | null; oem: string | null; managedBy: string | null },
+  target: ScopeTarget,
+): ScopeMoveCheck {
+  if (isConsumerRole(session.user.role)) {
+    return { error: 'Clients can’t copy assets between sub-accounts.' };
+  }
+
+  // Same reason a move refuses: these rows mirror Account settings, and the
+  // next brand-asset sync would overwrite whatever we made of the copy.
+  if (asset.managedBy) {
+    return {
+      error: 'Brand logos and fonts are managed in Account settings and can’t be copied here.',
+    };
+  }
+
+  if (target.accountKey !== null && target.oem !== null) {
+    return { error: 'An asset belongs to one account or to a brand, not both.' };
+  }
+
+  const sourceIsShared = asset.accountKey === null;
+  if (!sourceIsShared && !canAccessAsset(session, asset.accountKey)) {
+    return { error: 'You don’t have access to that asset.' };
+  }
+
+  if (target.accountKey === null) {
+    if (!isUnrestrictedAdmin(session)) {
+      return { error: 'Only agency admins can copy an asset into a shared library.' };
+    }
+  } else if (!canAccessAsset(session, target.accountKey)) {
+    return { error: 'You don’t have access to that sub-account.' };
+  }
+
+  // Copying an asset into its own scope makes a second identical row in the
+  // same place, which reads as a bug rather than as a copy.
+  if ((asset.accountKey ?? null) === target.accountKey && (asset.oem ?? null) === target.oem) {
+    return { error: 'That’s where this asset already lives.' };
+  }
+
+  return { error: null };
+}
+
 export function describeScope(target: ScopeTarget, dealerName?: string): string {
   if (target.accountKey) return dealerName || target.accountKey;
   if (target.oem) return `every ${target.oem} sub-account`;

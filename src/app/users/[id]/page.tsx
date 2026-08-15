@@ -50,12 +50,29 @@ export default function UserDetailPage() {
   );
 }
 
-function UserDetailContent() {
+/**
+ * The same editor, embedded rather than routed — used by the Agency Settings
+ * modal, which owns the Users tier and has to keep its drill-in inside the
+ * overlay. `userId` replaces the route param and `onBack` replaces the back
+ * link; everything else is identical, so the two hosts can't drift.
+ */
+export function UserDetail({ userId, onBack }: { userId: string; onBack: () => void }) {
+  return (
+    <AdminOnly>
+      <UserDetailContent userId={userId} onBack={onBack} />
+    </AdminOnly>
+  );
+}
+
+function UserDetailContent({
+  userId: userIdProp,
+  onBack,
+}: { userId?: string; onBack?: () => void } = {}) {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
   const { data: session, update } = useSession();
-  const userId = params.id as string;
+  const userId = userIdProp ?? (params.id as string);
   const { accounts, accountsLoaded, userRole: currentUserRole } = useAccount();
   const { markClean } = useUnsavedChanges();
   const { confirm } = useLoomiDialog();
@@ -206,7 +223,8 @@ function UserDetailContent() {
         throw new Error(delError || 'Failed to delete');
       }
       toast.success('User deleted');
-      router.push(usersBasePath);
+      if (onBack) onBack();
+      else router.push(usersBasePath);
     } catch (err) {
       toast.error(String(err instanceof Error ? err.message : err));
     }
@@ -307,9 +325,19 @@ function UserDetailContent() {
     return (
       <div className="text-center py-16">
         <p className="text-[var(--muted-foreground)]">User not found</p>
-        <Link href={usersBasePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
-          Back to Users
-        </Link>
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline"
+          >
+            Back to Users
+          </button>
+        ) : (
+          <Link href={usersBasePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
+            Back to Users
+          </Link>
+        )}
       </div>
     );
   }
@@ -323,12 +351,23 @@ function UserDetailContent() {
     <div>
       {/* Header */}
       <div className="page-sticky-header flex items-center gap-3 mb-8">
-        <Link
-          href={usersBasePath}
-          className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-        >
-          <ArrowLeftIcon className="w-4 h-4" />
-        </Link>
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to Users"
+            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <ArrowLeftIcon className="w-4 h-4" />
+          </button>
+        ) : (
+          <Link
+            href={usersBasePath}
+            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <ArrowLeftIcon className="w-4 h-4" />
+          </Link>
+        )}
         <div className="relative">
           <UserAvatar
             name={name || user.name}

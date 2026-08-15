@@ -18,7 +18,38 @@ export default function NewUserPage() {
   );
 }
 
-function NewUserContent() {
+/**
+ * The same form, embedded rather than routed — used by the Agency Settings
+ * modal so "Add User" stays inside the overlay. `onCancel` replaces the back
+ * link and `onCreated` replaces the redirect to the new user's page.
+ */
+export function NewUser({
+  onCancel,
+  onCreated,
+  defaultRole,
+}: {
+  onCancel: () => void;
+  onCreated: (userId: string) => void;
+  /** Starting role. Agency Settings passes `admin` — it lists agency staff, so
+   *  a user created there defaulting to Client would vanish on save. */
+  defaultRole?: string;
+}) {
+  return (
+    <ElevatedOnly>
+      <NewUserContent onCancel={onCancel} onCreated={onCreated} defaultRole={defaultRole} />
+    </ElevatedOnly>
+  );
+}
+
+function NewUserContent({
+  onCancel,
+  onCreated,
+  defaultRole,
+}: {
+  onCancel?: () => void;
+  onCreated?: (userId: string) => void;
+  defaultRole?: string;
+} = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const { accounts, accountsLoaded, userRole } = useAccount();
@@ -30,7 +61,7 @@ function NewUserContent() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [sendInvite, setSendInvite] = useState(true);
-  const [role, setRole] = useState('client');
+  const [role, setRole] = useState(defaultRole ?? 'client');
   const [department, setDepartment] = useState('');
   const [accountKeys, setAccountKeys] = useState<string[]>([]);
 
@@ -78,7 +109,8 @@ function NewUserContent() {
       } else {
         toast.success('User created');
       }
-      router.push(`${usersBasePath}/${user.id}`);
+      if (onCreated) onCreated(user.id);
+      else router.push(`${usersBasePath}/${user.id}`);
     } catch (err) {
       toast.error(String(err instanceof Error ? err.message : err));
     } finally {
@@ -95,12 +127,23 @@ function NewUserContent() {
     <div>
       {/* Header */}
       <div className="page-sticky-header flex items-center gap-3 mb-8">
-        <Link
-          href={usersBasePath}
-          className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-        >
-          <ArrowLeftIcon className="w-4 h-4" />
-        </Link>
+        {onCancel ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Back to Users"
+            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <ArrowLeftIcon className="w-4 h-4" />
+          </button>
+        ) : (
+          <Link
+            href={usersBasePath}
+            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <ArrowLeftIcon className="w-4 h-4" />
+          </Link>
+        )}
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold">New User</h2>
           <p className="text-xs text-[var(--muted-foreground)]">Create a new team member account</p>

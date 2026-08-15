@@ -19,6 +19,7 @@ import {
   CheckIcon,
   BookmarkIcon,
   BuildingStorefrontIcon,
+  ShieldCheckIcon,
   Squares2X2Icon,
   ListBulletIcon,
   ArrowDownTrayIcon,
@@ -43,13 +44,6 @@ import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
 import { ScopeMoveModal, type ScopeMoveTarget } from '@/components/media/scope-move-modal';
 import { CollectionsSection } from '@/components/media/collections-section';
 import { BulkMetadataModal } from '@/components/media/bulk-metadata-modal';
-import {
-  MediaScopeSection,
-  scopeLabel,
-  scopeSearchLabel,
-  scopeToParams,
-  type AdminScope,
-} from '@/components/media/media-scope-section';
 import { ApprovalPanel } from '@/components/media/approval-panel';
 import {
   AssetMetadataFields,
@@ -155,15 +149,6 @@ interface MediaCapabilities {
   canUpload: boolean;
   canDelete: boolean;
   canRename: boolean;
-}
-
-interface AccountMediaPreview {
-  files: MediaFile[];
-  totalCount?: number;
-  provider: string | null;
-  capabilities: MediaCapabilities | null;
-  loading: boolean;
-  error?: string;
 }
 
 interface ProviderInfo {
@@ -378,6 +363,8 @@ interface MediaCardProps {
   onRename?: () => void;
   /** Change which scope owns the asset. Admin-only, so undefined otherwise. */
   onMoveScope?: () => void;
+  /** Put an independent copy in another sub-account, leaving this one alone. */
+  onCopyTo?: () => void;
   onDelete?: () => void;
 }
 
@@ -400,6 +387,7 @@ function MediaCard({
   onDownload,
   onRename,
   onMoveScope,
+  onCopyTo,
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
@@ -510,6 +498,14 @@ function MediaCard({
                       <BuildingStorefrontIcon className="w-4 h-4" /> Move…
                     </button>
                   )}
+                  {onCopyTo && (
+                    <button
+                      onClick={() => { onMenuClose(); onCopyTo(); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    >
+                      <DocumentDuplicateIcon className="w-4 h-4" /> Copy to&hellip;
+                    </button>
+                  )}
                   {caps?.canDelete && onDelete && (
                     <button
                       onClick={() => { onMenuClose(); onDelete(); }}
@@ -559,6 +555,7 @@ function MediaListRow({
   onDownload,
   onRename,
   onMoveScope,
+  onCopyTo,
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
@@ -656,6 +653,14 @@ function MediaListRow({
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
                 >
                   <BuildingStorefrontIcon className="w-4 h-4" /> Move…
+                </button>
+              )}
+              {onCopyTo && (
+                <button
+                  onClick={() => { onMenuClose(); onCopyTo(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                >
+                  <DocumentDuplicateIcon className="w-4 h-4" /> Copy to&hellip;
                 </button>
               )}
               {caps?.canDelete && onDelete && (
@@ -772,8 +777,6 @@ export default function MediaPage() {
    */
   const [ownership, setOwnership] = useState<OwnershipFilter>('mine');
   const [facetSelection, setFacetSelection] = useState<MediaFacetSelection>({});
-  /** The admin view's own facet selection — independent of the account view's. */
-  const [adminFacetSelection, setAdminFacetSelection] = useState<MediaFacetSelection>({});
   /** Mobile-only: the rail is always shown from `lg` up. */
   const [railOpen, setRailOpen] = useState(false);
   /** How many assets the account can see beyond its own — drives the banner. */
@@ -791,47 +794,16 @@ export default function MediaPage() {
     if (typeof window !== 'undefined') localStorage.setItem('media-view-mode', mode);
   }, []);
 
-  // Admin account filter — persisted in sessionStorage so it survives
-  // unexpected component remounts (e.g. during session refreshes).
-  const [accountFilter, setAccountFilterRaw] = useState<string>(() => {
-    if (typeof window === 'undefined') return 'all';
-    return sessionStorage.getItem('media-account-filter') ?? 'all';
-  });
-  const setAccountFilter = useCallback((value: string) => {
-    setAccountFilterRaw(value);
-    if (typeof window !== 'undefined') {
-      if (value === 'all') sessionStorage.removeItem('media-account-filter');
-      else sessionStorage.setItem('media-account-filter', value);
-    }
-  }, []);
-
-  // ── Admin overview state ──
-  const [overviewData, setOverviewData] = useState<Record<string, AccountMediaPreview>>({});
-  const [overviewLoaded, setOverviewLoaded] = useState(false);
-  const [overviewSearch, setOverviewSearch] = useState('');
-  const [overviewTab, setOverviewTab] = useState<'assets' | 'rights'>('assets');
   /**
-   * Which slice of the library the admin grid is showing.
-   *
-   * This replaced three tabs — Sub-account Media, Loomi Media and OEM Libraries —
-   * which were all one question asked as navigation. They shared a grid, a search
-   * box and every facet; only the where-clause differed. So it's a filter, and it
-   * lives in the rail with the others.
+   * The rights & activity monitor, over the library rather than beside it.
+   * Admin-only and off by default: it answers "is the licence sweep still
+   * running, and what is about to expire", which is a question you go looking
+   * for rather than one the library should answer unprompted.
    */
-  const [adminScope, setAdminScope] = useState<AdminScope>({ kind: 'all' });
-  /** Bumped after an upload so the scope counts re-fetch. */
-  const [scopeRefreshKey, setScopeRefreshKey] = useState(0);
-  // ── Admin S3 media state ──
-  const [adminMediaFiles, setAdminMediaFiles] = useState<MediaFile[]>([]);
-  const [adminMediaTotal, setAdminMediaTotal] = useState(0);
-  const [adminMediaLoading, setAdminMediaLoading] = useState(false);
-
-  // Derive the effective account key
-  const effectiveAccountKey = isAccount
-    ? accountKey
-    : accountFilter !== 'all'
-      ? accountFilter
-      : null;
+  const [showRights, setShowRights] = useState(false);
+  // The library is always the active sub-account's. (It used to fall back to an
+  // agency-scope account picker, which is gone.)
+  const effectiveAccountKey = isAccount ? accountKey : null;
 
   /**
    * The consumer tier (§2.2). Clients browse and download the assets their
@@ -839,6 +811,18 @@ export default function MediaPage() {
    * approved-only for this role — this hides the controls that would 403.
    */
   const isConsumer = userRole === 'client';
+
+  /**
+   * May file assets outside the sub-account you're standing in — the Loomi
+   * library and the per-brand shared scopes.
+   *
+   * Role, not scope. This used to read `isAdmin`, which meant "the switcher is
+   * in Agency View"; agency scope was retired, so keying off it would have
+   * quietly taken shared/OEM asset publishing away from the agency staff who
+   * do it. Where you're standing doesn't decide this — who you are does.
+   */
+  const canManageSharedAssets =
+    userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
 
   // The brands the current account carries — floated to the top of the Brand
   // picker so a Ford rooftop isn't scrolling past forty marques to reach Ford.
@@ -864,7 +848,7 @@ export default function MediaPage() {
       ? `This sub-account${accountData?.dealer ? ` — ${accountData.dealer}` : ''}`
       : 'Loomi library — all accounts';
     const options = [{ value: 'account', label: here }];
-    if (!isAdmin) return options;
+    if (!canManageSharedAssets) return options;
 
     // An account's own brands when we know them; the full marque list otherwise
     // (the Select searches once the list is long).
@@ -878,14 +862,10 @@ export default function MediaPage() {
       options.push({ value: 'global', label: 'Loomi library — all accounts' });
     }
     return options;
-  }, [effectiveAccountKey, accountData?.dealer, isAdmin, accountBrands]);
+  }, [effectiveAccountKey, accountData?.dealer, canManageSharedAssets, accountBrands]);
 
-  // Show overview when admin has no specific account selected
-  const showOverview = isAdmin && !effectiveAccountKey;
   // Consumers can't upload, so the whole-page drop target would be a lie.
-  const canDropUploadFiles = !isConsumer && (showOverview || !!effectiveAccountKey);
-  /** The single admin asset view. Scope decides what's in it. */
-  const isAdminGridTab = showOverview && overviewTab === 'assets';
+  const canDropUploadFiles = !isConsumer && !!effectiveAccountKey;
 
   // All account keys (sorted)
   const allAccountKeys = useMemo(() => {
@@ -895,9 +875,6 @@ export default function MediaPage() {
       return nameA.localeCompare(nameB);
     });
   }, [accounts]);
-
-  // Every account is "connected" now that media is Loomi-S3-backed.
-  const connectedAccountKeys = allAccountKeys;
 
 
   // Ref guard: prevents the global close-handler from firing in the same
@@ -919,140 +896,6 @@ export default function MediaPage() {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
-
-  // ── Admin Overview Loading ──
-
-  const loadOverview = useCallback(async () => {
-    if (!isAdmin || connectedAccountKeys.length === 0) return;
-
-    // Initialize loading state for all connected accounts
-    const initialState: Record<string, AccountMediaPreview> = {};
-    for (const key of connectedAccountKeys) {
-      initialState[key] = {
-        files: [],
-        provider: null,
-        capabilities: null,
-        loading: true,
-      };
-    }
-    setOverviewData(initialState);
-
-    // Fetch total file counts for all connected accounts.
-    // S3 is the canonical (and only) media store now — ESP media is gone.
-    const results = await Promise.allSettled(
-      connectedAccountKeys.map(async (key) => {
-        const params = new URLSearchParams({
-          accountKey: key,
-          countOnly: 'true',
-        });
-        const res = await fetch(`/api/media?${params.toString()}`);
-        const data = await res.json();
-
-        if (res.ok) {
-          return {
-            accountKey: key,
-            totalCount: (data.total as number) || 0,
-            provider: 's3' as string | null,
-            capabilities: S3_CAPABILITIES as MediaCapabilities | null,
-          };
-        } else {
-          return {
-            accountKey: key,
-            totalCount: 0,
-            provider: null,
-            capabilities: null,
-            error: data.error || 'Failed to load',
-          };
-        }
-      })
-    );
-
-    // Update state with results
-    setOverviewData(prev => {
-      const updated = { ...prev };
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          const { accountKey: key, totalCount, provider: rowProvider, capabilities: rowCaps, error } = result.value as {
-            accountKey: string;
-            totalCount: number;
-            provider: string | null;
-            capabilities: MediaCapabilities | null;
-            error?: string;
-          };
-          updated[key] = {
-            files: [],
-            totalCount,
-            provider: rowProvider,
-            capabilities: rowCaps,
-            loading: false,
-            error,
-          };
-        } else {
-          // Promise rejected — find the account key from the index
-          const idx = results.indexOf(result);
-          const key = connectedAccountKeys[idx];
-          if (key) {
-            updated[key] = {
-              files: [],
-              provider: null,
-              capabilities: null,
-              loading: false,
-              error: 'Failed to load media',
-            };
-          }
-        }
-      }
-      return updated;
-    });
-
-    setOverviewLoaded(true);
-  }, [isAdmin, connectedAccountKeys]);
-
-  useEffect(() => {
-    if (showOverview && !overviewLoaded && connectedAccountKeys.length > 0) {
-      loadOverview();
-    }
-  }, [showOverview, overviewLoaded, connectedAccountKeys, loadOverview]);
-
-  // ── Admin S3 Media Loading ──
-
-  const loadAdminMedia = useCallback(async (searchQuery?: string, scope: AdminScope = { kind: 'all' }) => {
-    if (!isAdmin) return;
-    setAdminMediaLoading(true);
-
-    try {
-      const params = new URLSearchParams({ limit: '50' });
-      if (searchQuery?.trim()) params.set('search', searchQuery.trim());
-      // The scope IS the query — see scopeToParams, which is the one place that
-      // mapping lives so the rail and the fetch can't disagree.
-      for (const [k, v] of Object.entries(scopeToParams(scope))) params.set(k, v);
-
-      const res = await fetch(`/api/media?${params.toString()}`);
-      const data = await res.json();
-
-      if (res.ok) {
-        setAdminMediaFiles(data.files || []);
-        setAdminMediaTotal(data.total || 0);
-      } else {
-        toast.error(data.error || 'Failed to load Loomi media');
-      }
-    } catch {
-      toast.error('Failed to load Loomi media');
-    }
-
-    setAdminMediaLoading(false);
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (showOverview) {
-      loadAdminMedia(undefined, adminScope);
-    } else {
-      setAdminMediaFiles([]);
-      setAdminMediaTotal(0);
-    }
-    // adminScope is a dependency: changing scope has to refetch, or the grid
-    // keeps showing the previous slice's assets.
-  }, [showOverview, loadAdminMedia, adminScope]);
 
   // ── Single-Account Data Loading ──
 
@@ -1403,12 +1246,7 @@ export default function MediaPage() {
     // exactly the wrong impression.
     const landedInView = uploadScope === 'account';
     if (uploadedFiles.length > 0 && landedInView) {
-      if (showOverview && !effectiveAccountKey) {
-        setAdminMediaFiles(prev => [...uploadedFiles, ...prev]);
-        setAdminMediaTotal(prev => prev + uploadedFiles.length);
-      } else {
-        setFiles(prev => [...uploadedFiles, ...prev]);
-      }
+      setFiles(prev => [...uploadedFiles, ...prev]);
     }
     if (successCount > 0) {
       const destination = uploadScopeOptions.find(o => o.value === uploadScope)?.label;
@@ -1433,13 +1271,6 @@ export default function MediaPage() {
     setShowUploadMetadata(false);
     setArchives({});
     setUnpackChoice({});
-    // The rail's per-brand counts are now wrong, and if the upload landed in the
-    // library on screen the grid needs it too — an asset that doesn't appear
-    // where you just put it reads as a failed upload.
-    if (showOverview) {
-      setScopeRefreshKey((k) => k + 1);
-      loadAdminMedia(undefined, adminScope);
-    }
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1558,15 +1389,9 @@ export default function MediaPage() {
       const data = await res.json();
 
       if (res.ok && data.file) {
-        if (showOverview && !effectiveAccountKey) {
-          setAdminMediaFiles(prev =>
-            prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: 's3' as const } : f))
-          );
-        } else {
-          setFiles(prev =>
-            prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: 's3' as const } : f))
-          );
-        }
+        setFiles(prev =>
+          prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: 's3' as const } : f))
+        );
         toast.success('File updated');
         setRenameFile(null);
       } else {
@@ -1594,12 +1419,7 @@ export default function MediaPage() {
       const data = await res.json();
 
       if (res.ok) {
-        if (showOverview && !effectiveAccountKey) {
-          setAdminMediaFiles(prev => prev.filter(f => f.id !== deleteFile.id));
-          setAdminMediaTotal(prev => prev - 1);
-        } else {
-          setFiles(prev => prev.filter(f => f.id !== deleteFile.id));
-        }
+        setFiles(prev => prev.filter(f => f.id !== deleteFile.id));
         toast.success('File deleted');
         setDeleteFile(null);
       } else {
@@ -1657,12 +1477,7 @@ export default function MediaPage() {
       }
 
       const created: MediaFile = { ...data.file, source: 's3' };
-      if (showOverview && !effectiveAccountKey) {
-        setAdminMediaFiles(prev => [created, ...prev]);
-        setAdminMediaTotal(prev => prev + 1);
-      } else {
-        setFiles(prev => [created, ...prev]);
-      }
+      setFiles(prev => [created, ...prev]);
       setPreviewFile(created);
 
       toast.success('Cropped image saved');
@@ -1783,8 +1598,7 @@ export default function MediaPage() {
         if (data.skipped?.length) {
           toast.error(`Skipped (no access): ${data.skipped.slice(0, 3).join(', ')}${data.skipped.length > 3 ? '…' : ''}`);
         }
-        if (showOverview) loadAdminMedia(undefined, adminScope);
-        else loadMedia();
+        loadMedia();
         clearSelection();
         setBulkEditItems(null);
       }
@@ -1801,13 +1615,11 @@ export default function MediaPage() {
   // whatever was already selected would show neither thing.
   const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
   const [collectionFiles, setCollectionFiles] = useState<MediaFile[] | null>(null);
-  const [collectionName, setCollectionName] = useState<string | null>(null);
   const [collectionsKey, setCollectionsKey] = useState(0);
 
   useEffect(() => {
     if (!activeCollectionId) {
       setCollectionFiles(null);
-      setCollectionName(null);
       return;
     }
     let cancelled = false;
@@ -1818,7 +1630,6 @@ export default function MediaPage() {
         if (cancelled) return;
         if (res.ok) {
           setCollectionFiles(data.files || []);
-          setCollectionName(data.collection?.name ?? null);
         } else {
           toast.error(data?.error || 'Could not open that collection');
           setActiveCollectionId(null);
@@ -1830,31 +1641,6 @@ export default function MediaPage() {
     return () => { cancelled = true; };
   }, [activeCollectionId]);
 
-  /** Save the current scope + facets + search as a smart collection. */
-  const saveCurrentAsCollection = async () => {
-    const name = window.prompt('Name this saved search');
-    if (!name?.trim()) return;
-    const query = {
-      accountKey: adminScope.kind === 'account' ? adminScope.value : adminScope.kind === 'all' ? undefined : null,
-      oem: adminScope.kind === 'oem' ? adminScope.value : adminScope.kind === 'global' ? 'none' : undefined,
-      facets: adminFacetSelection,
-      search: overviewSearch.trim() || undefined,
-    };
-    try {
-      const res = await fetch('/api/media/collections', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), kind: 'smart', query }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'failed');
-      toast.success(`Saved “${name.trim()}” — it keeps up as assets change`);
-      setCollectionsKey((k) => k + 1);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save that search');
-    }
-  };
-
   /** Add the current selection to a static collection, creating it if needed. */
   const addSelectionToCollection = async () => {
     const ids = [...selectedIds];
@@ -1863,7 +1649,7 @@ export default function MediaPage() {
     if (!name?.trim()) return;
 
     try {
-      const listRes = await fetch(`/api/media/collections${adminScope.kind === 'account' ? `?accountKey=${encodeURIComponent(adminScope.value)}` : ''}`);
+      const listRes = await fetch(`/api/media/collections${effectiveAccountKey ? `?accountKey=${encodeURIComponent(effectiveAccountKey)}` : ''}`);
       const existing = listRes.ok ? (await listRes.json()).collections ?? [] : [];
       const match = existing.find(
         (c: { name: string; kind: string }) => c.name.toLowerCase() === name.trim().toLowerCase() && c.kind === 'static',
@@ -1937,14 +1723,8 @@ export default function MediaPage() {
 
     if (ok > 0) {
       toast.success(`Moved ${ok} asset${ok > 1 ? 's' : ''}`);
-      // The moved assets have left whichever scope is on screen, so both the
-      // grid and the rail's counts are now wrong.
-      if (showOverview) {
-        setScopeRefreshKey((k) => k + 1);
-        loadAdminMedia(undefined, adminScope);
-      } else {
-        loadMedia();
-      }
+      // The moved assets have left the library on screen.
+      loadMedia();
       clearSelection();
     }
     // Reported per asset: a partial move is the common failure (one managed
@@ -1958,6 +1738,64 @@ export default function MediaPage() {
 
     setMovingScope(false);
     setScopeMoveItems(null);
+  };
+
+  // ── Copies ──
+  //
+  // The other half of the move: leave the asset where it is and put an
+  // independent copy somewhere else. This is how one rooftop gets the photo
+  // another rooftop owns, and it's deliberately the ONLY cross-account move in
+  // the library — sharing something with many accounts at once is a scope
+  // (Loomi library / a brand's), not a pile of copies.
+  const [copyItems, setCopyItems] = useState<MediaFile[] | null>(null);
+  const [copying, setCopying] = useState(false);
+
+  const handleAssetCopy = async (target: ScopeMoveTarget) => {
+    if (!copyItems?.length) return;
+    setCopying(true);
+    let ok = 0;
+    const failures: string[] = [];
+    let duplicateOf: string | null = null;
+
+    for (const item of copyItems) {
+      try {
+        const res = await fetch(`/api/media/${encodeURIComponent(item.id)}/copy`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(target),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          ok += 1;
+          if (data?.duplicateOf) duplicateOf = data.duplicateOf;
+        } else {
+          failures.push(`${item.name}: ${data?.error || 'failed'}`);
+        }
+      } catch {
+        failures.push(`${item.name}: failed`);
+      }
+    }
+
+    if (ok > 0) {
+      const destination = target.accountKey
+        ? accounts[target.accountKey]?.dealer || target.accountKey
+        : target.oem
+          ? `all ${target.oem} sub-accounts`
+          : 'the Loomi library';
+      toast.success(`Copied ${ok} asset${ok > 1 ? 's' : ''} to ${destination}`);
+      // The source view is unchanged — the originals never moved — so only
+      // reload when the copies landed where we're standing.
+      if (target.accountKey && target.accountKey === effectiveAccountKey) loadMedia();
+      clearSelection();
+    }
+    for (const f of failures.slice(0, 4)) toast.error(f);
+    if (failures.length > 4) toast.error(`…and ${failures.length - 4} more failed`);
+    if (duplicateOf) {
+      toast.error(`A file with identical contents ("${duplicateOf}") is already there.`);
+    }
+
+    setCopying(false);
+    setCopyItems(null);
   };
 
   // ── Bulk Download ──
@@ -2026,46 +1864,6 @@ export default function MediaPage() {
     loadMedia(); // surface the new copies
   };
 
-  // ── Bulk Delete Admin S3 Files ──
-
-  const handleBulkDeleteAdmin = async () => {
-    if (selectedIds.size === 0) return;
-    const count = selectedIds.size;
-    const confirmed = await confirm({
-      title: 'Delete files',
-      message: `Delete ${count} selected file${count > 1 ? 's' : ''}? This cannot be undone.`,
-      confirmLabel: 'Delete',
-      destructive: true,
-    });
-    if (!confirmed) return;
-
-    setDeleting(true);
-    let successCount = 0;
-
-    for (const id of selectedIds) {
-      try {
-        const res = await fetch(`/api/media/${encodeURIComponent(id)}`, { method: 'DELETE' });
-        if (res.ok) successCount++;
-      } catch { /* skip */ }
-    }
-
-    if (successCount > 0) {
-      setAdminMediaFiles(prev => prev.filter(f => !selectedIds.has(f.id)));
-      setAdminMediaTotal(prev => prev - successCount);
-      toast.success(`Deleted ${successCount} file${successCount > 1 ? 's' : ''}`);
-    }
-
-    setDeleting(false);
-    clearSelection();
-  };
-
-
-
-
-
-
-
-
   // ── Filtering ──
 
   /**
@@ -2108,6 +1906,9 @@ export default function MediaPage() {
   );
 
   const filtered = useMemo(() => {
+    // A collection is a set someone defined, so it REPLACES the list rather
+    // than intersecting with the facets — same rule the agency grid used.
+    if (collectionFiles) return collectionFiles;
     const q = search.trim().toLowerCase();
     return filesWithFacets
       .filter(({ file, facets }) => {
@@ -2121,7 +1922,7 @@ export default function MediaPage() {
           .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
       })
       .map(({ file }) => file);
-  }, [filesWithFacets, search, facetSelection, ownership, isInherited]);
+  }, [filesWithFacets, search, facetSelection, ownership, isInherited, collectionFiles]);
 
   /**
    * Counts for the Ownership rows.
@@ -2146,80 +1947,18 @@ export default function MediaPage() {
     setOwnership(next);
   }, []);
 
-  // ── Filtered admin media (for overview search) ──
-  /**
-   * Facets for the admin view, derived exactly as the account view derives its
-   * own. The admin grid had no facets at all while three tabs stood in for
-   * scope — now that scope is a filter, the rest of the taxonomy belongs beside
-   * it rather than being a thing only sub-account users get.
-   */
-  const adminFilesWithFacets = useMemo(
-    () => adminMediaFiles.map((f) => ({ file: f, facets: facetsForAsset(f) })),
-    [adminMediaFiles],
-  );
-
-  const adminFacetOptions = useMemo(
-    () => buildMediaFacetOptions(adminFilesWithFacets, adminFacetSelection),
-    [adminFilesWithFacets, adminFacetSelection],
-  );
-
-  const adminVisibleFacets = useMemo(
-    () => MEDIA_FACET_KEYS.filter(
-      (k) => buildMediaFacetOptions(adminFilesWithFacets, {})[k].length > 1,
-    ),
-    [adminFilesWithFacets],
-  );
-
-  const filteredAdminMedia = useMemo(() => {
-    // An open collection replaces the grid wholesale — see the state comment.
-    if (collectionFiles) return collectionFiles;
-    const q = overviewSearch.trim().toLowerCase();
-    return adminFilesWithFacets
-      .filter(({ file, facets }) => {
-        if (!matchesMediaFacets(facets, adminFacetSelection)) return false;
-        if (!q) return true;
-        // Same fields the server searches, so typing doesn't change what matches
-        // as results move between the cached list and a refetch.
-        return [file.name, file.altText, file.oem, file.rightsHolder, ...(file.tags ?? [])]
-          .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
-      })
-      .map(({ file }) => file);
-  }, [adminFilesWithFacets, overviewSearch, adminFacetSelection, collectionFiles]);
-
-  /** Sub-accounts for the Scope rail, with the counts the old cards showed. */
-  const scopeAccounts = useMemo(
-    () =>
-      connectedAccountKeys.map((key) => ({
-        key,
-        dealer: accounts[key]?.dealer || key,
-        count: overviewData[key]?.totalCount,
-      })),
-    [connectedAccountKeys, accounts, overviewData],
-  );
-
-  useEffect(() => {
-    if (!showOverview) return;
-    setSelectedIds(new Set());
-    setOpenMenu(null);
-    setOverviewSearch('');
-    // Scope changed: a facet value from the previous slice usually doesn't exist
-    // in the new one, and leaving it selected shows an empty grid for no visible
-    // reason.
-    setAdminFacetSelection({});
-  }, [overviewTab, showOverview, adminScope]);
-
-  // Loomi-native media is always available; gating on a provider
-  // connection no longer makes sense post-ESP-teardown.
+  // Loomi-native media is always available; gating on a provider connection no
+  // longer makes sense post-ESP-teardown.
   const hasConnection = Boolean(effectiveAccountKey);
   const activeAccountName = effectiveAccountKey
     ? (accounts[effectiveAccountKey]?.dealer || accountData?.dealer || effectiveAccountKey)
     : null;
 
-  const backToAllAccounts = useCallback(() => {
-    setAccountFilter('all');
-    setSearch('');
-    setOverviewSearch('');
-  }, [setAccountFilter]);
+  /** Destinations for the Move and Copy pickers — every sub-account in view. */
+  const scopeAccounts = useMemo(
+    () => allAccountKeys.map((key) => ({ key, dealer: accounts[key]?.dealer || key })),
+    [allAccountKeys, accounts],
+  );
 
   // ── Render ──
 
@@ -2275,55 +2014,32 @@ export default function MediaPage() {
                   label — and the model is still MediaAsset. */}
               <h2 className="text-2xl font-bold">Asset Library</h2>
               <div className="flex items-center gap-2 text-sm mt-0.5 flex-wrap">
-                {isAdmin ? (
-                  effectiveAccountKey ? (
-                    <>
-                      <button
-                        onClick={backToAllAccounts}
-                        className="text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                      >
-                        All Accounts
-                      </button>
-                      <span className="text-[var(--muted-foreground)]">{'>'}</span>
-                      <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
-                    </>
-                  ) : (
-                    <span className="text-[var(--muted-foreground)]">All Accounts</span>
-                  )
-                ) : effectiveAccountKey ? (
-                  <>
-                    <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
-                  </>
-                ) : (
-                  <span className="text-[var(--muted-foreground)]">Manage your media files</span>
-                )}
+                {/* One library, one scope: the sub-account you're in. The
+                    "All Accounts" crumb belonged to agency scope, which is
+                    gone — shared and OEM assets still appear here, inherited. */}
+                <span className="text-[var(--muted-foreground)]">
+                  {effectiveAccountKey ? activeAccountName : 'Manage your media files'}
+                </span>
               </div>
             </div>
           </div>
 
           {/* Action buttons in header */}
           <div className="flex items-center gap-2">
-            {showOverview && (
-              <PrimaryButton
-                onClick={() => {
-                  setStagedFiles([]);
-                  // Uploading while looking at Audi's library should go to Audi's
-                  // library. Anywhere else keeps the previous default.
-                  // Uploading while looking at a slice should go to that slice.
-                  setUploadScope(
-                    adminScope.kind === 'oem'
-                      ? `oem:${adminScope.value}`
-                      : adminScope.kind === 'account'
-                        ? `account:${adminScope.value}`
-                        : 'account',
-                  );
-                  setShowUploadModal(true);
-                }}
-                disabled={uploading}
+            {canManageSharedAssets && (
+              <button
+                onClick={() => setShowRights((v) => !v)}
+                title="Rights & activity"
+                aria-pressed={showRights}
+                className={`inline-flex items-center gap-2 h-10 rounded-lg border px-3 text-sm transition-colors ${
+                  showRights
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                    : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                }`}
               >
-                <ArrowUpTrayIcon className="w-4 h-4" />
-                {uploading ? 'Uploading...' : 'Add Assets'}
-              </PrimaryButton>
+                <ShieldCheckIcon className="w-4 h-4" />
+                Rights
+              </button>
             )}
             {effectiveAccountKey && (
               <>
@@ -2372,217 +2088,18 @@ export default function MediaPage() {
         </div>
       </div>
 
-      {/* ── Admin Overview Mode ── */}
-      {showOverview && (
-        <>
-          {/* Hidden file input for uploads (overview mode) */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            onChange={(e) => { stageFiles(e.target.files); if (e.target) e.target.value = ''; }}
-            className="hidden"
-            id="media-upload-input"
-          />
+      {/* ── Rights & Activity ──
+          The fleet-wide licence sweep: what it found and whether it is still
+          running. This used to be a tab of the agency-scope "All Accounts"
+          view, which no longer exists — but it is a compliance monitor, not a
+          browsing mode, and its readings are the same wherever you open it. So
+          it stays here as an admin-only panel over whichever library you're in.
+          A stale sweep has to be visible to SOMEBODY, and burying it in a
+          retired scope is how an expired licence goes unnoticed. */}
+      {canManageSharedAssets && showRights && <RightsActivityPanel />}
 
-          {/* Two tabs, not five. Assets is one view whose scope is a filter in the
-              rail; Rights & Activity is genuinely a different screen — an
-              operational report with no grid and no facets. */}
-          <div className="flex items-center gap-1 mb-4 border-b border-[var(--border)]">
-            <button
-              onClick={() => setOverviewTab('assets')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                overviewTab === 'assets'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              Assets
-            </button>
-            <button
-              onClick={() => setOverviewTab('rights')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                overviewTab === 'rights'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              Rights &amp; Activity
-            </button>
-          </div>
-
-          {overviewTab === 'rights' && <RightsActivityPanel />}
-
-          {/* Scope + facets on the left, assets on the right — the same shape the
-              account view uses, so an admin isn't learning a second layout. */}
-          {isAdminGridTab && (
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-            {/* The wrapper owns the width; children fill it. Previously it set
-                lg:w-52 AND carried pr-1 around a child that was also lg:w-52,
-                so content was 4px wider than the box — and overflow-y:auto
-                forces the x axis from visible to auto, which is where the
-                horizontal scrollbar came from. overflow-x-hidden makes that
-                impossible regardless of what a future child does. */}
-            {/* lg:top tracks the docked header: its height plus the header's
-                bottom margin plus a 4px breath. Changing either the header's
-                height or its mb-* means changing this too, or the rail docks
-                with a gap above it. */}
-            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[96px] lg:w-52 lg:max-h-[calc(100vh-11rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
-              {/* Search leads the rail, above scope. It narrows the same slice
-                  the controls below it define, so it belongs with them rather
-                  than floating over the grid. */}
-              <div className="relative">
-                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                <input
-                  type="text"
-                  value={overviewSearch}
-                  onChange={(e) => setOverviewSearch(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] py-2 pl-9 pr-3 text-sm text-[var(--foreground)]"
-                  placeholder={`Search ${scopeSearchLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}...`}
-                />
-              </div>
-              <MediaScopeSection
-                scope={adminScope}
-                onScopeChange={setAdminScope}
-                accounts={scopeAccounts}
-                refreshKey={scopeRefreshKey}
-              />
-              <CollectionsSection
-                accountKey={adminScope.kind === 'account' ? adminScope.value : null}
-                selectedId={activeCollectionId}
-                onSelect={setActiveCollectionId}
-                refreshKey={collectionsKey}
-              />
-              <MediaFilterRail
-                options={adminFacetOptions}
-                visibleFacets={adminVisibleFacets}
-                selection={adminFacetSelection}
-                onSelectionChange={setAdminFacetSelection}
-                // Ownership is meaningless here: scope already answers "whose is
-                // this", and more precisely than mine/shared could.
-                ownership="all"
-                onOwnershipChange={() => {}}
-                showOwnership={false}
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-
-              {/* Search now leads the rail (it narrows the same slice the rail
-                  defines), so this row carries only what describes the result:
-                  which slice is showing, and the offer to save it. Right-aligned
-                  because it no longer has a left-hand control to sit beside. */}
-              <div className="mb-4 flex items-center justify-end gap-3">
-                {collectionName ? (
-                  <button
-                    onClick={() => setActiveCollectionId(null)}
-                    className="shrink-0 text-xs text-[var(--primary)] transition-opacity hover:opacity-80"
-                    title="Back to the library"
-                  >
-                    {collectionName} ✕
-                  </button>
-                ) : (
-                  <div className="flex shrink-0 items-center gap-3">
-                    {/* Only offered once something is actually narrowed — saving
-                        "everything" as a search would be a collection of the
-                        whole library. */}
-                    {(countMediaFacetsSelected(adminFacetSelection) > 0 || adminScope.kind !== 'all' || overviewSearch.trim()) && (
-                      <button
-                        onClick={saveCurrentAsCollection}
-                        className="text-xs text-[var(--primary)] transition-opacity hover:opacity-80"
-                      >
-                        Save this view
-                      </button>
-                    )}
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      {scopeLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-          {/* ── Loomi Media Library section ── */}
-          {isAdminGridTab && adminMediaLoading && adminMediaFiles.length === 0 && (
-            <div className="mb-8">
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
-                {[1, 2, 3, 4].map(i => (
-                  <div key={i} className="glass-card rounded-xl animate-pulse">
-                    <div className="h-[140px] rounded-t-xl bg-[var(--muted)]" />
-                    <div className="p-3 space-y-2">
-                      <div className="h-3 bg-[var(--muted)] rounded w-16" />
-                      <div className="h-3 bg-[var(--muted)] rounded w-3/4" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {isAdminGridTab && !adminMediaLoading && filteredAdminMedia.length > 0 && (
-            <div className="mb-8">
-              <div className="flex items-center justify-end mb-3">
-                <p className="text-xs text-[var(--muted-foreground)]">
-                  {filteredAdminMedia.length} file{filteredAdminMedia.length !== 1 ? 's' : ''}
-                  {adminMediaTotal > filteredAdminMedia.length && ` of ${adminMediaTotal}`}
-                </p>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
-                {filteredAdminMedia.map(f => {
-                  const itemKey = mediaItemKey(f);
-                  return (
-                    <MediaCard
-                      key={itemKey}
-                      f={f}
-                      isMenuOpen={openMenu === itemKey}
-                      isSelected={selectedIds.has(f.id)}
-                      selectionActive={selectionActive}
-                      provider="s3"
-                      capabilities={S3_CAPABILITIES}
-                      menuClickRef={menuClickRef}
-                      onMenuToggle={() => setOpenMenu(prev => prev === itemKey ? null : itemKey)}
-                      onMenuClose={() => setOpenMenu(null)}
-                      onSelect={() => toggleSelectFile(f.id)}
-                      onPreview={() => setPreviewFile(f)}
-                      onCopyUrl={() => copyUrl(f.url)}
-                      onDownload={() => downloadFile(f.url, f.name)}
-                      onRename={() => {
-                        setRenameValue(f.name);
-                        setRenameAltValue(f.altText ?? '');
-                        const meta = assetMetadataFrom(f);
-                        setRenameMetadata(meta);
-                        setRenameMetadataInitial(meta);
-                        setRenameFile(f);
-                      }}
-                      onMoveScope={isAdmin && !f.managedBy ? () => setScopeMoveItems([f]) : undefined}
-                      onDelete={() => setDeleteFile(f)}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {isAdminGridTab && !adminMediaLoading && filteredAdminMedia.length === 0 && (
-            <div className="text-center py-16 text-[var(--muted-foreground)]">
-              <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p className="text-sm font-medium mb-1">
-                {overviewSearch.trim() ? 'Nothing matches your search' : 'No assets in this scope'}
-              </p>
-              <p className="text-xs">
-                {overviewSearch.trim()
-                  ? 'Try a different search term.'
-                  : 'Nothing in this scope yet — upload, or pick another scope on the left.'}
-              </p>
-            </div>
-          )}
-            </div>
-          </div>
-          )}
-
-        </>
-      )}
-
-      {/* ── Single-Account Detail Mode ── */}
-      {!showOverview && (
+      {/* ── The library itself ── */}
+      {!showRights && (
         <>
           {/* Hidden file input for uploads */}
           <input
@@ -2695,6 +2212,15 @@ export default function MediaPage() {
                 showOwnership={sharedCount > 0 || ownership !== 'mine'}
                 ownershipCounts={ownershipCounts}
               />
+              {/* Collections used to be browsable only from the agency-scope
+                  rail, so "Add to collection" in this view created sets nobody
+                  could open again. They belong with the library they hold. */}
+              <CollectionsSection
+                accountKey={effectiveAccountKey}
+                selectedId={activeCollectionId}
+                onSelect={setActiveCollectionId}
+                refreshKey={collectionsKey}
+              />
             </div>
           )}
           <div className="min-w-0 flex-1">
@@ -2781,7 +2307,11 @@ export default function MediaPage() {
                       setRenameMetadataInitial(meta);
                       setRenameFile(f);
                     } : undefined}
-                    onMoveScope={isAdmin && !fileInherited && !f.managedBy ? () => setScopeMoveItems([f]) : undefined}
+                    onMoveScope={canManageSharedAssets && !fileInherited && !f.managedBy ? () => setScopeMoveItems([f]) : undefined}
+                    // Copy is offered on INHERITED assets too: taking a local
+                    // copy of an OEM or Loomi-library asset is the main reason
+                    // to copy at all, and it leaves the shared original alone.
+                    onCopyTo={!isConsumer && !f.managedBy ? () => setCopyItems([f]) : undefined}
                     onDelete={capabilities?.canDelete && !fileInherited ? () => setDeleteFile(f) : undefined}
                   />
                 );
@@ -2809,72 +2339,7 @@ export default function MediaPage() {
       {/* Docks, modals and the drop overlay sit OUTSIDE the scroll container so
           they anchor to the viewport rather than to the scrolled content. */}
 
-      {showOverview && isAdminGridTab && selectionActive && (
-        <BulkActionDock
-          count={selectedIds.size}
-          itemLabel="files"
-          onClose={clearSelection}
-          actions={[
-            {
-              id: 'select-all',
-              label: selectedIds.size === filteredAdminMedia.length ? 'Deselect all' : 'Select all',
-              icon: <CheckIcon className="h-4 w-4" />,
-              onClick: () => {
-                if (selectedIds.size === filteredAdminMedia.length) {
-                  setSelectedIds(new Set());
-                  return;
-                }
-                setSelectedIds(new Set(filteredAdminMedia.map((file) => file.id)));
-              },
-              disabled: filteredAdminMedia.length === 0,
-            },
-            {
-              id: 'bulk-edit',
-              label: 'Edit details',
-              icon: <PencilSquareIcon className="h-4 w-4" />,
-              onClick: () => {
-                const chosen = adminMediaFiles.filter((f) => selectedIds.has(f.id));
-                if (chosen.length) setBulkEditItems(chosen);
-              },
-              disabled: selectedIds.size === 0 || bulkEditing,
-            },
-            {
-              id: 'collect',
-              label: 'Add to collection',
-              icon: <BookmarkIcon className="h-4 w-4" />,
-              onClick: addSelectionToCollection,
-              disabled: selectedIds.size === 0,
-            },
-            {
-              id: 'move-scope',
-              label: 'Move',
-              icon: <BuildingStorefrontIcon className="h-4 w-4" />,
-              onClick: () => {
-                const chosen = adminMediaFiles.filter((f) => selectedIds.has(f.id));
-                if (chosen.length) setScopeMoveItems(chosen);
-              },
-              disabled: !isAdmin || selectedIds.size === 0 || movingScope,
-            },
-            {
-              id: 'download',
-              label: downloading ? 'Zipping…' : 'Download',
-              icon: <ArrowDownTrayIcon className="h-4 w-4" />,
-              onClick: () => handleBulkDownload(false),
-              disabled: selectedIds.size === 0 || downloading,
-            },
-            {
-              id: 'delete',
-              label: 'Delete',
-              icon: <TrashIcon className="h-4 w-4" />,
-              onClick: handleBulkDeleteAdmin,
-              disabled: selectedIds.size === 0 || deleting,
-              danger: true,
-            },
-          ]}
-        />
-      )}
-
-      {!showOverview && selectionActive && (
+      {selectionActive && (
         <BulkActionDock
           count={selectedIds.size}
           itemLabel="files"
@@ -2910,7 +2375,7 @@ export default function MediaPage() {
                     label: 'Edit details',
                     icon: <PencilSquareIcon className="h-4 w-4" />,
                     onClick: () => {
-                      const chosen = (showOverview ? adminMediaFiles : files)
+                      const chosen = files
                         .filter((f) => selectedIds.has(f.id));
                       if (chosen.length) setBulkEditItems(chosen);
                     },
@@ -2928,11 +2393,23 @@ export default function MediaPage() {
                     label: 'Move',
                     icon: <BuildingStorefrontIcon className="h-4 w-4" />,
                     onClick: () => {
-                      const chosen = (showOverview ? adminMediaFiles : files)
+                      const chosen = files
                         .filter((f) => selectedIds.has(f.id));
                       if (chosen.length) setScopeMoveItems(chosen);
                     },
-                    disabled: !isAdmin || selectedIds.size === 0 || movingScope,
+                    // Role, not switcher scope — see canManageSharedAssets.
+                    disabled: !canManageSharedAssets || selectedIds.size === 0 || movingScope,
+                  },
+                  {
+                    id: 'copy-to',
+                    label: 'Copy to…',
+                    icon: <BuildingStorefrontIcon className="h-4 w-4" />,
+                    onClick: () => {
+                      const chosen = files
+                        .filter((f) => selectedIds.has(f.id));
+                      if (chosen.length) setCopyItems(chosen);
+                    },
+                    disabled: isConsumer || selectedIds.size === 0 || copying,
                   },
                   {
                     id: 'download',
@@ -2988,6 +2465,32 @@ export default function MediaPage() {
           busy={movingScope}
           onCancel={() => setScopeMoveItems(null)}
           onConfirm={handleScopeMove}
+        />
+      )}
+
+      {copyItems && copyItems.length > 0 && (
+        <ScopeMoveModal
+          mode="copy"
+          count={copyItems.length}
+          singleName={copyItems.length === 1 ? copyItems[0].name : undefined}
+          // "This sub-account" is offered when the asset came from somewhere
+          // else — taking a local copy of a shared or OEM asset is the whole
+          // point. It's dropped only when the asset already lives here, where a
+          // copy would just be a duplicate row (and the API refuses it).
+          accounts={scopeAccounts
+            .filter(({ key }) =>
+              key !== effectiveAccountKey ||
+              (copyItems ?? []).some((f) => (f.accountKey ?? null) !== effectiveAccountKey),
+            )
+            // Current account first, because the modal defaults to the first
+            // entry and "bring this shared asset in here" is the common case.
+            .sort((a, b) =>
+              a.key === effectiveAccountKey ? -1 : b.key === effectiveAccountKey ? 1 : 0,
+            )
+            .map(({ key, dealer }) => ({ key, dealer }))}
+          busy={copying}
+          onCancel={() => setCopyItems(null)}
+          onConfirm={handleAssetCopy}
         />
       )}
 
@@ -3399,7 +2902,7 @@ export default function MediaPage() {
       {previewFile && (() => {
         const previewIsImage = previewFile.type?.startsWith('image') || previewFile.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
         // Use the correct file list for navigation based on context
-        const previewList = showOverview ? filteredAdminMedia : filtered;
+        const previewList = filtered;
         const currentIndex = previewList.findIndex(f => f.id === previewFile.id);
         const hasPrev = currentIndex > 0;
         const hasNext = currentIndex < previewList.length - 1;

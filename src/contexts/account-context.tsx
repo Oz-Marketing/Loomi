@@ -106,13 +106,54 @@ export interface AccountData {
   parentAccountKey?: string | null;
 }
 
+/**
+ * The active scope.
+ *
+ * `admin` is no longer a place the user can be. Agency scope was retired when
+ * platform config moved into the Agency Settings modal (the cog in the top
+ * bar) — the account switcher lists sub-accounts and nothing else. What's left
+ * of `admin` is the UNRESOLVED state: the window between "session is
+ * authenticated" and "we know which sub-account to open", plus the case where
+ * the user can see no accounts at all. `resolveDefaultAccountKey` closes that
+ * window as soon as the account list lands.
+ */
 export type AccountType =
   | { mode: 'admin' }
   | { mode: 'account'; accountKey: string };
 
+/**
+ * Where a user with no stored selection should land.
+ *
+ * An Organization first — a group account rolls its rooftops up, so it's the
+ * widest view anyone gets now that agency scope is gone, and the largest one is
+ * the closest thing to "home" for an agency user. Falls back to the first
+ * account by display name so the choice is at least stable between loads.
+ */
+export function resolveDefaultAccountKey(
+  accounts: Record<string, AccountData>,
+  descendantCounts: Record<string, number>,
+): string | null {
+  const keys = Object.keys(accounts);
+  if (keys.length === 0) return null;
+  const byName = (a: string, b: string) =>
+    (accounts[a]?.dealer || a).localeCompare(accounts[b]?.dealer || b);
+  const organizations = keys
+    .filter((key) => (descendantCounts[key] ?? 0) > 0)
+    .sort((a, b) => (descendantCounts[b] ?? 0) - (descendantCounts[a] ?? 0) || byName(a, b));
+  return organizations[0] ?? [...keys].sort(byName)[0] ?? null;
+}
+
 interface AccountContextValue {
   account: AccountType;
   setAccount: (account: AccountType) => void;
+  /**
+   * The scope hasn't resolved to a sub-account (yet). This used to mean "the
+   * switcher is in Agency View" and gated fleet-wide roll-up views; agency
+   * scope is gone, so in practice this is only true for the first paint after
+   * login, or for a user who can see no accounts at all. Don't hang new
+   * behaviour off it — for "does this user manage the platform", read
+   * `userRole`; for "does this account roll up others", read `isGroup`.
+   */
   isAdmin: boolean;
   /** User has full (all-account) access — drives font roll-up, etc. */
   isUnrestricted: boolean;
@@ -256,6 +297,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (userRole === 'client' && userAccountKeys.length > 0) {
         setAccountState({ mode: 'account', accountKey: userAccountKeys[0] });
       } else {
+        // Unresolved, not "agency scope" — the effect below opens a default
+        // sub-account once the account list arrives.
         setAccountState({ mode: 'admin' });
       }
       setInitialized(true);
@@ -386,6 +429,30 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
     return out;
   }, [childrenByParent, accounts, descendantsOf]);
+
+  // Close the unresolved window: agency scope isn't a destination any more, so
+  // a user who arrives without a stored sub-account (first login, or a stale
+  // `admin` cookie from before this changed) gets opened into one as soon as the
+  // account list lands. Without this they'd sit in a scope the switcher can no
+  // longer name or leave.
+  //
+  // Scoped URLs are left alone — `SubaccountLayout` hydrates those from the
+  // slug, and racing it would swap the account out from under the page.
+  useEffect(() => {
+    if (!initialized || !accountsLoaded) return;
+    if (account.mode !== 'admin') return;
+    if (
+      typeof window !== 'undefined' &&
+      (window.location.pathname.startsWith('/subaccount/') ||
+        window.location.pathname.startsWith('/org/'))
+    ) {
+      return;
+    }
+    const defaultKey = resolveDefaultAccountKey(accounts, childCounts);
+    if (!defaultKey) return; // no visible accounts — nothing to open
+    setAccountState({ mode: 'account', accountKey: defaultKey });
+    writeActiveAccountCookie(defaultKey);
+  }, [initialized, accountsLoaded, account.mode, accounts, childCounts]);
 
   // Don't render until the very first session is resolved.
   // After initialization, keep rendering children during session refreshes

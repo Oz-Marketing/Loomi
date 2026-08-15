@@ -29,27 +29,37 @@ export function CalendarView() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
-  const { accountKey: globalAccountKey, isAdmin } = useAccount();
+  const { accountKey: globalAccountKey, isAdmin, isGroup, scopedAccountKeys } = useAccount();
 
-  // Fetch scoped server-side only by the global account; per-view multi-selects
-  // refine client-side.
-  const serverAccount = isAdmin ? '' : globalAccountKey ?? '';
+  // Same roll-up rule as the Tasks board: an Organization spans its rooftops
+  // (agency scope, which used to be the only cross-account view, is gone).
+  const rollsUp = isAdmin || isGroup;
+  const serverAccount = rollsUp ? '' : globalAccountKey ?? '';
   const swrKey = `/api/projects/tasks${serverAccount ? `?accountKey=${encodeURIComponent(serverAccount)}` : ''}`;
   const { data, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
     revalidateOnFocus: false,
   });
   const tasks = data?.tasks ?? [];
 
+  // Nothing picked still has to hold an organization to its own subtree — an
+  // empty list means "no filter" to the client-side matcher.
+  const filterAccountKeys = useMemo(() => {
+    if (!rollsUp) return [];
+    if (!isGroup) return accountKeys;
+    const subtree = scopedAccountKeys ?? [];
+    return accountKeys.length > 0 ? accountKeys.filter((k) => subtree.includes(k)) : subtree;
+  }, [rollsUp, isGroup, accountKeys, scopedAccountKeys]);
+
   const filters: TaskFilters = useMemo(
     () => ({
-      accountKeys: isAdmin ? accountKeys : [],
+      accountKeys: filterAccountKeys,
       teamKeys,
       assigneeUserIds,
       priorities,
       statuses: [],
       search: '',
     }),
-    [isAdmin, accountKeys, teamKeys, assigneeUserIds, priorities],
+    [filterAccountKeys, teamKeys, assigneeUserIds, priorities],
   );
 
   const { weeks, monthLabel, month } = useMemo(() => {
@@ -96,7 +106,7 @@ export function CalendarView() {
         onAssigneeUserIds={setAssigneeUserIds}
         priorities={priorities}
         onPriorities={setPriorities}
-        showAccountSelect={isAdmin}
+        showAccountSelect={rollsUp}
         title="Calendar"
         subtitle="Tasks plotted by due date."
       />

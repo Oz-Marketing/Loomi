@@ -10,6 +10,30 @@ import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import type { AdData, FieldSpec } from '@/lib/ad-generator/types';
 import { EvoxPickerModal } from './evox-picker';
 
+/** Per-offer-type pill colours. Identity, not severity — one hue per type. */
+const OFFER_TYPE_TONE: Record<string, { on: string; off: string }> = {
+  lease: {
+    on: 'border-indigo-500 bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
+    off: 'hover:border-indigo-400/60 hover:text-indigo-500',
+  },
+  apr: {
+    on: 'border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
+    off: 'hover:border-emerald-400/60 hover:text-emerald-500',
+  },
+  discount: {
+    on: 'border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-300',
+    off: 'hover:border-amber-400/60 hover:text-amber-500',
+  },
+  sales_price: {
+    on: 'border-sky-500 bg-sky-500/15 text-sky-600 dark:text-sky-300',
+    off: 'hover:border-sky-400/60 hover:text-sky-500',
+  },
+  custom: {
+    on: 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--foreground)]',
+    off: 'hover:border-[var(--primary)]/60 hover:text-[var(--foreground)]',
+  },
+};
+
 export function Field({ field, value, onChange, allowVehiclePicker, evoxSeed }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean; evoxSeed?: { year?: string; make?: string; model?: string } }) {
   const label = (
     <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
@@ -28,6 +52,38 @@ export function Field({ field, value, onChange, allowVehiclePicker, evoxSeed }: 
       </div>
     );
   }
+  // Offer type decides what every other field on the form MEANS, so it reads as
+  // a set of choices rather than one more dropdown that looks like an input. The
+  // colours are just identity — each type keeps the same hue everywhere — not a
+  // severity scale.
+  if (field.type === 'select' && field.key === 'offerType') {
+    return (
+      <div>
+        {label}
+        <div role="radiogroup" aria-label={field.label} className="flex flex-wrap gap-1.5">
+          {(field.options ?? []).map((o) => {
+            const on = value === o.value;
+            const tone = OFFER_TYPE_TONE[o.value] ?? OFFER_TYPE_TONE.custom;
+            return (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={on}
+                onClick={() => onChange(o.value)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  on ? tone.on : `border-[var(--border)] text-[var(--muted-foreground)] ${tone.off}`
+                }`}
+              >
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   if (field.type === 'select') {
     return (
       <div>

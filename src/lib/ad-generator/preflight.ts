@@ -1,4 +1,5 @@
 import type { AdData } from './types';
+import { OFFER_TYPES } from './offer-text';
 import type { TemplateDoc } from './doc-types';
 import { enrichOfferFields } from './offer-text';
 import { missingRequired, type OemOfferRule, FIELD_LABELS } from './compliance';
@@ -192,6 +193,12 @@ export interface CoopDesignVerdict {
  * Run every preflight check. Errors block the render; warnings are logged so a
  * reviewer can see them without the ad being skipped.
  */
+/** "an APR Financing offer", "a lease offer" — for messages people read. */
+function offerTypePhrase(offerType?: string): string {
+  const label = OFFER_TYPES.find((t) => t.value === offerType)?.label ?? offerType ?? 'custom';
+  return `${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label} offer`;
+}
+
 export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }: PreflightInput): PreflightResult {
   const issues: PreflightIssue[] = [];
   const sizes = sizeIds?.length ? sizeIds : doc.sizes.map((s) => s.id);
@@ -216,7 +223,10 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       severity: 'error',
       field: key,
       label,
-      message: `${label} is required for a ${data.offerType || 'custom'} offer${
+      // These now read on the creative form, not just in a run log, so the offer
+      // type gets its display label ("APR Financing", not "apr") and the article
+      // agrees with it — "a apr offer" was fine in a log and is not on screen.
+      message: `${label} is required for ${offerTypePhrase(data.offerType)}${
         oemRule?.make ? ` on ${oemRule.make}` : ''
       }.`,
     });

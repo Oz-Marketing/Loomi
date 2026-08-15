@@ -269,9 +269,50 @@ export function usableByAutomation(doc: Pick<TemplateDoc, 'usage'>): boolean {
   return templateUsage(doc) !== 'custom';
 }
 
+/**
+ * The field keys a template actually renders — every element's binding key.
+ *
+ * The system-field schema is fixed, so a doc carries all of them whether or not
+ * it draws them. This is how a caller tells "the template has a Tagline" from
+ * "the template merely inherits the Tagline field and never shows it".
+ */
+export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> {
+  const keys = new Set<string>();
+  for (const el of doc.elements ?? []) {
+    const b = el.binding;
+    if ((b?.kind === 'field' || b?.kind === 'brand') && b.key) keys.add(b.key);
+    // A condition names a field the form still has to expose, or the user can
+    // never satisfy it.
+    if (el.visibleWhen?.field) keys.add(el.visibleWhen.field);
+  }
+  return keys;
+}
+
 /** Can a person build a custom ad from this template? */
 export function usableForCustom(doc: Pick<TemplateDoc, 'usage'>): boolean {
   return templateUsage(doc) !== 'oem';
+}
+
+/**
+ * Is `date` inside the template's publish window?
+ *
+ * `schedule` has always documented itself as hiding a template outside its dates,
+ * but only the automation resolver ever honoured it — in the human library a
+ * seasonal plate showed all year. Absent or half-open windows are open-ended,
+ * matching the field's own contract.
+ */
+export function templateInSchedule(doc: Pick<TemplateDoc, 'schedule'>, date: Date): boolean {
+  const s = doc.schedule;
+  if (!s || (!s.start && !s.end)) return true;
+  // Compare as local calendar days: a window ending "2026-08-31" should include
+  // all of the 31st in the dealer's own timezone, not expire at 18:00 the day
+  // before because the boundary was read as UTC midnight.
+  const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')}`;
+  if (s.start && day < s.start) return false;
+  if (s.end && day > s.end) return false;
+  return true;
 }
 
 export interface TemplateDoc {

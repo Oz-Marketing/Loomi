@@ -88,8 +88,15 @@ export function OfferCard({
 
       <div className="space-y-4">
         {/* Vehicle picker — sets vehicleName + the `_veh*` stash the disclaimer
-            engine, co-op lookups and the color picker all read. */}
-        {vehicleSlots.length > 0 && (
+            engine, co-op lookups and the color picker all read.
+
+            Gated on `allowVehiclePicker`, NOT on `vehicleSlots`. Those are two
+            different questions: the slots say whether the design draws a vehicle
+            IMAGE, while the make drives the disclaimer, the OEM required fields
+            and every co-op rule lookup. Tying them together meant a template with
+            no image element quietly lost its make selector — and with it, all
+            manufacturer checking. */}
+        {allowVehiclePicker && (
           <ManualVehiclePicker
             initial={{
               year: data._vehYear,

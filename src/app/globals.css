@@ -364,7 +364,13 @@ body {
 html,
 body {
   max-width: 100%;
-  overflow-x: hidden;
+  /* `clip`, not `hidden`. `overflow-x: hidden` computes overflow-y to `auto`,
+     which makes BODY a scroll container — but the page actually scrolls on
+     `html`, so body's scrollport never moved and every `position: sticky`
+     descendant silently did nothing. `clip` suppresses the same horizontal
+     overflow without establishing a scrollport, so sticky resolves against the
+     viewport again. */
+  overflow-x: clip;
 }
 
 * {

@@ -1940,7 +1940,10 @@ export default function AdBuilderPage() {
     node.textContent = editingText.value;
     node.style.color = color;
     node.style.caretColor = color;
-    node.style.outline = '2px solid #6366f1';
+    // Editor chrome, not ad content — follows the user's accent. (The `#4f46e5`
+    // defaults elsewhere in this file are the ADVERTISER's brand colour and must
+    // stay fixed, or the accent would leak into generated creative.)
+    node.style.outline = '2px solid var(--primary)';
     node.style.outlineOffset = '1px';
     node.style.cursor = 'text';
     node.setAttribute('contenteditable', 'true');

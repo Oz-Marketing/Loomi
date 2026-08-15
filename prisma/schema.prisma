@@ -46,6 +46,7 @@ model User {
   metaPacerBudgetLogs          MetaAdsPacerBudgetLog[]   @relation("MetaPacerBudgetLogAuthor")
   notifications                Notification[]
   notificationPreferences      NotificationPreference[]
+  appearancePreference         UserAppearancePreference?
 
   // Projects (App surface)
   teamMemberships  TeamMembership[]
@@ -2997,6 +2998,31 @@ model NotificationPreference {
 
   @@unique([userId, type])
   @@index([userId])
+}
+
+// One row per user holding every Appearance-tab choice, so a preference set on
+// one machine follows the person to the next. The cookie + localStorage written
+// by the theme context stay the fast path (they apply before React mounts, so
+// there's no flash); this row is the durable copy that reconciles on load.
+// Values are validated against the catalogs in `src/lib/appearance/presets.ts` —
+// stored as plain strings so adding a preset is a code change, not a migration.
+model UserAppearancePreference {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 'dark' | 'light' | 'system' — 'system' follows prefers-color-scheme.
+  theme              String   @default("system")
+  // A Tailwind hue key, or 'custom' — in which case `accentCustom` is used.
+  accent             String   @default("indigo")
+  // Hex for the custom accent. Retained while a preset is selected so switching
+  // back to Custom restores the last color the user mixed.
+  accentCustom       String   @default("#6366f1")
+  fontFamily         String   @default("system")
+  density            String   @default("comfortable")
+  reduceTransparency Boolean  @default(false)
+  reduceMotion       Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────────────

@@ -110,7 +110,13 @@ function Intro() {
   return (
     <div className="glass-card rounded-2xl p-4">
       <div className="flex items-start gap-3">
-        <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-indigo-500/15 text-indigo-300 flex-shrink-0">
+        <span
+          className="inline-flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
+          style={{
+            background: 'color-mix(in srgb, var(--primary) 15%, transparent)',
+            color: 'var(--primary)',
+          }}
+        >
           <GlobeAltIcon className="w-4 h-4" />
         </span>
         <div className="text-sm leading-relaxed">

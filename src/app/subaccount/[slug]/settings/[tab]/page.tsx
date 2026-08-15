@@ -14,5 +14,10 @@ export default async function SubAccountSettingsTabRouter({ params }: PageProps)
   if (RELOCATED_TABS.has(tab)) {
     redirect(`/subaccount/${slug}/messaging/settings/${tab}`);
   }
+  // `company` was renamed to `general`. The client reads the old key as the new
+  // one anyway, but redirecting keeps the URL honest about which tab you're on.
+  if (tab === 'company') {
+    redirect(`/subaccount/${slug}/settings/general`);
+  }
   return <SubAccountSettingsPage />;
 }

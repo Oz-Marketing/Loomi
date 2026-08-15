@@ -13,8 +13,17 @@ import {
   MapPinIcon,
   ArrowTopRightOnSquareIcon,
   ExclamationTriangleIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
-import { fetcher, num, Section, Muted, EmptyState, LoadingState } from '../../ads/_components/shared';
+import {
+  fetcher,
+  num,
+  Section,
+  Muted,
+  EmptyState,
+  LoadingState,
+  DataTable,
+} from '../../ads/_components/shared';
 
 interface Review {
   author: string;
@@ -37,6 +46,22 @@ interface RepData {
   dealer: string;
   place: Place;
   competitor: Place | null;
+  /** Null when the reviews sync hasn't reached this account, or errored. */
+  history: ReviewHistory | null;
+  coverage: HistoryCoverage | null;
+}
+
+interface ReviewHistory {
+  reviews: number;
+  average: number | null;
+  replied: number;
+  replyRate: number | null;
+  distribution: { stars: number; reviews: number; share: number }[];
+  months: { period: string; label: string; reviews: number; average: number | null; replied: number }[];
+}
+interface HistoryCoverage {
+  reviews: number;
+  earliest: string | null;
 }
 
 function Stars({ rating, size = 'h-4 w-4' }: { rating: number; size?: string }) {
@@ -178,9 +203,118 @@ export function ReputationReport({ accountKey }: { accountKey: string }) {
         )}
       </Section>
 
+      <ReviewHistorySection history={data.history ?? null} coverage={data.coverage ?? null} />
+
       <p className="text-[11px] text-[var(--muted-foreground)]">
-        Live from Google Places. Full review history, trends, and reply rates arrive with the reviews pipeline.
+        The rating above is live from Google Places — it reflects every review the listing has ever
+        had. The history below counts only reviews recorded since the sync began, so the two
+        averages can differ.
       </p>
     </div>
+  );
+}
+
+/**
+ * Review history — the half Google Places cannot answer.
+ *
+ * Places has no history endpoint: no reviews-in-March, no distribution over a
+ * range, and no reply status. These come from `ReviewEvent`, which only holds
+ * what the sync has recorded — so the section says how far back it goes rather
+ * than letting a short history read as a quiet quarter.
+ */
+function ReviewHistorySection({
+  history,
+  coverage,
+}: {
+  history: ReviewHistory | null;
+  coverage: HistoryCoverage | null;
+}) {
+  if (!history || history.reviews === 0) {
+    return (
+      <Section title="Review history" icon={ChartBarIcon}>
+        <Muted>
+          No review history recorded yet. History accumulates from the reviews sync — it cannot be
+          backfilled from the live Google listing, which only returns a handful of recent reviews.
+        </Muted>
+      </Section>
+    );
+  }
+
+  const max = Math.max(...history.distribution.map((d) => d.reviews), 1);
+
+  return (
+    <>
+      <Section
+        title="Review history"
+        subtitle={
+          coverage?.earliest
+            ? `${history.reviews.toLocaleString()} in range · recorded since ${coverage.earliest}`
+            : `${history.reviews.toLocaleString()} in range`
+        }
+        icon={ChartBarIcon}
+      >
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          <div className="space-y-2">
+            {history.distribution.map((d) => (
+              <div key={d.stars} className="flex items-center gap-3">
+                <span className="w-10 shrink-0 text-xs tabular-nums text-[var(--muted-foreground)]">
+                  {d.stars}★
+                </span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--muted)]">
+                  <div
+                    className="h-full rounded-full bg-[var(--primary)] transition-[width] duration-300"
+                    style={{ width: `${(d.reviews / max) * 100}%` }}
+                  />
+                </div>
+                <span className="w-14 shrink-0 text-right text-xs tabular-nums">
+                  {d.reviews.toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Average in range
+              </p>
+              <p className="text-xl font-bold tabular-nums">
+                {history.average === null ? '—' : history.average.toFixed(2)}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Replied
+              </p>
+              <p className="text-xl font-bold tabular-nums">
+                {history.replyRate === null ? '—' : `${history.replyRate.toFixed(1)}%`}
+              </p>
+              <Muted>
+                {history.replied.toLocaleString()} of {history.reviews.toLocaleString()} reviews in
+                this range have a reply.
+              </Muted>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {history.months.length > 0 && (
+        <Section title="Reviews by month" icon={ChartBarIcon}>
+          <DataTable
+            head={['Month', 'Reviews', 'Average', 'Replied']}
+            rows={history.months
+              .slice()
+              .reverse()
+              .map((m) => [
+                m.label,
+                m.reviews.toLocaleString(),
+                m.average === null ? '—' : m.average.toFixed(2),
+                m.replied.toLocaleString(),
+              ])}
+            maxRows={12}
+          />
+        </Section>
+      )}
+    </>
   );
 }

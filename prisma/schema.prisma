@@ -110,69 +110,69 @@ model DashboardLayoutPreference {
 // ─────────────────────────────────────────────────────
 
 model Account {
-  id                        String  @id @default(cuid())
-  key                       String  @unique // "youngHonda", "smithToyota"
-  slug                      String? @unique // URL-safe kebab-case: "young-honda"
-  dealer                    String // "Young Honda"
-  category                  String? // "Automotive", "Healthcare", etc.
-  oem                       String? // single OEM key
-  oems                      String? // JSON array of OEM keys for multi-brand dealers
-  email                     String?
-  phone                     String?
-  salesPhone                String?
-  servicePhone              String?
-  partsPhone                String?
-  address                   String?
-  city                      String?
-  state                     String?
-  postalCode                String?
-  website                   String?
-  timezone                  String?
-  logos                     String? // JSON: { light, dark, white?, black? }
-  branding                  String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
-  customFonts               String? // JSON: [{ family, weight, style, url }] — uploaded OEM/brand font files
-  customValues              String? // JSON: Record<string, { name, value }>
+  id                         String    @id @default(cuid())
+  key                        String    @unique // "youngHonda", "smithToyota"
+  slug                       String?   @unique // URL-safe kebab-case: "young-honda"
+  dealer                     String // "Young Honda"
+  category                   String? // "Automotive", "Healthcare", etc.
+  oem                        String? // single OEM key
+  oems                       String? // JSON array of OEM keys for multi-brand dealers
+  email                      String?
+  phone                      String?
+  salesPhone                 String?
+  servicePhone               String?
+  partsPhone                 String?
+  address                    String?
+  city                       String?
+  state                      String?
+  postalCode                 String?
+  website                    String?
+  timezone                   String?
+  logos                      String? // JSON: { light, dark, white?, black? }
+  branding                   String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
+  customFonts                String? // JSON: [{ family, weight, style, url }] — uploaded OEM/brand font files
+  customValues               String? // JSON: Record<string, { name, value }>
   // Markup rate used by Meta Ads Pacer budget math: actual spend =
   // client gross × markup. Falls back to the global default (0.77) when
   // null. Settable per-account so stores with non-standard markups don't
   // need code changes.
-  markup                    Float?
+  markup                     Float?
   // Meta single-day daily-budget flexibility for this ad account (0.25 or
   // 0.75) — the MANUAL fallback for the pacing engine's overage allowance.
   // Read the "maximum daily spend" figure under the budget field in Ads
   // Manager, divide by the daily budget, subtract 1. Preferred source is the
   // empirical derivation from the synced daily-spend series; this only kicks
   // in while history is too thin. null → derived, else 0.75.
-  pacerOverageAllowance     Float?
+  pacerOverageAllowance      Float?
   // Sending identity for Loomi-native email sends. When null, falls back to
   // SMTP_FROM / global defaults. Configure per-subaccount once DKIM/SPF for
   // sendingDomain is set up in the client's DNS.
-  senderEmail               String?
-  senderName                String?
-  sendingDomain             String?
-  replyToEmail              String?
+  senderEmail                String?
+  senderName                 String?
+  sendingDomain              String?
+  replyToEmail               String?
   // Per-sub-account SendGrid API key (AES-256-GCM encrypted at rest via
   // src/lib/crypto/encryption.ts). When present, the worker sends through
   // SendGrid instead of falling back to SMTP. sendgridFromDomain stores the
   // verified sender domain so we can warn at send time if senderEmail isn't
   // authenticated.
-  sendgridApiKey            String?
-  sendgridFromDomain        String?
+  sendgridApiKey             String?
+  sendgridFromDomain         String?
   // Per-sub-account Twilio credentials. accountSid + authToken are
   // encrypted at rest with the same helper as the SendGrid key. The
   // worker prefers messagingServiceSid (Twilio's recommendation for
   // scaled sending — handles A2P 10DLC registration + sticky sender +
   // automatic phone-number failover) and falls back to the single
   // phoneNumber when no service is configured.
-  twilioAccountSid          String?
-  twilioAuthToken           String?
-  twilioPhoneNumber         String?
-  twilioMessagingServiceSid String?
+  twilioAccountSid           String?
+  twilioAuthToken            String?
+  twilioPhoneNumber          String?
+  twilioMessagingServiceSid  String?
   // Facebook (Meta) ad account this sub-account's campaigns live under, e.g.
   // "act_1234567890". Used by the Meta Ads Pacer's Sync-from-Facebook job to
   // pull spend. The access token itself is a single agency-wide System User
   // token in env (META_SYSTEM_USER_TOKEN), not per-account.
-  metaAdAccountId           String?
+  metaAdAccountId            String?
   // ── Publishing identity (Ad Generator → campaign launch) ──
   //
   // Reporting only ever needed the ad ACCOUNT. Publishing needs to know who the
@@ -184,37 +184,37 @@ model Account {
   // multi-brand group the wrong Page publishes a Ford store's ad from the Chevy
   // store's Page — a brand-compliance incident that looks like a Loomi bug and
   // is invisible until someone spots it in the feed.
-  metaPageId                String?
+  metaPageId                 String?
   /// Instagram actor for IG placements. Optional: without it the ad runs on
   /// Facebook placements only rather than failing.
-  metaInstagramActorId      String?
+  metaInstagramActorId       String?
   /// Pixel + the event to optimize toward, for anything past a traffic campaign.
-  metaPixelId               String?
+  metaPixelId                String?
   metaDefaultConversionEvent String?
   /// Google conversion action resource name, the equivalent for Google launches.
-  googleConversionAction    String?
+  googleConversionAction     String?
   /// Who confirmed the Page/IG/pixel above, and when. Recorded because "which
   /// Page does this rooftop post from" is exactly the decision someone will need
   /// to re-verify later, and an unattributed id is not re-verifiable.
-  metaAssetsConfirmedBy     String?
-  metaAssetsConfirmedAt     DateTime?
+  metaAssetsConfirmedBy      String?
+  metaAssetsConfirmedAt      DateTime?
   // Reporting margin (percent, 0–100) applied to Meta media-cost fields in the
   // Ads report: billed = actual / (1 - margin/100). Ported from Oz Dealer
   // Tools' per-org `facebook_ads_margin`. Distinct from `markup` above (the
   // Pacer's spend multiplier). null / 0 = bill cost at face value.
-  facebookAdsMargin         Float?
+  facebookAdsMargin          Float?
   // StackAdapt (OTT/CTV) advertiser this sub-account reports on, plus its
   // reporting margin (percent, same markup math as facebookAdsMargin). The
   // StackAdapt GraphQL API key is a single agency-wide key in env
   // (STACKADAPT_API_KEY), not per-account. Ported from Oz Dealer Tools'
   // per-org stackadapt_advertiser_id / stackadapt_margin.
-  stackadaptAdvertiserId    String?
-  stackadaptMargin          Float?
+  stackadaptAdvertiserId     String?
+  stackadaptMargin           Float?
   // Google Ads customer this sub-account reports on (digits, dashes stripped),
   // plus its reporting margin (percent, same markup math as the others). The
   // Google Ads API credentials (developer token + OAuth) are agency-wide in env.
   // Ported from Oz Dealer Tools' per-org google_ads_customer_id / google_ads_margin.
-  googleAdsCustomerId       String?
+  googleAdsCustomerId        String?
 
   // ── Audience sync consent ──
   //
@@ -233,7 +233,7 @@ model Account {
   // feeds carry no consent column today, so there is nothing truthful to
   // populate it from. Recording that fact at the rooftop level, with who
   // attested and when, is the honest version.
-  audienceSyncs             AudienceSync[]
+  audienceSyncs            AudienceSync[]
   // RETAINED, NOT READ. These backed a per-account consent attestation
   // that was replaced by per-contact provenance (see
   // segments/eligibility.ts). Production is ~98% transacted customers, so
@@ -243,26 +243,26 @@ model Account {
   // Kept rather than dropped because `prisma db push` runs unattended on
   // deploy without --accept-data-loss, and a column drop would fail it.
   // Safe to remove in a deliberate migration.
-  audienceSyncConsentBasis  String?
-  audienceSyncConsentAt     DateTime?
-  audienceSyncConsentBy     String?
-  googleAdsMargin           Float?
+  audienceSyncConsentBasis String?
+  audienceSyncConsentAt    DateTime?
+  audienceSyncConsentBy    String?
+  googleAdsMargin          Float?
   // GoHighLevel email reporting: a per-sub-account Private Integration Token
   // (AES-256-GCM encrypted at rest via src/lib/crypto/encryption.ts) + the GHL
   // locationId it reports on. The /emails/schedule API returns delivery counts
   // only — engagement (opens/clicks) requires a marketplace OAuth app, not a
   // PIT. Ported from Oz Dealer Tools' per-org ghl_api_key / ghl_location_id.
-  ghlApiKey                 String?
-  ghlLocationId             String?
+  ghlApiKey                String?
+  ghlLocationId            String?
   // IANA timezone of the Meta ad account (e.g. "America/New_York"), cached
   // from the Marketing API on each sync. Meta resets the daily budget at
   // midnight in THIS zone, so the Pacer's time-left math runs against it.
   // Authoritative for pacing; distinct from the hand-entered `timezone`
   // business field above. Falls back to `timezone` (if a valid IANA zone),
   // then America/Denver, when unset.
-  metaTimezone              String?
-  accountRepId              String?
-  accountRep                User?   @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
+  metaTimezone             String?
+  accountRepId             String?
+  accountRep               User?          @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
 
   // ── Account hierarchy ──
   // A group like Young Automotive Group is BOTH a marketing entity (it sends
@@ -309,6 +309,11 @@ model Account {
   clientAgreements         ClientAgreement[]
   budgetLinesBilled        BudgetLine[]                 @relation("BudgetLineBilled")
   budgetLinesSpend         BudgetLine[]                 @relation("BudgetLineSpend")
+  gbpConnection            GbpConnection?
+  callEvents               CallEvent[]
+  reviews                  ReviewEvent[]
+  mailerCampaigns          MailerCampaign[]
+  billboards               Billboard[]
 
   @@index([accountRepId])
   @@index([parentAccountKey])
@@ -481,15 +486,21 @@ model AudienceSync {
 
   provider String // google_ads | meta | stackadapt
 
-  /** Remote user-list id/resource name. Null until first created there. */
+  /**
+   * Remote user-list id/resource name. Null until first created there.
+   */
   externalId String?
 
   status   String @default("paused") // active | paused | error
   schedule String @default("manual") // manual | daily
-  /** Which identifier the destination matches on: email | phone | any. */
+  /**
+   * Which identifier the destination matches on: email | phone | any.
+   */
   channel  String @default("any")
 
-  /** Provider-specific settings (membership lifespan, list type, …). */
+  /**
+   * Provider-specific settings (membership lifespan, list type, …).
+   */
   config String?
 
   lastRunAt     DateTime?
@@ -520,8 +531,10 @@ model AudienceSyncMember {
   sync      AudienceSync @relation(fields: [syncId], references: [id], onDelete: Cascade)
   contactId String
 
-  /** The hashed identity actually uploaded (see identityDedupeKey), so a
-   *  contact whose email changed is correctly seen as remove + add. */
+  /**
+   * The hashed identity actually uploaded (see identityDedupeKey), so a
+   * contact whose email changed is correctly seen as remove + add.
+   */
   dedupeKey String?
 
   addedAt DateTime @default(now())
@@ -546,36 +559,48 @@ model AudienceSyncRun {
   finishedAt DateTime?
   status     String    @default("running") // running | success | failed | skipped
 
-  /** Why a run did nothing, when status = skipped. */
+  /**
+   * Why a run did nothing, when status = skipped.
+   */
   skipReason String?
 
   segmentSize Int @default(0)
   eligible    Int @default(0)
   added       Int @default(0)
   removed     Int @default(0)
-  /** Membership size after this run. */
+  /**
+   * Membership size after this run.
+   */
   total       Int @default(0)
 
-  excludedOptedOut     Int @default(0)
-  excludedSuppressed   Int @default(0)
-  excludedNoIdentifier Int @default(0)
-  excludedDuplicate    Int @default(0)
-  /** Dropped for lack of first-party provenance — no sale, no service
-   *  visit, no form submission. */
-  excludedNoProvenance Int @default(0)
-  /** JSON array of {source, count} for the provenance exclusions, so a
-   *  reviewer can see WHICH lead sources were dropped rather than just
-   *  how many. That's the evidence for deciding whether a given vendor
-   *  should be allowed through. */
+  excludedOptedOut     Int     @default(0)
+  excludedSuppressed   Int     @default(0)
+  excludedNoIdentifier Int     @default(0)
+  excludedDuplicate    Int     @default(0)
+  /**
+   * Dropped for lack of first-party provenance — no sale, no service
+   * visit, no form submission.
+   */
+  excludedNoProvenance Int     @default(0)
+  /**
+   * JSON array of {source, count} for the provenance exclusions, so a
+   * reviewer can see WHICH lead sources were dropped rather than just
+   * how many. That's the evidence for deciding whether a given vendor
+   * should be allowed through.
+   */
   excludedSources      String?
 
-  /** Reported by the provider, often asynchronously — null until known. */
+  /**
+   * Reported by the provider, often asynchronously — null until known.
+   */
   matched   Int?
   matchRate Float?
 
-  /** True when the run computed a delta but deliberately didn't upload
-   *  (no provider adapter wired yet). Lets the pipeline be proven on real
-   *  data before anything leaves the building. */
+  /**
+   * True when the run computed a delta but deliberately didn't upload
+   * (no provider adapter wired yet). Lets the pipeline be proven on real
+   * data before anything leaves the building.
+   */
   dryRun Boolean @default(false)
 
   error String?
@@ -675,8 +700,10 @@ model Contact {
   lastEmailOpenedAt    DateTime?
   lastEmailClickedAt   DateTime?
   lastSmsAt            DateTime?
-  /** Most recent delivered email OR sent/delivered SMS — the union that
-   *  backs the "Last Message Date" filter field. */
+  /**
+   * Most recent delivered email OR sent/delivered SMS — the union that
+   * backs the "Last Message Date" filter field.
+   */
   lastMessageAt        DateTime?
 
   // ── Purchase / service history rollups ──
@@ -705,9 +732,9 @@ model Contact {
   //
   // RECOMPUTED, never incremented — ContactEvent ingest is an upsert, so
   // a re-ingested batch would double-count anything additive.
-  serviceVisitCount   Int    @default(0)
-  saleCount           Int    @default(0)
-  lifetimeSpend       Float  @default(0)
+  serviceVisitCount   Int       @default(0)
+  saleCount           Int       @default(0)
+  lifetimeSpend       Float     @default(0)
   firstServiceEventAt DateTime?
   lastServiceEventAt  DateTime?
   firstSaleEventAt    DateTime?
@@ -1976,32 +2003,32 @@ model ChangelogEntry {
 // ─────────────────────────────────────────────────────
 
 model MediaAsset {
-  id           String       @id @default(cuid())
-  accountKey   String? // null = admin-level (Loomi media library)
-  account      Account?     @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  s3Key        String // "media/_admin/{id}/{filename}" or "media/{accountKey}/{id}/{filename}"
-  filename     String
-  mimeType     String
-  size         Int // bytes
-  width        Int? // image-only
-  height       Int? // image-only
-  thumbnailKey String? // "media/_admin/{id}/thumb.webp"
-  altText      String? // accessible alt text for images — used as the default alt= when inserting <img> from the picker, editable across the media library
+  id              String                @id @default(cuid())
+  accountKey      String? // null = admin-level (Loomi media library)
+  account         Account?              @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  s3Key           String // "media/_admin/{id}/{filename}" or "media/{accountKey}/{id}/{filename}"
+  filename        String
+  mimeType        String
+  size            Int // bytes
+  width           Int? // image-only
+  height          Int? // image-only
+  thumbnailKey    String? // "media/_admin/{id}/thumb.webp"
+  altText         String? // accessible alt text for images — used as the default alt= when inserting <img> from the picker, editable across the media library
   // Which media-picker tab this appears under. NOT the DAM taxonomy — see
   // `assetCategory` below, and lib/media-metadata.ts for why they stay separate.
-  category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
-  tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
+  category        String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
+  tags            String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
   /// Generated platform-size derivatives. Cascade-deleted with the master —
   /// they have no meaning without it.
-  renditions   MediaRendition[]
+  renditions      MediaRendition[]
   /// Static-collection memberships.
   collectionItems MediaCollectionItem[]
   /// Shareable links pointing at this asset.
   publicLinks     MediaPublicLink[]
-  uploadedBy   String? // User ID
-  archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  uploadedBy      String? // User ID
+  archivedAt      DateTime? // soft-archive: hidden from the default library view, restorable
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
 
   // ── DAM metadata (docs/asset-management.md Phase 1) ──
   //
@@ -2016,36 +2043,36 @@ model MediaAsset {
   ///
   /// This is the column the whole phase exists for: without it, an OEM asset used
   /// by six rooftops has to be uploaded six times.
-  oem            String? // normalized against lib/oems.ts
+  oem           String? // normalized against lib/oems.ts
   /// Where the asset came from — lib/media-metadata.ts ASSET_SOURCES. Drives the
   /// card badge now and the rights defaults in Phase 3.
   ///
   /// Named `assetSource`, not `source`, because the API payload's `source` is
   /// already the storage discriminator ('esp' | 's3') that the media UI reads.
   /// Two different meanings under one name is a bug waiting to happen.
-  assetSource    String?
+  assetSource   String?
   /// The DAM taxonomy value — ASSET_CATEGORIES. Distinct from `category`.
-  assetCategory  String?
+  assetCategory String?
   /// JSON string[] of 4-digit years. An array because an OEM template package
   /// legitimately spans model years ("MY25_MY26") and collapsing it loses that.
-  modelYear      String?
+  modelYear     String?
   /// JSON string[] of vehicle model names.
-  vehicleModel   String?
+  vehicleModel  String?
   /// Who owns the rights, e.g. "Audi of America". Free text in Phase 1; Phase 3
   /// adds the structured licence window this is the human-readable half of.
-  rightsHolder   String?
+  rightsHolder  String?
   /// Derivative lineage: a crop/resize/duplicate points at the master it came
   /// from, so "which assets derive from this?" is answerable. No FK relation —
   /// deleting a master must not cascade away its derivatives, which may be the
   /// only approved copies in use.
-  parentAssetId  String?
+  parentAssetId String?
   /// sha256 of the uploaded bytes. Powers duplicate detection on upload — the
   /// same job contentHash does on AdGuidelineDoc.
   ///
   /// Deliberately NOT unique: the same file legitimately exists under two scopes
   /// (an OEM master and a rooftop's own copy), and a unique constraint would also
   /// fail `db push` on any environment already holding duplicates.
-  contentHash    String?
+  contentHash   String?
 
   // ── Rights management (docs/asset-management.md Phase 3, §6) ──
   //
@@ -2058,46 +2085,46 @@ model MediaAsset {
   // `rightsHolder` above is the licence HOLDER; these describe the licence.
 
   /// lib/media-rights.ts LICENSE_TYPES — OEM-licensed, stock, talent release…
-  licenseType          String?
+  licenseType           String?
   /// The agreement this asset is covered by, e.g. "Ford-2026-lifestyle-Q3".
   /// Free text: it is whatever reference the counterparty used.
-  licenseRef           String?
-  licenseStartsAt      DateTime?
+  licenseRef            String?
+  licenseStartsAt       DateTime?
   /// When the LICENCE lapses — distinct from `expiresAt`, which is when the
   /// offer or campaign the asset advertises ends. An asset can outlive its offer
   /// and still be licensed, or the reverse.
-  licenseExpiresAt     DateTime?
+  licenseExpiresAt      DateTime?
   /// JSON string[] — where it may be used (digital, print, social, OOH…).
-  usageScope           String?
+  usageScope            String?
   /// JSON string[] — territories it is cleared for. Feeds OEM DAT compliance
   /// once there is a launch gate to enforce it.
-  territoryScope       String?
+  territoryScope        String?
   /// Tri-state on purpose: null = not recorded, which is not the same as false.
   /// A missing talent release and a confirmed absent one carry different risk.
-  exclusive            Boolean?
-  talentReleaseOnFile  Boolean?
+  exclusive             Boolean?
+  talentReleaseOnFile   Boolean?
   /// Whether the licence permits derivative works (resize, crop, composite).
   /// The one rights field automated generation must respect: compositing an
   /// asset that forbids derivatives is a breach nobody would catch by eye.
-  derivativesPermitted Boolean?
+  derivativesPermitted  Boolean?
   sublicensingPermitted Boolean?
 
   /// When the offer/campaign this asset supports ends. Set by a person, or
   /// carried from the offer for generated creative.
-  expiresAt            DateTime?
+  expiresAt DateTime?
 
   /// Set by the expiration sweep when the asset passes whichever date came
   /// first. A TIMESTAMP rather than a status value, matching `archivedAt` and
   /// AdCreative's convention: expiry is orthogonal to whatever workflow state
   /// Phase 5 adds, and folding them together would lose one of them.
-  expiredAt            DateTime?
+  expiredAt          DateTime?
   /// Why it expired — "license" | "effective" | "manual". §3 of the design note
   /// requires the trigger source to be auditable; without it nobody can tell a
   /// lapsed licence from an ended campaign after the fact.
-  expirationReason     String?
+  expirationReason   String?
   /// Last advance warning sent, so the daily sweep doesn't re-notify. Null once
   /// the dates move, which is what makes a renewal re-arm the warnings.
-  expirationWarnedAt   DateTime?
+  expirationWarnedAt DateTime?
 
   // ── Approval lifecycle (docs/asset-management.md Phase 5, §5) ──
   //
@@ -2113,19 +2140,19 @@ model MediaAsset {
 
   /// "draft" | "approved". Cleared for use, not "published" — distribution is a
   /// separate question the Go-to-Market work answers.
-  status         String    @default("draft")
-  approvedAt     DateTime?
-  approvedById   String?
+  status          String    @default("draft")
+  approvedAt      DateTime?
+  approvedById    String?
   /// Denormalized so the review history survives the reviewer leaving.
-  approvedByName String?
+  approvedByName  String?
   /// Free-text note from the reviewer. Carries a rejection reason too: sending
   /// an asset back leaves it in `draft` WITH the note, rather than inventing a
   /// fifth state whose only difference from draft is that someone looked at it.
-  reviewNote     String?   @db.Text
+  reviewNote      String?   @db.Text
   /// Pre-flight findings as of the last approve attempt, JSON MediaPreflight.
   /// Stored so a reviewer sees what was checked without re-running it, and so an
   /// approval remains explicable against the rules in force at the time.
-  preflightResult String?  @db.Text
+  preflightResult String?   @db.Text
 
   // ── Externally-managed assets ──
   //
@@ -2211,7 +2238,7 @@ model MediaPublicLink {
 
   createdBy     String?
   createdByName String?
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime @default(now())
 
   @@index([assetId, revokedAt])
 }
@@ -2251,10 +2278,10 @@ model MediaCollection {
 
   items MediaCollectionItem[]
 
-  createdBy   String?
+  createdBy     String?
   createdByName String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // "This account's collections", the only listing there is.
   @@index([accountKey, updatedAt])
@@ -2362,8 +2389,8 @@ model MediaRendition {
   // One rendition per size per asset: regenerating replaces rather than
   // accumulating near-identical copies.
   @@unique([assetId, name])
-  @@index([assetId])
   @@unique([s3Key])
+  @@index([assetId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -2719,8 +2746,8 @@ model MetaAdsPacerAd {
   // (budget removed, pending, ended, policy) and that reason set is exactly
   // what the mismatch warning needs to be actionable rather than alarming.
   googlePrimaryStatusReasons   String?
-  googleBudgetConstrained      Boolean  @default(false)
-  googleAdsDisapproved         Boolean  @default(false)
+  googleBudgetConstrained      Boolean   @default(false)
+  googleAdsDisapproved         Boolean   @default(false)
   // Delivery-surface metric tiles (delivery/reallocation spec §4). These ride the
   // SAME account-wide month-to-date query that produces pacerActual, so a tile can
   // never disagree with the spend figure above it and opening N row expanders
@@ -2765,7 +2792,7 @@ model MetaAdsPacerAd {
   // June 2026 change, scheduled campaigns pace the FULL monthly cap into
   // their active days, so calendar-day pacing math misreads them — detected
   // and badged for now (active-day math is a follow-up).
-  googleHasAdSchedule          Boolean  @default(false)
+  googleHasAdSchedule          Boolean   @default(false)
   // §9 — monthly ceiling ($), server-computed at sync time. A Google daily
   // budget's real cap is daily_rate × 30.4, BUT modifying the daily budget
   // mid-month reprorates the ceiling around the change date, so it can't be
@@ -2788,7 +2815,7 @@ model MetaAdsPacerAd {
   // it only sets this flag — and never creates an unallocated gap on its own.
   // It does not exempt the line from a budget push: the rate it needs is still
   // the rate it needs.
-  pacerLocked                  Boolean  @default(false)
+  pacerLocked                  Boolean   @default(false)
   // Reserved (delivery/reallocation spec §12): budget set aside for a campaign
   // that CANNOT spend yet — committed, but not built or not linked to Google.
   //
@@ -2805,7 +2832,7 @@ model MetaAdsPacerAd {
   // drops a campaign out of pacing is worse than one that shows a wrong number.
   // Distinct from pacerLocked: locked = live but don't reallocate; reserved =
   // cannot spend yet. Different badges, different meanings, never merged.
-  pacerReserved                Boolean  @default(false)
+  pacerReserved                Boolean   @default(false)
   // Free-text labels as a JSON array of strings, e.g. ["Summer Sales Event"].
   // A view/tracking dimension only, INDEPENDENT of budgetSource (base/added):
   // tagging a base-funded campaign into an event must not move money between
@@ -2815,7 +2842,7 @@ model MetaAdsPacerAd {
   // Per-ad alert mute (Change 9): when true, the pacing-family scanners
   // (underspend/overpace, went-dark, flight-ending) skip this ad so a
   // known-acceptable case stops pinging. Workflow alerts are unaffected.
-  alertsMuted                  Boolean  @default(false)
+  alertsMuted                  Boolean   @default(false)
 
   // Other
   creativeLink   String?
@@ -3463,7 +3490,7 @@ model AdLaunch {
 
   /// JSON string[] of AdCreative ids. One launch is one campaign with one ad per
   /// creative, so this is plural while platformCampaignId is singular.
-  creativeIds String @db.Text
+  creativeIds String  @db.Text
   /// Vehicle-scoped offer key (see creativeOfferKey), NOT the bare fingerprint.
   offerKey    String?
 
@@ -3498,9 +3525,9 @@ model AdLaunch {
   /// is about whether the result is live. Attribution matters here more than
   /// anywhere else in the pipeline: this is the field that answers "who started
   /// spending money", which a Graph audit log nobody can reach does not.
-  liveStatus      String? // "ACTIVE" | "PAUSED"
-  liveChangedAt   DateTime?
-  liveChangedBy   String?
+  liveStatus    String? // "ACTIVE" | "PAUSED"
+  liveChangedAt DateTime?
+  liveChangedBy String?
 
   @@index([accountKey, status])
   @@index([offerKey])
@@ -3535,7 +3562,7 @@ model AdLaunchPreset {
   /// campaigns whose creative gets refreshed monthly, others spin up a campaign
   /// per offer push. Attaching to a proven ad set avoids a learning-phase reset
   /// and budget fragmentation, so it's the better default where it applies.
-  launchMode String @default("attach_existing")
+  launchMode      String  @default("attach_existing")
   /// For attach_existing: the ad set new creative is added to. Discovered via
   /// fetchAdSets and confirmed by a person — the same reasoning as metaPageId, since
   /// attaching to the wrong ad set spends someone else's budget on this offer.
@@ -3548,7 +3575,7 @@ model AdLaunchPreset {
   dailyBudget String?
   flightDays  Int     @default(30)
 
-  geoZip String?
+  geoZip         String?
   /// Miles. FLOORED AT 15 at resolve time when a financial-products category
   /// applies — Meta enforces that minimum and rejects tighter targeting.
   geoRadiusMiles Int     @default(25)
@@ -4420,4 +4447,301 @@ model BudgetLineEvent {
   @@index([lineId, createdAt])
   @@index([groupId])
   @@index([createdAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — per-sub-account form field preferences
+// ─────────────────────────────────────────────────────
+//
+// Which of a template's fields a given sub-account hides on its custom-ad form.
+//
+// A shared template carries every field any dealer might need; a given rooftop
+// uses a handful. Without this the only way to trim the form is to fork the
+// template per dealer, which is how a library of near-identical plates starts.
+//
+// A hidden field is still SUBMITTED with whatever value it had — hiding is a
+// form concern, not a data one. That is exactly why required fields can never be
+// hidden: it wouldn't relax the requirement, it would remove the only way to
+// satisfy it. `field-prefs.ts` enforces that on write AND on read, so a
+// preference saved before a manufacturer rule changed stops applying the moment
+// the field becomes required.
+model AdTemplateFieldPref {
+  id         String @id @default(cuid())
+  accountKey String
+  // Code template id or AdTemplateDoc id — same identifier space as AdCreative.
+  templateId String
+
+  /// JSON string[] of field keys hidden for this sub-account.
+  hiddenFields String @db.Text
+
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountKey, templateId])
+  @@index([accountKey])
+}
+
+// Google Business Profile connection — one per account.
+//
+// THE ONLY PER-ACCOUNT OAUTH IN LOOMI. Every other Google integration here
+// (Google Ads, GA4) authenticates as the agency: one refresh token or service
+// account in env, used for every dealer. Business Profile can't work that way —
+// a location's insights are readable only by a Google identity that manages
+// that listing, and that identity is the dealer's, not ours. So each account
+// carries its own grant.
+//
+// Consequences worth knowing before touching this:
+//   - The token belongs to a PERSON at the dealership. If they leave, or revoke
+//     access in their Google account, this connection dies and the report has to
+//     prompt for a reconnect. That is normal, not a bug.
+//   - `refreshToken` is encrypted at rest with the same AES-256-GCM helper as
+//     CrmDestination.accessToken, and must never leave the server.
+//   - Connecting is a STAFF action (MANAGEMENT_ROLES); reading the report is
+//     client-visible. See src/lib/integrations/gbp.ts.
+model GbpConnection {
+  id         String  @id @default(cuid())
+  accountKey String  @unique
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// AES-256-GCM ciphertext (iv:authTag:ciphertext). NEVER serialize this.
+  refreshToken   String
+  /// Which Google identity granted access — shown to staff so they know who to
+  /// chase when the grant dies.
+  connectedEmail String?
+
+  /// "locations/12345678901234567890". Null until someone picks a location:
+  /// the OAuth grant can cover several listings, so the connection exists
+  /// before the choice does.
+  locationId      String?
+  locationName    String?
+  locationAddress String?
+
+  connectedByUserId String?
+
+  /// Last failure talking to Google, so the UI can distinguish "never worked"
+  /// from "worked until Tuesday" without digging through logs.
+  lastError   String?
+  lastErrorAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────
+// Tracked phone call — one row per call, pushed by the Oz Reports bridge
+// (`/loomi/pushcalls`) from its `calls` table.
+//
+// WHAT IS DELIBERATELY NOT HERE: caller name, caller phone number, and the
+// call-recording URL. Oz Reports stores all three; none of them is needed to
+// report call volume, answer rate, or the tracker/city/hour breakdowns, and
+// copying a caller's number and a recording of their conversation into a
+// second system is not something a reporting feature should do on its own
+// initiative. The city/state/ZIP kept below are what the geographic
+// breakdowns need and are already coarse.
+//
+// If a future feature genuinely needs the caller's number — the BDC call list
+// in Marketing Lists is the obvious candidate — that is a deliberate decision
+// to widen this model, with its own retention question, not something to slip
+// in because the column exists upstream.
+model CallEvent {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Stable id from the call tracker ("ozreports:calls:<id>"), so a re-push
+  /// updates rather than duplicating and the Sunday sweep stays safe to re-run.
+  idempotencyKey String @unique
+
+  occurredAt DateTime
+  /// The tracker's own status string, lowercased at ingest: "answered",
+  /// "missed", "abandoned", … Not an enum — a new status from the vendor must
+  /// show up in the report as itself, not crash the ingest or vanish.
+  status     String
+
+  /// Talk time in seconds. Null when the tracker didn't report one; only
+  /// answered calls have a meaningful duration.
+  durationSeconds Int?
+
+  /// The tracking campaign the number belongs to, e.g. "Spring Service".
+  trackerName String?
+
+  callerCity  String?
+  callerState String?
+  callerZip   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, occurredAt])
+  @@index([accountKey, status])
+  @@index([accountKey, trackerName])
+}
+
+// ─────────────────────────────────────────────────────
+// A single published review, pushed by the Oz Reports bridge
+// (`/loomi/pushreviews`) from the reputation database's `google_reviews`.
+//
+// WHY THIS EXISTS ALONGSIDE THE LIVE PLACES CALL. The Reputation report
+// already reads Google Places live, which gives the CURRENT rating and the
+// handful of reviews Google chooses to return. Places will not give you
+// history: it has no "reviews in March", no star distribution over a range,
+// and no idea whether anyone replied. Those three are the whole point of this
+// table, and none of them can be backfilled later from the live API — a review
+// unrecorded today is gone.
+//
+// So the two sources answer different questions and both stay: live Places for
+// "what does our listing say right now", this for "what happened over time".
+model ReviewEvent {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// "ozrep:google_reviews:<id>" — stable, so a re-push updates a review whose
+  /// reply status changed rather than duplicating it.
+  idempotencyKey String @unique
+
+  /// When the review was published, not when we ingested it.
+  publishedAt DateTime
+  /// 1–5. Validated at ingest; a review outside that range is skipped rather
+  /// than silently dragging the average.
+  stars       Int
+
+  /// Whether the store has replied. The reply RATE is the metric this table
+  /// exists for that Places cannot answer at all.
+  replied Boolean @default(false)
+
+  /// Review body. Nullable — a star-only review with no text is common and is
+  /// still a review.
+  text       String? @db.Text
+  /// Display name as published by Google. No email, no profile URL.
+  authorName String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, publishedAt])
+  @@index([accountKey, stars])
+  @@index([accountKey, replied])
+}
+
+// ─────────────────────────────────────────────────────
+// Direct-mail campaign matchback RESULT — one row per campaign per rooftop,
+// pushed by the Oz Reports bridge (`/loomi/pushmailer`).
+//
+// ── WHY THIS STORES RESULTS, NOT SOURCE ROWS ────────────────────────────────
+// Every other bridge feed ships raw rows and lets Loomi do the arithmetic. This
+// one cannot, for a reason that is structural rather than convenient: the
+// matchback joins mailed recipients to repair orders on `custno`, the DMS
+// customer number — and Loomi has no custno. `ContactEvent` keys on
+// `contactId`, resolved by email/phone at ingest; the mail file and the RO
+// share only the DMS's own identifier, which lives on the Oz Reports host and
+// nowhere else.
+//
+// Pushing raw recipients instead would ship the name and address of everyone
+// mailed — tens of thousands of people per campaign — AND still not work,
+// because the join key would be missing on arrival. So the match runs where
+// both databases and the key are, and only its result crosses.
+//
+// The consequence to be honest about: this table cannot be recomputed from
+// Loomi's own data. If the matchback logic changes, the fix ships in PHP and
+// the campaigns are re-pushed.
+model MailerCampaign {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// "ozpurls:campaign:<id>:<dealerMatchback>" — a campaign spans rooftops, so
+  /// the dealer code is part of the identity.
+  idempotencyKey String @unique
+
+  campaignName String
+  /// "LS" (Lost Souls) | "FLF" | whatever the mail vendor calls it.
+  mailerType   String?
+  /// Earliest and latest in-home date across the mailed file.
+  mailedFrom   DateTime
+  mailedTo     DateTime
+
+  /// Pieces mailed to this rooftop's customers.
+  marketed      Int
+  /// Recipients who visited their personal URL.
+  engaged       Int
+  /// LS campaigns only; null elsewhere so "no offers" and "not applicable"
+  /// stay distinguishable.
+  offerRequests Int?
+
+  /// Distinct recipients with at least one matched repair order.
+  matchedCustomers Int
+  /// Matched repair orders — higher than matchedCustomers when someone came
+  /// back twice.
+  matchedRos       Int
+  /// Matched ROs where the serviced VIN equals the mailed VIN.
+  directMatches    Int
+  /// Matched ROs for the same customer on a different vehicle.
+  indirectMatches  Int
+
+  /// Attributed repair-order revenue, split the way the service feed splits it.
+  customerPay Decimal @db.Decimal(12, 2)
+  warrantyPay Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, mailedFrom])
+}
+
+// ─────────────────────────────────────────────────────
+// Out-of-home board. NATIVE Loomi data, not a bridge feed.
+//
+// Oz Dealer Tools owned these in its own `billboards` table, which no bridge
+// touches — and since ODT is being retired, pointing a sync at a system that
+// is going away would be building a dependency with an expiry date. So these
+// move once and Loomi owns them: full CRUD lives here, and the ODT rows come
+// across through a one-time import (scripts/import-billboards.ts).
+//
+// SHARING. ODT had an `is_group_level` flag: a board owned by a group is
+// visible to every org beneath it. Loomi already has that concept — the
+// account hierarchy — so `sharedWithChildren` means the same thing without a
+// new sharing system. A board on a group account with the flag set is visible
+// to its descendants; without it, only to the account that owns it.
+model Billboard {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Visible to accounts beneath this one in the hierarchy. Only meaningful on
+  /// a group account — harmless and inert on a leaf.
+  sharedWithChildren Boolean @default(false)
+
+  providerName    String
+  billboardNumber String
+  artworkUrl      String?
+  facingDirection String?
+  avgDailyTraffic Int?
+
+  pricePerPeriod Decimal? @db.Decimal(10, 2)
+  numPeriods     Int      @default(1)
+  /// "4-week", "monthly", … free text, as in ODT.
+  periodType     String   @default("4-week")
+
+  expirationDate DateTime? @db.Date
+  renewedAt      DateTime?
+
+  latitude  Float
+  longitude Float
+
+  /// active | expired | archived. ODT also had `deleted`; Loomi deletes rows
+  /// instead of tombstoning them, so that state has no equivalent here.
+  status String  @default("active")
+  notes  String? @db.Text
+
+  /// Set when imported from ODT ("odt:billboards:<id>"), so the one-time
+  /// import is safe to re-run. Null for boards created in Loomi.
+  externalId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, status])
+  @@index([accountKey, expirationDate])
 }

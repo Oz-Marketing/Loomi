@@ -4,14 +4,26 @@ import { useState, useEffect, useCallback, type ComponentType } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  ArrowPathIcon,
+  ArrowTrendingUpIcon,
+  BanknotesIcon,
+  BuildingStorefrontIcon,
   ChevronDownIcon,
   CogIcon,
+  FunnelIcon,
   GlobeAltIcon,
   HomeIcon,
+  InboxStackIcon,
+  MapIcon,
+  MapPinIcon,
   MegaphoneIcon,
-  PaperAirplaneIcon,
+  PhoneIcon,
+  PresentationChartLineIcon,
+  PhotoIcon,
   StarIcon,
+  UserPlusIcon,
   UsersIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
@@ -64,12 +76,24 @@ const REPORT_BRAND_ICON: Record<string, ComponentType<{ className?: string }>> =
   google: GoogleAdsBrandIcon,
 };
 
+// Order and grouping follow docs/odt-reporting-migration.md §4. Members marked
+// `soon` are Oz Dealer Tools reports not yet ported — they render as disabled
+// rows on purpose, so the intended shape of Reporting is legible before the
+// data lands. Drop the flag as each one ships; delete a group only if its
+// last member is cut.
 const NAV: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: HomeIcon, href: '/', matchExact: true },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon, href: '/contacts' },
-  { key: 'engagement', label: 'Engagement', icon: PaperAirplaneIcon, href: '/engagement' },
-  { key: 'websites', label: 'Websites', icon: GlobeAltIcon, href: '/websites' },
-  { key: 'reputation', label: 'Reputation', icon: StarIcon, href: '/reputation' },
+  //
+  // NO "Engagement" ENTRY: it is now Digital Ads → "Email & Text Blasts", one
+  // surface carrying Loomi email, Loomi text, the email history from the
+  // previous provider, and flows. Two entries for one subject meant two places
+  // to look and two sets of numbers to reconcile. /reporting/engagement
+  // redirects there rather than 404ing — the old path is in saved links.
+  //
+  // The same records Studio calls segments — one model, two surfaces. Sits
+  // next to Contacts because that is what it is made of.
+  { key: 'lists', label: 'Marketing Lists', icon: FunnelIcon, href: '/lists' },
   {
     key: 'digital-ads',
     label: 'Digital Ads',
@@ -81,6 +105,42 @@ const NAV: NavItem[] = [
       icon: REPORT_BRAND_ICON[r.key] ?? r.icon,
     })),
   },
+  { key: 'websites', label: 'Websites', icon: GlobeAltIcon, href: '/websites' },
+  {
+    key: 'local-presence',
+    label: 'Local Presence',
+    icon: MapPinIcon,
+    children: [
+      { href: '/business-profile', label: 'Business Profile', icon: BuildingStorefrontIcon },
+      { href: '/reputation', label: 'Reputation', icon: StarIcon },
+      { href: '/call-tracking', label: 'Call Tracking', icon: PhoneIcon },
+      // Out-of-home sits under Local Presence rather than Digital Ads: it is
+      // how the dealer shows up in the market, and it is the one channel here
+      // that isn't digital at all.
+      { href: '/billboards', label: 'Billboards', icon: PhotoIcon },
+    ],
+  },
+  {
+    key: 'sales-service',
+    label: 'Sales & Service',
+    icon: PresentationChartLineIcon,
+    children: [
+      { href: '/leads', label: 'Lead Performance', icon: UserPlusIcon },
+      { href: '/sales-trend', label: 'Sales Trend', icon: ArrowTrendingUpIcon },
+      { href: '/service-trend', label: 'Service Trend', icon: WrenchScrewdriverIcon },
+      { href: '/service-retention', label: 'Service Retention', icon: ArrowPathIcon },
+      { href: '/heatmap', label: 'Customer Heatmap', icon: MapIcon },
+      { href: '/direct-mail', label: 'Direct Mail ROI', icon: InboxStackIcon },
+    ],
+  },
+  // Staff-only comparison of every rooftop. Rendered for everyone; the page
+  // itself gates on role and on more than one account being in scope, so the
+  // nav doesn't need to duplicate that logic (and can't — it has no session).
+  { key: 'executive', label: 'Executive', icon: PresentationChartLineIcon, href: '/executive' },
+  // Top level, not under Digital Ads: the ledger covers every channel including
+  // non-digital fee lines, so filing it under Digital Ads would understate what
+  // it holds. Read-only here — authoring lives in the budget hub.
+  { key: 'budget', label: 'Budget', icon: BanknotesIcon, href: '/budget' },
 ];
 
 const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';

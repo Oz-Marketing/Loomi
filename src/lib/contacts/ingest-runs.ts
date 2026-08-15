@@ -13,7 +13,7 @@
 
 import { prisma } from '@/lib/prisma';
 
-export type IngestKind = 'contacts' | 'events';
+export type IngestKind = 'contacts' | 'events' | 'calls' | 'reviews' | 'mailer';
 
 export interface IngestRunRecord {
   accountKey: string;

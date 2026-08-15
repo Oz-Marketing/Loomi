@@ -3,6 +3,7 @@ import {
   coopPassed,
   evaluateCoopRules,
   parseCoopPack,
+  splitCoopPack,
   EXAMPLE_PACK,
   type CoopRule,
   type CoopRulePack,
@@ -427,6 +428,126 @@ describe('EXAMPLE_PACK', () => {
     const f = evaluateCoopRules({ doc: d, data: LEASE, pack: EXAMPLE_PACK });
     expect(Array.isArray(f)).toBe(true);
     expect(coopPassed(f)).toBe(true); // unverified ⇒ nothing blocks
+  });
+});
+
+describe('numeric_limit', () => {
+  const D = doc([textEl('e', 'disclaimer')]);
+  const evalRule = (rule: CoopRule, data: AdData) =>
+    evaluateCoopRules({ doc: D, data, pack: pack([rule]) });
+
+  // A pricing floor: advertised price ≥ dealer invoice − advertising allowance.
+  const floor: CoopRule = {
+    id: 'floor',
+    kind: 'numeric_limit',
+    field: 'salePrice',
+    bound: 'min',
+    limits: [[{ field: 'dealerInvoiceTotal', label: 'Dealer invoice' }, { field: 'maapAllowance', label: 'allowance', op: 'subtract' }]],
+    severity: 'error',
+    description: 'The advertised price may not fall below the pricing floor.',
+    citation: 'Doc §1a',
+  };
+
+  it('passes a price at or above the floor', () => {
+    expect(evalRule(floor, { salePrice: '40200', dealerInvoiceTotal: '43200', maapAllowance: '3000' })).toEqual([]);
+  });
+
+  it('flags a price below the floor and shows the arithmetic', () => {
+    const [f] = evalRule(floor, { salePrice: '39000', dealerInvoiceTotal: '43200', maapAllowance: '3000' });
+    expect(f.severity).toBe('error');
+    expect(f.observed).toContain('salePrice is $39,000');
+    expect(f.observed).toContain('floor is $40,200');
+    expect(f.observed).toContain('Dealer invoice − allowance = $40,200');
+    expect(f.citation).toBe('Doc §1a');
+  });
+
+  // A ceiling stated as a percentage of another field — the VW down-payment cap.
+  const cap: CoopRule = {
+    id: 'cap',
+    kind: 'numeric_limit',
+    field: 'customerDown',
+    bound: 'max',
+    limits: [[{ field: 'msrp', label: 'MSRP', factor: 0.2 }]],
+    severity: 'error',
+    description: 'Customer down may not exceed 20% of MSRP.',
+  };
+
+  it('passes a down payment under the cap', () => {
+    expect(evalRule(cap, { customerDown: '8000', msrp: '45630' })).toEqual([]);
+  });
+
+  it('flags a down payment over the cap, describing it as a percentage', () => {
+    const [f] = evalRule(cap, { customerDown: '10000', msrp: '45630' });
+    expect(f.observed).toContain('ceiling is $9,126');
+    expect(f.observed).toContain('20% of MSRP');
+  });
+
+  it('does not trip on float error at exactly the limit', () => {
+    expect(evalRule(cap, { customerDown: '9126', msrp: '45630' })).toEqual([]);
+  });
+
+  // "Could not check" must never be silence — silence reads as a pass.
+  it('warns rather than passing when the tested figure is missing', () => {
+    const [f] = evalRule(floor, { dealerInvoiceTotal: '43200', maapAllowance: '3000' });
+    expect(f.severity).toBe('warning');
+    expect(f.observed).toContain('Not checked');
+    expect(f.observed).toContain('salePrice is empty');
+  });
+
+  it('warns rather than enforcing a partial sum when a limit input is missing', () => {
+    const [f] = evalRule(floor, { salePrice: '39000', dealerInvoiceTotal: '43200' });
+    expect(f.severity).toBe('warning');
+    expect(f.observed).toContain('a figure the limit depends on is missing');
+  });
+
+  // The un-checkable warning stays a warning even on an error-severity rule, so
+  // a figure the dealer cannot supply can't block a whole month of ads.
+  it('never blocks on an un-checkable rule', () => {
+    expect(coopPassed(evalRule(floor, {}))).toBe(true);
+  });
+
+  // Two candidate limits — the shape a brand needs when it states its cap two
+  // ways at once ("15% of MSRP or $3,500").
+  const twoWay = (select: 'lowest' | 'highest'): CoopRule => ({
+    id: 'twoway',
+    kind: 'numeric_limit',
+    field: 'dueAtSigning',
+    bound: 'max',
+    limits: [[{ field: 'msrp', label: 'MSRP', factor: 0.15 }], [{ literal: 3500 }]],
+    select,
+    severity: 'error',
+    description: 'Amount due at signing is capped.',
+  });
+
+  it('takes the lower of two candidate limits when told to', () => {
+    // 15% of $45,630 = $6,844.50; the other candidate is $3,500.
+    const [f] = evalRule(twoWay('lowest'), { dueAtSigning: '4000', msrp: '45630' });
+    expect(f.observed).toContain('ceiling is $3,500');
+  });
+
+  it('takes the higher of two candidate limits when told to', () => {
+    expect(evalRule(twoWay('highest'), { dueAtSigning: '4000', msrp: '45630' })).toEqual([]);
+  });
+
+  // Ambiguity is a fault in the rule, not something to resolve by guessing.
+  it('rejects several limits with no rule for choosing between them', () => {
+    const ambiguous = { ...twoWay('lowest'), select: undefined } as CoopRule;
+    const [f] = evalRule(ambiguous, { dueAtSigning: '4000', msrp: '45630' });
+    expect(f.severity).toBe('error');
+    expect(f.observed).toContain('does not say which governs');
+  });
+
+  it('rejects a rule that defines no limit at all', () => {
+    const empty = { ...floor, limits: [] } as CoopRule;
+    const [f] = evalRule(empty, { salePrice: '39000' });
+    expect(f.observed).toContain('defines no limit');
+  });
+
+  it('is a content rule — it runs per ad, not against the template', () => {
+    // Design-time checking must not try to evaluate it against placeholder data.
+    const { design, content } = splitCoopPack(pack([floor]));
+    expect(design.rules).toEqual([]);
+    expect(content.rules).toHaveLength(1);
   });
 });
 

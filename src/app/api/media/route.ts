@@ -264,7 +264,7 @@ export async function POST(req: NextRequest) {
   // Access check
   if (accountKey === null) {
     if (!canAccessAdminMedia(session!)) {
-      return NextResponse.json({ error: 'Only admins can upload to Loomi media library' }, { status: 403 });
+      return NextResponse.json({ error: 'Only admins can upload to the Loomi asset library' }, { status: 403 });
     }
   } else {
     if (!canAccessAccount(session!, accountKey)) {

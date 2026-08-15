@@ -100,7 +100,7 @@ const adGeneratorNav: NavItem = {
   absolute: true,
 };
 // Media library — re-added below Ad Generator.
-const mediaNav: NavItem = { href: '/media', label: 'Media', icon: PhotoIcon };
+const mediaNav: NavItem = { href: '/media', label: 'Assets', icon: PhotoIcon };
 // Flows is now a leaf nav item — analytics moved to /reporting/engagement.
 const flowsNavItem: NavItem = {
   href: '/flows',

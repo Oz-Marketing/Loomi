@@ -196,6 +196,10 @@ export function Muted({ children }: { children: React.ReactNode }) {
  * with a "Show all" toggle; when expanded they scroll inside a bounded box with
  * a sticky header, so a 50-keyword list never dominates the page. First column
  * is left-aligned + truncated, the rest right-aligned tabular numbers.
+ *
+ * Cells are `ReactNode` so a first column can be a `<Link>` (see the Marketing
+ * Overview's channel table). The truncation tooltip only reads plain cells —
+ * a node cell must pass its own `title`, since `String(node)` is meaningless.
  */
 export function DataTable({
   head,
@@ -203,7 +207,7 @@ export function DataTable({
   maxRows = 8,
 }: {
   head: string[];
-  rows: (string | number)[][];
+  rows: React.ReactNode[][];
   maxRows?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -230,7 +234,11 @@ export function DataTable({
                   <td
                     key={ci}
                     className={`py-2.5 tabular-nums ${ci === 0 ? 'max-w-[280px] truncate pr-3' : 'px-3 text-right'}`}
-                    title={ci === 0 ? String(cell) : undefined}
+                    title={
+                      ci === 0 && (typeof cell === 'string' || typeof cell === 'number')
+                        ? String(cell)
+                        : undefined
+                    }
                   >
                     {cell}
                   </td>

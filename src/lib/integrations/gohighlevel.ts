@@ -6,8 +6,18 @@
  * Account. The /emails/schedule endpoint returns delivery counts (sent /
  * delivered / failed) but NOT engagement (opens / clicks / bounces) — those
  * require a marketplace OAuth app, so engagement fields default to 0 and the
- * report flags when none is present. normalizeCampaign + aggregateStats are
- * ported verbatim for parity.
+ * report flags when none is present. normalizeCampaign is ported verbatim for
+ * parity.
+ *
+ * ── THIS IS NOW A HISTORY FEED ──────────────────────────────────────────────
+ * Nothing sends through this provider any more. Its only consumer is
+ * /api/reporting/blasts, which folds these campaigns in beside Loomi's own
+ * sends so an account's email history doesn't start over at the migration —
+ * and which labels them "another provider" rather than naming the vendor.
+ *
+ * `aggregateStats` used to live here for the standalone email report. That
+ * report is gone; the blasts route sums campaigns itself, into a shape it can
+ * merge with Loomi sends (lib/reporting/blasts.ts).
  */
 
 import { prisma } from '@/lib/prisma';
@@ -186,60 +196,4 @@ export async function getEmailBlastsNormalized(creds: GhlCredentials): Promise<E
     list = [];
   }
   return (list as Raw[]).filter((item) => item && typeof item === 'object').map(normalizeCampaign);
-}
-
-export interface EmailAggregate {
-  total_campaigns: number;
-  total_sent: number;
-  total_delivered: number;
-  total_failed: number;
-  total_errors: number;
-  total_opened: number;
-  total_clicked: number;
-  total_bounced: number;
-  total_unsubscribed: number;
-  total_complained: number;
-  delivery_rate: number;
-  fail_rate: number;
-  avg_open_rate: number;
-  avg_click_rate: number;
-  avg_bounce_rate: number;
-  avg_unsub_rate: number;
-  avg_recipients: number;
-  has_engagement: boolean;
-}
-
-/** Aggregate stats across campaigns (Oz parity). */
-export function aggregateStats(campaigns: EmailBlast[]): EmailAggregate {
-  const sum = (k: keyof EmailBlast) => campaigns.reduce((t, c) => t + (c[k] as number), 0);
-  const total_sent = sum('sent');
-  const total_delivered = sum('delivered');
-  const total_failed = sum('failed');
-  const total_opened = sum('opened');
-  const total_clicked = sum('clicked');
-  const total_bounced = sum('bounced');
-  const total_unsubscribed = sum('unsubscribed');
-  const total_campaigns = campaigns.length;
-  const base = Math.max(total_delivered, total_sent, 1);
-
-  return {
-    total_campaigns,
-    total_sent,
-    total_delivered,
-    total_failed,
-    total_errors: sum('errors'),
-    total_opened,
-    total_clicked,
-    total_bounced,
-    total_unsubscribed,
-    total_complained: sum('complained'),
-    delivery_rate: total_sent > 0 ? round1((total_delivered / total_sent) * 100) : 0,
-    fail_rate: total_sent > 0 ? round1((total_failed / total_sent) * 100) : 0,
-    avg_open_rate: round1((total_opened / base) * 100),
-    avg_click_rate: round1((total_clicked / base) * 100),
-    avg_bounce_rate: total_sent > 0 ? round1((total_bounced / total_sent) * 100) : 0,
-    avg_unsub_rate: round1((total_unsubscribed / base) * 100),
-    avg_recipients: total_campaigns > 0 ? Math.round(total_sent / total_campaigns) : 0,
-    has_engagement: total_opened + total_clicked + total_bounced > 0,
-  };
 }

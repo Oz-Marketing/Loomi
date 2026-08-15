@@ -1,4 +1,4 @@
-import type { TemplateDoc } from '../doc-types';
+import { usableByAutomation, type TemplateDoc } from '../doc-types';
 
 /**
  * Template resolution for autonomous generation.
@@ -10,6 +10,13 @@ import type { TemplateDoc } from '../doc-types';
  * constraint, and create a duplicate draft. So: same inputs ⇒ same template,
  * always. Any future "rotate templates" feature must be a pure function of
  * (sub-account, period), never of a clock or a shuffle.
+ *
+ * Custom-only templates (`usage: 'custom'`) are filtered out BEFORE any rule
+ * below runs. Automation's last resort is a make match, so without that filter a
+ * plate a designer built for a person to fill was already a candidate for
+ * unattended ads of the same brand — which is exactly what rule 6 exists to
+ * prevent. Filtering first means no route, not even an explicit pin, can reach
+ * one; a pin naming a custom template refuses and says so.
  *
  * Precedence, first match wins:
  *   1. An explicit pin for the period the ad runs in.
@@ -105,8 +112,13 @@ export function resolveAutomationTemplate({
   templateMap,
   monthlyPins,
 }: TemplateResolutionInput): TemplateResolution {
-  const byId = new Map(candidates.map((c) => [c.id, c]));
-  const sorted = [...candidates].sort(preferenceSort(accountKey));
+  // Custom-only templates are removed BEFORE any precedence rule runs, so no
+  // route — including an explicit pin — can put an offer through a plate built
+  // for a human to fill. A pin naming one is treated exactly like a pin naming a
+  // deleted template: refuse and say so, rather than substitute.
+  const usable = candidates.filter((c) => usableByAutomation(c.doc));
+  const byId = new Map(usable.map((c) => [c.id, c]));
+  const sorted = [...usable].sort(preferenceSort(accountKey));
 
   // 1. Explicit pin for the run period.
   const pinned = monthlyPins?.[periodKey(runDate)];
@@ -119,14 +131,20 @@ export function resolveAutomationTemplate({
         explanation: `Pinned to "${t.name}" for ${periodKey(runDate)}.`,
       };
     }
-    // A pin naming a template that no longer exists must not silently fall
-    // through as though nothing was pinned — the intent was explicit.
+    // A pin naming a template that no longer exists — or one that has since been
+    // marked custom-only — must not silently fall through as though nothing was
+    // pinned. The intent was explicit, so the refusal says which case it is.
+    const existsButCustom = candidates.some((c) => c.id === pinned);
     return {
       template: null,
       reason: 'none',
-      explanation: `Pinned template ${pinned} for ${periodKey(
-        runDate,
-      )} is no longer available — refusing to substitute a different design.`,
+      explanation: existsButCustom
+        ? `Pinned template ${pinned} for ${periodKey(
+            runDate,
+          )} is marked custom-only, so automation may not use it — refusing to substitute a different design.`
+        : `Pinned template ${pinned} for ${periodKey(
+            runDate,
+          )} is no longer available — refusing to substitute a different design.`,
     };
   }
 
@@ -175,12 +193,22 @@ export function resolveAutomationTemplate({
     };
   }
 
-  // 6. Refuse.
+  // 6. Refuse. "Everything in scope is custom-only" is a different problem from
+  // "nothing is mapped", and sends someone to a different place to fix it.
+  if (!usable.length) {
+    return {
+      template: null,
+      reason: 'none',
+      explanation: candidates.length
+        ? `${candidates.length} template(s) are in scope for this sub-account but all are marked custom-only, so automation may not use them. Mark one "OEM" or "Both" in the builder.`
+        : 'No published templates are in scope for this sub-account.',
+    };
+  }
   return {
     template: null,
     reason: 'none',
-    explanation: candidates.length
-      ? `No template is mapped for ${offerType} and none is built for ${make || 'this make'}. Map one in the automation config.`
-      : 'No published templates are in scope for this sub-account.',
+    explanation: `No template is mapped for ${offerType} and none is built for ${
+      make || 'this make'
+    }. Map one in the automation config.`,
   };
 }

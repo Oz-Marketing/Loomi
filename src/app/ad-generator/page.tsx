@@ -33,6 +33,7 @@ import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
 import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
 import { SizePicker } from '@/components/ad-generator/size-picker';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
+import { templateInSchedule, usableForCustom } from '@/lib/ad-generator/doc-types';
 import {
   facetsForAd,
   matchesFacets,
@@ -170,8 +171,25 @@ export default function AdGeneratorListPage() {
   // render) but aren't offered here — the DB library is the single source (the
   // built-in/DB split and the old Ad-Types filter row were both retired).
   const pickerTemplates = useMemo(
-    () => dbTemplates.filter((t) => templateInIndustry(t, accountData?.category)),
-    [dbTemplates, accountData?.category],
+    () =>
+      dbTemplates.filter((t) => {
+        if (!templateInIndustry(t, accountData?.category)) return false;
+        // `adTemplateFromDoc` doesn't carry usage or schedule, so both come off
+        // the raw doc. Absent doc ⇒ show it: a template we can't inspect is
+        // better offered than silently withheld.
+        const doc = templateDocs[t.id];
+        if (!doc) return true;
+        // The ad generator builds CUSTOM ads now. A design meant for the
+        // automation expects the feed to fill it and would hand a person a form
+        // of fields they have no source for.
+        if (!usableForCustom(doc)) return false;
+        // Seasonal windows. `TemplateDoc.schedule` has always documented itself
+        // as hiding the template outside its dates, but only the automation
+        // resolver honoured it — in the human library a Christmas plate showed
+        // in July.
+        return templateInSchedule(doc, new Date());
+      }),
+    [dbTemplates, templateDocs, accountData?.category],
   );
 
   useEffect(() => {

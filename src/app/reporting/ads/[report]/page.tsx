@@ -54,7 +54,11 @@ export default function DigitalAdsReportPage() {
     ? `${accountData?.dealer ?? 'Group'} — ${scopedAccountKeys.length} accounts`
     : accountKey
       ? dealer
-      : 'select an account';
+      // A report that doesn't need an account is already showing everything the
+      // viewer can see, so telling them to pick one would be wrong.
+      : def.accountOptional
+        ? 'every account you can see'
+        : 'select an account';
 
   return (
     <>
@@ -106,7 +110,7 @@ export default function DigitalAdsReportPage() {
             to={range.to}
             compareTo={range.compareTo}
           />
-        ) : !accountKey ? (
+        ) : !accountKey && !def.accountOptional ? (
           <EmptyState
             icon={ChartBarIcon}
             title="Pick an account"
@@ -114,7 +118,7 @@ export default function DigitalAdsReportPage() {
           />
         ) : (
           <Report
-            accountKey={accountKey}
+            accountKey={accountKey ?? ''}
             from={range.from}
             to={range.to}
             compareTo={range.compareTo}

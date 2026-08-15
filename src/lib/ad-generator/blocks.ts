@@ -13,6 +13,7 @@
 import type { AdData, FieldSpec } from './types';
 import type { DocElement, DocLayoutBox, TemplateDoc } from './doc-types';
 import { addFieldKit } from './vehicle-fields';
+import { rescaleBox } from './size-scope';
 
 export const BLOCK_PAYLOAD_VERSION = 1;
 
@@ -162,16 +163,23 @@ export function insertBlockIntoDoc(
     const sid = size.id;
     const existing = layouts[sid] ?? {};
     const maxZ = Object.values(existing).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
-    const scale = payload.sourceSize.h ? size.height / payload.sourceSize.h : 1;
+    // Type scales by the WIDTH ratio, matching how `rescaleBox` anchors geometry.
+    // It used to scale by HEIGHT while the frame's fractions were copied
+    // untouched, so on a landscape board the frame grew wider and shorter while
+    // the type shrank — the two moved in opposite directions and the block broke.
+    const scale = payload.sourceSize.w ? size.width / payload.sourceSize.w : 1;
+    const from = { width: payload.sourceSize.w, height: payload.sourceSize.h };
     const next: Record<string, DocLayoutBox> = { ...existing };
     for (const el of payload.elements) {
       const box = payload.boxes[el.id];
       const newId = idMap.get(el.id);
       if (!box || !newId) continue;
+      // Re-derive the box for THIS board so the block keeps its shape.
+      const fitted = rescaleBox(box, from, size);
       next[newId] = {
-        ...box,
-        x: clamp(box.x + OFFSET, 0, Math.max(0, 1 - box.w)),
-        y: clamp(box.y + OFFSET, 0, Math.max(0, 1 - box.h)),
+        ...fitted,
+        x: clamp(fitted.x + OFFSET, 0, Math.max(0, 1 - fitted.w)),
+        y: clamp(fitted.y + OFFSET, 0, Math.max(0, 1 - fitted.h)),
         z: (box.z ?? 0) + maxZ + 1,
         ...(box.fontSize != null ? { fontSize: Math.max(1, Math.round(box.fontSize * scale)) } : {}),
       };

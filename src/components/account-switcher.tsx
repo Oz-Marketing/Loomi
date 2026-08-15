@@ -4,10 +4,8 @@ import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, usePathname } from 'next/navigation';
 import {
-  ArrowLeftIcon,
   ChevronUpDownIcon,
   MagnifyingGlassIcon,
-  ShieldCheckIcon,
   CheckIcon,
   CogIcon,
 } from '@heroicons/react/24/outline';
@@ -61,16 +59,6 @@ const ADMIN_SETTINGS_TO_SUBACCOUNT_TAB: Record<string, string> = {
   appearance: 'appearance',
 };
 
-const SUBACCOUNT_SETTINGS_TO_ADMIN_PATH: Record<string, string> = {
-  company: '/settings/subaccounts',
-  branding: '/settings/subaccounts',
-  users: '/settings/users',
-  integration: '/settings/integrations',
-  integrations: '/settings/integrations',
-  'custom-values': '/settings/custom-values',
-  appearance: '/settings/appearance',
-};
-
 interface RecentSubaccountEntry {
   key: string;
   lastViewedAt: number;
@@ -115,31 +103,6 @@ function recordRecentSubaccount(storageKey: string, accountKey: string): RecentS
 
   window.localStorage.setItem(storageKey, JSON.stringify(nextEntries));
   return nextEntries;
-}
-
-function resolveAdminPath(pathname: string): string {
-  const strippedPath = stripScopePrefix(pathname);
-  const segments = strippedPath.split('/').filter(Boolean);
-
-  if (segments.length === 0 || segments[0] === 'dashboard') {
-    return '/dashboard';
-  }
-
-  if (
-    SHARED_ACCOUNT_ROUTE_ROOTS.has(segments[0]) ||
-    CONTEXT_SCOPED_ROUTE_ROOTS.has(segments[0])
-  ) {
-    return `/${segments.join('/')}`;
-  }
-
-  if (segments[0] === 'settings') {
-    return SUBACCOUNT_SETTINGS_TO_ADMIN_PATH[segments[1] || ''] || '/settings/subaccounts';
-  }
-
-  // Default: stay on the current page (treat unknown roots as context-scoped),
-  // never bounce to the dashboard. The page reads the active account from
-  // context, so only the data refreshes.
-  return strippedPath || '/dashboard';
 }
 
 function resolveSubaccountPath(pathname: string, slug: string): string {
@@ -205,8 +168,10 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const canSwitchToAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  const isAdmin = account.mode === 'admin';
+  // Agency scope was once a selectable entry here ("Agency Settings"). It isn't
+  // a place any more — platform config is the cog's modal — so this switcher
+  // lists sub-accounts and nothing else. `mode: 'admin'` survives only as the
+  // brief pre-resolution state before the context settles on an account.
   const currentKey = account.mode === 'account' ? account.accountKey : null;
   const currentAccount = currentKey ? accounts[currentKey] : null;
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
@@ -288,8 +253,8 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     setRecentAccountKeys(nextEntries.map((entry) => entry.key));
   }, [currentKey, recentStorageKey]);
 
-  const handleSelect = (key: string | '__admin__') => {
-    const destinationLabel = key === '__admin__' ? 'Agency Settings' : (accounts[key]?.dealer || key);
+  const handleSelect = (key: string) => {
+    const destinationLabel = accounts[key]?.dealer || key;
     confirmNavigation(() => {
       // The reporting AND app surfaces don't use the studio `/subaccount/<slug>/*`
       // URL structure — their pages read the active account from context/cookie
@@ -299,26 +264,20 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
       const surface = getCurrentSurface();
       const contextOnly = surface === 'reporting' || surface === 'app';
 
-      if (key === '__admin__') {
-        setAccount({ mode: 'admin' });
-        if (!contextOnly) router.push(resolveAdminPath(pathname));
-        else router.refresh();
+      if (contextOnly) {
+        setAccount({ mode: 'account', accountKey: key });
+        router.refresh();
       } else {
-        if (contextOnly) {
+        const slug = accountKeyToSlug(key, accounts);
+        const targetPath = slug ? resolveSubaccountPath(pathname, slug) : null;
+        // Context-scoped routes (e.g. /tools/*) keep the same path on switch
+        // — the layout doesn't pick up the slug from the URL, so we have to
+        // update the account context ourselves.
+        const stayingOnSamePath = targetPath === pathname;
+        if (stayingOnSamePath || !slug) {
           setAccount({ mode: 'account', accountKey: key });
-          router.refresh();
-        } else {
-          const slug = accountKeyToSlug(key, accounts);
-          const targetPath = slug ? resolveSubaccountPath(pathname, slug) : null;
-          // Context-scoped routes (e.g. /tools/*) keep the same path on switch
-          // — the layout doesn't pick up the slug from the URL, so we have to
-          // update the account context ourselves.
-          const stayingOnSamePath = targetPath === pathname;
-          if (stayingOnSamePath || !slug) {
-            setAccount({ mode: 'account', accountKey: key });
-          } else if (targetPath) {
-            router.push(targetPath);
-          }
+        } else if (targetPath) {
+          router.push(targetPath);
         }
       }
       setOpen(false);
@@ -440,18 +399,12 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     );
   }
 
-  const triggerAvatar = isAdmin ? (
-    <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-      <ShieldCheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />
-    </div>
-  ) : currentAccount ? (
+  const triggerAvatar = currentAccount ? (
     <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
   ) : (
     <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
   );
-  const triggerLabel = isAdmin
-    ? 'Agency Settings'
-    : currentAccount?.dealer || currentKey || 'Select sub-account';
+  const triggerLabel = currentAccount?.dealer || currentKey || 'Select sub-account';
 
   return (
     <>
@@ -481,7 +434,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
             <p className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">
               {triggerLabel}
             </p>
-            {!isAdmin && currentAccount && (
+            {currentAccount && (
               <p className="text-[10px] text-[var(--sidebar-muted-foreground)] truncate leading-tight">
                 {getAccountAddress(currentAccount)}
               </p>
@@ -498,19 +451,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
           className="fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
           style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         >
-          {/* Admin option */}
-          {canSwitchToAdmin && !isAdmin && (
-            <div className="px-3 py-2 border-b border-[var(--border)]">
-              <button
-                onClick={() => handleSelect('__admin__')}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--primary)] hover:opacity-80 transition-opacity"
-              >
-                <ArrowLeftIcon className="w-3.5 h-3.5" />
-                Back to Agency Settings
-              </button>
-            </div>
-          )}
-
           {/* Search — universal filter for BOTH the organizations and
               sub-account lists, so it scales to many orgs. Placed high so it's
               the first thing you reach when the lists are long. */}

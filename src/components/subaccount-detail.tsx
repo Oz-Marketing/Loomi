@@ -158,15 +158,27 @@ interface SubAccountDetailPageProps {
   settingsMode?: boolean;
   /** Account key to use (for settings mode, where there's no :key route param) */
   accountKeyProp?: string;
+  /**
+   * Rendered inside the Agency Settings modal rather than on a route. The
+   * account comes from `accountKeyProp` instead of the URL, and every exit —
+   * the back arrow, a delete — calls `onBack` instead of navigating, which
+   * would leave the user on a page behind the overlay.
+   */
+  onBack?: () => void;
 }
 
-export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }: SubAccountDetailPageProps) {
+export function SubAccountDetailPage({
+  basePath,
+  settingsMode,
+  accountKeyProp,
+  onBack,
+}: SubAccountDetailPageProps) {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
-  const key = settingsMode ? (accountKeyProp || '') : (params.key as string);
+  const key = settingsMode || accountKeyProp ? (accountKeyProp || '') : (params.key as string);
   const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
@@ -598,7 +610,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       const res = await fetch(`/api/accounts?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshAccountList();
-        router.push(basePath);
+        if (onBack) onBack();
+        else router.push(basePath);
       } else {
         toast.error('Failed to delete');
       }
@@ -689,11 +702,19 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     const notFoundEl = (
       <div className="text-center py-16">
         <p className="text-[var(--muted-foreground)]">Sub-account not found</p>
-        {!settingsMode && (
+        {!settingsMode && (onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline"
+          >
+            Back to Sub-Accounts
+          </button>
+        ) : (
           <Link href={basePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
             Back to Sub-Accounts
           </Link>
-        )}
+        ))}
       </div>
     );
     return settingsMode ? notFoundEl : <AdminOnly>{notFoundEl}</AdminOnly>;
@@ -809,12 +830,23 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
           </div>
         ) : (
           <div className="page-sticky-header flex items-center gap-3 mb-6">
-            <Link
-              href={backHref}
-              className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-            >
-              <ArrowLeftIcon className="w-4 h-4" />
-            </Link>
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label="Back to Sub-Accounts"
+                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+              </button>
+            ) : (
+              <Link
+                href={backHref}
+                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+              </Link>
+            )}
             <AccountAvatar
               name={dealer || key}
               accountKey={key}

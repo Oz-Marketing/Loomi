@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { MagnifyingGlassIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { useAccount, type AccountData } from '@/contexts/account-context';
@@ -78,9 +77,23 @@ function resolveAccountSummary(accountKey: string, account: AccountData | null |
 
 export function UsersTab({
   agencyScope = false,
-  actionSlotId = 'settings-title-actions',
-}: { agencyScope?: boolean; actionSlotId?: string } = {}) {
+  onOpenUser,
+  onCreateUser,
+}: {
+  agencyScope?: boolean;
+  /**
+   * Open a user WITHOUT navigating. Set by the Agency Settings modal so the
+   * drill-in stays inside the overlay instead of landing on a page behind it.
+   */
+  onOpenUser?: (userId: string) => void;
+  /** Same, for "Add User". */
+  onCreateUser?: () => void;
+} = {}) {
   const router = useRouter();
+  const openUser = (userId: string) =>
+    onOpenUser ? onOpenUser(userId) : router.push(`/settings/users/${userId}`);
+  const createUser = () =>
+    onCreateUser ? onCreateUser() : router.push('/settings/users/new');
   const { isAccount, accountKey, accounts, userRole, scopedAccountKeys } = useAccount();
   const canEditUsers = userRole === 'developer' || userRole === 'super_admin';
   const [users, setUsers] = useState<User[]>([]);
@@ -111,19 +124,28 @@ export function UsersTab({
       .finally(() => setLoading(false));
   }, []);
 
-  // Scoped to the active sub-account — and, when that sub-account is an
-  // organization, to its children too, so an org's Users tab rolls up the
-  // people across its sub-accounts instead of showing only those assigned to
-  // the parent itself. `scopedAccountKeys` is the same hierarchy expansion the
-  // rest of the roll-up views use.
+  // Two different rosters, split by role — the same list was showing both, so
+  // agency staff appeared inside every sub-account they cover and clients
+  // appeared in the platform roster.
   //
-  // `agencyScope` opts out: Agency Settings is fleet-wide, and it renders in a
-  // modal that deliberately leaves the surrounding account scope alone, so the
-  // roster there must not inherit whichever sub-account you had open.
+  //   • Agency Settings — the AGENCY's own people (developer / super_admin /
+  //     admin). They're assigned to sub-accounts as agency members, which is
+  //     what the Sub-Accounts column shows; that assignment doesn't make them
+  //     that sub-account's users.
+  //   • A sub-account's Users tab — that tenant's CLIENT users.
+  //
+  // Scope then narrows the sub-account case to the active account, plus its
+  // children when it's an organization (`scopedAccountKeys` — the same
+  // hierarchy expansion the other roll-up views use). Agency Settings skips
+  // that: it renders in a modal that deliberately leaves the surrounding
+  // account scope alone, so the roster must not inherit whichever sub-account
+  // you happened to have open.
   const scopedUsers = useMemo(() => {
-    if (agencyScope || !isAccount || !accountKey) return users;
+    if (agencyScope) return users.filter((user) => user.role !== 'client');
+    const clients = users.filter((user) => user.role === 'client');
+    if (!isAccount || !accountKey) return clients;
     const inScope = new Set(scopedAccountKeys?.length ? scopedAccountKeys : [accountKey]);
-    return users.filter((user) => user.accountKeys.some((k) => inScope.has(k)));
+    return clients.filter((user) => user.accountKeys.some((k) => inScope.has(k)));
   }, [users, agencyScope, isAccount, accountKey, scopedAccountKeys]);
 
   const filteredUsers = useMemo(() => {
@@ -198,27 +220,14 @@ export function UsersTab({
     return sortDirection === 'asc' ? '\u2191' : '\u2193';
   };
 
-  // Add User portals into the host's title bar so it sits beside the heading
-  // rather than floating above the table. Every host that renders this tab
-  // provides a slot: the top-level Settings page, the sub-account detail page,
-  // and the Agency Settings modal — the last under its own id, since a modal
-  // open over a settings page would otherwise find the page's slot first and
-  // drop its button behind the overlay.
-  const titleActionsEl =
-    typeof document !== 'undefined' ? document.getElementById(actionSlotId) : null;
-
-  const addUserButton = canEditUsers ? (
-    <PrimaryButton onClick={() => router.push('/settings/users/new')}>
-      <PlusIcon className="w-4 h-4" />
-      Add User
-    </PrimaryButton>
-  ) : null;
-
   return (
     <div>
-      {addUserButton && titleActionsEl && createPortal(addUserButton, titleActionsEl)}
-
-      <div className="mb-4">
+      {/* Search left, create right, directly above the table — the same header
+          row Field Blueprints uses. This used to portal into the host's title
+          bar, which meant the button's presence depended on the host having a
+          slot with the right id: the Agency Settings modal has its own id, so
+          the button silently vanished there. Inline, it can't go missing. */}
+      <div className="mb-4 flex items-center justify-between gap-4">
         <div className="relative w-52">
           <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--foreground)]" />
           <input
@@ -232,6 +241,12 @@ export function UsersTab({
             className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
           />
         </div>
+        {canEditUsers && (
+          <PrimaryButton onClick={createUser}>
+            <PlusIcon className="w-4 h-4" />
+            Add User
+          </PrimaryButton>
+        )}
       </div>
 
       <div className="glass-table account-tooltip-table">
@@ -282,16 +297,16 @@ export function UsersTab({
                 <td colSpan={6} className="px-4 py-8 text-center text-sm text-[var(--muted-foreground)]">
                   {search
                     ? 'No users match your search'
-                    : isAccount
-                      ? 'No users are assigned to this sub-account'
-                      : 'No users found'}
+                    : agencyScope
+                      ? 'No agency users yet'
+                      : 'No client users on this sub-account yet'}
                 </td>
               </tr>
             ) : (
               pagedUsers.map(user => (
                 <tr
                   key={user.id}
-                  onClick={canEditUsers ? () => router.push(`/settings/users/${user.id}`) : undefined}
+                  onClick={canEditUsers ? () => openUser(user.id) : undefined}
                   className={`border-b border-[var(--border)] last:border-b-0 transition-colors ${canEditUsers ? 'hover:bg-[var(--muted)]/50 cursor-pointer' : ''}`}
                 >
                   <td className="px-3 py-2 align-middle">

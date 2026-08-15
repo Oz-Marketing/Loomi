@@ -38,6 +38,7 @@ import { isFieldVisible, isClientField, type AdData, type AdTemplate, type Field
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { OfferCard, type VehicleSlot } from '@/components/ad-generator/client-form/offer-card';
 import { OfferSummaryCard } from '@/components/ad-generator/client-form/offer-summary-card';
+import { CoopStanding } from '@/components/ad-generator/client-form/coop-standing';
 import { Field, DisclaimerField, evoxSeedFor } from '@/components/ad-generator/client-form/fields';
 import { VehicleColorPicker } from '@/components/ad-generator/client-form/vehicle-colors';
 import { LaunchModal } from '@/components/ad-generator/launch-modal';
@@ -957,6 +958,14 @@ export default function AdGeneratorPage() {
         {/* Preview + export */}
         <div className="lg:sticky lg:top-6 lg:self-start">
           <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
+            {/* Co-op standing for the plate this ad is built from — shown next to
+                export, because "the design moved since the OEM saw it" needs to
+                land before the ad ships, not when the claim is rejected weeks on. */}
+            {showAutomotiveTools && oemMake && (
+              <div className="mb-3">
+                <CoopStanding templateId={templateId} make={oemMake} />
+              </div>
+            )}
             <div className="mb-3 flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes for this ad</span>
               {/* The builder is a design tool — managers only. Clients never

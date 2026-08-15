@@ -182,24 +182,38 @@ MAAP is the one capability that needs new engine work. `coop-rules.ts` has six
 rule kinds and **none of them does arithmetic** — they match phrases, check
 element presence, and compare geometry.
 
-Proposed seventh kind:
+**Built** as a seventh kind, `numeric_limit` — one kind covering both floors and
+ceilings, since the down-payment caps in §6 need the same machinery:
 
 ```ts
-/** A pricing floor: the advertised price may not fall below a computed figure. */
-export interface PriceFloorRule extends CoopRuleBase {
-  kind: 'price_floor';
-  /** The advertised figure to test, e.g. `salePrice`. */
-  field: string;
-  /** Ordered terms summed to produce the floor; each is a field key or literal. */
-  formula: { op: 'add' | 'subtract'; field?: string; literal?: number }[];
+export interface NumericLimitRule extends CoopRuleBase {
+  kind: 'numeric_limit';
+  field: string;              // the advertised figure under test
+  bound: 'min' | 'max';       // floor, or ceiling
+  limits: LimitTerm[][];      // CANDIDATE limits, each a sum of terms
+  select?: 'lowest' | 'highest';   // which candidate governs, when >1
 }
 ```
 
-This keeps the property that matters: a blocked ad gets a citation and the
-arithmetic, not an opinion. Each OEM's formula is transcribed **from its own
-guideline document** — they genuinely differ, and the mock's single
-`invoice − allowance` reference calculation is wrong for most of the brands it
-ships:
+`limits` is a list of candidates because at least one brand states its cap two
+ways at once ("15% of MSRP or $3,500"). Deliberately not a general expression
+language: sums of scaled terms cover every formula we've been shown, and anything
+richer would produce rules nobody could read back against the guideline.
+
+Three properties worth keeping when transcribing:
+
+- **A blocked ad gets the arithmetic**, not a verdict — the finding reads
+  `salePrice is $39,000; the floor is $40,200 (Dealer invoice − allowance = $40,200)`.
+- **"Couldn't check" is never silence.** A missing figure produces a warning
+  saying so, at warning severity regardless of the rule's own severity — so a
+  number the dealer cannot supply can't block their month, but nobody mistakes
+  the gap for a pass.
+- **Ambiguity is a fault in the rule.** Several candidate limits with no `select`
+  is reported as malformed rather than resolved by guessing.
+
+Each OEM's formula is transcribed **from its own guideline document** — they
+genuinely differ, and the mock's single `invoice − allowance` reference
+calculation is wrong for most of the brands it ships:
 
 - Mazda: Dealer Invoice + D&D − unrestricted consumer-facing incentives
 - Subaru: Subaru Official Invoice Price (inclusive of D&D)
@@ -327,9 +341,18 @@ Deferred to Phase 3:
 
 ### Phase 3 — MAAP and caps
 
-- The `price_floor` rule kind (§5), registered as `content` scope.
-- Per-OEM MAAP formulas, transcribed with citations.
-- VW and Kia down/due-at-signing caps (§6).
+Engine done; the rule DATA is blocked on the Co-op team.
+
+- ✅ The `numeric_limit` rule kind (§5), `content`-scoped.
+- ✅ `numbers.ts` — one shared figure parser. The disclaimer engine states a
+  figure and these rules decide whether it's permitted; parsing "$3,999" even
+  slightly differently would let a rule block an ad the disclaimer renders fine,
+  invisibly to whoever got blocked.
+- ✅ Co-op standing surfaced on the creative page, read-only, from the approval
+  record (deferred here from Phase 2).
+- ⛔ **Per-OEM MAAP formulas and the VW/Kia caps.** Deliberately not written.
+  The mechanism accepts them the moment the Co-op team confirms the formula, the
+  quantity each cap applies to, and the section it comes from — §10 items 2 and 3.
 
 ### Phase 4 — prohibited language
 

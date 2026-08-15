@@ -1,5 +1,6 @@
 import type { AdData } from './types';
 import type { DocElement, TemplateDoc } from './doc-types';
+import { parseOfferNumber } from './numbers';
 
 /**
  * Co-op compliance rule packs — machine-checkable per-OEM advertising rules.
@@ -108,13 +109,64 @@ export interface RequiredElementRule extends CoopRuleBase {
   field: string;
 }
 
+/**
+ * One term of a computed limit: a fixed amount, or another field's value,
+ * optionally scaled. `factor: 0.2` on `msrp` is "20% of MSRP".
+ */
+export interface LimitTerm {
+  /** A field on the ad data, e.g. `msrp`, `dealerInvoiceTotal`. */
+  field?: string;
+  /** A fixed amount. Mutually exclusive with `field`. */
+  literal?: number;
+  /** Multiplier applied to the term. Default 1. */
+  factor?: number;
+  /** How the term joins the running total. Default 'add'. */
+  op?: 'add' | 'subtract';
+  /** What this term is, for the observed message ("Dealer invoice"). */
+  label?: string;
+}
+
+/**
+ * A numeric bound on an advertised figure — the manufacturers' pricing rules.
+ *
+ * This is the kind that unlocks MAAP. Every other rule here matches text or
+ * measures a box; none could express "the advertised price may not fall below
+ * dealer invoice less the advertising allowance", which is why both transcribed
+ * packs record their brand's pricing rules as NOT EXPRESSIBLE. Loomi never held
+ * the invoice figure either — that arrives with the Programme fields.
+ *
+ * `limits` holds CANDIDATE limits, each a sum of terms, because at least one
+ * brand states its cap two ways at once ("15% of MSRP or $3,500"). With more
+ * than one candidate, `select` says which governs — and until the Co-op team
+ * confirms which reading is right for a given brand, the rule shouldn't be
+ * written at all rather than guessed.
+ *
+ * Deliberately NOT a general expression language: sums of scaled terms cover
+ * every formula we've actually been shown, and anything more would be a rule
+ * nobody could read back against the guideline it came from.
+ */
+export interface NumericLimitRule extends CoopRuleBase {
+  kind: 'numeric_limit';
+  /** The advertised figure under test, e.g. `salePrice`, `customerDown`. */
+  field: string;
+  /** 'min' = a floor the figure may not fall below; 'max' = a ceiling. */
+  bound: 'min' | 'max';
+  /** Candidate limits. Each inner array is summed. */
+  limits: LimitTerm[][];
+  /** Which candidate governs when there is more than one. */
+  select?: 'lowest' | 'highest';
+  /** How to render figures in the finding. Default 'currency'. */
+  unit?: 'currency' | 'number';
+}
+
 export type CoopRule =
   | RequiredPhraseRule
   | BannedPhraseRule
   | MinFontSizeRule
   | ElementZoneRule
   | MinElementSizeRule
-  | RequiredElementRule;
+  | RequiredElementRule
+  | NumericLimitRule;
 
 /**
  * WHEN a rule can actually be decided — the distinction that keeps this engine
@@ -145,6 +197,8 @@ export const RULE_SCOPE: Record<CoopRule['kind'], CoopRuleScope> = {
   min_element_size: 'design',
   required_phrase: 'content',
   banned_phrase: 'content',
+  // The figures under test are the offer's own — they change with every ad.
+  numeric_limit: 'content',
 };
 
 export function ruleScope(rule: CoopRule): CoopRuleScope {
@@ -239,6 +293,47 @@ function elementsFor(doc: TemplateDoc, field: string): DocElement[] {
   );
 }
 
+/** Half a cent — money comparisons must not trip on binary float error. */
+const MONEY_EPSILON = 0.005;
+
+function fmtLimit(n: number, unit: 'currency' | 'number' = 'currency'): string {
+  const body = n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return unit === 'currency' ? `$${body}` : body;
+}
+
+/** Describe a term for the observed message, e.g. "20% of MSRP", "$3,500". */
+function describeTerm(t: LimitTerm, unit: 'currency' | 'number'): string {
+  const name = t.label ?? t.field ?? '';
+  if (t.literal != null) return fmtLimit(t.literal, unit);
+  const factor = t.factor ?? 1;
+  return factor === 1 ? name : `${(factor * 100).toLocaleString('en-US', { maximumFractionDigits: 4 })}% of ${name}`;
+}
+
+interface Candidate {
+  value: number;
+  /** The arithmetic, so a blocked dealer can check it rather than trust it. */
+  math: string;
+}
+
+/**
+ * Compute one candidate limit. Returns null when ANY term is missing — a partial
+ * sum is a different number, not a smaller one, and enforcing it would be worse
+ * than admitting we couldn't check.
+ */
+function computeCandidate(terms: LimitTerm[], data: AdData, unit: 'currency' | 'number'): Candidate | null {
+  let sum = 0;
+  const parts: string[] = [];
+  for (const t of terms) {
+    const base = t.literal != null ? t.literal : t.field ? parseOfferNumber(data[t.field]) : null;
+    if (base == null) return null;
+    const value = base * (t.factor ?? 1);
+    const subtract = t.op === 'subtract';
+    sum += subtract ? -value : value;
+    parts.push(`${parts.length === 0 ? '' : subtract ? '− ' : '+ '}${describeTerm(t, unit)}`);
+  }
+  return { value: sum, math: `${parts.join(' ')} = ${fmtLimit(sum, unit)}` };
+}
+
 /** Whether an element is visible for this data (honours `visibleWhen`). */
 function elementVisible(el: DocElement, data: AdData): boolean {
   if (!el.visibleWhen) return true;
@@ -330,6 +425,85 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
               observed: `${key} contains it: "${value.slice(0, 120)}"`,
             });
           }
+        }
+        break;
+      }
+
+      case 'numeric_limit': {
+        const unit = rule.unit ?? 'currency';
+        if (!rule.limits?.length) {
+          push({
+            ruleId: rule.id,
+            severity: 'error',
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: 'Rule is malformed — it defines no limit.',
+          });
+          break;
+        }
+        if (rule.limits.length > 1 && !rule.select) {
+          // Several candidate limits with no rule for choosing between them is
+          // ambiguous, and guessing would silently pick a threshold nobody agreed.
+          push({
+            ruleId: rule.id,
+            severity: 'error',
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: 'Rule is malformed — it gives several limits but does not say which governs.',
+          });
+          break;
+        }
+
+        const actual = parseOfferNumber(data[rule.field]);
+        const candidates = rule.limits.map((terms) => computeCandidate(terms, data, unit));
+
+        // "Couldn't check" must never read as "passed". It's reported at warning
+        // severity whatever the rule's own severity, so a figure the dealer has
+        // no way to supply can't block their whole month — while still leaving a
+        // visible mark that this rule went unverified.
+        if (actual == null || candidates.some((c) => c == null)) {
+          const why =
+            actual == null
+              ? `${rule.field} is empty or not a number`
+              : 'a figure the limit depends on is missing';
+          push({
+            ruleId: rule.id,
+            severity: 'warning',
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: `Not checked — ${why}.`,
+          });
+          break;
+        }
+
+        const found = candidates as Candidate[];
+        const governing =
+          found.length === 1
+            ? found[0]
+            : found.reduce((a, b) =>
+                (rule.select === 'highest' ? b.value > a.value : b.value < a.value) ? b : a,
+              );
+
+        const violates =
+          rule.bound === 'min'
+            ? actual < governing.value - MONEY_EPSILON
+            : actual > governing.value + MONEY_EPSILON;
+
+        if (violates) {
+          push({
+            ruleId: rule.id,
+            severity: rule.severity,
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed:
+              `${rule.field} is ${fmtLimit(actual, unit)}; the ` +
+              `${rule.bound === 'min' ? 'floor' : 'ceiling'} is ${fmtLimit(governing.value, unit)} ` +
+              `(${governing.math})`,
+          });
         }
         break;
       }

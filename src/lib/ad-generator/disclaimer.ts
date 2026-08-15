@@ -1,5 +1,6 @@
 import type { AdData } from './types';
 import type { OfferType } from './offer-text';
+import { parseOfferNumber } from './numbers';
 
 /**
  * Disclaimer composition — the DETERMINISTIC, rule-based counterpart to the AI
@@ -76,14 +77,10 @@ function plain(v: string | undefined): string | null {
   return t === '' ? null : t;
 }
 
-/** Parse a user-entered figure ("$3,999", "10,000", "36") to a Number, or null. */
-function num(v: string | undefined): number | null {
-  if (v == null || String(v).trim() === '') return null;
-  const cleaned = String(v).replace(/[^0-9.-]/g, '');
-  if (cleaned === '' || cleaned === '-' || cleaned === '.') return null;
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
-}
+/** Parse a user-entered figure ("$3,999", "10,000", "36") to a Number, or null.
+ *  Shared with the co-op rule engine so a rule can't disagree with the
+ *  disclaimer about what a figure is — see numbers.ts. */
+const num = parseOfferNumber;
 
 /** Format a Number as whole dollars. */
 function fmtMoney(n: number): string {

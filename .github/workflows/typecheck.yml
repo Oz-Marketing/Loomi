@@ -1,19 +1,19 @@
 name: Typecheck
 
 on:
+  # KEEP THIS. Branch protection on main and staging requires a check literally
+  # named `verify`, which is this job running standalone on a PR. If this trigger
+  # goes away, that required check never reports and every PR blocks forever.
   pull_request:
-  push:
-    branches:
-      - main
-      # staging too. Pushes here often go direct rather than through a PR, so
-      # without this nothing type-checks them: four TS6133 errors rode into
-      # staging unnoticed and only surfaced against the next staging → main PR,
-      # where verify is a required check.
-      #
-      # This REPORTS, it does not gate. Deploy to Staging is a separate workflow
-      # triggered by the same push, so a red typecheck will not stop a deploy —
-      # it just means someone finds out now instead of at merge time.
-      - staging
+
+  # Called by deploy.yml and deploy-staging.yml so the same definition both runs
+  # and GATES the deploy — see the `verify` job in each.
+  #
+  # Deliberately no `push:` trigger. It used to run on pushes to main (and
+  # briefly staging), but that only ever reported: the deploy workflows fire on
+  # the same event and never looked at the result, so a red typecheck deployed
+  # anyway. Being called by them replaces that, without running twice per push.
+  workflow_call:
 
 jobs:
   verify:

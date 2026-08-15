@@ -22,6 +22,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # tsc + tests, as the gate on `deploy` below. Runs in PARALLEL with `build`
+  # rather than before it: both take minutes, and only the deploy job actually
+  # touches the running droplet, so gating there costs
+  # max(build, verify) - build of wall clock instead of build + verify.
+  #
+  # One consequence worth knowing: on a red verify, `build` has still shipped its
+  # tarball into /var/www/loomi-studio/incoming/. Nothing activates it — the
+  # release only becomes `current` in the deploy job — but the file is left
+  # behind for the next deploy's cleanup.
+  verify:
+    if: ${{ vars.STAGING_ENABLED == 'true' }}
+    uses: ./.github/workflows/typecheck.yml
+
   # Compile the Next.js bundle on the GitHub runner (NOT the droplet). The
   # webpack build is the one CPU-heavy step in a deploy; running it here keeps
   # the small droplet from pegging at ~100% for minutes. See deploy.yml.
@@ -66,7 +79,9 @@ jobs:
     # variable STAGING_ENABLED=true. Until then, pushes to `staging` won't
     # attempt a (failing) deploy — the job shows as skipped, not red.
     if: ${{ vars.STAGING_ENABLED == 'true' }}
-    needs: build
+    # BOTH, so a failing typecheck or test stops the deploy instead of merely
+    # reporting next to it.
+    needs: [build, verify]
     runs-on: ubuntu-latest
     environment: staging
     timeout-minutes: 20

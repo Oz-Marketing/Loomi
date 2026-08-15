@@ -168,10 +168,10 @@ mock's Audi/VW bodies already parameterise the `$699` / `$395` / `$0.20` /
 | Mazda, Subaru, Audi, Ford, Genesis, Yamaha, Arctic Cat, LS Tractor, Suzuki, Honda Powersports, Indian Motorcycle, Harley-Davidson, Kawasaki | same | none |
 | `KIA` | `Kia` | store canonical (lookup is case-insensitive, so low risk) |
 | `CFMOTO` | `CFMoto` | store canonical |
-| `VW` | `Volkswagen` | **rename** — `make: { equals: 'VW' }` matches nothing, silently |
-| `CDJRF` | `Chrysler`, `Dodge`, `Jeep`, `Ram` (+`Fiat`) | **split into 4–5 rows.** Stellantis publishes one guideline set, but an ad keys off a single vehicle make. |
-| `BRP (Can-Am/Ski-Doo/Sea-Doo/Lynx)` | `Can-Am`, `Ski-Doo`, `Sea-Doo` | **split into 3.** Lynx is absent from `oems.ts`; add only if Young sells it. |
-| `New Holland` | — | **absent from `oems.ts`.** See §8. |
+| `VW` | `Volkswagen` | ✅ alias map in `normalizeOems` |
+| `CDJRF` | `Chrysler`, `Dodge`, `Jeep`, `Ram` (+`Fiat`) | ✅ group, via `expandBrandGroup`. Stellantis publishes one guideline set, but an ad keys off a single vehicle make, so it must become 4–5 pack rows — never one brand. |
+| `BRP (Can-Am/Ski-Doo/Sea-Doo/Lynx)` | `Can-Am`, `Ski-Doo`, `Sea-Doo` | ✅ group. Lynx deliberately omitted — not in `oems.ts`; add only if Young sells it. |
+| `New Holland` | `New Holland` | ✅ added to `POWERSPORTS_BRANDS`. See §8. |
 
 Loomi powersports brands with **no** mock coverage: Ducati, Husqvarna, KTM,
 Polaris, Royal Enfield, Sherco, Triumph.
@@ -367,10 +367,24 @@ copywriter at the same time.
 
 ### Phase 5 — powersports and ag coverage
 
-- Resolve §8 (recommend option (a)).
-- Split `CDJRF` and `BRP`; rename `VW`.
-- Packs for the 12 powersports brands the mock covers (counting the BRP split),
-  then the 7 it does not, as the Co-op team gets to them.
+Mechanical half done; the packs are blocked on the Co-op team.
+
+- ✅ §8 resolved as option (a) — `New Holland` added to `POWERSPORTS_BRANDS`
+  alongside `LS Tractor`. No `agriculture` industry.
+- ✅ `VW` → `Volkswagen` via an alias map in `normalizeOems`, with the other
+  shorthand in real use (`Chevy`, `Mercedes`, `Harley`, `Can Am`, …). This was
+  the silent one: an account stored as `VW` matched no pack, no disclaimer
+  template and no OEM rule, and looked exactly like a brand with none on file.
+- ✅ `CDJRF` / `CDJR` / `BRP` encoded as GROUPS via `expandBrandGroup`, kept
+  deliberately out of `normalizeOems` — callers that take the first result
+  (media scoping) would otherwise pick Chrysler for a Jeep.
+- ⚠️ `expandBrandGroup` has **no runtime caller yet**. Group acronyms reach
+  neither brand lookup: `loadCoopPack` takes a vehicle's make from the feed, and
+  `makesMissingCoopPack` reads makes off inventory rows. It exists so Phase 4's
+  pack seeding doesn't have to re-derive which brands a Stellantis or BRP
+  guideline covers.
+- ⛔ Packs for the 12 powersports brands the mock covers (counting the BRP
+  split), then the 7 it does not.
 
 ## 10. What we need from the Oz Co-op team
 

@@ -26,10 +26,12 @@ import {
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { useAccount } from '@/contexts/account-context';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
+import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
 
@@ -41,6 +43,11 @@ import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
  * whose children come from the report registry. The active group auto-expands,
  * open/closed state persists across navigations (localStorage), and in the
  * collapsed icon rail a group reveals its children in a hover flyout.
+ *
+ * Two modes displace that nav, matching Studio and Projects:
+ *   • AGENCY VIEW — the platform-management rail (Manage/Configure), identical
+ *     on every surface. No swap, no back button; the rail IS the settings rail.
+ *   • SUB-ACCOUNT SETTINGS — the nav swaps to SettingsNav with a back button.
  *
  * Hrefs are BROWSER-facing paths on `reporting.loomilm.com`; the proxy rewrites
  * `/ads/*` → `/reporting/ads/*`, and `usePathname()` returns the browser URL,
@@ -141,7 +148,14 @@ const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';
 export function ReportingSidebar() {
   const pathname = usePathname();
   const { collapsed } = useSidebarCollapse();
+  const { isAccount, accountKey } = useAccount();
   const settingsActive = pathname.startsWith('/settings');
+  // Sub-account settings render the SAME sector-gated sections as Studio, via
+  // the shared sub-account detail page. Studio reaches it at
+  // /subaccount/<slug>/settings; this surface has no such route tree, so it
+  // uses the admin-browse shape (section in ?tab=) against the active account.
+  const subaccountSettingsHref =
+    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings';
 
   const isChildActive = useCallback(
     (c: NavChild) => !c.soon && pathname.startsWith(c.href),
@@ -214,10 +228,10 @@ export function ReportingSidebar() {
           {(() => {
             const settingsLink = (
               <Link
-                href="/settings"
+                href={subaccountSettingsHref}
                 className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
                   settingsActive
-                    ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                    ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
                     : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
                 }`}
               >
@@ -231,20 +245,24 @@ export function ReportingSidebar() {
         </>
       }
     >
-      {NAV.map((item) =>
-        item.children ? (
-          <GroupNav
-            key={item.key}
-            item={item}
-            collapsed={collapsed}
-            open={!!open[item.key]}
-            active={isGroupActive(item)}
-            isChildActive={isChildActive}
-            onToggle={() => toggleGroup(item.key)}
-          />
-        ) : (
-          <LeafNav key={item.key} item={item} collapsed={collapsed} active={isLeafActive(item)} />
-        ),
+      {isSettingsPath(pathname) ? (
+        <SettingsNav backHref="/" backLabel="Back to Reporting" collapsed={collapsed} />
+      ) : (
+        NAV.map((item) =>
+          item.children ? (
+            <GroupNav
+              key={item.key}
+              item={item}
+              collapsed={collapsed}
+              open={!!open[item.key]}
+              active={isGroupActive(item)}
+              isChildActive={isChildActive}
+              onToggle={() => toggleGroup(item.key)}
+            />
+          ) : (
+            <LeafNav key={item.key} item={item} collapsed={collapsed} active={isLeafActive(item)} />
+          ),
+        )
       )}
     </SidebarFrame>
   );
@@ -258,7 +276,7 @@ function LeafNav({ item, collapsed, active }: { item: NavItem; collapsed: boolea
       href={item.href!}
       className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
         active
-          ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+          ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
           : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
       }`}
     >

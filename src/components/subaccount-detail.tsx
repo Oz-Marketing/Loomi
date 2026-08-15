@@ -12,7 +12,6 @@ import {
   GlobeAltIcon,
   PaintBrushIcon,
   PencilSquareIcon,
-  SwatchIcon,
   UsersIcon,
   CloudArrowUpIcon,
   PhotoIcon,
@@ -20,7 +19,6 @@ import {
   ExclamationTriangleIcon,
   QuestionMarkCircleIcon,
   PuzzlePieceIcon,
-  TagIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
@@ -28,6 +26,11 @@ import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
+import { NotificationsTab } from '@/components/settings/notifications-tab';
+import {
+  canonicalSubaccountSection,
+  useSubaccountSections,
+} from '@/components/settings/use-settings-tabs';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
@@ -82,7 +85,16 @@ function validHexColor(value: string, fallback: string): string {
   return /^#(?:[0-9a-fA-F]{3}){1,2}$/.test(value) ? value : fallback;
 }
 
-type DetailTab = 'company' | 'branding' | 'contacts' | 'contact-fields' | 'domains' | 'integrations' | 'users' | 'appearance';
+type DetailTab =
+  | 'general'
+  | 'branding'
+  | 'contacts'
+  | 'contact-fields'
+  | 'domains'
+  | 'integrations'
+  | 'users'
+  | 'notifications'
+  | 'appearance';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
 const META_LOGO_URL =
@@ -92,28 +104,22 @@ type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 type TabDef = { key: DetailTab; label: string; icon?: React.ComponentType<{ className?: string }> };
 
 const TABS: TabDef[] = [
-  { key: 'company', label: 'Company', icon: BuildingStorefrontIcon },
+  { key: 'general', label: 'General', icon: BuildingStorefrontIcon },
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
   { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
 ];
 
+// The SETTINGS-mode tab list is no longer declared here — it comes from the
+// shared registry (`useSubaccountSections`), which also feeds the sidebar's
+// settings nav and gates each section by sector. The two lists used to be
+// hand-synced copies.
+//
 // Sending + Suppressions used to live here but moved into the
 // messaging-scoped settings page at /subaccount/<slug>/messaging/settings
 // since they're tightly coupled to the email engine. Legacy URLs are
 // redirected from the [tab] page below.
-// Order: Company → Users → Branding → rest. Shared with the sidebar settings
-// nav (see SUBACCOUNT_SETTINGS_SECTIONS in settings-nav).
-const SETTINGS_TABS: TabDef[] = [
-  { key: 'company', label: 'Company', icon: BuildingStorefrontIcon },
-  { key: 'users', label: 'Users', icon: UsersIcon },
-  { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
-  { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
-  { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
-  { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
-  { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
-];
 
 // Settings mode lives at two URL shapes:
 //   • Studio scoped:  /subaccount/<slug>/settings/<tab>            (section in path)
@@ -164,7 +170,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
-  const [activeTab, setActiveTab] = useState<DetailTab>('company');
+  const [activeTab, setActiveTab] = useState<DetailTab>('general');
+  // Settings-mode sections for the current sector, from the shared registry.
+  const settingsSections = useSubaccountSections();
   // Which integration card is open in the Integrations tab (null = no modal).
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
   const [savingIntegration, setSavingIntegration] = useState(false);
@@ -411,32 +419,35 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // Settings mode: sync activeTab from URL on initial load and popstate
   useEffect(() => {
     if (!settingsMode) return;
-    const allTabKeys = SETTINGS_TABS.map(t => t.key);
+    const allTabKeys = settingsSections.map(t => t.key);
     const syncFromUrl = () => {
       const url = new URL(window.location.href);
-      const tab = readSettingsSectionTab(url.pathname, url.searchParams) ?? 'company';
-      if (allTabKeys.includes(tab as DetailTab)) {
+      const tab =
+        canonicalSubaccountSection(readSettingsSectionTab(url.pathname, url.searchParams)) ??
+        'general';
+      if (allTabKeys.includes(tab as never)) {
         setActiveTab(tab as DetailTab);
       }
     };
     // Sync on mount — if no tab in URL, push default tab into the URL
-    if (settingsUrlTab && allTabKeys.includes(settingsUrlTab as DetailTab)) {
-      setActiveTab(settingsUrlTab as DetailTab);
+    const canonical = canonicalSubaccountSection(settingsUrlTab);
+    if (canonical && allTabKeys.includes(canonical as never)) {
+      setActiveTab(canonical as DetailTab);
     } else if (!settingsUrlTab) {
-      // No tab segment — add /company to URL (scheme-aware)
-      window.history.replaceState({}, '', buildSettingsSectionPath(pathname, key, 'company'));
+      // No tab segment — add /general to URL (scheme-aware)
+      window.history.replaceState({}, '', buildSettingsSectionPath(pathname, key, 'general'));
     }
     // Sync on browser back/forward
     window.addEventListener('popstate', syncFromUrl);
     return () => window.removeEventListener('popstate', syncFromUrl);
-  }, [settingsMode, settingsUrlTab, pathname]);
+  }, [settingsMode, settingsUrlTab, pathname, settingsSections]);
 
   // Handle ?tab= query param for deep-linking to a specific tab (non-settings mode)
   useEffect(() => {
     if (settingsMode) return;
-    const tabParam = searchParams.get('tab') as DetailTab | null;
-    if (tabParam && ['company', 'branding', 'contacts'].includes(tabParam)) {
-      setActiveTab(tabParam);
+    const tabParam = canonicalSubaccountSection(searchParams.get('tab') ?? undefined);
+    if (tabParam && ['general', 'branding', 'contacts'].includes(tabParam)) {
+      setActiveTab(tabParam as DetailTab);
     }
   }, [settingsMode, searchParams]);
 
@@ -694,8 +705,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const sectionCardClass = 'glass-section-card rounded-xl p-6';
   const isSettingsEmbed = basePath.startsWith('/settings/');
   const showContactsTab = !isSettingsEmbed;
-  const visibleTabs = settingsMode
-    ? SETTINGS_TABS
+  const visibleTabs: TabDef[] = settingsMode
+    ? settingsSections.map((s) => ({ key: s.key as DetailTab, label: s.label, icon: s.icon }))
     : TABS.filter((tab) => {
         if (tab.key === 'contacts' && !showContactsTab) return false;
         return true;
@@ -779,15 +790,21 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   </p>
                 </div>
               </div>
-              {showSaveButton && (
-                <button
-                  onClick={handleSave}
-                  disabled={saving || !hasFormChanges}
-                  className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
-                >
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </button>
-              )}
+              <div className="flex flex-shrink-0 items-center gap-2">
+                {/* Sections portal their primary action here (e.g. Users' "Add
+                    User"), so it sits beside the heading rather than floating
+                    above the section's own content. */}
+                <div id="settings-title-actions" className="flex items-center gap-2" />
+                {showSaveButton && (
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || !hasFormChanges}
+                    className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
+                  >
+                    {saving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ) : (
@@ -885,7 +902,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         <div className="flex-1 min-w-0">
 
         {/* ════════════ COMPANY TAB ════════════ */}
-        {activeTab === 'company' && (
+        {activeTab === 'general' && (
           <div className="max-w-7xl grid grid-cols-1 lg:grid-cols-2 gap-6">
             <section className={sectionCardClass}>
               <h3 className={sectionHeadingClass}>Business Details</h3>
@@ -1571,6 +1588,12 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             surface. Admin-level blueprints live at /settings under the
             top-level Field Blueprints tab. */}
         {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
+
+        {/* ════════════ NOTIFICATIONS TAB (settings mode only) ════════════
+            Personal delivery preferences, filtered to the categories that
+            belong to the current sector (see NOTIFICATION_CATEGORY_SURFACE).
+            Not offered on Reporting, which has no categories of its own. */}
+        {settingsMode && activeTab === 'notifications' && <NotificationsTab />}
 
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}

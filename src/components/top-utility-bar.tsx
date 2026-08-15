@@ -6,10 +6,8 @@ import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
 import {
   ArrowRightStartOnRectangleIcon,
-  ArrowTopRightOnSquareIcon,
   BellIcon,
   BugAntIcon,
-  ChartBarIcon,
   ClockIcon,
   MagnifyingGlassIcon,
   MoonIcon,
@@ -19,10 +17,10 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
-import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useTheme } from '@/contexts/theme-context';
+import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { DevImpersonate } from '@/components/dev-impersonate';
 import { AI_ASSIST_OPEN_EVENT } from '@/lib/ui-events';
@@ -53,7 +51,7 @@ function UtilityIconButton({
 
 export function TopUtilityBar() {
   const pathname = usePathname();
-  const { userName, userTitle, userEmail, userAvatarUrl, userRole, account } = useAccount();
+  const { userName, userTitle, userEmail, userAvatarUrl, userRole } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const { theme, toggleTheme } = useTheme();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -229,12 +227,9 @@ export function TopUtilityBar() {
           )}
         </div>
 
-        <UtilityIconButton
-          title="Report a Bug"
-          onClick={() => toast.info('Bug reporting portal coming soon')}
-        >
-          <BugAntIcon className="w-5 h-5" />
-        </UtilityIconButton>
+        {/* Agency Settings — the platform-management tier. Took the bug
+            reporter's slot; bug reporting moved into the user dropdown. */}
+        <AgencySettingsButton />
 
         <div ref={userMenuRef} className="relative">
           {userMenuOpen && (
@@ -285,28 +280,20 @@ export function TopUtilityBar() {
                   )}
                   {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                 </button>
-                {(() => {
-                  let otherUrl = getOtherSurfaceUrl();
-                  if (!otherUrl) return null;
-                  // Pass the active account + theme through the URL so
-                  // reporting can restore the same context on arrival.
-                  if (account.mode === 'account' && account.accountKey) {
-                    const sep = otherUrl.includes('?') ? '&' : '?';
-                    otherUrl = `${otherUrl}${sep}account=${encodeURIComponent(account.accountKey)}`;
-                  }
-                  otherUrl = appendThemeParam(otherUrl, theme);
-                  return (
-                    <a
-                      href={otherUrl}
-                      onClick={() => setUserMenuOpen(false)}
-                      className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                    >
-                      <ChartBarIcon className="w-4 h-4" />
-                      <span className="flex-1 text-left">Reporting</span>
-                      <ArrowTopRightOnSquareIcon className="w-3 h-3 text-[var(--muted-foreground)]" />
-                    </a>
-                  );
-                })()}
+                {/* Cross-surface jump lives in the sidebar's surface switcher,
+                    which offers all three — a single "Reporting" link here was
+                    a second, narrower door to the same place. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    toast.info('Bug reporting portal coming soon');
+                  }}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                >
+                  <BugAntIcon className="w-4 h-4" />
+                  Report a Bug
+                </button>
                 <button
                   type="button"
                   onClick={() => {

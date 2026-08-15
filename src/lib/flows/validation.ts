@@ -93,6 +93,10 @@ export const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'sms',
   'add_tag',
   'remove_tag',
+  'update_field',
+  'add_to_list',
+  'remove_from_list',
+  'create_task',
   'wait',
   'wait_until',
   'condition',
@@ -101,6 +105,33 @@ export const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'push_to_crm',
   'exit',
 ]);
+
+// Contact columns an `update_field` node may write directly. Anything
+// else must be addressed as `custom:<key>` and lands in
+// Contact.customFields. Deliberately excludes identity keys (email,
+// phone) — those carry the (accountKey, email) / (accountKey, phone)
+// unique constraints, so a flow rewriting them could collide with
+// another contact mid-run. Mirrors CANONICAL_UPDATABLE_FIELDS in
+// BuilderInspector's UpdateFieldForm.
+export const UPDATABLE_CONTACT_FIELDS: readonly string[] = [
+  'firstName',
+  'lastName',
+  'fullName',
+  'city',
+  'state',
+  'postalCode',
+  'country',
+  'address1',
+  'source',
+  'vehicleYear',
+  'vehicleMake',
+  'vehicleModel',
+  'vehicleVin',
+  'vehicleMileage',
+];
+
+// Task priorities a `create_task` node may set. Mirrors Task.priority.
+export const TASK_PRIORITIES: readonly string[] = ['low', 'medium', 'high', 'urgent'];
 
 // Date fields on Contact that the wait_until node may anchor against.
 // Mirrors the picker in BuilderInspector's WaitUntilForm — the
@@ -223,7 +254,17 @@ export function validateFlowGraph(graph: {
           'Connect it after another step, or remove it.',
         );
       }
-      continue;
+      // Branchers have already been told to wire their outputs up;
+      // running their per-branch edge checks too would just restate it
+      // once per branch.
+      if (node.type === 'condition' || node.type === 'split') continue;
+      // Everything else falls through to the config checks below. A step
+      // with no outgoing edge is the flow's implicit END, but it still
+      // RUNS — so its config has to be validated like any other.
+      // (This used to `continue` unconditionally, which meant the last
+      // step of every flow published with its config unchecked: a
+      // trailing email node with no template sailed through publish and
+      // only failed at send time.)
     }
     if (node.type === 'condition') {
       const cfg = node.config as { branches?: Array<{ id: string; label?: string; rules?: unknown[] }> };
@@ -337,6 +378,65 @@ export function validateFlowGraph(graph: {
           node.id,
           'Set a tag name.',
           `Open the step and type the tag to ${node.type === 'add_tag' ? 'add to' : 'remove from'} the contact.`,
+        );
+      }
+    }
+    if (node.type === 'add_to_list' || node.type === 'remove_from_list') {
+      const listId = String(node.config.listId || '').trim();
+      if (!listId) {
+        push(
+          node.id,
+          'Pick a contact list.',
+          `Open the step and choose the list to ${node.type === 'add_to_list' ? 'add the contact to' : 'remove the contact from'}.`,
+        );
+      }
+    }
+    if (node.type === 'update_field') {
+      const field = String(node.config.field || '').trim();
+      if (!field) {
+        push(
+          node.id,
+          'Pick a field to update.',
+          'Open the step and choose the contact field this step should set.',
+        );
+      } else if (
+        !field.startsWith('custom:') &&
+        !UPDATABLE_CONTACT_FIELDS.includes(field)
+      ) {
+        push(
+          node.id,
+          `Field "${field}" can’t be written by a flow step.`,
+          `Open the step and pick one of: ${UPDATABLE_CONTACT_FIELDS.join(', ')}, or a custom field. Email and phone are excluded — overwriting them can collide with another contact.`,
+        );
+      } else if (field === 'custom:') {
+        push(node.id, 'Custom field key is empty.', 'Re-pick the custom field in the step inspector.');
+      }
+      // An empty value is legal — it clears the field. That's a real
+      // use case (wiping a stale lifecycle marker), so no check here.
+    }
+    if (node.type === 'create_task') {
+      const title = String(node.config.title || '').trim();
+      if (!title) {
+        push(
+          node.id,
+          'Set a task title.',
+          'Open the step and type the title. Mergetags like {{firstName}} are supported.',
+        );
+      }
+      const priority = String(node.config.priority || '').trim();
+      if (priority && !TASK_PRIORITIES.includes(priority)) {
+        push(
+          node.id,
+          `Unsupported task priority "${priority}".`,
+          `Open the step and pick one of: ${TASK_PRIORITIES.join(', ')}.`,
+        );
+      }
+      const dueInDays = node.config.dueInDays;
+      if (dueInDays !== undefined && dueInDays !== '' && !Number.isFinite(Number(dueInDays))) {
+        push(
+          node.id,
+          'Task due offset must be a whole number of days.',
+          'Open the step and enter how many days after the step runs the task is due (or leave it blank for no due date).',
         );
       }
     }
@@ -525,6 +625,23 @@ export function collectConditionFieldKeys(
     }
   }
   return [...keys];
+}
+
+/** List ids referenced by add_to_list / remove_from_list nodes. Checked
+ *  at publish against the account's own ContactList rows — a template
+ *  deployed to a second sub-account carries the first account's list id,
+ *  which would silently no-op (or worse, write into another dealer's
+ *  list) if we didn't block it. */
+export function collectListIds(
+  nodes: { type: NodeType; config: Record<string, unknown> }[],
+): string[] {
+  const ids = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'add_to_list' && node.type !== 'remove_from_list') continue;
+    const listId = String(node.config.listId || '').trim();
+    if (listId) ids.add(listId);
+  }
+  return [...ids];
 }
 
 // Helper to count by severity, useful for badges + section headers.

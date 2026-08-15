@@ -20,6 +20,10 @@ import {
 } from '@/lib/smart-list-types';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import {
+  TASK_PRIORITIES,
+  UPDATABLE_CONTACT_FIELDS,
+} from '@/lib/flows/validation';
+import {
   NODE_META,
   type BuilderNodeData,
   type BuilderNodeType,
@@ -179,7 +183,7 @@ function NodeConfigForm({
       return <UpdateFieldForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'add_to_list':
     case 'remove_from_list':
-      return <ListMembershipForm config={config} onChange={onChange} />;
+      return <ListMembershipForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'add_note':
       return <NoteForm config={config} onChange={onChange} />;
     case 'create_task':
@@ -1024,20 +1028,11 @@ function TagForm({
 // Library flows (no account scope) only show canonical fields because
 // custom fields are per-sub-account by definition.
 
-const CANONICAL_UPDATABLE_FIELDS = [
-  'firstName',
-  'lastName',
-  'fullName',
-  'email',
-  'phone',
-  'city',
-  'state',
-  'postalCode',
-  'source',
-  'vehicleYear',
-  'vehicleMake',
-  'vehicleModel',
-];
+// Single source of truth with the worker + publish validator — email and
+// phone are deliberately absent (they carry per-account unique
+// constraints, so a flow rewriting one could collide with another
+// contact mid-run).
+const CANONICAL_UPDATABLE_FIELDS = UPDATABLE_CONTACT_FIELDS;
 
 function UpdateFieldForm({
   config,
@@ -1178,15 +1173,25 @@ function UpdateFieldForm({
 
 // ── List membership form (add / remove) ──
 
+interface ContactListOption {
+  id: string;
+  name: string;
+  accountKey: string;
+  memberCount: number;
+}
+
 function ListMembershipForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const [state, setField] = useFieldState(config, ['listId']);
-  const [lists, setLists] = useState<{ id: string; name: string; memberCount: number }[]>([]);
+  const [lists, setLists] = useState<ContactListOption[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -1194,33 +1199,84 @@ function ListMembershipForm({
       .then((r) => (r.ok ? r.json() : { lists: [] }))
       .then((data) => {
         if (cancelled) return;
-        const rows = Array.isArray(data?.lists) ? data.lists : [];
+        const rows = Array.isArray(data?.lists) ? (data.lists as ContactListOption[]) : [];
         setLists(rows);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // Lists are per-sub-account rows. Show only this flow's account so a
+  // multi-account admin can't wire in another dealer's list — publish
+  // rejects that anyway, and failing in the picker is friendlier.
+  const scoped = useMemo(
+    () => (accountKey ? lists.filter((l) => l.accountKey === accountKey) : lists),
+    [lists, accountKey],
+  );
+
+  // A template (accountKey === null) can't resolve a real list — its
+  // instances each need their own. Say so instead of offering a picker
+  // whose value would be rejected at publish on every instance.
+  if (!accountKey) {
+    return (
+      <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
+        Contact lists belong to a sub-account, so this step can&rsquo;t be
+        pointed at one from a template. Deploy the flow, then pick the list
+        on each sub-account&rsquo;s copy.
+      </p>
+    );
+  }
+
+  const selectedMissing =
+    state.listId !== '' && !loading && !scoped.some((l) => l.id === state.listId);
+
   return (
-    <Field label="List">
-      <select
-        value={state.listId}
-        onChange={(e) => {
-          setField('listId', e.target.value);
-          onChange({ ...config, listId: e.target.value });
-        }}
-        className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
-      >
-        <option value="">— Select a list —</option>
-        {lists.map((l) => (
-          <option key={l.id} value={l.id}>
-            {l.name} ({l.memberCount})
+    <>
+      <Field label="List">
+        <select
+          value={state.listId}
+          onChange={(e) => {
+            const nextId = e.target.value;
+            setField('listId', nextId);
+            // Denormalise the name so the canvas card can read
+            // "+ list: VIP Service" instead of a raw cuid. The worker
+            // always resolves by id — this copy is display-only and may
+            // go stale if the list is renamed.
+            onChange({
+              ...config,
+              listId: nextId,
+              listName: scoped.find((l) => l.id === nextId)?.name ?? '',
+            });
+          }}
+          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        >
+          <option value="">
+            {loading ? 'Loading lists…' : '— Select a list —'}
           </option>
-        ))}
-      </select>
-    </Field>
+          {scoped.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name} ({l.memberCount})
+            </option>
+          ))}
+        </select>
+      </Field>
+      {selectedMissing && (
+        <p className="text-[10px] text-amber-400 -mt-2">
+          The list this step points at isn&rsquo;t available for this
+          sub-account. Pick another before publishing.
+        </p>
+      )}
+      {!loading && scoped.length === 0 && (
+        <p className="text-[10px] text-[var(--muted-foreground)] -mt-2">
+          No contact lists yet — create one under Contacts &rarr; Lists.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -1258,6 +1314,11 @@ function NoteForm({
 
 // ── Create task form ──
 
+// Files a row on the Projects board for the flow's sub-account. The due
+// date is expressed as an offset in days rather than an absolute
+// datetime: a flow step fires whenever the contact reaches it, so
+// "3 days from now" is the only anchor that stays meaningful across
+// every enrollment (and across a template deployed months later).
 function TaskForm({
   config,
   onChange,
@@ -1265,16 +1326,17 @@ function TaskForm({
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
 }) {
-  const [state, setField] = useFieldState(config, ['title', 'dueAt']);
+  const [state, setField] = useFieldState(config, [
+    'title',
+    'description',
+    'priority',
+    'dueInDays',
+  ]);
   function commit(next: Partial<typeof state>) {
     onChange({ ...config, ...state, ...next });
   }
   return (
     <>
-      <ComingSoonNote>
-        Tasks aren&apos;t executable yet — no Task model exists in the
-        schema. Coming in a follow-up.
-      </ComingSoonNote>
       <Field label="Title">
         <input
           value={state.title}
@@ -1286,17 +1348,52 @@ function TaskForm({
           className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
         />
       </Field>
-      <Field label="Due (optional)">
-        <input
-          type="datetime-local"
-          value={state.dueAt}
+      <Field label="Details (optional)">
+        <textarea
+          value={state.description}
           onChange={(e) => {
-            setField('dueAt', e.target.value);
-            commit({ dueAt: e.target.value });
+            setField('description', e.target.value);
+            commit({ description: e.target.value });
           }}
+          rows={3}
+          placeholder="{{fullName}} — {{email}} — opened the welcome email but didn't book."
           className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
         />
       </Field>
+      <Field label="Priority">
+        <select
+          value={state.priority || 'medium'}
+          onChange={(e) => {
+            setField('priority', e.target.value);
+            commit({ priority: e.target.value });
+          }}
+          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        >
+          {TASK_PRIORITIES.map((p) => (
+            <option key={p} value={p}>
+              {p.charAt(0).toUpperCase() + p.slice(1)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Due in (days after this step runs)">
+        <input
+          type="number"
+          min={0}
+          value={state.dueInDays}
+          onChange={(e) => {
+            setField('dueInDays', e.target.value);
+            commit({ dueInDays: e.target.value });
+          }}
+          placeholder="Leave blank for no due date"
+          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        />
+      </Field>
+      <p className="text-[10px] text-[var(--muted-foreground)] -mt-1 leading-relaxed">
+        The task lands on this sub-account&rsquo;s Projects board, unassigned,
+        with the contact&rsquo;s name and email attached. Mergetags work in
+        both the title and details.
+      </p>
     </>
   );
 }

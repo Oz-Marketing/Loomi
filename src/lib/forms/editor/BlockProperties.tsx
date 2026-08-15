@@ -542,12 +542,24 @@ function PropertyInput({
     return <ColorInput value={stringValue} onChange={(v) => onChange(v)} />;
   }
   if (prop.type === 'textarea') {
+    // The Custom HTML block pastes markup, not prose — give it a taller
+    // monospace box and turn off the editing conveniences (autocorrect,
+    // smart quotes) that would silently mangle attributes.
+    const isCode = prop.key === 'html';
     return (
       <textarea
         value={stringValue}
         onChange={(e) => onChange(e.target.value)}
-        rows={3}
-        className={inputClass + ' resize-y font-[inherit]'}
+        rows={isCode ? 10 : 3}
+        spellCheck={isCode ? false : undefined}
+        autoCapitalize={isCode ? 'off' : undefined}
+        autoCorrect={isCode ? 'off' : undefined}
+        className={
+          inputClass +
+          (isCode
+            ? ' resize-y font-mono text-[12px] leading-[1.5] whitespace-pre'
+            : ' resize-y font-[inherit]')
+        }
         placeholder={prop.placeholder}
       />
     );

@@ -2,8 +2,12 @@
 
 import * as React from 'react';
 import { useEditor } from './EditorContext';
-import { ColorInput, NumberInput, SpacingBox } from './PropertyControls';
-import { ComputerDesktopIcon } from '@heroicons/react/24/outline';
+import { ColorInput, NumberInput, SpacingBox, Switch } from './PropertyControls';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
+import {
+  ComputerDesktopIcon,
+  InformationCircleIcon,
+} from '@heroicons/react/24/outline';
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -47,18 +51,37 @@ export function FormSettings() {
       {/* Layout */}
       <SectionHeader name="Layout" />
       <div className="px-4 py-3 space-y-3">
-        <StackedField label="Form Width">
-          <NumberInput
-            value={settings.contentWidth}
-            onChange={(v) => updateSettings({ contentWidth: v })}
-            min={320}
-            max={1024}
-            unit="px"
-            slider
-            sliderMin={400}
-            sliderMax={1024}
-          />
-        </StackedField>
+        <InlineField
+          label="Full Width"
+          hint="Edge to edge — the form fills whatever container it sits in, with no maximum. Use it when the page around the embed already sets the width."
+        >
+          <div className="flex justify-end">
+            <Switch
+              checked={!!settings.contentFullWidth}
+              onChange={(v) => updateSettings({ contentFullWidth: v })}
+              label="Full width"
+            />
+          </div>
+        </InlineField>
+        {/* Hidden rather than disabled while full-bleed is on: the value
+            is still stored, so flipping the toggle back restores it. */}
+        {!settings.contentFullWidth && (
+          <StackedField
+            label="Form Width"
+            hint="A maximum, not a fixed size — the form still shrinks to fit narrower screens and embeds."
+          >
+            <NumberInput
+              value={settings.contentWidth}
+              onChange={(v) => updateSettings({ contentWidth: v })}
+              min={320}
+              max={1600}
+              unit="px"
+              slider
+              sliderMin={400}
+              sliderMax={1600}
+            />
+          </StackedField>
+        )}
         <StackedField label="Border Radius">
           <NumberInput
             value={settings.contentBorderRadius ?? 12}
@@ -155,28 +178,49 @@ function SectionHeader({ name }: { name: string }) {
   );
 }
 
-function StackedField({ label, children }: { label: string; children: React.ReactNode }) {
+function StackedField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label name={label} />
+      <Label name={label} hint={hint} />
       {children}
     </div>
   );
 }
 
-function InlineField({ label, children }: { label: string; children: React.ReactNode }) {
+function InlineField({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex items-center justify-between gap-3 py-0.5">
-      <Label name={label} />
+      <Label name={label} hint={hint} />
       <div className="flex-shrink-0 w-[58%]">{children}</div>
     </div>
   );
 }
 
-function Label({ name }: { name: string }) {
+function Label({ name, hint }: { name: string; hint?: string }) {
   return (
     <div className="flex items-center gap-1.5 min-w-0">
       <span className="text-[12px] font-medium text-[var(--foreground)] truncate">{name}</span>
+      {hint && (
+        <Tooltip label={hint}>
+          <InformationCircleIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] transition-colors" />
+        </Tooltip>
+      )}
       <span
         title="Editing for Desktop"
         className="inline-flex items-center text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] transition-colors cursor-default"

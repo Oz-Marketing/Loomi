@@ -286,6 +286,21 @@ export const DIVIDER_SCHEMA: BlockSchema = {
   ],
 };
 
+export const HTML_SCHEMA: BlockSchema = {
+  type: 'html',
+  label: 'Custom HTML',
+  icon: 'code-bracket',
+  description:
+    'Drop in raw HTML. Sanitized at render time — scripts, iframes and form controls are stripped.',
+  category: 'layout',
+  defaults: { html: '', marginTop: 0, marginBottom: 16 },
+  props: [
+    { key: 'html', label: 'HTML', type: 'textarea', default: '', group: 'content', placeholder: '<div>...</div>' },
+    { key: 'marginTop', label: 'Margin Top', type: 'number', default: 0, half: true, group: 'spacing' },
+    { key: 'marginBottom', label: 'Margin Bottom', type: 'number', default: 16, half: true, group: 'spacing' },
+  ],
+};
+
 // ── Field schemas ──
 
 export const FIELD_TEXT_SCHEMA: BlockSchema = {
@@ -500,6 +515,7 @@ export const BLOCK_SCHEMAS: Record<FormBlockType, BlockSchema> = {
   image: IMAGE_SCHEMA,
   divider: DIVIDER_SCHEMA,
   spacer: SPACER_SCHEMA,
+  html: HTML_SCHEMA,
   field_text: FIELD_TEXT_SCHEMA,
   field_email: FIELD_EMAIL_SCHEMA,
   field_phone: FIELD_PHONE_SCHEMA,
@@ -536,6 +552,7 @@ export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   COLUMNS_SCHEMA,
   DIVIDER_SCHEMA,
   SPACER_SCHEMA,
+  HTML_SCHEMA,
 ];
 
 // Ensure every *visible* block exposes the hide-on-device toggles. Field

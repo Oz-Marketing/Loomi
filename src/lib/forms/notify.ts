@@ -12,6 +12,7 @@ import type { Form, FormSubmission } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { resolveSendGridConfig, sendEmailViaSendGrid } from '@/lib/sending/sendgrid';
 import { asFileValues } from './types';
+import { readSubmissionMetadata } from './embed-params';
 
 export class LeadNotificationError extends Error {
   constructor(message: string) {
@@ -63,11 +64,19 @@ async function deliverToEach(
   }
 }
 
+/**
+ * Escape for both element text and attribute values. Quotes are in the
+ * set on purpose: `formatValueHtml` interpolates a file URL straight
+ * into an `href="…"`, and submissions can now also carry embed metadata
+ * lifted from a third-party page's query string.
+ */
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatValue(value: unknown): string {
@@ -89,23 +98,50 @@ function formatValueHtml(value: unknown): string {
   return escapeHtml(formatValue(value));
 }
 
-function buildHtml(form: Form, submission: FormSubmission): string {
+function row(key: string, valueHtml: string): string {
+  return `<tr><td style="padding:4px 12px 4px 0;color:#666;font-family:sans-serif;font-size:13px;vertical-align:top;white-space:nowrap">${escapeHtml(key)}</td><td style="padding:4px 0;font-family:sans-serif;font-size:13px">${valueHtml}</td></tr>`;
+}
+
+/** `meta_*` params captured from the host page the form was embedded
+ *  in. Sorted for a stable read; escaped like everything else — this is
+ *  third-party input, and it lands in someone's inbox. */
+function metaEntries(submission: FormSubmission): [string, string][] {
+  return Object.entries(readSubmissionMetadata(submission.metadata)).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
+}
+
+/** Exported for tests — the escaping here is the last line of defense
+ *  before untrusted submission content lands in someone's inbox. */
+export function buildHtml(form: Form, submission: FormSubmission): string {
   const data = (submission.data ?? {}) as Record<string, unknown>;
   const rows = Object.entries(data)
-    .map(
-      ([key, value]) =>
-        `<tr><td style="padding:4px 12px 4px 0;color:#666;font-family:sans-serif;font-size:13px;vertical-align:top;white-space:nowrap">${escapeHtml(key)}</td><td style="padding:4px 0;font-family:sans-serif;font-size:13px">${formatValueHtml(value)}</td></tr>`,
-    )
+    .map(([key, value]) => row(key, formatValueHtml(value)))
     .join('');
+
+  const meta = metaEntries(submission);
+  const metaTable = meta.length
+    ? `<h3 style="font-size:13px;margin:20px 0 8px;color:#666">Page context</h3>
+    <table style="border-collapse:collapse">${meta
+      .map(([key, value]) => row(key, escapeHtml(value)))
+      .join('')}</table>`
+    : '';
+
   return `<div style="font-family:sans-serif">
     <h2 style="font-size:16px;margin:0 0 12px">New submission — ${escapeHtml(form.name)}</h2>
     <table style="border-collapse:collapse">${rows}</table>
+    ${metaTable}
   </div>`;
 }
 
-function buildText(form: Form, submission: FormSubmission): string {
+/** Exported for tests — see {@link buildHtml}. */
+export function buildText(form: Form, submission: FormSubmission): string {
   const data = (submission.data ?? {}) as Record<string, unknown>;
   const lines = Object.entries(data).map(([key, value]) => `${key}: ${formatValue(value)}`);
+  const meta = metaEntries(submission);
+  if (meta.length) {
+    lines.push('', 'Page context:', ...meta.map(([key, value]) => `${key}: ${value}`));
+  }
   return [`New submission — ${form.name}`, '', ...lines].join('\n');
 }
 

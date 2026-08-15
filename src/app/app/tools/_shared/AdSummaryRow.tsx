@@ -225,26 +225,25 @@ export function AdSummaryRow({
     </div>
   );
 
-  const flightDisplay = (
-    <div className="flex items-center gap-2">
-      <FlightBar ad={ad} />
-      {isGoogle && ad.googleAdsDisapproved && (
-        <span
-          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-          style={{ background: 'rgba(248,113,113,0.16)', color: '#f87171' }}
-        >
-          Ads disapproved
-        </span>
-      )}
-      {isGoogle && !ad.googleAdsDisapproved && ad.googleBudgetConstrained && (
-        <span
-          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-          style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
-        >
-          Limited by budget
-        </span>
-      )}
-    </div>
+  const flightDisplay = <FlightBar ad={ad} />;
+
+  /**
+   * Delivery state, rendered beside the campaign NAME. These used to sit in the
+   * Flight Dates cell, which read as if they described the flight — they are
+   * facts about whether the campaign can serve, so they belong with its identity.
+   * Disapproved wins: when ads can't serve, "limited by budget" is noise.
+   */
+  const deliveryBadges = isGoogle && (ad.googleAdsDisapproved || ad.googleBudgetConstrained) && (
+    <span
+      className="whitespace-nowrap rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
+      style={
+        ad.googleAdsDisapproved
+          ? { background: 'rgba(248,113,113,0.16)', color: '#f87171' }
+          : { background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }
+      }
+    >
+      {ad.googleAdsDisapproved ? 'Ads disapproved' : 'Limited by budget'}
+    </span>
   );
 
   return (
@@ -298,9 +297,14 @@ export function AdSummaryRow({
               onOpen={onOpen}
               onEditingChange={setInlineEditing}
             />
-            {isGoogle && ad.googleChannelType && (
-              <span className="block text-[11px] text-[var(--muted-foreground)] truncate">
-                {ad.googleChannelType}
+            {isGoogle && (ad.googleChannelType || deliveryBadges) && (
+              <span className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
+                {ad.googleChannelType && (
+                  <span className="truncate text-[11px] text-[var(--muted-foreground)]">
+                    {ad.googleChannelType}
+                  </span>
+                )}
+                {deliveryBadges}
               </span>
             )}
           </div>

@@ -537,24 +537,39 @@ export function warmupThresholdDays(
 export type PacingDirection = 'on_target' | 'under' | 'over';
 
 /**
- * The tolerance verdict, re-derived from the same projection and band the state
- * machine used. This exists so the badge cannot disagree with the recommendation:
- * before this, the badge ran its own hardcoded ±5% test against a DIFFERENT
- * projection (budget-rate `spent + daily × daysLeft`) while the engine tested
- * the run-rate projection against a tapering band — which is how an ON TRACK
- * badge ended up beside an active "Add $1.01" recommendation. Anything rendering
- * a direction must come through here.
+ * The tolerance verdict — the single source the badge, the status message and
+ * its dollar figure all read, so none of them can disagree with each other.
+ *
+ * `projection` is the projection the CARD DISPLAYS (`spent + daily × daysLeft`,
+ * the Projected Spend box). Pass it: a verdict derived from a projection the
+ * operator can't see on the card is unreconcilable — a badge reading UNDER and
+ * a message claiming a $54.73 underspend beside a box showing $376.69 against a
+ * $385 target reads as a bug, because by the displayed arithmetic the ad is
+ * $8.31 short. Omitting it falls back to the engine's efficiency-weighted run
+ * rate (the pre-display behavior), which is still the right basis for callers
+ * with no card to agree with.
+ *
+ * Delivery is the one axis that is NOT arithmetic and so is not overridden:
+ * `delivery_low` reports `under` whatever the projection says, because an ad
+ * spending half its budget will not reach target no matter what
+ * `daily × daysLeft` extrapolates to.
  */
 export function pacingDirection(
   rec: MetaRecommendation,
   target: number,
+  projection?: number,
 ): PacingDirection | null {
   if (rec.state === 'warmup') return null; // no call yet, by design
   if (!(target > 0)) return null;
-  if (Math.abs(rec.projectedRunrate - target) <= rec.tolerance * target) {
+  if (rec.state === 'delivery_low') return 'under';
+  const projected =
+    projection != null && Number.isFinite(projection)
+      ? projection
+      : rec.projectedRunrate;
+  if (Math.abs(projected - target) <= rec.tolerance * target) {
     return 'on_target';
   }
-  return rec.projectedRunrate > target ? 'over' : 'under';
+  return projected > target ? 'over' : 'under';
 }
 
 // ─── Meta: recommendation state machine ─────────────────────────────────────

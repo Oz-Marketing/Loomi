@@ -225,15 +225,28 @@ export default function ListDetailPage() {
           <ListBulletIcon className="w-10 h-10 mx-auto text-[var(--muted-foreground)] mb-3 opacity-60" />
           <p className="text-[var(--foreground)] text-sm font-medium">No contacts yet</p>
           <p className="text-[var(--muted-foreground)] text-xs mt-1 max-w-md mx-auto">
-            Upload a CSV to populate this list.
+            Upload a CSV to populate this list, or select contacts in{' '}
+            <Link href={subHref('/contacts')} className="text-[var(--primary)] hover:underline">
+              All Contacts
+            </Link>{' '}
+            and use <span className="font-medium">Add to list</span>.
           </p>
-          <Link
-            href={importHref}
-            className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 mt-4"
-          >
-            <ArrowUpTrayIcon className="w-4 h-4" />
-            Upload CSV
-          </Link>
+          <div className="flex items-center justify-center gap-2 mt-4">
+            <Link
+              href={importHref}
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+            >
+              <ArrowUpTrayIcon className="w-4 h-4" />
+              Upload CSV
+            </Link>
+            <Link
+              href={subHref('/contacts')}
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/40"
+            >
+              <UsersIcon className="w-4 h-4" />
+              Browse Contacts
+            </Link>
+          </div>
         </div>
       ) : (
         <ContactsTable

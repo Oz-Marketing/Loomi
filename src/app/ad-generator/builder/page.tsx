@@ -68,7 +68,7 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
-import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
+import { isElementVisibleFor, renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { Select, type SelectOption } from '@/components/select';
 import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
@@ -79,7 +79,8 @@ import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
-import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
+import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
+import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
@@ -87,15 +88,51 @@ import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-gen
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAlignCenterIcon, HAlignRightIcon } from '@/components/ad-generator/valign-icons';
-import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
+import { normalizeTags, type LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
+import { SizePicker } from '@/components/ad-generator/size-picker';
+import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator/size-ids';
+import {
+  applyBox,
+  applyElementPatch,
+  clearElementOverride,
+  effectiveElement,
+  overriddenKeys,
+  refitAllSizes,
+  styleVariants,
+  type EditScope,
+} from '@/lib/ad-generator/size-scope';
+import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
+import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
+import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
+
+/**
+ * What saving this design would do to the ads already built from this template.
+ *
+ * Best-effort by design: this is the input to an OPTIONAL prompt, so a failure
+ * here must never stop a designer saving their work. Null simply means no prompt.
+ */
+async function fetchSyncImpact(templateId: string, doc: TemplateDoc): Promise<SyncImpact | null> {
+  try {
+    const res = await fetch(`/api/ad-generator/templates-doc/${templateId}/sync-impact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SyncImpact;
+  } catch {
+    return null;
+  }
+}
 
 /** Track an element's content-box size via ResizeObserver (for fit-to-pane). */
 function useElementSize<T extends HTMLElement>() {
@@ -116,6 +153,46 @@ function useElementSize<T extends HTMLElement>() {
 
 const HISTORY_LIMIT = 60;
 const COALESCE_MS = 450; // window in which same-key edits (typing, a slider drag) merge
+// Remembered across sessions: a designer who works one board at a time (or always
+// pushes globally) shouldn't re-pick on every open.
+const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope';
+/**
+ * What the Arrange buttons align/distribute AGAINST.
+ *
+ * Aligning to the selection's own bounding box is the Figma default, but it is
+ * almost never what an ad designer wants: "centre this" means centre it on the
+ * ARTBOARD, not on whatever two blocks happen to be selected. So the artboard is
+ * the default here, with the safe-area margin box as the third option (align to
+ * the guide you already set rather than to the bleed edge).
+ */
+type ArrangeTarget = 'selection' | 'artboard' | 'margins';
+const ARRANGE_TARGET_KEY = 'loomi.adBuilder.arrangeTarget';
+const ARRANGE_TARGETS: { value: ArrangeTarget; label: string; hint: string }[] = [
+  { value: 'artboard', label: 'Artboard', hint: 'Align to the full artboard edges' },
+  { value: 'margins', label: 'Margins', hint: 'Align to the safe-area margin box' },
+  { value: 'selection', label: 'Selection', hint: "Align within the selection's own bounds" },
+];
+/** Human names for the style keys a size can diverge on (for the override note). */
+const STYLE_KEY_LABEL: Record<string, string> = {
+  fontFamily: 'font',
+  fontWeight: 'weight',
+  letterSpacing: 'letter spacing',
+  lineHeight: 'line height',
+  uppercase: 'uppercase',
+  color: 'colour',
+  bg: 'text background',
+  align: 'alignment',
+  vAlign: 'vertical alignment',
+  padding: 'padding',
+  fit: 'image fit',
+  fill: 'fill',
+  gradientFill: 'gradient',
+  opacity: 'opacity',
+  blendMode: 'blend mode',
+  radius: 'corner radius',
+  shapeKind: 'shape',
+  shrink: 'text sizing',
+};
 
 type Hist = { past: TemplateDoc[]; present: TemplateDoc; future: TemplateDoc[] };
 
@@ -298,6 +375,11 @@ function isOfferElement(el: DocElement): boolean {
 }
 
 
+/** Narrowing helper: is this element showing the account logo? */
+function isBrandLogoBinding(b: Binding | undefined): b is { kind: 'brand'; key: 'logoUrl'; variant?: LogoVariant } {
+  return b?.kind === 'brand' && b.key === 'logoUrl';
+}
+
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
   if (b.kind === 'field') return `field:${b.key}`;
@@ -431,6 +513,8 @@ type SavedTemplate = {
   status: string;
   /** null = global; an account key = only that account sees it in the picker. */
   accountKey?: string | null;
+  /** Sub-accounts granted access on top of the owner. */
+  sharedAccountKeys?: string[];
   updatedAt: string;
   doc: TemplateDoc | null;
 };
@@ -857,6 +941,12 @@ export default function AdBuilderPage() {
   const publishRef = useRef<HTMLDivElement>(null);
   // Deploy-to-subaccounts modal.
   const [deployOpen, setDeployOpen] = useState(false);
+  /** Set after a save that would affect ads following this template (see save()). */
+  const [syncImpact, setSyncImpact] = useState<SyncImpact | null>(null);
+  /** Ad mode: whether the open ad still follows its source template. */
+  const [adSync, setAdSync] = useState<'synced' | 'detached'>('detached');
+  /** Which sub-accounts the OPEN template is shared with (for the Share modal). */
+  const [sharedAccountKeys, setSharedAccountKeys] = useState<string[]>([]);
   // The canvas (Background) settings panel is shown only when the canvas itself
   // is focused — clicking the empty artboard selects "the canvas". It never
   // appears just because no element is selected (so it stays hidden on load).
@@ -867,22 +957,10 @@ export default function AdBuilderPage() {
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
-  // The shared size library (drives the Add-size picker; falls back to presets).
-  const [libSizes, setLibSizes] = useState<{ id: string; name: string; width: number; height: number }[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/ad-generator/sizes')
-      .then((r) => (r.ok ? r.json() : { sizes: [] }))
-      .then((d: { sizes?: { id: string; name: string; width: number; height: number }[] }) => {
-        if (!cancelled) setLibSizes(d.sizes ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setLibSizes([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [customTags, setCustomTags] = useState('');
+  // The size library — the same list the /ad-generator/sizes page and the
+  // from-scratch modal read, so a size added anywhere is offered everywhere.
+  const { sizes: libSizes, facets: libFacets, loading: libLoading, reload: reloadLibrary } = useSizeLibrary();
 
   // ── persistence ──
   const [templateId, setTemplateId] = useState<string | null>(null);
@@ -922,6 +1000,36 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
+  /**
+   * Whether an edit lands on this board or on all of them.
+   *
+   * Defaults to THIS SIZE, and is remembered per browser: editing one artboard
+   * must never silently rewrite the other fourteen, and per-aspect-ratio placement
+   * is hand-tuned work to lose. Flip it deliberately to push a change everywhere.
+   */
+  // Show every offer block at once (off-type ghosted) vs only the previewed type.
+  const [showAllOfferTypes, setShowAllOfferTypes] = useState(false);
+  const [editScope, setEditScope] = useState<EditScope>('size');
+  useEffect(() => {
+    const stored = window.localStorage.getItem(EDIT_SCOPE_KEY);
+    if (stored === 'all' || stored === 'size') setEditScope(stored);
+  }, []);
+  const chooseScope = useCallback((next: EditScope) => {
+    setEditScope(next);
+    window.localStorage.setItem(EDIT_SCOPE_KEY, next);
+  }, []);
+  // What Arrange aligns to (artboard by default — see ArrangeTarget). Remembered
+  // per browser like the edit scope.
+  const [arrangeTarget, setArrangeTarget] = useState<ArrangeTarget>('artboard');
+  useEffect(() => {
+    const stored = window.localStorage.getItem(ARRANGE_TARGET_KEY);
+    if (stored === 'selection' || stored === 'artboard' || stored === 'margins') setArrangeTarget(stored);
+  }, []);
+  // Multi-size templates only: with one board there's nothing to broadcast to, so
+  // the control would be a switch that does nothing.
+  const scopeApplies = doc.sizes.length > 1;
+  const effectiveScope: EditScope = scopeApplies ? editScope : 'size';
+
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
   // Admins get the roll-up (union of every subaccount's fonts); clients get only
@@ -940,7 +1048,7 @@ export default function AdBuilderPage() {
   // resolves to (see previewData). Included in the embed set so its face loads.
   const brandDefaultFont = accountData?.branding?.fonts?.brandDefault || '';
   const usedFamilies = useMemo(
-    () => usedFontFamilies(doc.elements, [doc.defaults?.fontFamily, adData?.fontFamily, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
+    () => usedFontFamilies(styleVariants(doc), [doc.defaults?.fontFamily, adData?.fontFamily, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
     [doc.elements, doc.defaults?.fontFamily, adData, brandDefaultFont, customFamilySet],
   );
   const usedFamilyKey = usedFamilies.join('');
@@ -1009,17 +1117,8 @@ export default function AdBuilderPage() {
   }, []);
 
   // The account's logo variants — offered in the selection panel so a designer
-  // can swap which logo a Logo element shows without leaving the canvas.
-  const brandLogos = useMemo<{ key: string; label: string; url: string }[]>(() => {
-    const l = accountData?.logos;
-    if (!l) return [];
-    return [
-      l.light && { key: 'light', label: 'Light', url: l.light },
-      l.dark && { key: 'dark', label: 'Dark', url: l.dark },
-      l.white && { key: 'white', label: 'White', url: l.white },
-      l.black && { key: 'black', label: 'Black', url: l.black },
-    ].filter((v): v is { key: string; label: string; url: string } => Boolean(v));
-  }, [accountData?.logos]);
+  // can pick WHICH logo an element bound to "Account logo" shows.
+  const brandLogos = useMemo(() => availableLogoVariants(accountData?.logos), [accountData?.logos]);
 
   // Whether the design actually uses offers — an element gated by offer type, or
   // bound to (or typing) a computed `_offer*` token. Gates the canvas-bar offer-
@@ -1051,7 +1150,9 @@ export default function AdBuilderPage() {
       ...(adData ?? {}), // ad mode: the ad's real content
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+      // Every logo variant, not just `light` — so an element pinned to the dark
+      // logo previews as the dark logo instead of silently falling back.
+      ...brandLogoData(accountData?.logos),
       ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
     };
     // Preview the first offer type the design actually uses when the stored
@@ -1063,12 +1164,54 @@ export default function AdBuilderPage() {
     const base = enrichOfferFields(merged);
     // Load only the Google families this doc actually uses into the canvas iframe.
     const googleUrl = googleFontsCssUrl(
-      usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
+      usedGoogleFontFamilies(styleVariants(doc), typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
     );
     return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
   }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, usedOfferTypes]);
 
-  const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
+  /**
+   * A real vehicle from this sub-account's own stock, for unfilled vehicle slots.
+   * Resolved server-side (EVOX jellybean → the dealer's feed photo → nothing); when
+   * it comes back empty the canvas falls back to the drawn silhouette.
+   */
+  const [sampleVehicle, setSampleVehicle] = useState<{ url: string; label: string } | null>(null);
+  useEffect(() => {
+    if (!accountKey) {
+      setSampleVehicle(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/sample-vehicle?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { vehicle: null }))
+      .then((j: { vehicle?: { url: string; label: string } | null }) => {
+        if (!cancelled) setSampleVehicle(j.vehicle ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSampleVehicle(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
+
+  /**
+   * What the CANVAS renders: the real preview data, plus a sample vehicle in any
+   * unfilled vehicle-image slot. A dashed "Image" box says nothing about how the ad
+   * reads, since the design hangs off the car's silhouette.
+   *
+   * Kept separate from `previewData` on purpose — the tools that resolve an
+   * element's actual image (crop, background pan, the inspector thumbnail) read the
+   * unsubstituted data, so nobody ends up cropping a placeholder.
+   */
+  const canvasData = useMemo(
+    () => withPreviewPlaceholders(previewData, doc.fields, sampleVehicle?.url),
+    [previewData, doc.fields, sampleVehicle],
+  );
+
+  const html = useMemo(
+    () => renderDoc(doc, canvasData, size, { preview: true, dimOffType: showAllOfferTypes }),
+    [doc, canvasData, size, showAllOfferTypes],
+  );
 
   // Patch the canvas iframe's document IN PLACE on every edit instead of swapping
   // `srcDoc` (which navigates the iframe → a white flash on every change). Replacing
@@ -1292,14 +1435,32 @@ export default function AdBuilderPage() {
   }
 
   const layout = doc.layouts[size.id] ?? {};
-  const placed = useMemo(
-    () =>
-      doc.elements
-        .map((el) => ({ el, box: layout[el.id] }))
-        .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box))
-        .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0)),
-    [doc.elements, layout],
-  );
+  /**
+   * Elements the canvas is currently showing — the basis for outlines, hit-testing,
+   * marquee and drag.
+   *
+   * Excludes wrong-offer-type elements unless the All tab is on, matching what the
+   * renderer draws. Without this, previewing one offer type still left the OTHER
+   * types' empty frames outlined on the artboard: the boxes you couldn't see the
+   * content of, but could still click.
+   */
+  const placed = useMemo(() => {
+    return doc.elements
+      .filter((el) => showAllOfferTypes || isElementVisibleFor(el, previewData))
+      .map((el) => ({ el, box: layout[el.id] }))
+      .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box))
+      .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0));
+  }, [doc.elements, layout, previewData, showAllOfferTypes]);
+
+  // Switching to a single offer type can hide what was selected; keep the panel
+  // honest by dropping any selection the canvas is no longer showing.
+  useEffect(() => {
+    if (showAllOfferTypes || !selectedIds.length) return;
+    const shown = new Set(placed.map((p) => p.el.id));
+    const stillThere = selectedIds.filter((id) => shown.has(id));
+    if (stillThere.length !== selectedIds.length) setSelectedIds(stillThere);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed, showAllOfferTypes]);
 
   // Panning is disabled on a fresh/empty artboard — there's nothing to pan to,
   // and it kept the onboarding card from feeling anchored. Re-enabled the moment
@@ -1442,8 +1603,18 @@ export default function AdBuilderPage() {
   // Single-selection shorthand — the per-element toolbar, handles, and action
   // tab only show when exactly one element is selected.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
-  const selected = selectedId ? doc.elements.find((e) => e.id === selectedId) ?? null : null;
+  // The element AS THIS BOARD RENDERS IT — shared style with this size's overrides
+  // merged in. The inspector reads dozens of fields off this, so resolving once
+  // here means every control shows what the canvas is actually showing.
+  const selected = selectedId
+    ? (() => {
+        const base = doc.elements.find((e) => e.id === selectedId);
+        return base ? effectiveElement(base, doc.overrides, size.id) : null;
+      })()
+    : null;
   const selectedBox = selectedId ? layout[selectedId] : undefined;
+  /** Style keys this board diverges from the shared element on. */
+  const selectedOverrides = selectedId ? overriddenKeys(doc, size.id, selectedId) : [];
   // Live readout of the auto-scaled font size for the selected Fit-to-box text.
   // The font is computed at render time (fitTextNode), never stored on the box,
   // so we measure the rendered node's computed size and surface it (grayed) in
@@ -1520,9 +1691,20 @@ export default function AdBuilderPage() {
   // SYSTEM fields + computed offer tokens + brand data (see buildContentSources).
   // Sourced from the system schema, not doc.fields: designers bind to system
   // fields, they don't author their own.
+  //
+  // The one exception is the SECOND OFFER (`o2_*`). The system schema is the
+  // single-offer field set, so on a dual template — seeded by "Two vehicles" at
+  // creation, or by inserting a dual offer block — Offer 2's questions exist on
+  // the form but had no bindable entry here, leaving the second offer
+  // unreachable. Those keys are system-defined twins (not designer-authored), so
+  // admitting them keeps the fixed-schema rule intact.
+  const bindableFields = useMemo<FieldSpec[]>(() => {
+    const o2 = doc.fields.filter((f) => f.key.startsWith('o2_'));
+    return o2.length ? [...SYSTEM_FIELDS, ...o2] : SYSTEM_FIELDS;
+  }, [doc.fields]);
   const contentSources = useMemo<SearchableSelectOption[]>(
-    () => (selected ? buildContentSources(selected, SYSTEM_FIELDS) : []),
-    [selected],
+    () => (selected ? buildContentSources(selected, bindableFields) : []),
+    [selected, bindableFields],
   );
 
   // Write the selected element's content back to its source: static → the literal,
@@ -1568,7 +1750,11 @@ export default function AdBuilderPage() {
     (el: DocElement | null | undefined): string | null => {
       if (!el?.binding) return null;
       if (el.binding.kind === 'static') return el.binding.value || null;
-      const v = previewData[el.binding.key];
+      // Match the renderer: a pinned logo variant reads its own key.
+      const key = isBrandLogoBinding(el.binding) && el.binding.variant
+        ? logoVariantDataKey(el.binding.variant)
+        : el.binding.key;
+      const v = previewData[key] || previewData[el.binding.key];
       return typeof v === 'string' && v ? v : null;
     },
     [previewData],
@@ -1627,25 +1813,15 @@ export default function AdBuilderPage() {
   // `coalesceKey` (optional): repeated calls with the same key inside the coalesce
   // window merge into one undo step (holding a stepper, dragging a slider). Omit
   // it for discrete actions (a drag/resize commit) so each is its own step.
+  // Both writes route through the scope, so every edit — drag, inspector field,
+  // bulk multi-select — obeys the same This size / All sizes choice.
   const setBox = useCallback((sid: string, elId: string, box: DocLayoutBox, coalesceKey?: string) => {
-    setDoc(
-      (prev) => ({
-        ...prev,
-        layouts: { ...prev.layouts, [sid]: { ...prev.layouts[sid], [elId]: box } },
-      }),
-      coalesceKey,
-    );
-  }, []);
+    setDoc((prev) => applyBox(prev, elId, box, effectiveScope, sid), coalesceKey);
+  }, [effectiveScope]);
 
   const setElement = useCallback((id: string, patch: Partial<DocElement>, coalesceKey?: string) => {
-    setDoc(
-      (prev) => ({
-        ...prev,
-        elements: prev.elements.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-      }),
-      coalesceKey,
-    );
-  }, []);
+    setDoc((prev) => applyElementPatch(prev, id, patch, effectiveScope, sizeId), coalesceKey);
+  }, [effectiveScope, sizeId]);
 
   // ── inline text editing (double-click a text element) ──
   // Editable when the element binds to a STATIC literal or a plain FIELD.
@@ -1909,27 +2085,38 @@ export default function AdBuilderPage() {
   // ── bulk edits across the current multi-selection ──
   // Patch a property on every selected ELEMENT (font, weight, color, align, …).
   const patchSelectedElements = useCallback((patch: Partial<DocElement>) => {
-    const ids = new Set(selectedIds);
-    setDoc((prev) => ({ ...prev, elements: prev.elements.map((el) => (ids.has(el.id) ? { ...el, ...patch } : el)) }), `bulkel:${Object.keys(patch).sort().join(',')}`);
-  }, [selectedIds]);
+    const ids = selectedIds;
+    setDoc(
+      (prev) => ids.reduce((d, id) => applyElementPatch(d, id, patch, effectiveScope, sizeId), prev),
+      `bulkel:${Object.keys(patch).sort().join(',')}`,
+    );
+  }, [selectedIds, effectiveScope, sizeId]);
   // Patch the current-size BOX of every selected element (fontSize lives here).
   const patchSelectedBoxes = useCallback((patch: Partial<DocLayoutBox>) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], ...patch };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, `bulkbox:${Object.keys(patch).sort().join(',')}`);
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          return prior ? applyBox(acc, id, { ...prior, ...patch }, effectiveScope, size.id) : acc;
+        }, prev),
+      `bulkbox:${Object.keys(patch).sort().join(',')}`,
+    );
+  }, [selectedIds, size.id, effectiveScope]);
   // Nudge each selected element's font size by delta, keeping their relative sizes.
   const bumpSelectedFontSize = useCallback((delta: number) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], fontSize: clamp(Math.round((lay[id].fontSize ?? 48) + delta), 4, 400) };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, 'bulkbox:fontSize');
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          if (!prior) return acc;
+          const fontSize = clamp(Math.round((prior.fontSize ?? 48) + delta), 4, 400);
+          return applyBox(acc, id, { ...prior, fontSize }, effectiveScope, size.id);
+        }, prev),
+      'bulkbox:fontSize',
+    );
+  }, [selectedIds, size.id, effectiveScope]);
 
   // Fit a text box to its rendered content on the given axis — the explicit
   // action behind double-clicking a resize handle (n/s → height, e/w → width,
@@ -2402,19 +2589,25 @@ export default function AdBuilderPage() {
   }
 
   // New sizes start from the current size's layout so they're not empty.
-  function addSize(label: string, width: number, height: number) {
-    const base = `${width}x${height}`;
-    let id = base;
-    let n = 2;
-    while (doc.sizes.some((s) => s.id === id)) id = `${base}-${n++}`;
-    const src = doc.layouts[sizeId] ?? {};
-    setDoc((prev) => ({
-      ...prev,
-      sizes: [...prev.sizes, { id, label: `${label} ${width}×${height}`, width, height }],
-      layouts: { ...prev.layouts, [id]: structuredClone(src) },
-    }));
-    setSizeId(id);
+  //
+  // Ids are assigned inside the updater, against `prev.sizes`. Reading `doc.sizes`
+  // from the render closure instead meant a multi-size add — every call in one
+  // tick, all seeing the same pre-batch list — handed the catalog's three
+  // 1080×1920 entries (Facebook Story, Instagram Story, TikTok) the SAME id, and
+  // `doc.layouts` is keyed by that id.
+  // One call per batch — so this computes the whole result up front rather than
+  // folding size-by-size through state that hasn't landed yet.
+  function addSizes(sizes: SizeToAdd[]) {
+    if (!sizes.length) return;
+    const { doc: next, addedIds } = addSizesToDoc(doc, sizes, sizeId);
+    setDoc(next);
+    const lastId = addedIds[addedIds.length - 1];
+    if (lastId) setSizeId(lastId);
     setAddSizeOpen(false);
+  }
+
+  function addSize(label: string, width: number, height: number) {
+    addSizes([{ label, width, height }]);
   }
 
   // Create a NEW size in the shared library (anyone can), then add it here.
@@ -2430,15 +2623,16 @@ export default function AdBuilderPage() {
       const res = await fetch('/api/ad-generator/sizes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, width: Math.round(w), height: Math.round(h) }),
+        body: JSON.stringify({ name, width: Math.round(w), height: Math.round(h), tags: normalizeTags(customTags.split(',')) }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      if (json.size) setLibSizes((prev) => [json.size, ...prev]);
+      void reloadLibrary();
       addSize(name, Math.round(w), Math.round(h));
       setCustomName('');
       setCustomW('');
       setCustomH('');
+      setCustomTags('');
       toast.success('Size created');
     } catch (err) {
       toast.error(`Couldn't create size: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -2471,6 +2665,70 @@ export default function AdBuilderPage() {
       return { ...prev, safeArea: { ...cur, ...patch } };
     });
   }
+  // ── how many offers this template advertises ──
+  //
+  // Structural, not cosmetic: "two offers" means the doc carries the parallel
+  // `o2_*` question set, which is what the client form, the offer engine
+  // (`assembleOffer(data,'o2_')`), preflight and the ad facets all gate on. It
+  // used to be pickable ONLY when creating an ad from scratch, so a template
+  // could never be made dual after the fact.
+  const offerCount: 1 | 2 = doc.fields.some((f) => f.key.startsWith('o2_')) ? 2 : 1;
+  /**
+   * Elements using the second offer — what would be orphaned by going back to
+   * one offer.
+   *
+   * Two shapes to match, not one: IMAGE elements carry a real `field` binding,
+   * but text/button elements are authored as STATIC `{{token}}` strings (see
+   * setSelectedContent), so a headline showing Offer 2's payment has
+   * `kind: 'static'`. Checking only `field` misses every text element — which is
+   * nearly all of them.
+   */
+  const secondOfferElements = doc.elements.filter((e) => {
+    const b = e.binding;
+    if (b?.kind === 'field') return /^_?o2_/.test(b.key);
+    if (b?.kind === 'static') return /\{\{\s*_?o2_/i.test(b.value);
+    return false;
+  }).length;
+
+  function setOfferCount(next: 1 | 2) {
+    if (next === offerCount) return;
+    if (next === 2) {
+      // Purely additive — merges the missing `o2_*` fields + their defaults.
+      setDoc((prev) => addFieldKit(prev, 'dual'), 'offerCount');
+      toast.success('Offer 2 added — bind elements to it from an element’s "Shows" list');
+      return;
+    }
+    // Back to one: drop the second offer's questions and defaults. Elements
+    // bound to them are LEFT ALONE rather than deleted (deleting a designer's
+    // work on a settings toggle is worse than leaving it blank) — but say so,
+    // and ⌘Z puts it all back.
+    setDoc((prev) => {
+      const fields = prev.fields.filter((f) => !f.key.startsWith('o2_'));
+      const defaults = Object.fromEntries(Object.entries(prev.defaults).filter(([k]) => !k.startsWith('o2_')));
+      return { ...prev, fields, defaults };
+    }, 'offerCount');
+    if (secondOfferElements > 0) {
+      toast.warning(
+        `Offer 2 removed — ${secondOfferElements} element${secondOfferElements === 1 ? '' : 's'} still bound to it will render blank. ⌘Z to undo.`,
+      );
+    } else {
+      toast.success('Back to a single offer');
+    }
+  }
+
+  /**
+   * Push this board's geometry onto every other board, preserving each element's
+   * shape. The repair for templates laid out before `rescaleBox` — their stored
+   * boxes are already distorted and nothing rewrites them until someone does.
+   */
+  function refitOtherSizes() {
+    const others = doc.sizes.length - 1;
+    if (others < 1) return;
+    setDoc((prev) => refitAllSizes(prev, size.id), 'refit');
+    toast.success(`Re-fitted ${others} other size${others === 1 ? '' : 's'} from ${size.label.split(' ')[0]}. ⌘Z to undo.`);
+    setSettingsOpen(false);
+  }
+
   // Publish schedule (lives in the doc JSON). Undefined = live indefinitely.
   function setSchedule(next: { start?: string | null; end?: string | null } | undefined) {
     setDoc((prev) => ({ ...prev, schedule: next }));
@@ -2487,6 +2745,62 @@ export default function AdBuilderPage() {
   // ── industries (which accounts this template is offered to) ──
   const allIndustries = useIndustries();
 
+  /**
+   * Ad mode: react to the ad having just stopped following its template.
+   *
+   * The server decides this — it detaches when a save actually CHANGES the design
+   * (not when one merely changes field values), which is a comparison only it can
+   * make against the stored doc. Told, not asked: autosave persists design edits
+   * within a second or so, so a blocking confirm would either arrive after the
+   * fact or mean gating autosave and lying about "Saved". The action offers the
+   * way back, and names its cost.
+   */
+  function noteAdSync(json: { creative?: { templateSync?: string } } | null) {
+    const next = json?.creative?.templateSync;
+    if (next !== 'detached' || adSync !== 'synced') return;
+    setAdSync('detached');
+    toast.info('This ad now keeps its own design — future template updates will skip it.', {
+      duration: 10000,
+      action: {
+        label: 'Undo',
+        onClick: () => void revertAdToTemplate(),
+      },
+    });
+  }
+
+  /** Put this ad back on its template's design, discarding the local change. */
+  async function revertAdToTemplate() {
+    if (!adId) return;
+    const ok = await confirm({
+      title: 'Follow the template again?',
+      message:
+        "This replaces the ad's design with the template's current one, discarding your design change. The offer values you filled in are kept.",
+      confirmLabel: 'Reset to template',
+      cancelLabel: 'Keep my design',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${adId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const { result } = (await res.json()) as { result?: { outcome: string; detail?: string } };
+      if (result?.outcome !== 'updated') {
+        toast.error(result?.detail || "That ad couldn't be reset to its template");
+        return;
+      }
+      toast.success('Reset to the template — reloading');
+      // Reload rather than patching state: the ad's doc, thumbnail and review
+      // notes all changed server-side, and re-reading is the only way to be sure
+      // the canvas matches what was stored.
+      window.location.reload();
+    } catch (err) {
+      toast.error(`Couldn't reset: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
   // ── save / load ──
   async function save(asNew = false) {
     // Ad mode — persist the design to THIS ad (not a template).
@@ -2500,6 +2814,7 @@ export default function AdBuilderPage() {
           body: JSON.stringify({ name, doc: { ...doc, name }, ...(adData ? { data: adData } : {}) }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+        noteAdSync((await res.json().catch(() => null)) as { creative?: { templateSync?: string } } | null);
         savedRef.current = serializeDoc(doc, name, status, adData);
         setSaveStatus('saved');
         toast.success('Saved to this ad');
@@ -2520,6 +2835,10 @@ export default function AdBuilderPage() {
     try {
       const payload = { name, doc: { ...doc, name }, status, accountKey: scopeAccount };
       const useId = templateId && !asNew;
+      // Ask what this save would do to existing ads BEFORE writing it — the
+      // classification compares the stored design against the incoming one, so
+      // once the PATCH lands there is nothing left to compare against.
+      const impact = useId ? await fetchSyncImpact(templateId, { ...doc, name }) : null;
       const res = await fetch(useId ? `/api/ad-generator/templates-doc/${templateId}` : '/api/ad-generator/templates-doc', {
         method: useId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2531,6 +2850,9 @@ export default function AdBuilderPage() {
       savedRef.current = serializeDoc(doc, name, status);
       setSaveStatus('saved');
       toast.success(status === 'published' ? 'Saved & published' : 'Saved as draft');
+      // The template is saved either way; the prompt is only about whether ads
+      // already built from it should follow.
+      if (shouldPromptSync(impact)) setSyncImpact(impact);
     } catch (err) {
       setSaveStatus('error');
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -2571,18 +2893,34 @@ export default function AdBuilderPage() {
     }
   }
 
+  /** Every doc that arrives from the server goes through here: own the copy, and
+   *  repair colliding size ids so a doc saved before ids were assigned batch-wide
+   *  is editable (its pager could otherwise never leave the first of the twins).
+   *
+   *  Deterministic, so it produces the same ids on every load and needs no save to
+   *  take effect; saving anything else persists it. The repaired doc is what the
+   *  save baseline is taken from, so this never shows up as an unsaved edit. */
+  function hydrateDoc(incoming: TemplateDoc): TemplateDoc {
+    const { doc: fixed, changed } = dedupeSizeIds(structuredClone(incoming));
+    if (changed) {
+      toast.info('Some of these sizes were sharing one layout. They now have their own.');
+    }
+    return fixed;
+  }
+
   function loadTemplate(t: SavedTemplate) {
     if (!t.doc) {
       toast.error('That template could not be read');
       return;
     }
-    const loaded = structuredClone(t.doc);
+    const loaded = hydrateDoc(t.doc);
     const st = t.status === 'published' ? 'published' : 'draft';
     resetHistory(loaded);
     setTemplateId(t.id);
     setTemplateName(t.name);
     setStatus(st);
     setScopeAccount(t.accountKey ?? null);
+    setSharedAccountKeys(t.sharedAccountKeys ?? []);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
     savedRef.current = serializeDoc(loaded, t.name, st);
@@ -2605,9 +2943,21 @@ export default function AdBuilderPage() {
           // Ad mode — edit THIS ad's own design copy, saving back to the ad.
           const res = await fetch(`/api/ad-generator/creatives/${adParam}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = (await res.json()) as { creative?: { id: string; name: string; templateId: string; data: AdData; doc: TemplateDoc | null } };
+          const json = (await res.json()) as {
+            creative?: {
+              id: string;
+              name: string;
+              templateId: string;
+              data: AdData;
+              doc: TemplateDoc | null;
+              templateSync?: 'synced' | 'detached';
+            };
+          };
           const c = json.creative;
           if (!c) throw new Error('not found');
+          // Whether this ad still follows its template — decides whether the
+          // first design edit needs to warn that it will stop.
+          setAdSync(c.templateSync ?? 'detached');
           let d = c.doc;
           if (!d) {
             // No snapshot yet — resolve the source doc. Code offer templates
@@ -2629,6 +2979,7 @@ export default function AdBuilderPage() {
             toast.error("This ad's template can't be edited in the builder");
             return;
           }
+          d = hydrateDoc(d);
           resetHistory(d);
           setAdId(c.id);
           setAdData(c.data ?? {});
@@ -2640,7 +2991,17 @@ export default function AdBuilderPage() {
         }
         const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; accountKey?: string | null; doc: TemplateDoc | null } };
+        const json = (await res.json()) as {
+          template?: {
+            id: string;
+            name: string;
+            description: string | null;
+            status: string;
+            accountKey?: string | null;
+            sharedAccountKeys?: string[];
+            doc: TemplateDoc | null;
+          };
+        };
         const t = json.template;
         if (!t?.doc) {
           toast.error('That template could not be opened');
@@ -2650,7 +3011,18 @@ export default function AdBuilderPage() {
         // unsaved draft (clear the id so the first save creates a fresh template
         // instead of overwriting the source).
         const copy = params.get('copy') === '1';
-        loadTemplate({ id: t.id, name: copy ? `${t.name} copy` : t.name, description: t.description, status: copy ? 'draft' : t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
+        loadTemplate({
+          id: t.id,
+          name: copy ? `${t.name} copy` : t.name,
+          description: t.description,
+          status: copy ? 'draft' : t.status,
+          accountKey: t.accountKey ?? null,
+          // A copy starts unshared — access is granted per template, and silently
+          // inheriting the source's list would hand out a template nobody reviewed.
+          sharedAccountKeys: copy ? [] : t.sharedAccountKeys ?? [],
+          updatedAt: '',
+          doc: t.doc,
+        });
         if (copy) {
           setTemplateId(null);
           savedRef.current = '';
@@ -2834,11 +3206,12 @@ export default function AdBuilderPage() {
       // Commit the drag as-is — text/button boxes size freely (no auto-hug).
       setBox(d.sizeId, d.elId, d.live);
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
-        for (const id of Object.keys(d.live)) lay[id] = d.live[id];
-        return { ...prev, layouts: { ...prev.layouts, [d.sizeId]: lay } };
-      });
+      // Through the scope, same as a single drag — moving a group of five under
+      // "All sizes" has to reach the other boards too, or the switch would quietly
+      // apply to some drags and not others.
+      setDoc((prev) =>
+        Object.keys(d.live).reduce((acc, id) => applyBox(acc, id, d.live[id], effectiveScope, d.sizeId), prev),
+      );
     } else if (d?.kind === 'marquee') {
       const r = d.rect;
       if (r.w > 0.01 || r.h > 0.01) {
@@ -3108,20 +3481,60 @@ export default function AdBuilderPage() {
 
   // ── align / distribute the multi-selection ──
   function applyBoxes(patch: Record<string, DocLayoutBox>) {
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of Object.keys(patch)) lay[id] = patch[id];
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    });
+    // Align/distribute is a move like any other, so it obeys the scope too.
+    setDoc((prev) =>
+      Object.keys(patch).reduce((acc, id) => applyBox(acc, id, patch[id], effectiveScope, size.id), prev),
+    );
+  }
+
+  /**
+   * `arrangeTarget`, corrected for what the selection can actually support: with
+   * one element there is no selection bounding box, so fall back to the artboard
+   * rather than leaving the buttons inert.
+   */
+  const arrangeTargetEff: ArrangeTarget = arrangeTarget === 'selection' && selectedIds.length < 2 ? 'artboard' : arrangeTarget;
+
+  /** Pick what Arrange aligns to. Choosing Margins with no margin set seeds the
+   *  default and turns the guide on, so the target is visible on the canvas. */
+  function chooseArrangeTarget(next: ArrangeTarget) {
+    setArrangeTarget(next);
+    window.localStorage.setItem(ARRANGE_TARGET_KEY, next);
+    if (next === 'margins') {
+      if (!doc.safeArea) setMargin({ value: 5, unit: 'percent' });
+      setShowSafe(true);
+    }
+  }
+
+  /**
+   * The rectangle Arrange aligns against, in 0–1 fractions of the current size.
+   *
+   * Artboard = the whole board; Margins = inset by the safe-area guide (falling
+   * back to the full board when no margin is set, so the buttons still do
+   * something sane); Selection = the union of the selected boxes (the old
+   * behaviour, which needs 2+ to mean anything).
+   */
+  function arrangeBounds(boxes: { box: DocLayoutBox }[]) {
+    if (arrangeTargetEff !== 'selection') {
+      const sa = arrangeTargetEff === 'margins' ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
+      const mx = sa?.x ?? 0;
+      const my = sa?.y ?? 0;
+      return { left: mx, right: 1 - mx, top: my, bottom: 1 - my };
+    }
+    return {
+      left: Math.min(...boxes.map((b) => b.box.x)),
+      right: Math.max(...boxes.map((b) => b.box.x + b.box.w)),
+      top: Math.min(...boxes.map((b) => b.box.y)),
+      bottom: Math.max(...boxes.map((b) => b.box.y + b.box.h)),
+    };
   }
 
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
     const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    if (boxes.length < 2) return;
-    const left = Math.min(...boxes.map((b) => b.box.x));
-    const right = Math.max(...boxes.map((b) => b.box.x + b.box.w));
-    const top = Math.min(...boxes.map((b) => b.box.y));
-    const bottom = Math.max(...boxes.map((b) => b.box.y + b.box.h));
+    // Selection-relative needs two boxes to have a bounding box; artboard /
+    // margins are absolute, so a single element is enough (and is the common
+    // case — "centre this headline").
+    if (boxes.length < (arrangeTargetEff === 'selection' ? 2 : 1)) return;
+    const { left, right, top, bottom } = arrangeBounds(boxes);
     const cx = (left + right) / 2;
     const cy = (top + bottom) / 2;
     const patch: Record<string, DocLayoutBox> = {};
@@ -3140,28 +3553,32 @@ export default function AdBuilderPage() {
 
   function distributeSelected(axis: 'h' | 'v') {
     const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    if (boxes.length < 3) return; // equal gaps need 3+
+    // Spreading INSIDE the selection needs 3+ (the outer two define the span and
+    // don't move). Against the artboard / margins the span is given, so two
+    // elements is enough — they land flush against each edge.
+    if (boxes.length < (arrangeTargetEff === 'selection' ? 3 : 2)) return;
+    const bounds = arrangeBounds(boxes);
     const patch: Record<string, DocLayoutBox> = {};
     if (axis === 'h') {
       boxes.sort((a, b) => a.box.x - b.box.x);
-      const start = boxes[0].box.x;
-      const end = boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w;
+      const start = arrangeTargetEff === 'selection' ? boxes[0].box.x : bounds.left;
+      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w : bounds.right;
       const totalW = boxes.reduce((s, b) => s + b.box.w, 0);
       const gap = (end - start - totalW) / (boxes.length - 1);
       let cur = start;
       for (const { id, box } of boxes) {
-        patch[id] = { ...box, x: cur };
+        patch[id] = { ...box, x: clamp(cur, 0, 1 - box.w) };
         cur += box.w + gap;
       }
     } else {
       boxes.sort((a, b) => a.box.y - b.box.y);
-      const start = boxes[0].box.y;
-      const end = boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h;
+      const start = arrangeTargetEff === 'selection' ? boxes[0].box.y : bounds.top;
+      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h : bounds.bottom;
       const totalH = boxes.reduce((s, b) => s + b.box.h, 0);
       const gap = (end - start - totalH) / (boxes.length - 1);
       let cur = start;
       for (const { id, box } of boxes) {
-        patch[id] = { ...box, y: cur };
+        patch[id] = { ...box, y: clamp(cur, 0, 1 - box.h) };
         cur += box.h + gap;
       }
     }
@@ -3193,18 +3610,18 @@ export default function AdBuilderPage() {
       else if (e.key === 'ArrowDown') dy = step;
       else return;
       e.preventDefault();
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[size.id] ?? {}) };
-        for (const id of selectedIds) {
-          const b = lay[id];
-          if (b) lay[id] = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
-        }
-        return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-      });
+      setDoc((prev) =>
+        selectedIds.reduce((acc, id) => {
+          const b = acc.layouts[size.id]?.[id];
+          if (!b) return acc;
+          const moved = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
+          return applyBox(acc, id, moved, effectiveScope, size.id);
+        }, prev),
+      );
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedIds, size.id, deleteElement, setDoc, clearSelection]);
+  }, [selectedIds, size.id, effectiveScope, deleteElement, setDoc, clearSelection]);
 
   // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup, plus the bare M (margins) / O
   // (outlines) view-guide toggles — global, but defer to the browser inside text
@@ -3274,6 +3691,9 @@ export default function AdBuilderPage() {
           body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // An autosaved design edit is what usually detaches an ad, so this is the
+        // path that has to report it.
+        if (adId) noteAdSync((await res.json().catch(() => null)) as { creative?: { templateSync?: string } } | null);
         savedRef.current = snapshot;
         setSaveStatus('saved');
       } catch {
@@ -3433,6 +3853,40 @@ export default function AdBuilderPage() {
                     />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
+                    {/* Offers — adds/removes the parallel `o2_` question set, so
+                        a template can be made dual after it was started. */}
+                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                      <div className="mb-1 flex items-center gap-1.5">
+                        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Offers</h3>
+                        <Tooltip label="Two offers adds a parallel “Offer 2” question set (its own vehicle, offer type, payment and terms). Bind elements to it from any element’s “Shows” list, and use Show for to style each offer type.">
+                          <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                        </Tooltip>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {([1, 2] as const).map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => setOfferCount(n)}
+                            className={`flex-1 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              offerCount === n
+                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                            }`}
+                          >
+                            {n === 1 ? 'One offer' : 'Two offers'}
+                          </button>
+                        ))}
+                      </div>
+                      {offerCount === 2 && (
+                        <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                          {secondOfferElements > 0
+                            ? `${secondOfferElements} element${secondOfferElements === 1 ? '' : 's'} bound to Offer 2.`
+                            : 'Nothing bound to Offer 2 yet — pick “· Offer 2” entries in an element’s Shows list.'}
+                        </p>
+                      )}
+                    </div>
+
                     {templateIsAutomotive && (
                       <div className="mt-4 border-t border-[var(--border)] pt-3">
                         <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Make / OEM</h3>
@@ -3461,16 +3915,43 @@ export default function AdBuilderPage() {
                       </div>
                     )}
 
+                    {/* Repair action for templates whose boards drifted before
+                        geometry was shape-preserving (see rescaleBox). */}
+                    {doc.sizes.length > 1 && (
+                      <div className="mt-4 border-t border-[var(--border)] pt-3">
+                        <div className="mb-1 flex items-center gap-1.5">
+                          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes</h3>
+                          <Tooltip label={`Copies every element's placement from ${size.label.split(' ')[0]} onto the other boards, re-deriving each one's height so nothing is stretched out of shape. Per-board stacking, framing and font sizes are left alone. Undoable with ⌘Z.`}>
+                            <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                          </Tooltip>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={refitOtherSizes}
+                          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                        >
+                          <Squares2X2Icon className="h-4 w-4" />
+                          Re-fit other sizes from {size.label.split(' ')[0]}
+                        </button>
+                      </div>
+                    )}
+
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                      {/* Access is stored on the template row, so there has to BE a
+                          row — an unsaved draft has nothing to share yet. */}
                       <button
                         onClick={() => {
+                          if (!templateId) {
+                            toast.error('Save this template first, then you can share it.');
+                            return;
+                          }
                           setDeployOpen(true);
                           setSettingsOpen(false);
                         }}
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                       >
                         <RocketLaunchIcon className="h-4 w-4" />
-                        Copy to Subaccounts
+                        Share with sub-accounts
                       </button>
                       {templateId && (
                         <button
@@ -3860,15 +4341,36 @@ export default function AdBuilderPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Preview</span>
                   <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {/* All: every offer block on the board at once, the off-type ones
+                        ghosted — for finding and editing a block that belongs to a
+                        type you're not previewing. Picking a single type shows ONLY
+                        that type, which is the honest answer to "how will this look". */}
+                    <button
+                      type="button"
+                      onClick={() => setShowAllOfferTypes(true)}
+                      title="Show every offer block at once — off-type blocks are ghosted"
+                      aria-pressed={showAllOfferTypes}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        showAllOfferTypes
+                          ? 'bg-[var(--muted)] text-[var(--foreground)]'
+                          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                      }`}
+                    >
+                      All
+                    </button>
                     {usedOfferTypes.map((t) => {
                       const color = OFFER_TYPE_COLOR[t.value] ?? '#64748b';
-                      const active = String(previewData.offerType ?? 'lease') === t.value;
+                      const active =
+                        !showAllOfferTypes && String(previewData.offerType ?? 'lease') === t.value;
                       return (
                         <button
                           key={t.value}
                           type="button"
-                          onClick={() => writeFieldValue('offerType', t.value)}
-                          title={`Preview as ${t.label}`}
+                          onClick={() => {
+                            setShowAllOfferTypes(false);
+                            writeFieldValue('offerType', t.value);
+                          }}
+                          title={`Preview as ${t.label} — only ${t.label} blocks show`}
                           aria-pressed={active}
                           className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                             active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
@@ -3880,6 +4382,40 @@ export default function AdBuilderPage() {
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* Where an edit lands. Only meaningful with more than one board. */}
+              {scopeApplies && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Edits apply to</span>
+                  <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {([
+                      ['size', 'This size', 'Changes affect only the board you are looking at.'],
+                      [
+                        'all',
+                        'All sizes',
+                        `Changes affect all ${doc.sizes.length} sizes. Position and size travel, and type scales by the same proportion on each board; stacking and image framing stay per size.`,
+                      ],
+                    ] as const).map(([value, label, hint]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => chooseScope(value)}
+                        title={hint}
+                        aria-pressed={editScope === value}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                          editScope === value
+                            ? value === 'all'
+                              ? 'bg-amber-500/15 text-amber-500'
+                              : 'bg-[var(--muted)] text-[var(--foreground)]'
+                            : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -4174,7 +4710,7 @@ export default function AdBuilderPage() {
                       >
                         {/* Detached elements are clipped out of the iframe, so
                             render their actual content here on the canvas. */}
-                        {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={previewData} resolveUrl={resolveBindingUrl} />}
+                        {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={canvasData} resolveUrl={resolveBindingUrl} />}
                         {/* Selection ring + fill. Hidden while editing this element:
                             the stored box can't resize mid-keystroke, so it'd sit
                             stale around the live-shrinking text. The editing effect's
@@ -4284,7 +4820,8 @@ export default function AdBuilderPage() {
                     <PreviewBoard
                       key={s.id}
                       doc={doc}
-                      previewData={previewData}
+                      previewData={canvasData}
+                      dimOffType={showAllOfferTypes}
                       size={s}
                       scale={scale}
                       order={i}
@@ -4453,6 +4990,11 @@ export default function AdBuilderPage() {
                 <SelectionPanel
                   el={selected}
                   box={selectedBox}
+                  overriddenOnThisSize={selectedOverrides}
+                  sizeLabel={size.label.split(' ')[0]}
+                  onResetOverride={() =>
+                    setDoc((prev) => clearElementOverride(prev, selected.id, size.id), `unoverride:${selected.id}`)
+                  }
                   collapsed={inspectorCollapsed}
                   onCollapse={() => setInspectorCollapsed(true)}
                   sizeW={size.width}
@@ -4468,6 +5010,9 @@ export default function AdBuilderPage() {
                   onSetSizing={(mode) => updEl({ shrink: mode === 'shrink' ? true : undefined, wrap: undefined, autoSize: undefined })}
                   fitFontPx={fitFontPx}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
+                  arrangeTarget={arrangeTargetEff}
+                  onArrangeTarget={chooseArrangeTarget}
+                  onAlign={alignSelected}
                   onClose={clearSelection}
                   onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
                   shifted={false}
@@ -4497,6 +5042,8 @@ export default function AdBuilderPage() {
                   onElAll={patchSelectedElements}
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
+                  arrangeTarget={arrangeTargetEff}
+                  onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
                   onDistribute={distributeSelected}
                   onDuplicate={() => duplicateElements(selectedIds)}
@@ -4526,10 +5073,12 @@ export default function AdBuilderPage() {
             sizeLabel={size.label}
             setSizeId={setSizeId}
             removeSize={removeSize}
-            addSize={addSize}
+            addSizes={addSizes}
             createLibrarySize={createLibrarySize}
             copyLayoutFrom={copyLayoutFrom}
             libSizes={libSizes}
+            libFacets={libFacets}
+            libLoading={libLoading}
             addSizeOpen={addSizeOpen}
             setAddSizeOpen={setAddSizeOpen}
             customName={customName}
@@ -4538,6 +5087,8 @@ export default function AdBuilderPage() {
             setCustomW={setCustomW}
             customH={customH}
             setCustomH={setCustomH}
+            customTags={customTags}
+            setCustomTags={setCustomTags}
             onClose={() => setSizesOpen(false)}
             viewAll={viewAll}
             onViewAll={() => {
@@ -4550,7 +5101,25 @@ export default function AdBuilderPage() {
 
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
 
-      {deployOpen && <DeployTemplateModal name={templateName} doc={doc} excludeKey={scopeAccount} onClose={() => setDeployOpen(false)} />}
+      {/* Shown after a template save when ads are following this template. */}
+      {syncImpact && (
+        <TemplateSyncModal
+          impact={syncImpact}
+          templateName={templateName}
+          onClose={() => setSyncImpact(null)}
+        />
+      )}
+
+      {deployOpen && templateId && (
+        <ShareTemplateModal
+          templateId={templateId}
+          name={templateName}
+          ownerKey={scopeAccount}
+          sharedWith={sharedAccountKeys}
+          onClose={() => setDeployOpen(false)}
+          onSaved={setSharedAccountKeys}
+        />
+      )}
       {cropModal && (
         <CropEditorModal
           file={{ url: cropModal.url, name: cropModal.name }}
@@ -4610,13 +5179,15 @@ export default function AdBuilderPage() {
                         {selectionIsGroup ? 'Ungroup' : 'Group'}
                       </Item>
                       <Sep />
+                      {/* Aligns to whatever the panel's Arrange target is set to
+                          (artboard by default), so both surfaces agree. */}
                       <div className="flex items-center gap-0.5 px-2 py-1">
                         {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
-                          <button key={edge} onClick={run(() => alignSelected(edge))} title={`Align ${edge}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
+                          <button key={edge} onClick={run(() => alignSelected(edge))} title={`Align ${edge} to ${arrangeTargetEff === 'selection' ? 'selection' : arrangeTargetEff}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
                             <AlignIcon edge={edge} />
                           </button>
                         ))}
-                        {selectedIds.length >= 3 && (
+                        {selectedIds.length >= (arrangeTargetEff === 'selection' ? 3 : 2) && (
                           <>
                             <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
                             <button onClick={run(() => distributeSelected('h'))} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
@@ -5054,6 +5625,8 @@ function MultiSelectPanel({
   onElAll,
   onBoxAll,
   onBumpSize,
+  arrangeTarget,
+  onArrangeTarget,
   onAlign,
   onDistribute,
   onDuplicate,
@@ -5070,9 +5643,12 @@ function MultiSelectPanel({
   onElAll: (patch: Partial<DocElement>) => void;
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
+  /** What align/distribute measure against (artboard / margins / selection). */
+  arrangeTarget: ArrangeTarget;
+  onArrangeTarget: (t: ArrangeTarget) => void;
   /** Position-align the whole selection to a shared edge/center. */
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
-  /** Evenly distribute the selection along an axis (needs 3+). */
+  /** Evenly distribute the selection along an axis. */
   onDistribute: (axis: 'h' | 'v') => void;
   onDuplicate: () => void;
   onSaveAsBlock: () => void;
@@ -5096,33 +5672,9 @@ function MultiSelectPanel({
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         {/* Position align / distribute — applies to any 2+ selection (all element
-            types), mirroring the right-click menu. */}
-        <PanelSection title="Arrange">
-          <div className="flex items-center gap-1">
-            {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
-              <button
-                key={edge}
-                type="button"
-                onClick={() => onAlign(edge)}
-                title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')}`}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-              >
-                <AlignIcon edge={edge} />
-              </button>
-            ))}
-            {elements.length >= 3 && (
-              <>
-                <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
-                <button type="button" onClick={() => onDistribute('h')} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                  <AlignIcon edge="dist-h" />
-                </button>
-                <button type="button" onClick={() => onDistribute('v')} title="Distribute vertically" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                  <AlignIcon edge="dist-v" />
-                </button>
-              </>
-            )}
-          </div>
-        </PanelSection>
+            types), mirroring the right-click menu. The target picker decides
+            whether that means the selection, the artboard, or the margin box. */}
+        <ArrangeSection count={elements.length} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
         {/* Show for — per-offer-type visibility, applied to the WHOLE selection at
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
@@ -5243,6 +5795,9 @@ function MultiSelectPanel({
 function SelectionPanel({
   el,
   box,
+  overriddenOnThisSize,
+  sizeLabel,
+  onResetOverride,
   sizeW,
   sizeH,
   fontOptions,
@@ -5256,6 +5811,9 @@ function SelectionPanel({
   onSetSizing,
   fitFontPx,
   hasOfferField,
+  arrangeTarget,
+  onArrangeTarget,
+  onAlign,
   onClose,
   onCollapse,
   collapsed,
@@ -5269,7 +5827,11 @@ function SelectionPanel({
   sizeW: number;
   sizeH: number;
   fontOptions: SelectOption[];
-  brandLogos: { key: string; label: string; url: string }[];
+  /** Style keys this board has diverged from the shared element on. */
+  overriddenOnThisSize: string[];
+  sizeLabel: string;
+  onResetOverride: () => void;
+  brandLogos: { key: LogoVariant; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
@@ -5285,6 +5847,11 @@ function SelectionPanel({
   /** Whether the template has an `offerType` field — gates the per-offer-type
    *  "Show for" (element visibleWhen) control. */
   hasOfferField: boolean;
+  /** What Arrange aligns this element to (artboard / margins). "Selection" is
+   *  meaningless for one element, so the picker hides it here. */
+  arrangeTarget: ArrangeTarget;
+  onArrangeTarget: (t: ArrangeTarget) => void;
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onClose: () => void;
   /** Collapse the panel (hide it, keep the selection) to reclaim canvas width. */
   onCollapse: () => void;
@@ -5362,6 +5929,25 @@ function SelectionPanel({
         </div>
       </div>
 
+      {/* Per-size divergence, stated rather than left to be discovered. Without
+          this, a value that looks global (it sits in the same field as every other)
+          would quietly be local to one board, and there'd be no way back. */}
+      {overriddenOnThisSize.length > 0 && (
+        <div className="mx-3 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+          <p className="text-[11px] leading-snug text-amber-500">
+            <span className="font-medium">{sizeLabel} only:</span>{' '}
+            {overriddenOnThisSize.map((k) => STYLE_KEY_LABEL[k] ?? k).join(', ')}
+          </p>
+          <button
+            type="button"
+            onClick={onResetOverride}
+            className="mt-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            Match the other sizes
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         {/* Content — for IMAGES, pick what the element shows (a field / brand /
             uploaded image) via "Shows". For TEXT, there's no "Shows": you write
@@ -5432,20 +6018,25 @@ function SelectionPanel({
           </PanelSection>
         )}
 
-        {/* Brand logo — swap which of the account's logo variants this Logo
-            element shows, without leaving the canvas. Picking a variant pins it;
-            "Account default" restores the brand-managed logo. */}
-        {el.type === 'logo' && brandLogos.length > 0 && (
-          <PanelSection title="Brand logo">
+        {/* Which logo — pick one of the account's variants for an element bound to
+            "Account logo". This pins the CHOICE, not the file: the template says
+            "the dark one" and every sub-account resolves its own, which a literal
+            URL couldn't do (it baked one dealer's logo into a shared template).
+            Shown for any element on the account logo, plus Logo elements pinned to
+            a static file, so those have a way back to the brand. */}
+        {brandLogos.length > 0
+          && (isBrandLogoBinding(el.binding) || (el.type === 'logo' && el.binding?.kind !== 'field')) && (
+          <PanelSection title="Which logo">
             <div className="flex flex-wrap gap-2">
               {brandLogos.map((lg) => {
-                const active = el.binding?.kind === 'static' && el.binding.value === lg.url;
+                const active = isBrandLogoBinding(el.binding) && el.binding.variant === lg.key;
                 return (
                   <button
                     key={lg.key}
                     type="button"
-                    title={lg.label}
-                    onClick={() => onEl({ binding: { kind: 'static', value: lg.url } })}
+                    title={`${lg.label} logo`}
+                    aria-pressed={active}
+                    onClick={() => onEl({ binding: { kind: 'brand', key: 'logoUrl', variant: lg.key } })}
                     className={`flex h-12 w-16 items-center justify-center overflow-hidden rounded-md border bg-[var(--muted)]/40 p-1 transition-colors ${
                       active ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : 'border-[var(--border)] hover:border-[var(--primary)]'
                     }`}
@@ -5456,14 +6047,33 @@ function SelectionPanel({
                 );
               })}
             </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2">
+              {brandLogos.map((lg) => (
+                <span
+                  key={lg.key}
+                  className={`text-[10px] ${
+                    isBrandLogoBinding(el.binding) && el.binding.variant === lg.key
+                      ? 'font-medium text-[var(--primary)]'
+                      : 'text-[var(--muted-foreground)]'
+                  }`}
+                  style={{ width: '4rem' }}
+                >
+                  {lg.label}
+                </span>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => onEl({ binding: { kind: 'brand', key: 'logoUrl' } })}
               className={`mt-2 text-[11px] font-medium transition-colors ${
-                el.binding?.kind === 'brand' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                isBrandLogoBinding(el.binding) && !el.binding.variant
+                  ? 'text-[var(--primary)]'
+                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
-              {el.binding?.kind === 'brand' ? '✓ Using account default' : 'Reset to account default'}
+              {isBrandLogoBinding(el.binding) && !el.binding.variant
+                ? "✓ Whichever logo the ad uses"
+                : 'Use whichever logo the ad uses'}
             </button>
           </PanelSection>
         )}
@@ -5490,6 +6100,10 @@ function SelectionPanel({
             </label>
           </div>
         </PanelSection>
+
+        {/* Snap this one element to an artboard (or margin-box) edge/centre —
+            the single-element half of the multi-select Arrange controls. */}
+        <ArrangeSection count={1} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} />
 
         {/* Show for — per-offer-type visibility (element `visibleWhen`). Only for
             templates with an offerType question. All checked = always shown; check
@@ -5896,7 +6510,6 @@ function SelectionPanel({
         <MediaPickerModal
           accountKey={accountKey}
           showCategories
-          showFolders
           brandingMedia={brandLogos.map((l) => ({ label: `${l.label} logo`, url: l.url }))}
           onSelect={(url) => {
             onContentChange(url);
@@ -5926,12 +6539,91 @@ function FillArtboardButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
+function PanelSection({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="py-3">
-      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
+      <div className="mb-2 flex min-h-[18px] items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</span>
+        {action}
+      </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * Align / distribute, plus the target picker that says WHAT they align to.
+ *
+ * Shared by the single-element and multi-select panels: aligning one element to
+ * the artboard ("centre this headline") is at least as common as aligning a
+ * cluster to itself, so both panels get the same control.
+ */
+function ArrangeSection({
+  count,
+  target,
+  onTargetChange,
+  onAlign,
+  onDistribute,
+}: {
+  /** How many elements are selected — gates Selection + the distribute buttons. */
+  count: number;
+  target: ArrangeTarget;
+  onTargetChange: (t: ArrangeTarget) => void;
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
+  onDistribute: (axis: 'h' | 'v') => void;
+}) {
+  // Selection-relative needs a real bounding box, so hide it for one element.
+  const options = ARRANGE_TARGETS.filter((o) => o.value !== 'selection' || count >= 2);
+  const canDistribute = count >= (target === 'selection' ? 3 : 2);
+  const targetWord = target === 'selection' ? 'selection' : target === 'margins' ? 'margins' : 'artboard';
+  return (
+    <PanelSection
+      title="Arrange"
+      action={
+        <div className="flex items-center gap-0.5 rounded-md border border-[var(--border)] p-0.5">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onTargetChange(o.value)}
+              title={o.hint}
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                target === o.value
+                  ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
+                  : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <div className="flex items-center gap-1">
+        {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
+          <button
+            key={edge}
+            type="button"
+            onClick={() => onAlign(edge)}
+            title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')} to ${targetWord}`}
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            <AlignIcon edge={edge} />
+          </button>
+        ))}
+        {canDistribute && (
+          <>
+            <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
+            <button type="button" onClick={() => onDistribute('h')} title={`Distribute horizontally across ${targetWord}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+              <AlignIcon edge="dist-h" />
+            </button>
+            <button type="button" onClick={() => onDistribute('v')} title={`Distribute vertically across ${targetWord}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+              <AlignIcon edge="dist-v" />
+            </button>
+          </>
+        )}
+      </div>
+    </PanelSection>
   );
 }
 
@@ -6669,12 +7361,14 @@ function PreviewBoard({
   doc,
   previewData,
   size,
+  dimOffType,
   scale,
   order,
   onActivate,
 }: {
   doc: TemplateDoc;
   previewData: AdData;
+  dimOffType: boolean;
   size: AdSize;
   scale: number;
   order: number;
@@ -6682,7 +7376,10 @@ function PreviewBoard({
 }) {
   // Render this size's HTML once per (doc, previewData, size) — it feeds an
   // <iframe srcDoc>, so recomputing on every zoom tick would reload the iframe.
-  const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
+  const html = useMemo(
+    () => renderDoc(doc, previewData, size, { preview: true, dimOffType }),
+    [doc, previewData, size, dimOffType],
+  );
   return (
     <div className="flex flex-col items-center gap-1.5" style={{ order }}>
       <button
@@ -6716,10 +7413,12 @@ function SizesManager({
   sizeLabel,
   setSizeId,
   removeSize,
-  addSize,
+  addSizes,
   createLibrarySize,
   copyLayoutFrom,
   libSizes,
+  libFacets,
+  libLoading,
   addSizeOpen,
   setAddSizeOpen,
   customName,
@@ -6728,6 +7427,8 @@ function SizesManager({
   setCustomW,
   customH,
   setCustomH,
+  customTags,
+  setCustomTags,
   onClose,
   viewAll,
   onViewAll,
@@ -6737,10 +7438,12 @@ function SizesManager({
   sizeLabel: string;
   setSizeId: (id: string) => void;
   removeSize: (id: string) => void;
-  addSize: (label: string, width: number, height: number) => void;
+  addSizes: (sizes: SizeToAdd[]) => void;
   createLibrarySize: () => void;
   copyLayoutFrom: (id: string) => void;
-  libSizes: { id: string; name: string; width: number; height: number }[];
+  libSizes: LibrarySize[];
+  libFacets: { tag: string; count: number }[];
+  libLoading: boolean;
   addSizeOpen: boolean;
   setAddSizeOpen: React.Dispatch<React.SetStateAction<boolean>>;
   customName: string;
@@ -6749,6 +7452,8 @@ function SizesManager({
   setCustomW: (v: string) => void;
   customH: string;
   setCustomH: (v: string) => void;
+  customTags: string;
+  setCustomTags: (v: string) => void;
   onClose: () => void;
   viewAll: boolean;
   onViewAll: () => void;
@@ -6761,49 +7466,23 @@ function SizesManager({
       ? bg.color
       : '#ffffff';
 
-  // Multiselect for the Add catalog — accumulate picks, add them all at once.
-  const [picked, setPicked] = useState<Record<string, { name: string; width: number; height: number }>>({});
-  const pickKey = (name: string, w: number, h: number) => `${name}:${w}x${h}`;
-  const togglePick = (name: string, w: number, h: number) =>
+  // Multiselect over the size library — accumulate picks, add them all at once.
+  const [picked, setPicked] = useState<Record<string, LibrarySize>>({});
+  const togglePick = (s: LibrarySize) =>
     setPicked((prev) => {
-      const k = pickKey(name, w, h);
       const next = { ...prev };
-      if (next[k]) delete next[k];
-      else next[k] = { name, width: w, height: h };
+      if (next[s.id]) delete next[s.id];
+      else next[s.id] = s;
       return next;
     });
+  const pickedIds = useMemo(() => new Set(Object.keys(picked)), [picked]);
   const pickedCount = Object.keys(picked).length;
   const addPicked = () => {
-    Object.values(picked).forEach((s) => addSize(s.name, s.width, s.height));
+    // ONE call with the whole selection — adding them one by one gave same-ratio
+    // picks (the three 1080×1920 story sizes) colliding ids.
+    addSizes(Object.values(picked).map((s) => ({ label: s.name, width: s.width, height: s.height })));
     setPicked({});
     setAddSizeOpen(false);
-  };
-  // A ratio-accurate swatch (long edge = `long` px) for a catalog/list entry.
-  const ratioSwatch = (w: number, h: number, long: number, extraClass = '') => {
-    const tw = w >= h ? long : Math.round((long * w) / h);
-    const th = h >= w ? long : Math.round((long * h) / w);
-    return <span className={`rounded-[2px] border border-[var(--border)] ${extraClass}`} style={{ width: tw, height: th, background: previewFill }} />;
-  };
-  // A selectable catalog/library tile (checkbox-style multiselect + ratio).
-  const catalogTile = (name: string, w: number, h: number) => {
-    const sel = !!picked[pickKey(name, w, h)];
-    return (
-      <button
-        key={`${name}:${w}x${h}`}
-        onClick={() => togglePick(name, w, h)}
-        aria-pressed={sel}
-        className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${sel ? 'border-[var(--primary)] bg-[var(--primary)]/10' : 'border-[var(--border)] hover:border-[var(--primary)]'}`}
-      >
-        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center">{ratioSwatch(w, h, 30)}</span>
-        <span className="min-w-0 flex-1">
-          <span className={`block truncate text-xs font-medium ${sel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{name}</span>
-          <span className="block text-[10px] tabular-nums text-[var(--muted-foreground)]">{w}×{h}</span>
-        </span>
-        <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border ${sel ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'}`}>
-          {sel && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
-        </span>
-      </button>
-    );
   };
   return (
     <section
@@ -6888,33 +7567,31 @@ function SizesManager({
         <div className="mt-2 flex min-h-0 flex-col rounded-lg border border-dashed border-[var(--border)]">
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
             <p className="text-[11px] text-[var(--muted-foreground)]">Select one or more sizes to add, then hit Add.</p>
-            {/* Standard catalog, grouped by category — multiselect w/ ratio previews */}
-            {catalogByCategory().map((grp) => (
-              <div key={grp.category}>
-                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {grp.sizes.map((p) => catalogTile(p.name, p.width, p.height))}
-                </div>
-              </div>
-            ))}
-
-            {/* Custom sizes from the shared library (added on top of the catalog) */}
-            {libSizes.length > 0 && (
-              <div>
-                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom</div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {libSizes.map((s) => catalogTile(s.name, s.width, s.height))}
-                </div>
-              </div>
-            )}
+            {/* The whole size library, filtered by what each size is used for. */}
+            <SizePicker
+              sizes={libSizes}
+              facets={libFacets}
+              loading={libLoading}
+              selectedIds={pickedIds}
+              onToggle={togglePick}
+              previewFill={previewFill}
+              dense
+            />
 
             {/* Create a brand-new size — saved to the library + added here */}
             <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5">
-              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom size</div>
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">New size</div>
               <input
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
                 placeholder="New size name (e.g. Wide Banner)"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+              <input
+                value={customTags}
+                onChange={(e) => setCustomTags(e.target.value)}
+                placeholder="Used for (e.g. Facebook, Display)"
+                title="Comma-separated tags — what this size is used for. They filter this picker."
                 className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
               />
               <div className="flex items-center gap-1.5">

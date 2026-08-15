@@ -62,6 +62,11 @@ export interface PacerAd {
   internalApproval: string;
   clientApproval: string;
   allocation: string | null;
+  /** Google allocator (§3): the percent-of-payable input, present only while the
+   *  card is in percent mode. `allocation` remains the dollar target in both
+   *  modes; this exists so the dollar target can be re-derived when the account
+   *  payable changes. Null on Meta rows / in dollar mode. */
+  allocationPercent?: string | null;
   pacerActual: string | null;
   pacerDailyBudget: string | null;
   pacerTodayDate: string | null;
@@ -115,8 +120,26 @@ export interface PacerAd {
   // = BUDGET_CONSTRAINED (raise budget); googleAdsDisapproved = an ad is
   // disapproved (fix the ads). googlePrimaryStatus = raw campaign.primary_status.
   googlePrimaryStatus?: string | null;
+  /** JSON array of campaign.primary_status_reasons — read via parseStatusReasons. */
+  googlePrimaryStatusReasons?: string | null;
   googleBudgetConstrained?: boolean | null;
   googleAdsDisapproved?: boolean | null;
+  // Delivery-surface metric tiles (§4). Raw INPUTS only — avg CPC, CTR and
+  // cost/conv are derived at render from these plus pacerActual, so the tiles
+  // can't disagree with the spend figure. Synced on the same month-to-date query
+  // as pacerActual; googleMetricsAsOf is that window's last day — the data edge
+  // (yesterday live / month end closed). The two impression-share fields are 0–1,
+  // null for PMAX / Demand Gen / Display and below Google's reporting threshold.
+  googleImpressions?: number | null;
+  googleClicks?: number | null;
+  googleConversions?: string | null;
+  googleConvRate?: string | null;
+  googleSearchBudgetLostIs?: string | null;
+  googleSearchRankLostIs?: string | null;
+  googleMetricsAsOf?: string | null;
+  /** §14 — when this campaign's daily was last pushed to Google. Drives the
+   *  just-applied marker through Google's 24–48h re-pacing window. */
+  googleDailyPushedAt?: string | Date | null;
   // §9 monthly ceiling ($) — server-computed, reprorated across mid-month budget
   // changes (change_event); falls back to current daily × 30.4. Null for total.
   googleProratedCeiling?: string | null;
@@ -124,6 +147,21 @@ export interface PacerAd {
   // June 2026 such campaigns concentrate the monthly cap into active days, so
   // calendar-day pacing math misreads them — badged for now.
   googleHasAdSchedule?: boolean | null;
+  /** §6 manual flight override (YYYY-MM-DD) for the funding window when it
+   *  differs from Google's literal campaign dates. Re-clamped to the month in
+   *  view, so a stale value from another month clamps away. */
+  googleFlightStartOverride?: string | null;
+  googleFlightEndOverride?: string | null;
+  /** §4 locked carve-out: skipped by Balance and by Move (both source and
+   *  destination). Changes no numbers on its own. */
+  pacerLocked?: boolean | null;
+  /** §12 Reserved: committed budget that cannot spend yet. Counts in allocation,
+   *  removed from every pacing figure, from Balance/Move/push, from the alert
+   *  scanners and from month-end variance. Manual only — never inferred. */
+  pacerReserved?: boolean | null;
+  /** §9 labels, JSON array of strings. Independent of budgetSource. Shared with
+   *  Meta — read/written via lib/ad-pacer/labels.ts, never parsed inline. */
+  pacerTags?: string | null;
   // Rolling-window slice of the synced per-day spend for this ad's linked
   // platform object (server-attached, last ~8 days). Feeds the pacing-health
   // engine's rolling 7-day window + the today-so-far readout. Empty until the
@@ -138,7 +176,11 @@ export interface PacerAd {
 export interface PriorOverUnder {
   period: string;
   clientBudget: number;
+  /** The month's spend target with any RESERVED allocations removed (§12). */
   spendTarget: number;
+  /** Σ reserved allocations excluded from spendTarget — surfaced, never silent,
+   *  so a shrunken target is explainable rather than mysterious. */
+  reservedExcluded: number;
   actual: number;
   variance: number; // actual − spendTarget (negative = underspent)
   carryover: number; // −variance: +ve = spend this much more next month
@@ -179,6 +221,12 @@ export interface PacerPlan {
   // Prior month's settled over/under for the carryover prompt. null when the
   // prior month isn't closed yet or this month is frozen.
   priorOverUnder: PriorOverUnder | null;
+  /** Google allocator (§3): the unit the whole card allocates in. Google plans
+   *  only; absent/null on Meta. */
+  allocationMode?: 'pct' | 'amt' | null;
+  /** Google allocator (§9): intended budget per label, for the filtered-view
+   *  match check. Never the account denominator. */
+  eventBudgets?: Record<string, number> | null;
   ads: PacerAd[];
   // Same-title rows' planned (allocation) + in-month actual across every period,
   // keyed by ad name → period — lets a lifetime ad render its real cross-month

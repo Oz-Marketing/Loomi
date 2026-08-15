@@ -436,3 +436,142 @@ describe('summarizePreflight', () => {
     expect(summarizePreflight(result)).toContain('placeholder');
   });
 });
+
+// ── costPerThousand: derived from APR, absent everywhere else ──
+//
+// The shared "Vehicle Offer (Builder)" template carries an element bound to
+// `costPerThousand` with NO `visibleWhen`, which blocked every lease ad the
+// automation tried to generate from it. The value is computed from an APR rate +
+// term, so a lease can never have one — but an APR ad without one is a real hole
+// and must still fail.
+describe('preflight — costPerThousand by offer type', () => {
+  const ungated = () => doc([textEl('e1', 'costPerThousand')]);
+
+  it('does not block a LEASE ad when the element is not gated', () => {
+    const result = preflight({ doc: ungated(), data: LEASE });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'costPerThousand')).toBe(false);
+    expect(result.ok).toBe(true);
+  });
+
+  it('still blocks an APR ad with nothing to show there', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'apr', aprRate: '1.9', aprTerm: '60', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'costPerThousand')).toBe(true);
+  });
+
+  it('accepts an APR ad that HAS the value', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'apr', aprRate: '1.9', aprTerm: '60', costPerThousand: '17.05', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'costPerThousand')).toBe(false);
+  });
+
+  it('reports it as bound either way, so compliance can still see the slot', () => {
+    const result = preflight({ doc: ungated(), data: LEASE });
+    expect(result.boundFields).toContain('costPerThousand');
+  });
+
+  it('still blocks when a manufacturer rule requires it on a lease', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: LEASE,
+      oemRule: { make: 'Mazda', requiredFields: { lease: ['costPerThousand'] } },
+    });
+    expect(result.issues.some((i) => i.code === 'missing_required' && i.field === 'costPerThousand')).toBe(true);
+    expect(result.ok).toBe(false);
+  });
+
+  it("judges a second offer's slot by ITS own offer type", () => {
+    const result = preflight({
+      doc: doc([textEl('e1', 'o2_costPerThousand')]),
+      // Offer 1 is a lease; offer 2 is the APR — the o2_ slot must be judged on
+      // `o2_offerType`, not on the ad's headline offer.
+      data: { ...LEASE, o2_offerType: 'apr', o2_aprRate: '0.9', o2_aprTerm: '60' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'o2_costPerThousand')).toBe(true);
+  });
+});
+
+// ── msrp: part of the offer only for discount / sale price ──
+//
+// `assembleOffer` puts MSRP in the terms for a discount ("$4,000 OFF MSRP") and a
+// sale price ("MSRP of $34,000"); a lease or APR ad never prints it. An ungated
+// MSRP element therefore blocked lease and APR ads over a number their own copy
+// would never have shown.
+describe('preflight — msrp by offer type', () => {
+  const ungated = () => doc([textEl('e1', 'msrp')]);
+
+  it('does not block a LEASE ad', () => {
+    const result = preflight({ doc: ungated(), data: LEASE });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'msrp')).toBe(false);
+  });
+
+  it('does not block an APR ad', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'apr', aprRate: '1.9', aprTerm: '60', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'msrp')).toBe(false);
+  });
+
+  it('DOES block a discount ad, whose headline is "off MSRP"', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'discount', discountAmount: '4000', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'msrp')).toBe(true);
+  });
+
+  it('DOES block a sale-price ad, whose terms quote MSRP', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'sales_price', salePrice: '31995', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'msrp')).toBe(true);
+  });
+
+  it('accepts a discount ad that supplies MSRP', () => {
+    const result = preflight({
+      doc: ungated(),
+      data: { offerType: 'discount', discountAmount: '4000', msrp: '34000', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'msrp')).toBe(false);
+  });
+});
+
+// An element with NO condition of its own inherits the applicability its FIELD
+// already declares — the general rule behind the costPerThousand/msrp fixes.
+describe('preflight — elements inherit their field visibleWhen', () => {
+  const withField = () =>
+    doc([textEl('e1', 'discountSource')], {
+      fields: [
+        { key: 'discountSource', label: 'Discount source', type: 'text', visibleWhen: { field: 'offerType', in: ['discount'] } },
+      ],
+    });
+
+  it('skips an element whose field does not apply to this offer type', () => {
+    const result = preflight({ doc: withField(), data: LEASE });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'discountSource')).toBe(false);
+  });
+
+  it('still demands it on the offer type the field DOES apply to', () => {
+    const result = preflight({
+      doc: withField(),
+      data: { offerType: 'discount', discountAmount: '4000', vehicleName: '2026 Subaru Crosstrek' },
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'discountSource')).toBe(true);
+  });
+
+  it("lets the element's own condition win over the field's", () => {
+    const d = doc([textEl('e1', 'discountSource', { visibleWhen: { field: 'offerType', in: ['lease'] } })], {
+      fields: [
+        { key: 'discountSource', label: 'Discount source', type: 'text', visibleWhen: { field: 'offerType', in: ['discount'] } },
+      ],
+    });
+    // Field says discount-only; the element says lease — the element wins.
+    expect(preflight({ doc: d, data: LEASE }).issues.some((i) => i.field === 'discountSource')).toBe(true);
+  });
+});

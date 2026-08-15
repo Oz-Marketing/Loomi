@@ -61,7 +61,7 @@ describe('buildBlockPayload', () => {
 });
 
 describe('insertBlockIntoDoc', () => {
-  it('appends elements with fresh ids on EVERY size, scaling fontSize by height', () => {
+  it('appends elements with fresh ids on EVERY size, scaling the block as a whole', () => {
     const doc = makeDoc();
     const payload = buildBlockPayload(doc, ['text-main', 'text-label', 'text-terms'], 's1')!;
 
@@ -77,10 +77,18 @@ describe('insertBlockIntoDoc', () => {
       expect(next.layouts.s1[id]).toBeTruthy();
       expect(next.layouts.s2[id]).toBeTruthy();
     }
-    // fontSize scaled by height ratio on the wide size (540/1080 = 0.5): 80 → 40
+    // The frame and the type scale TOGETHER, by the width ratio (1200/1080).
+    // Type used to scale by HEIGHT (→40) while the frame's fractions were copied
+    // untouched, so on this wide board the box grew wider and the words shrank —
+    // the two moved in opposite directions and the block came apart.
     const mainId = newIds[0];
-    expect(next.layouts.s1[mainId].fontSize).toBe(80); // same-size, no scale
-    expect(next.layouts.s2[mainId].fontSize).toBe(40); // half height
+    const s1Box = next.layouts.s1[mainId];
+    const s2Box = next.layouts.s2[mainId];
+    expect(s1Box.fontSize).toBe(80); // same-size, no scale
+    expect(s2Box.fontSize).toBe(89); // 80 × 1200/1080
+    // …and the box keeps its shape: same on-screen aspect ratio on both boards.
+    const aspect = (b: { w: number; h: number }, w: number, h: number) => (b.w * w) / (b.h * h);
+    expect(aspect(s2Box, 1200, 540)).toBeCloseTo(aspect(s1Box, 1080, 1080), 5);
     // nudged so it doesn't sit exactly on the original
     expect(next.layouts.s1[mainId].x).toBeCloseTo(0.13, 5);
     // stacked above existing content

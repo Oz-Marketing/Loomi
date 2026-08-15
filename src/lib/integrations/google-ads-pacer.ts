@@ -28,6 +28,7 @@ import {
 import type { PacerAd } from '@/lib/ad-pacer/types';
 import { prisma } from '@/lib/prisma';
 import {
+  addDaysIso,
   getOrCreatePlan,
   dailySpendSyncWindow,
   writeDailySpendSeries,
@@ -141,6 +142,7 @@ export async function importGoogleCampaigns(
       budgetExplicitlyShared: r.campaignBudget?.explicitlyShared ?? null,
       budgetPeriod: r.campaignBudget?.period ?? null,
       primaryStatus: r.campaign?.primaryStatus ?? null,
+      primaryStatusReasons: Array.isArray(reasons) ? reasons : [],
       budgetConstrained: reasons.includes('BUDGET_CONSTRAINED'),
       adsDisapproved: disapproved.has(id),
     });
@@ -175,6 +177,102 @@ export async function fetchCampaignSpend(
     spend.set(id, (spend.get(id) ?? 0) + microsToUnits(r.metrics?.costMicros));
   }
   return spend;
+}
+
+/**
+ * One campaign's month-to-date delivery metrics — the inputs behind the six
+ * expander tiles (delivery/reallocation spec §4). Ratios are raw fractions
+ * (0–1), not percentages.
+ */
+export interface GoogleCampaignPeriodMetrics {
+  /** Same figure fetchCampaignSpend would return for this window. */
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  /** metrics.conversions_from_interactions_rate. Stored, not derived —
+   *  interactions ≠ clicks on several campaign types and we don't pull them. */
+  convRate: number | null;
+  /** Search/Shopping only; null everywhere else and below Google's threshold. */
+  searchBudgetLostIs: number | null;
+  searchRankLostIs: number | null;
+}
+
+/**
+ * Read an impression-share field. Google returns these as fractions and reports
+ * anything above 90% as exactly 0.9 (the display layer renders that as "≥90%").
+ * Absent — which is what PMAX, Demand Gen and Display return, and what any
+ * account under Google's reporting threshold returns — stays NULL rather than
+ * becoming 0: an unavailable impression share and a zero impression share mean
+ * opposite things, and a zero here would read as "losing nothing to budget",
+ * which is exactly the wrong answer to "can this campaign absorb more money".
+ * Exported for the unit tests; not part of the query layer's contract.
+ */
+export function impressionShareValue(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(1, Math.max(0, n));
+}
+
+/**
+ * Month-to-date metrics per campaign over [sinceIso, untilIso] — spend PLUS the
+ * §4 tile inputs, in ONE account-wide request. This replaces the period
+ * fetchCampaignSpend call inside the sync rather than adding to it: same query
+ * shape, same window, more SELECT columns. Two consequences, both deliberate:
+ * the tiles cover exactly the window pacerActual does (so a tile can never
+ * disagree with the spend above it), and opening N row expanders costs zero
+ * Google calls because everything is already synced.
+ *
+ * Unsegmented by date on purpose. Impression share is a ratio over eligible
+ * impressions, so it only has meaning at the range level — summing or averaging
+ * per-day values produces a number that means nothing. With no segments Google
+ * returns ONE row per campaign, so the ratios are simply read; the counters are
+ * still accumulated defensively in case that ever stops being true.
+ */
+export async function fetchCampaignPeriodMetrics(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  sinceIso: string,
+  untilIso: string,
+): Promise<Map<string, GoogleCampaignPeriodMetrics>> {
+  const rows = await gaql(
+    cfg,
+    customerId,
+    `SELECT campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks,
+            metrics.conversions, metrics.conversions_from_interactions_rate,
+            metrics.search_budget_lost_impression_share,
+            metrics.search_rank_lost_impression_share
+     FROM campaign
+     WHERE segments.date BETWEEN '${sinceIso}' AND '${untilIso}'
+       AND campaign.status != 'REMOVED'`,
+  );
+  const out = new Map<string, GoogleCampaignPeriodMetrics>();
+  for (const r of rows) {
+    const id = r.campaign?.id;
+    if (!id) continue;
+    const m = r.metrics ?? {};
+    const prev = out.get(id);
+    out.set(id, {
+      spend: (prev?.spend ?? 0) + microsToUnits(m.costMicros),
+      impressions: (prev?.impressions ?? 0) + (Math.trunc(Number(m.impressions ?? 0)) || 0),
+      clicks: (prev?.clicks ?? 0) + (Math.trunc(Number(m.clicks ?? 0)) || 0),
+      conversions: (prev?.conversions ?? 0) + (Number(m.conversions ?? 0) || 0),
+      convRate:
+        m.conversionsFromInteractionsRate != null
+          ? Number(m.conversionsFromInteractionsRate) || 0
+          : (prev?.convRate ?? null),
+      searchBudgetLostIs:
+        impressionShareValue(m.searchBudgetLostImpressionShare) ??
+        prev?.searchBudgetLostIs ??
+        null,
+      searchRankLostIs:
+        impressionShareValue(m.searchRankLostImpressionShare) ??
+        prev?.searchRankLostIs ??
+        null,
+    });
+  }
+  return out;
 }
 
 /**
@@ -311,11 +409,40 @@ function monthEndIso(period: string): string {
   return `${period}-${String(lastDay).padStart(2, '0')}`;
 }
 
-function periodWindow(period: string, todayIso: string): { since: string; until: string } {
+/**
+ * The month window a Google spend read covers: the 1st through the DATA EDGE —
+ * the last whole day, i.e. yesterday in a live month and the month end in a
+ * closed one. Never today.
+ *
+ * This is the same edge `resolveClock` anchors every day count to, and the two
+ * have to agree. Pulling spend through today while counting days through
+ * yesterday puts a partial day in the numerator of
+ * `(target − spent) ÷ remaining days` and not the denominator, so the
+ * recommended daily slides down through the afternoon as spend accrues against
+ * a day count that hasn't moved — the exact drift whole-day anchoring exists to
+ * remove — and the pace badge reads a campaign as further ahead than it is.
+ *
+ * Today's spend is not lost: it is pulled by the daily-spend series (which does
+ * run through today) and surfaced as the "today so far" figure, deliberately
+ * separate from every finalized number.
+ *
+ * `empty` marks a window with no finalized day in it at all — the 1st of the
+ * month, or a month that hasn't started. Callers must skip the read rather than
+ * send Google a backwards date range.
+ *
+ * Meta deliberately keeps its own window through today: its pacer runs on
+ * fractional days and a rolling 7-day average, so spend-to-this-instant is the
+ * consistent choice there. This edge is Google-only, like the whole-day helpers.
+ */
+export function periodWindow(
+  period: string,
+  todayIso: string,
+): { since: string; until: string; empty: boolean } {
   const since = `${period}-01`;
   const monthEnd = monthEndIso(period);
-  const until = todayIso < monthEnd ? todayIso : monthEnd;
-  return { since, until };
+  const dataEdge = addDaysIso(todayIso, -1);
+  const until = dataEdge < monthEnd ? dataEdge : monthEnd;
+  return { since, until, empty: until < since };
 }
 
 // Wide start for the full-run spend pull — a campaign's all-time cost for the §2
@@ -348,6 +475,47 @@ export interface GoogleSyncResult {
  * googleStart/EndDate, googleChannelType, googleBudgetResourceName, and (for
  * daily campaigns) pacerDailyBudget. Never touches `allocation` (planned intent).
  */
+/**
+ * The period read: spend per campaign, plus the §4 tile metrics when they can be
+ * had. One request in the normal case.
+ *
+ * If the richer column set is ever rejected — a field renamed out from under us,
+ * an account without impression-share access — this falls back to the plain
+ * spend query and reports `metrics: null`. Degrading that way is the point: an
+ * empty set of tiles is a thinner expander, but a missing pacerActual is a
+ * broken card and a broken push. `metrics: null` also tells the writer to leave
+ * whatever was synced last time alone, so a failed pull never overwrites real
+ * numbers with zeros — the stale as-of stamp is what surfaces the failure.
+ */
+async function fetchPeriodSpendAndMetrics(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  sinceIso: string,
+  untilIso: string,
+  empty: boolean,
+): Promise<{
+  spend: Map<string, number>;
+  metrics: Map<string, GoogleCampaignPeriodMetrics> | null;
+}> {
+  // No finalized day in the window — the 1st of the month, or a month that
+  // hasn't started. Every campaign is legitimately at $0 spend, so report that
+  // instead of asking Google about a backwards date range. `metrics` is an empty
+  // map rather than null: this is a successful read of nothing, so the tiles
+  // should be cleared and stamped, not left showing last month's numbers.
+  if (empty) return { spend: new Map(), metrics: new Map() };
+  try {
+    const metrics = await fetchCampaignPeriodMetrics(cfg, customerId, sinceIso, untilIso);
+    const spend = new Map<string, number>();
+    for (const [id, m] of metrics) spend.set(id, m.spend);
+    return { spend, metrics };
+  } catch {
+    return {
+      spend: await fetchCampaignSpend(cfg, customerId, sinceIso, untilIso),
+      metrics: null,
+    };
+  }
+}
+
 export async function syncPeriodFromGoogle(
   accountKey: string,
   period: string,
@@ -359,18 +527,22 @@ export async function syncPeriodFromGoogle(
     where: { planId: plan.id, period, platform: 'google' },
     select: { id: true, name: true, googleCampaignId: true },
   });
-  const { since, until } = periodWindow(period, todayIso);
+  const { since, until, empty } = periodWindow(period, todayIso);
   // Full last day of the month — the ceiling is a month-end cap, so it spans the
   // whole month, not just the elapsed-to-`until` window.
   const monthEnd = monthEndIso(period);
 
-  const [campaigns, periodSpend, runSpend, rateSegments, scheduledIds] =
+  const [campaigns, periodRead, runSpend, rateSegments, scheduledIds] =
     await Promise.all([
       importGoogleCampaigns(cfg, customerId),
-      fetchCampaignSpend(cfg, customerId, since, until),
-      fetchCampaignSpend(cfg, customerId, RUN_SPEND_SINCE, until).catch(
-        () => new Map<string, number>(),
-      ),
+      fetchPeriodSpendAndMetrics(cfg, customerId, since, until, empty),
+      // Full-run spend rides the same data edge: a run total that includes
+      // today while the month total doesn't would put two different "now"s on
+      // one row.
+      (empty
+        ? Promise.resolve(new Map<string, number>())
+        : fetchCampaignSpend(cfg, customerId, RUN_SPEND_SINCE, until)
+      ).catch(() => new Map<string, number>()),
       fetchBudgetRateSegments(cfg, customerId, since, monthEnd).catch(
         () => new Map<string, BudgetRateSegment[]>(),
       ),
@@ -395,7 +567,28 @@ export async function syncPeriodFromGoogle(
       });
       continue;
     }
-    const spend = periodSpend.get(camp.id) ?? 0;
+    const spend = periodRead.spend.get(camp.id) ?? 0;
+    // §4 tiles. A campaign missing from the metrics map genuinely had no
+    // delivery in the window, so its counters are zero — but its RATIOS stay
+    // null, because "no impressions were eligible" is not "lost nothing to
+    // budget". When the metrics read failed outright (metrics === null) we write
+    // nothing at all and the previous values survive with their old as-of stamp.
+    const metrics = periodRead.metrics?.get(camp.id) ?? null;
+    const metricFields = periodRead.metrics
+      ? {
+          googleImpressions: metrics?.impressions ?? 0,
+          googleClicks: metrics?.clicks ?? 0,
+          googleConversions: (metrics?.conversions ?? 0).toFixed(2),
+          googleConvRate: metrics?.convRate != null ? metrics.convRate.toFixed(6) : null,
+          googleSearchBudgetLostIs:
+            metrics?.searchBudgetLostIs != null
+              ? metrics.searchBudgetLostIs.toFixed(6)
+              : null,
+          googleSearchRankLostIs:
+            metrics?.searchRankLostIs != null ? metrics.searchRankLostIs.toFixed(6) : null,
+          googleMetricsAsOf: until,
+        }
+      : {};
     // §9 ceiling: daily campaigns only (a total budget has no daily-rate cap).
     // Reprorated across mid-month rate changes; falls back to daily × 30.4.
     const ceiling =
@@ -423,12 +616,14 @@ export async function syncPeriodFromGoogle(
           googleBudgetExplicitlyShared: camp.budgetExplicitlyShared,
           googleBudgetPeriod: camp.budgetPeriod,
           googlePrimaryStatus: camp.primaryStatus,
+          googlePrimaryStatusReasons: JSON.stringify(camp.primaryStatusReasons ?? []),
           googleBudgetConstrained: camp.budgetConstrained,
           googleAdsDisapproved: camp.adsDisapproved,
           ...(scheduledIds != null
             ? { googleHasAdSchedule: scheduledIds.has(camp.id) }
             : {}),
           googleProratedCeiling: ceiling != null ? ceiling.toFixed(2) : null,
+          ...metricFields,
           pacerActual: spend.toFixed(2),
           pacerRunSpend: (runSpend.get(camp.id) ?? 0).toFixed(2),
           ...(camp.dailyBudget != null
@@ -576,11 +771,13 @@ export async function discoverGoogleCampaigns(
   todayIso: string,
 ): Promise<DiscoverGoogleResult> {
   const { cfg, customerId } = await getGoogleCustomer(accountKey);
-  const { since, until } = periodWindow(period, todayIso);
+  const { since, until, empty } = periodWindow(period, todayIso);
 
   const [campaigns, periodSpend] = await Promise.all([
     importGoogleCampaigns(cfg, customerId),
-    fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
+    empty
+      ? new Map<string, number>()
+      : fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
   ]);
 
   const plan = await prisma.metaAdsPacerPlan.findUnique({
@@ -657,11 +854,13 @@ export async function importGoogleCampaignsAsRows(
   if (requested.length === 0) return { ok: true, imported: [], skipped: [] };
 
   const { cfg, customerId } = await getGoogleCustomer(accountKey);
-  const { since, until } = periodWindow(period, todayIso);
+  const { since, until, empty } = periodWindow(period, todayIso);
 
   const [campaigns, periodSpend] = await Promise.all([
     importGoogleCampaigns(cfg, customerId),
-    fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
+    empty
+      ? new Map<string, number>()
+      : fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
   ]);
   const byId = new Map(campaigns.map((c) => [c.id, c]));
 

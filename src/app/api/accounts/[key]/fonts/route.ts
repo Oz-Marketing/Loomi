@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as accountService from '@/lib/services/accounts';
 import { uploadToS3, deleteFromS3, s3PublicUrl, s3KeyFromPublicUrl, isS3Configured } from '@/lib/s3';
+import { syncAccountBrandAssets } from '@/lib/services/brand-assets';
 
 /**
  * Custom font uploads for an account (e.g. OEM-required brand fonts).
@@ -82,6 +83,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
     fonts.push(font);
     await accountService.updateAccount(key, { customFonts: JSON.stringify(fonts) });
 
+    // Catalogue in the media library. Best-effort — a font operation must not
+    // fail because the library sync did.
+    try {
+      await syncAccountBrandAssets(key);
+    } catch (syncErr) {
+      console.warn('[fonts] media library sync failed:', syncErr);
+    }
+
     return NextResponse.json({ font, customFonts: fonts });
   } catch (err) {
     console.error('Font upload error:', err);
@@ -104,6 +113,14 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ k
     const fonts = parseFonts(account.customFonts);
     const remaining = fonts.filter((f) => f.url !== url);
     await accountService.updateAccount(key, { customFonts: JSON.stringify(remaining) });
+
+    // Catalogue in the media library. Best-effort — a font operation must not
+    // fail because the library sync did.
+    try {
+      await syncAccountBrandAssets(key);
+    } catch (syncErr) {
+      console.warn('[fonts] media library sync failed:', syncErr);
+    }
 
     const s3Key = s3KeyFromPublicUrl(url);
     if (s3Key) {

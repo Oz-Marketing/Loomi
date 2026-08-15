@@ -27,6 +27,7 @@ export {
 } from './metrics';
 export { PeriodSelector } from './PeriodSelector';
 export { StatusBattery } from './StatusBattery';
+export { LabelChips, LabelFilterBar } from './LabelChips';
 export { CollapsibleSection } from './CollapsibleSection';
 export { BudgetTypeToggle, BudgetSourceToggle } from './toggles';
 export { UserPicker } from './UserPicker';

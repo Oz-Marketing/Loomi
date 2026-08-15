@@ -18,10 +18,18 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   RocketLaunchIcon,
+  CalendarDaysIcon,
   CheckCircleIcon,
+  CheckBadgeIcon,
   ArrowUturnLeftIcon,
+  ChartBarIcon,
 } from '@heroicons/react/24/outline';
-import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
+import { templateReportHref } from '@/app/reporting/ads/_components/reports-config';
+import type { TemplateUsage } from '@/app/api/ad-generator/templates-doc/usage/route';
+import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
+import { ScheduleTemplateModal } from '@/components/ad-generator/schedule-template-modal';
+import { CoopApprovalModal } from '@/components/ad-generator/coop-approval-modal';
+import { approvalLabel, type ApprovalStatus } from '@/lib/ad-generator/coop-approval';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
@@ -40,6 +48,7 @@ type DocTemplate = {
   description: string | null;
   status: string;
   accountKey: string | null;
+  sharedAccountKeys: string[];
   category: string | null;
   tags: string[];
   updatedAt: string;
@@ -47,6 +56,8 @@ type DocTemplate = {
   createdByEmail: string | null;
   createdByImage: string | null;
   doc: TemplateDoc | null;
+  /** Co-op sign-off standing — what lets ads from this template run unattended. */
+  coopApproval?: ApprovalStatus;
 };
 
 const fetcher = async (url: string) => {
@@ -100,6 +111,20 @@ export function AdTemplatesTab({
     [data, accountKey, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
+  // How often each template is actually used, for the card's usage bar and the
+  // Analytics deep-link. Its own request so a slow/absent count never delays the
+  // library itself — the bar just appears a moment later.
+  const { data: usageData } = useSWR<{ usage?: TemplateUsage[] }>(
+    accountKey
+      ? `/api/ad-generator/templates-doc/usage?accountKey=${encodeURIComponent(accountKey)}`
+      : '/api/ad-generator/templates-doc/usage',
+    fetcher,
+  );
+  const usageById = useMemo(
+    () => new Map((usageData?.usage ?? []).map((u) => [u.templateId, u])),
+    [usageData],
+  );
+
   // Shared taxonomy vocabulary (categories + tags across every template kind).
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
   const taxonomy = useMemo(
@@ -130,7 +155,9 @@ export function AdTemplatesTab({
   useEffect(() => setPreviewSizeIdx(0), [preview?.id]);
   const [renameFor, setRenameFor] = useState<DocTemplate | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [deployFor, setDeployFor] = useState<DocTemplate | null>(null);
+  const [shareFor, setShareFor] = useState<DocTemplate | null>(null);
+  const [scheduleFor, setScheduleFor] = useState<DocTemplate | null>(null);
+  const [approveFor, setApproveFor] = useState<DocTemplate | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -222,11 +249,20 @@ export function AdTemplatesTab({
     if (s.end && todayIso > s.end) return false;
     return true;
   };
+  /** Short date for a badge: "Aug 12" (no year unless it isn't this one). */
+  const badgeDate = (iso: string): string => {
+    const d = new Date(`${iso}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return iso;
+    const sameYear = d.getFullYear() === new Date(`${todayIso}T00:00:00`).getFullYear();
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  };
+
   const scheduleBadge = (t: DocTemplate): string | null => {
     const s = t.doc?.schedule;
     if (!s || (!s.start && !s.end)) return null;
-    if (s.start && todayIso < s.start) return 'Scheduled';
-    if (s.end && todayIso > s.end) return 'Expired';
+    if (s.start && todayIso < s.start) return `From ${badgeDate(s.start)}`;
+    if (s.end && todayIso > s.end) return `Expired ${badgeDate(s.end)}`;
+    if (s.end) return `Until ${badgeDate(s.end)}`;
     return 'Scheduled';
   };
 
@@ -312,22 +348,47 @@ export function AdTemplatesTab({
     return <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>;
   }
 
-  // "Copy to Subaccounts" — publishes a copy of the template into other accounts
-  // (the DeployTemplateModal). Offered at the admin level AND inside a subaccount;
-  // requires the template to be published first.
-  const copyToSubaccounts = (t: DocTemplate): TemplateCardAction =>
-    t.status === 'published'
-      ? { key: 'copy-subaccounts', label: 'Copy to Subaccounts', icon: RocketLaunchIcon, run: () => setDeployFor(t) }
-      : { key: 'copy-subaccounts', label: 'Copy to Subaccounts', icon: RocketLaunchIcon, disabled: true, run: () => toast('Publish this template first, then you can copy it to subaccounts.') };
+  /**
+   * "Share" — grant sub-accounts access to THIS template.
+   *
+   * Replaces "Copy to Subaccounts", which cloned the doc per account: the copies
+   * diverged, an edit to the master reached none of them, and access could never be
+   * revoked. Available on a draft too — you can decide who gets it before it goes
+   * live, and the share only takes effect once it's published.
+   */
+  const shareAction = (t: DocTemplate): TemplateCardAction => ({
+    key: 'share',
+    label: t.sharedAccountKeys.length ? `Share (${t.sharedAccountKeys.length})` : 'Share',
+    icon: RocketLaunchIcon,
+    run: () => setShareFor(t),
+  });
 
   const actionsFor = (t: DocTemplate): TemplateCardAction[] => [
     { key: 'view', label: 'View', icon: EyeIcon, run: () => setPreview(t) },
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
     { key: 'clone', label: 'Copy', icon: DocumentDuplicateIcon, run: () => void clone(t) },
-    // Directly below Copy: push a published copy out to other accounts. Shown at
-    // both the admin level and inside a subaccount.
-    copyToSubaccounts(t),
+    // Directly below Copy: who can use this one template.
+    shareAction(t),
+    // The publish WINDOW, without a trip through the builder.
+    { key: 'schedule', label: 'Schedule…', icon: CalendarDaysIcon, run: () => setScheduleFor(t) },
+    // Co-op sign-off. Deliberately alongside the other template-level actions
+    // rather than buried in the builder: approval is granted for the PLATE, and
+    // it's the difference between ads that run and ads that queue as drafts.
+    {
+      key: 'coop',
+      label: t.coopApproval?.state === 'current' ? 'Co-op approval ✓' : 'Co-op approval…',
+      icon: CheckBadgeIcon,
+      run: () => setApproveFor(t),
+    },
+    // Usage reporting for this one template, over in Reporting where every other
+    // performance question already lives.
+    {
+      key: 'analytics',
+      label: 'Analytics',
+      icon: ChartBarIcon,
+      run: () => router.push(templateReportHref(t.id, accountKey)),
+    },
     // Inside a subaccount you can also USE the template (make an ad from it).
     ...(accountKey
       ? [{ key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) } as TemplateCardAction]
@@ -396,12 +457,47 @@ export function AdTemplatesTab({
                     taxonomy={taxonomy}
                     author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
                     editable
+                    usage={(() => {
+                      const u = usageById.get(t.id);
+                      // Undefined while the counts are still loading (no bar);
+                      // an absent ROW once loaded genuinely means zero.
+                      if (!usageData) return undefined;
+                      return { total: u?.total ?? 0, auto: u?.auto ?? 0, archived: u?.archived ?? 0 };
+                    })()}
                     badges={
-                      badge && (
-                        <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                          {badge}
-                        </span>
-                      )
+                      <>
+                        {/* Sharing is invisible otherwise — you'd have to open the
+                            modal on every card to find out who has a template. */}
+                        {t.sharedAccountKeys.length > 0 && (
+                          <span
+                            title={t.sharedAccountKeys.map((k) => scopeName(k) ?? k).join(', ')}
+                            className="inline-block rounded bg-[var(--primary)]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--primary)]"
+                          >
+                            +{t.sharedAccountKeys.length} shared
+                          </span>
+                        )}
+                        {badge && (
+                          <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                            {badge}
+                          </span>
+                        )}
+                        {/* Co-op standing. Green only when it can actually vouch for
+                            the current design — a stale approval has to look
+                            different from a live one, or the badge is worse than
+                            nothing. */}
+                        {t.coopApproval && t.coopApproval.state !== 'none' && (
+                          <span
+                            title={t.coopApproval.reason}
+                            className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                              t.coopApproval.state === 'current'
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {approvalLabel(t.coopApproval.state)}
+                          </span>
+                        )}
+                      </>
                     }
                     actions={actionsFor(t)}
                     // In a subaccount, clicking a card opens the detail modal
@@ -492,14 +588,37 @@ export function AdTemplatesTab({
         document.body,
       )}
 
-      {/* Deploy a template into selected subaccounts (published copies) */}
-      {deployFor?.doc && (
-        <DeployTemplateModal
-          name={deployFor.name}
-          doc={deployFor.doc}
-          excludeKey={deployFor.accountKey}
-          onClose={() => setDeployFor(null)}
-          onDeployed={() => void mutate()}
+      {/* Who can use this template (one template, revocable access) */}
+      {shareFor && (
+        <ShareTemplateModal
+          templateId={shareFor.id}
+          name={shareFor.name}
+          ownerKey={shareFor.accountKey}
+          sharedWith={shareFor.sharedAccountKeys}
+          onClose={() => setShareFor(null)}
+          onSaved={() => void mutate()}
+        />
+      )}
+
+      {/* When it's offered in the library */}
+      {approveFor && (
+        <CoopApprovalModal
+          templateId={approveFor.id}
+          templateName={approveFor.name}
+          defaultMake={approveFor.doc?.make ?? null}
+          onClose={() => setApproveFor(null)}
+          onSaved={() => void mutate()}
+        />
+      )}
+
+      {scheduleFor && (
+        <ScheduleTemplateModal
+          templateId={scheduleFor.id}
+          name={scheduleFor.name}
+          status={scheduleFor.status}
+          schedule={scheduleFor.doc?.schedule ?? null}
+          onClose={() => setScheduleFor(null)}
+          onSaved={() => void mutate()}
         />
       )}
 

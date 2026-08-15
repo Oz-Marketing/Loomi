@@ -15,6 +15,7 @@ import {
   TvIcon,
   MagnifyingGlassIcon,
   PaperAirplaneIcon,
+  RectangleGroupIcon,
 } from '@heroicons/react/24/outline';
 import type { DateRangeKey } from './shared';
 
@@ -35,6 +36,15 @@ export interface ReportDef {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   /** 'live' is navigable; 'soon' shows as a disabled nav row. */
   status: 'live' | 'soon';
+  /**
+   * Set when the report reads nothing account-specific, so the route shows it at
+   * Admin scope instead of the "Pick an account" gate.
+   *
+   * Platform reports all query one account's ad platform and are meaningless
+   * without a key — hence the gate being the default. A LIBRARY report is the
+   * opposite: the whole point is the view across every account.
+   */
+  accountOptional?: boolean;
 }
 
 export const DIGITAL_ADS_REPORTS: ReportDef[] = [
@@ -45,7 +55,22 @@ export const DIGITAL_ADS_REPORTS: ReportDef[] = [
   // the email history carried over from the provider used before Loomi — see
   // lib/reporting/blasts.ts. The previous vendor is never named in the UI.
   { key: 'blasts', label: 'Email & Text Blasts', blurb: 'Email and text sends, plus flow performance', icon: PaperAirplaneIcon, status: 'live' },
+  { key: 'ad-templates', label: 'Ad Templates', blurb: 'Which ad templates get used, by hand and by the automation', icon: RectangleGroupIcon, status: 'live', accountOptional: true },
 ];
+
+/**
+ * Deep link to the Ad Templates report, optionally focused on one template.
+ *
+ * Lives here rather than in the templates library so the URL shape is owned by
+ * the report that has to read it — the library just asks for a link.
+ */
+export function templateReportHref(templateId?: string, accountKey?: string): string {
+  const q = new URLSearchParams();
+  if (templateId) q.set('template', templateId);
+  if (accountKey) q.set('account', accountKey);
+  const s = q.toString();
+  return `/reporting/ads/ad-templates${s ? `?${s}` : ''}`;
+}
 
 export function findReport(key: string): ReportDef | undefined {
   return DIGITAL_ADS_REPORTS.find((r) => r.key === key);

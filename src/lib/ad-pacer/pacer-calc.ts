@@ -162,22 +162,68 @@ export type AdScheduleLike = {
   flightStart: string | null;
   metaEndDate: string | null;
   flightEnd: string | null;
+  // Google rows resolve their schedule from the Google campaign's own dates
+  // instead of Meta's. Optional so a caller with a narrow Prisma select still
+  // satisfies the type — but a Google-row caller that omits them silently falls
+  // back to the planner's dates, so select them whenever platform can be
+  // 'google' (see scheduleEndpoints).
+  platform?: string | null;
+  googleStartDate?: string | null;
+  googleEndDate?: string | null;
+  googleFlightStartOverride?: string | null;
+  googleFlightEndOverride?: string | null;
 };
+
+/**
+ * The raw (pre-clamp) schedule endpoints for an ad, by platform.
+ *
+ * Precedence is "most authoritative statement about THIS run first":
+ *   Meta:   metaStartDate → liveDate → flightStart   /   metaEndDate → flightEnd
+ *   Google: manual override → the Google campaign's own dates → liveDate →
+ *           the planner's flight
+ *
+ * The Google branch exists because the pacer used to read only the Meta and
+ * planner fields, so a synced `googleStartDate` never reached the pacing window: a
+ * campaign that launched on the 6th paced from the 1st and read as behind for the
+ * rest of the month (google-pacing-card spec §6 — dates auto-derive from the API,
+ * and the manual override is only for a funding window the API can't express).
+ *
+ * END STALENESS: a platform end date that falls before the pacing month opens is
+ * a PRIOR run's end (a recurring campaign whose linked object still carries last
+ * month's stop date). Honoring it would mark the month completed even though the
+ * flight was extended into it, so a stale candidate is skipped in favor of the
+ * next one. If every candidate is stale we return the last one anyway — that ad
+ * really has ended, and inventing a month-end flight would resurrect it.
+ */
+export function scheduleEndpoints(ad: AdScheduleLike): {
+  rawStart: string | null;
+  rawEnd: string | null;
+} {
+  const bounds = ad.period ? monthBoundsIso(ad.period) : null;
+  const isGoogle = ad.platform === 'google';
+  const present = (v: string | null | undefined): v is string => v != null && v !== '';
+
+  const startCandidates = isGoogle
+    ? [ad.googleFlightStartOverride, ad.googleStartDate, ad.liveDate, ad.flightStart]
+    : [ad.metaStartDate, ad.liveDate, ad.flightStart];
+  const endCandidates = isGoogle
+    ? [ad.googleFlightEndOverride, ad.googleEndDate, ad.flightEnd]
+    : [ad.metaEndDate, ad.flightEnd];
+
+  const ends = endCandidates.filter(present);
+  const stale = (v: string) => bounds != null && v < bounds.start;
+  return {
+    rawStart: startCandidates.find(present) ?? null,
+    rawEnd: ends.find((v) => !stale(v)) ?? ends[ends.length - 1] ?? null,
+  };
+}
 
 export function clampToMonth(ad: AdScheduleLike): {
   effectiveStart: string | null;
   effectiveEnd: string | null;
 } {
-  const rawStart = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+  const { rawStart, rawEnd } = scheduleEndpoints(ad);
   const bounds = ad.period ? monthBoundsIso(ad.period) : null;
-  // Meta's end normally wins over the planner's, BUT a Meta end that falls
-  // before this pacing month is stale — e.g. a recurring ad whose linked ad set
-  // still carries a PRIOR run's end date. Honoring it would mark the month
-  // "completed" even after the planner flight was extended into the month, so in
-  // that case defer to the planner's flightEnd (the user's forward intent).
-  const metaEndStale =
-    bounds != null && ad.metaEndDate != null && ad.metaEndDate < bounds.start;
-  const rawEnd = metaEndStale ? ad.flightEnd : (ad.metaEndDate ?? ad.flightEnd);
   if (!bounds) return { effectiveStart: rawStart, effectiveEnd: rawEnd };
   return {
     // max(rawStart, month_start) — never start before the month opens.
@@ -218,15 +264,29 @@ export function isEligibleForLivePacing(
 }
 
 /**
- * §3 — is this a LIFETIME ad still running (in progress)? Such an ad is
- * EXCLUDED from a month's over/under base entirely (both its actual slice and
- * its allocation are removed → $0 variance contribution) while it runs; it
- * still counts toward the honest "total month spend". When it completes
- * (status leaves ACTIVE_STATUSES, e.g. "Completed Run") it re-enters the base
- * and its single variance (pacerActual − allocation) books once — which for a
- * single-period ad equals fullRunActual − fullLifetimeTarget per the spec.
- * Multi-month lifetime ads are handled later by §1/§2 (cross-month split).
- * This is the ONE predicate every over/under-base sum + the badge consult.
+ * Is this LIFETIME ad currently running — started, not yet finished?
+ *
+ * This used to be the §3 over/under hold-out: a running lifetime ad had its
+ * actual AND allocation stripped from the month's settle-able base. That rule is
+ * gone. A lifetime ad spends close to its set budget regardless of whether the
+ * run has closed, so its spend belongs in the month's over/under the whole time
+ * it is live, like any daily line. Holding it out made a month's variance
+ * silently ignore real spend, and any run whose status never flipped held that
+ * spend out indefinitely.
+ *
+ * What remains is a plain state predicate, used where "is this run delivering
+ * right now" is the actual question — currently the Google daily roll-up, which
+ * INCLUDES running lifetime lines in its pacing figures.
+ *
+ * "Still running" means started AND not yet finished. Status alone can't carry
+ * that: `reconcileCompletedRuns` only auto-completes ads on WRITABLE periods, so
+ * a closed month's rows keep whatever status they had at close — a June lifetime
+ * ad left on "Live" read as in-progress forever, holding its spend and
+ * allocation out of June's settle-able base months after the run ended. June
+ * then showed the "lifetime · in progress" badge in August, its variance was
+ * computed on an incomplete base, and it could never settle or roll forward.
+ * So the run's own end date decides, which is also the spec's pending→settled
+ * trigger (run_end has passed).
  */
 export function isLifetimeInProgress(
   ad: AdScheduleLike,
@@ -235,9 +295,17 @@ export function isLifetimeInProgress(
 ): boolean {
   if (ad.budgetType !== 'Lifetime') return false;
   if (!ACTIVE_STATUSES.includes(ad.adStatus)) return false; // completed/off books normally
-  const { effectiveStart } = clampToMonth(ad);
+  const { effectiveStart, effectiveEnd } = clampToMonth(ad);
   if (!effectiveStart) return false;
-  return effectiveStart <= zonedTodayIso(nowMs, timeZone); // has started
+  const today = zonedTodayIso(nowMs, timeZone);
+  if (effectiveStart > today) return false; // hasn't started
+  // The UNCLAMPED end when the flight declares one, so a cross-month run stays
+  // in progress until its ACTUAL finish (a Jun 26 – Jul 3 run is still running
+  // on Jul 1) rather than looking done at its origin month's edge. With no end
+  // date at all, the pacing month's end bounds it — an undated run must not stay
+  // "in progress" indefinitely.
+  const runEnd = (ad.period ? runEndIso(ad, ad.period) : null) ?? effectiveEnd;
+  return runEnd == null || today <= runEnd; // hasn't finished
 }
 
 /**
@@ -362,52 +430,59 @@ export function lifetimeSettlesThisMonth(
   ad: AdScheduleLike,
   asMonth: string,
 ): boolean {
-  // Resolve the run's real end the same way clampToMonth does — including its
-  // stale-metaEndDate guard: a Meta end BEFORE this month is stale (a recurring
-  // ad set still carrying a prior run's stop date), so defer to the planner's
-  // flightEnd (the forward intent). Without this, a genuine cross-month run with
-  // a stale Meta end would be misread as "ends this month". Compare the UNCLAMPED
-  // end month (clampToMonth's effectiveEnd is capped at month-end, which would
-  // hide the "extends past the month" signal we need here).
+  const endMonth = runEndIso(ad, asMonth)?.slice(0, 7) ?? null;
+  return endMonth == null ? true : endMonth <= asMonth;
+}
+
+/**
+ * The run's real (UNCLAMPED) end date, or null when the flight declares none.
+ * Resolved the same way clampToMonth does — including its stale-metaEndDate
+ * guard: a Meta end BEFORE this month is stale (a recurring ad set still
+ * carrying a prior run's stop date), so defer to the planner's flightEnd (the
+ * forward intent). Without that guard a genuine cross-month run with a stale
+ * Meta end reads as "ends this month". Unclamped on purpose — clampToMonth's
+ * effectiveEnd is capped at month-end, which hides both the "extends past the
+ * month" signal and the run's actual finish date.
+ */
+export function runEndIso(ad: AdScheduleLike, asMonth: string): string | null {
   const bounds = monthBoundsIso(asMonth);
   const metaEndStale =
     bounds != null && ad.metaEndDate != null && ad.metaEndDate < bounds.start;
-  const rawEnd = metaEndStale ? ad.flightEnd : ad.metaEndDate ?? ad.flightEnd;
-  const endMonth = rawEnd?.slice(0, 7) ?? null;
-  return endMonth == null ? true : endMonth <= asMonth;
+  return metaEndStale ? ad.flightEnd : ad.metaEndDate ?? ad.flightEnd;
 }
 
 /**
  * Classify ONE ad for a month, producing the split the UI needs: inMonthSpend
  * (what spent this calendar month → the month total) vs billedActual (what the
  * over/under counts). They differ only when the ad is deliberately billed
- * cross-month or is a running lifetime ad:
- *   - lifetime-in-progress: still running — $0 in the over/under now (§3); its
- *     in-month spend is held out until the run completes.
+ * cross-month:
  *   - billed-cross-month: the user chose "Bill in one month" and the full run
  *     differs from this month's slice — the over/under counts the full run; the
  *     difference spent in another month.
  *   - real: everything else — billed equals the slice, all spent this month.
  * No date-based auto-detection; cross-month is the user's explicit choice.
+ *
+ * A running LIFETIME ad is deliberately NOT special-cased. It spends close to
+ * its set budget whether or not the run has closed, so its spend counts toward
+ * the month the whole time it is live, exactly like a daily line — a daily ad
+ * mid-month has also only delivered part of its allocation, and elapsed-time
+ * pacing (not exclusion) is what accounts for that. Holding lifetime spend out
+ * until the run "closed" was the old §3 rule; it made a month's over/under
+ * silently ignore real spend, and a run whose status never flipped could hold
+ * that spend out forever. The genuinely cross-month case — a budget deliberately
+ * spread over two months that Meta under-delivers in the first — is handled by
+ * the split-run settlement and the cross-month ledger, both of which key on an
+ * explicit user mark rather than on "is it still running".
  */
 export function classifyAdVariance(
   ad: VarianceAdLike,
   asMonth: string,
-  nowMs: number,
-  timeZone: string,
+  // Retained for call-site compatibility and because a future timing rule would
+  // need them; the classification itself is no longer time-dependent.
+  _nowMs?: number,
+  _timeZone?: string,
 ): AdVariance {
   const inMonthSpend = num(ad.pacerActual) ?? 0;
-  if (isLifetimeInProgress(ad, nowMs, timeZone)) {
-    return {
-      inMonthSpend,
-      billedActual: 0,
-      contribution: 0,
-      klass: 'lifetime-in-progress',
-      // Only a cross-month run (flight past this month) is deferred; a
-      // single-month lifetime ad settles at this month's close (Prompt 2).
-      settlesThisMonth: lifetimeSettlesThisMonth(ad, asMonth),
-    };
-  }
   const billedActual = effectiveActual(ad, asMonth);
   const contribution = billedActual - effectiveTarget(ad, asMonth);
   const klass: VarianceClass =
@@ -425,15 +500,7 @@ export interface MonthVarianceBreakdown {
   /** Σ (billedActual − inMonthSpend) over billed-cross-month ads — billed in
    *  this month though it spent in another (explains total ≠ over/under basis). */
   billedElsewhere: number;
-  /** Σ inMonthSpend over in-progress lifetime ads — spent this month but not yet
-   *  in the over/under (books on completion). */
-  heldOutLifetime: number;
   crossMonthCount: number;
-  heldOutCount: number;
-  /** Of the held-out lifetime ads, how many are DEFERRED to a future month (a
-   *  cross-month run). heldOutCount − this = lifetime ads settling at THIS
-   *  month's close. Lets the UI label the two in-progress states distinctly. */
-  heldOutDeferredCount: number;
   /** Per-ad results in input order — the caller maps back to its ad list. */
   perAd: AdVariance[];
 }
@@ -441,8 +508,9 @@ export interface MonthVarianceBreakdown {
 /**
  * Aggregate a month's ads into the two reconciling totals — totalInMonth (what
  * spent this calendar month) and overUnderActual (what the over/under is billed
- * on) — plus the pieces that explain any gap between them: billedElsewhere
- * (cross-month-billed runs) and heldOutLifetime (running lifetime ads).
+ * on) — plus the piece that explains any gap between them: billedElsewhere
+ * (cross-month-billed runs). Running lifetime ads are no longer a source of gap:
+ * their spend is billed in the month it delivered, like any other line.
  */
 export function decomposeMonthVariance(
   ads: VarianceAdLike[],
@@ -453,21 +521,14 @@ export function decomposeMonthVariance(
   let totalInMonth = 0;
   let overUnderActual = 0;
   let billedElsewhere = 0;
-  let heldOutLifetime = 0;
   let crossMonthCount = 0;
-  let heldOutCount = 0;
-  let heldOutDeferredCount = 0;
   const perAd: AdVariance[] = [];
   for (const ad of ads) {
     const v = classifyAdVariance(ad, asMonth, nowMs, timeZone);
     perAd.push(v);
     totalInMonth += v.inMonthSpend;
     overUnderActual += v.billedActual;
-    if (v.klass === 'lifetime-in-progress') {
-      heldOutLifetime += v.inMonthSpend;
-      heldOutCount += 1;
-      if (!v.settlesThisMonth) heldOutDeferredCount += 1;
-    } else if (v.klass === 'billed-cross-month') {
+    if (v.klass === 'billed-cross-month') {
       billedElsewhere += v.billedActual - v.inMonthSpend;
       crossMonthCount += 1;
     }
@@ -476,10 +537,7 @@ export function decomposeMonthVariance(
     totalInMonth,
     overUnderActual,
     billedElsewhere,
-    heldOutLifetime,
     crossMonthCount,
-    heldOutCount,
-    heldOutDeferredCount,
     perAd,
   };
 }
@@ -498,6 +556,38 @@ export type SplitRunAdLike = AdScheduleLike & {
   allocation?: string | null;
   metaLifetimeBudget?: string | null;
 };
+
+/**
+ * Group ads into logical FLIGHTS (runs): one entry per physical flight, keyed by
+ * the linked Meta ad-set id (the synced auto-chain) or, for a manual chain, the
+ * root of the `linkedPrevAdId` pointers. A flight's members are its per-month
+ * rows. This is the ONE grouping — the split-run settlement below and the
+ * cross-month ledger (cross-month-ledger.ts) both build on it, so they can never
+ * disagree about what counts as one flight.
+ */
+export function groupFlightRuns<T extends { id: string; metaObjectId?: string | null; linkedPrevAdId?: string | null }>(
+  ads: T[],
+): Map<string, T[]> {
+  const byId = new Map(ads.map((a) => [a.id, a]));
+  const runKeyOf = (a: T): string => {
+    if (a.metaObjectId) return `meta:${a.metaObjectId}`;
+    let cur = a;
+    const seen = new Set<string>();
+    while (cur.linkedPrevAdId && byId.has(cur.linkedPrevAdId) && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      cur = byId.get(cur.linkedPrevAdId)!;
+    }
+    return `link:${cur.id}`;
+  };
+  const runs = new Map<string, T[]>();
+  for (const a of ads) {
+    const k = runKeyOf(a);
+    const list = runs.get(k);
+    if (list) list.push(a);
+    else runs.set(k, [a]);
+  }
+  return runs;
+}
 
 export interface SplitRunSettlement {
   /** Ad ids in a marked split run — held out of every month's settle-able base. */
@@ -536,22 +626,7 @@ export function computeSplitRunSettlement(
     excludeAllocByPeriod: new Map<string, number>(),
     settlementByPeriod: new Map<string, number>(),
   };
-  const byId = new Map(ads.map((a) => [a.id, a]));
-  const runKeyOf = (a: SplitRunAdLike): string => {
-    if (a.metaObjectId) return `meta:${a.metaObjectId}`;
-    let cur = a;
-    const seen = new Set<string>();
-    while (cur.linkedPrevAdId && byId.has(cur.linkedPrevAdId) && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      cur = byId.get(cur.linkedPrevAdId)!;
-    }
-    return `link:${cur.id}`;
-  };
-  const runs = new Map<string, SplitRunAdLike[]>();
-  for (const a of ads) {
-    const k = runKeyOf(a);
-    (runs.get(k) ?? runs.set(k, []).get(k)!).push(a);
-  }
+  const runs = groupFlightRuns(ads);
   const add = (m: Map<string, number>, k: string, v: number) =>
     m.set(k, (m.get(k) ?? 0) + v);
   for (const members of runs.values()) {

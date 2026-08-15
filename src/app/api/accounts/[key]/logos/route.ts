@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as accountService from '@/lib/services/accounts';
 import { uploadToS3, deleteFromS3, s3PublicUrl, s3KeyFromPublicUrl, isS3Configured } from '@/lib/s3';
+import { syncAccountBrandAssets } from '@/lib/services/brand-assets';
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml', 'image/webp'];
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
@@ -108,6 +109,14 @@ export async function POST(
       previousUrl = logos[variant];
       logos[variant] = url;
       await accountService.updateAccount(key, { logos: JSON.stringify(logos) });
+    }
+
+    // Catalogue it in the media library. Best-effort: a logo upload must not
+    // fail because the library sync did — settings owns this asset either way.
+    try {
+      await syncAccountBrandAssets(key);
+    } catch (syncErr) {
+      console.warn('[logos] media library sync failed:', syncErr);
     }
 
     const previousKey = s3KeyFromPublicUrl(previousUrl);

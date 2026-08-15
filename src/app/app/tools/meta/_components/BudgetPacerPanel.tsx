@@ -16,7 +16,13 @@ import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate, classifyPacerHealth } from '@/lib/ad-pacer/helpers';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { shiftPeriod } from '@/lib/ad-pacer/period';
-import { PacerRow, Tooltip, usePacerReadOnly } from '@/app/app/tools/_shared';
+import {
+  LabelFilterBar,
+  PacerRow,
+  Tooltip,
+  usePacerReadOnly,
+} from '@/app/app/tools/_shared';
+import { collectLabels, hasTag, serializeTags } from '@/lib/ad-pacer/labels';
 import { AdSetLinkPicker, type MetaAdSetOption } from './AdSetLinkPicker';
 import { FilterStatus } from './FilterSidebar';
 
@@ -302,6 +308,9 @@ export function BudgetPacerPanel({
       action: 'apply_full_run' | 'split' | 'clear' | 'link',
       splitMap?: Record<string, number>,
       linkedPrevAdId?: string,
+      /** apply_full_run: the month the run BILLS in. Defaults to this month; a
+       *  later month makes it cross-month (Out here, In there). */
+      billedMonth?: string,
     ) => {
       // The CTA is disabled when frozen and the endpoint rejects a frozen
       // month (409), so no client-side readOnly guard is needed here.
@@ -315,7 +324,9 @@ export function BudgetPacerPanel({
                 // Mirror the server: bill / split / link are mutually exclusive;
                 // link seeds the split mark so the run is detected as split.
                 fullRunAppliedToMonth:
-                  action === 'apply_full_run' ? plan.period : null,
+                  action === 'apply_full_run'
+                    ? billedMonth ?? plan.period
+                    : null,
                 lifetimeMonthSplit:
                   action === 'split'
                     ? JSON.stringify(splitMap ?? {})
@@ -343,6 +354,9 @@ export function BudgetPacerPanel({
               action,
               ...(action === 'split' ? { splitMap } : {}),
               ...(action === 'link' ? { linkedPrevAdId } : {}),
+              ...(action === 'apply_full_run' && billedMonth
+                ? { month: billedMonth }
+                : {}),
             }),
           },
         );
@@ -369,10 +383,15 @@ export function BudgetPacerPanel({
     [accountKey, plan, onChange],
   );
 
-  const visibleAds = useMemo(
-    () => applyFilters(plan.ads, filters, currentUserId),
-    [plan.ads, filters, currentUserId],
-  );
+  // §9 label view — composes with the sidebar filters: a row has to satisfy both.
+  const [activeLabel, setActiveLabel] = useState<string | null>(null);
+  const allLabels = useMemo(() => collectLabels(plan.ads), [plan.ads]);
+  const visibleAds = useMemo(() => {
+    const filtered = applyFilters(plan.ads, filters, currentUserId);
+    return activeLabel == null
+      ? filtered
+      : filtered.filter((ad) => hasTag(ad.pacerTags, activeLabel));
+  }, [plan.ads, filters, currentUserId, activeLabel]);
   const allExpanded =
     visibleAds.length > 0 && visibleAds.every((a) => expandedIds.has(a.id));
 
@@ -500,6 +519,7 @@ export function BudgetPacerPanel({
           </div>
         );
       })()}
+      <LabelFilterBar ads={plan.ads} activeLabel={activeLabel} onChange={setActiveLabel} />
       <FilterStatus
         filters={filters}
         onClear={() => onFiltersChange(EMPTY_FILTERS)}
@@ -526,8 +546,8 @@ export function BudgetPacerPanel({
               updateAd({ ...ad, alertsMuted: !ad.alertsMuted })
             }
             onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
-            onResolveCrossMonth={(action, splitMap, linkedPrevAdId) =>
-              resolveCrossMonth(ad.id, action, splitMap, linkedPrevAdId)
+            onResolveCrossMonth={(action, splitMap, linkedPrevAdId, billedMonth) =>
+              resolveCrossMonth(ad.id, action, splitMap, linkedPrevAdId, billedMonth)
             }
             prevMonthAds={prevMonthAds}
             siblings={plan.siblingsByName?.[ad.name] ?? null}
@@ -552,6 +572,8 @@ export function BudgetPacerPanel({
                 disabled={readOnly}
               />
             }
+            allLabels={allLabels}
+            onTagsChange={(tags) => updateAd({ ...ad, pacerTags: serializeTags(tags) })}
             syncInfo={<MetaSyncInfo ad={ad} timeZone={plan.timeZone} />}
             statusMismatch={
               <MetaStatusMismatch

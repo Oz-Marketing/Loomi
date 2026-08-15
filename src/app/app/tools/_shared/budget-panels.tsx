@@ -730,6 +730,8 @@ export function AddPlanButton({
   importIcon,
   importLabel = 'Import',
   importHint = 'Bring existing ad sets in as rows',
+  createLabel = 'Add ad sets',
+  createHint = 'Name, budget and flight dates — one row per ad set',
 }: {
   onCreateNew: () => void;
   onOpenCopy: () => void;
@@ -738,6 +740,10 @@ export function AddPlanButton({
   importIcon?: ReactNode;
   importLabel?: string;
   importHint?: string;
+  /** Google's rows are campaigns, not ad sets — same parameterization the
+   *  import entry already uses so the dropdown itself stays shared. */
+  createLabel?: string;
+  createHint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -788,10 +794,10 @@ export function AddPlanButton({
             <PlusIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0 mt-0.5" />
             <div>
               <div className="text-xs font-semibold text-[var(--foreground)]">
-                Add ad sets
+                {createLabel}
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)]">
-                Name, budget and flight dates — one row per ad set
+                {createHint}
               </div>
             </div>
           </button>

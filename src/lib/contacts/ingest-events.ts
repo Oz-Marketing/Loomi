@@ -6,6 +6,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { normaliseEmail, normalisePhone, parseDateCell } from './normalize';
+import { recomputeContactEventRollups } from './event-rollups';
 
 export type ContactEventType = 'service' | 'sale';
 
@@ -73,6 +74,10 @@ export async function ingestEvents({
   // Resolve contactId once per distinct identity to avoid repeat lookups
   // across a dealer's batch (many events share a customer).
   const contactCache = new Map<string, string | null>();
+  // Contacts touched by this batch — their rollups are recomputed once at
+  // the end rather than per row, since a dealer's batch typically hits
+  // the same customer several times.
+  const touchedContactIds = new Set<string>();
 
   async function findContactId(email: string | null, phone: string | null): Promise<string | null> {
     const cacheKey = `${email ?? ''}|${phone ?? ''}`;
@@ -112,6 +117,7 @@ export async function ingestEvents({
 
     try {
       const contactId = await findContactId(email, phone);
+      if (contactId) touchedContactIds.add(contactId);
 
       const data = {
         accountKey,
@@ -149,6 +155,24 @@ export async function ingestEvents({
       if (issues.length < MAX_ISSUES) {
         issues.push({ index: i, reason: err instanceof Error ? err.message : 'Upsert failed' });
       }
+    }
+  }
+
+  // Refresh the denormalised history rollups for everyone this batch
+  // touched. Recomputed from the event table rather than incremented,
+  // because the upsert above means a replayed batch must not double
+  // anything. Failure here is logged, not fatal: the events themselves
+  // are already persisted, and the next batch (or the backfill script)
+  // re-derives the same numbers.
+  if (touchedContactIds.size > 0) {
+    try {
+      await recomputeContactEventRollups(accountKey, [...touchedContactIds]);
+    } catch (err) {
+      console.error(
+        '[ingest-events] rollup recompute failed for',
+        accountKey,
+        err instanceof Error ? err.message : err,
+      );
     }
   }
 

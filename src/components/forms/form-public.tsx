@@ -1,9 +1,10 @@
 'use client';
 
 import * as React from 'react';
-import type { FormTemplate } from '@/lib/forms/types';
+import { formContentMaxWidth, type FormTemplate } from '@/lib/forms/types';
 import { FormRenderer } from '@/lib/forms/render';
 import { FormInteractiveContext } from '@/lib/forms/components/FieldFileInput';
+import { META_FIELD_PREFIX } from '@/lib/forms/embed-params';
 
 interface FormPublicProps {
   slug: string;
@@ -32,6 +33,20 @@ interface FormPublicProps {
    * client-side render.
    */
   turnstileSiteKey?: string | null;
+  /**
+   * Per-field help-text overrides parsed from the embed's
+   * `note_{fieldKey}` query params. Already sanitized and filtered to
+   * fields that exist on this form (see `embed-params.ts`). Rendered
+   * only — never submitted.
+   */
+  helpTextOverrides?: Record<string, string>;
+  /**
+   * Submission metadata parsed from the embed's `meta_{key}` query
+   * params. Never rendered; attached to the submit payload as
+   * `__loomi_meta_*` fields, which the API re-sanitizes and persists on
+   * the submission row.
+   */
+  metadata?: Record<string, string>;
 }
 
 const TURNSTILE_API_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -70,6 +85,22 @@ interface SubmitResponse {
 type Phase = 'idle' | 'submitting' | 'success' | 'error';
 
 /**
+ * The app's global `<body>` is `flex min-h-screen`, so anything the
+ * public form route renders is a flex item — and a flex item's default
+ * `flex: 0 1 auto` sizes it to its *content*, not to the line. Without
+ * this, the form card collapsed to whatever the inputs happened to need
+ * (~440px) and the Form Width setting had no visible effect at any
+ * value: `max-width: 1024px` can't widen a box the parent never let
+ * grow. Applies on `/f/[slug]` and, because the script embed iframes
+ * that same page, in every embedded form too.
+ *
+ * `width: 100%` (not `flex: 1`) so the same wrapper still behaves
+ * inside a plain block parent — e.g. the landing-page Embedded Form
+ * block, which constrains the form with its own max-width.
+ */
+const FILL_WIDTH: React.CSSProperties = { width: '100%', minWidth: 0 };
+
+/**
  * Public-facing form. Wraps the rendered template in a real `<form>`
  * with browser-native validation suppressed in favour of server-side
  * checks (so error messages stay consistent regardless of the JS state).
@@ -91,6 +122,8 @@ export function FormPublic({
   embed,
   attribution,
   turnstileSiteKey,
+  helpTextOverrides,
+  metadata,
 }: FormPublicProps) {
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
@@ -247,6 +280,15 @@ export function FormPublic({
       formData.set('__loomi_lp_id', attribution.pageId);
       formData.set('__loomi_lp_slug', attribution.pageSlug);
     }
+    // Embed metadata (`?meta_vin=…`) rides along as `__loomi_meta_*`
+    // fields. Values were sanitized server-side before render; the API
+    // re-checks them anyway, since the submit endpoint is public.
+    if (metadata) {
+      for (const [key, value] of Object.entries(metadata)) {
+        formData.set(`${META_FIELD_PREFIX}${key}`, value);
+      }
+    }
+
     const utms = readLpUtmCookie();
     if (utms) {
       if (utms.source) formData.set('__loomi_utm_source', utms.source);
@@ -334,6 +376,10 @@ export function FormPublic({
         ref={rootRef}
         className="loomi-form-root"
         style={{
+          // See FILL_WIDTH below — the success state is a sibling root,
+          // so it needs the same treatment or the card snaps narrow
+          // the moment the form is replaced.
+          ...FILL_WIDTH,
           backgroundColor: template.settings.bodyBg,
           color: template.settings.textColor,
           fontFamily: template.settings.fontFamily,
@@ -343,7 +389,7 @@ export function FormPublic({
       >
         <div
           style={{
-            maxWidth: `${template.settings.contentWidth}px`,
+            maxWidth: formContentMaxWidth(template.settings),
             margin: '0 auto',
             backgroundColor: template.settings.contentBg,
             borderRadius: 12,
@@ -363,8 +409,8 @@ export function FormPublic({
   }
 
   return (
-    <div ref={rootRef}>
-      <form onSubmit={handleSubmit} noValidate>
+    <div ref={rootRef} style={FILL_WIDTH}>
+      <form onSubmit={handleSubmit} noValidate style={FILL_WIDTH}>
         {/* Honeypot — visually hidden, expected to remain empty. Real
             users never see it; bots that fill every input get flagged. */}
         <input
@@ -386,13 +432,16 @@ export function FormPublic({
         {/* Enable file-field uploads only on the live public form —
             preview surfaces (editor, overview, thumbnail) stay inert. */}
         <FormInteractiveContext.Provider value={true}>
-          <FormRenderer template={template} options={{ errors: fieldErrors }} />
+          <FormRenderer
+            template={template}
+            options={{ errors: fieldErrors, helpTextOverrides }}
+          />
         </FormInteractiveContext.Provider>
 
         {turnstileSiteKey && (
           <div
             style={{
-              maxWidth: `${template.settings.contentWidth}px`,
+              maxWidth: formContentMaxWidth(template.settings),
               margin: '0 auto 16px',
               padding: '0 16px',
               display: 'flex',
@@ -409,7 +458,7 @@ export function FormPublic({
           <div
             role="alert"
             style={{
-              maxWidth: `${template.settings.contentWidth}px`,
+              maxWidth: formContentMaxWidth(template.settings),
               margin: '0 auto 16px',
               padding: '12px 16px',
               borderRadius: 8,

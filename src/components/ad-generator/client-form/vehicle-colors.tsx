@@ -171,7 +171,18 @@ export function VehicleColorPicker({
         const r = await fetch('/api/ad-generator/evox/resolve', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ vifnum: cand.vifnum, colorCode: cand.code, accountKey, hint: `${vehicleName}-${c.simple || c.name || c.code}` }),
+          // year/make/model are the STRUCTURED props this component already
+          // prefers over parsing vehicleName — passing them through means the
+          // library entry gets the same fidelity the EVOX lookup did.
+          body: JSON.stringify({
+            vifnum: cand.vifnum,
+            colorCode: cand.code,
+            accountKey,
+            hint: `${vehicleName}-${c.simple || c.name || c.code}`,
+            year,
+            make,
+            model,
+          }),
         });
         if (r.ok) {
           const j = await r.json();

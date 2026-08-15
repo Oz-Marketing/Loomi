@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
+import { summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
 import type { ShadowReport } from './types';
 
 /**
@@ -150,11 +152,23 @@ export function useAutomation(accountKey: string | null): Automation {
         } else if (action === 'poll_offers') {
           toast.success(`Polled ${json.scopes} vehicle(s): ${json.offersNew} new, ${json.offersEnded} ended`);
         } else if (action === 'generate') {
-          const skipped = (json.skipped ?? []).length;
-          toast[json.created || json.refreshed ? 'success' : 'warning'](
-            json.created || json.refreshed
-              ? `${json.created} new draft(s), ${json.refreshed} refreshed${skipped ? `, ${skipped} skipped` : ''}`
-              : `No ads generated — ${skipped} vehicle(s) skipped.`,
+          // Name the reasons here rather than only counting them. The response
+          // carries them, so "see Run history" was making people go and look up
+          // something we already had in hand.
+          const skips = (json.skipped ?? []) as { vehicle: string; reason: string; detail: string }[];
+          const built = json.created || json.refreshed;
+          toast[built ? 'success' : 'warning'](
+            built
+              ? `${json.created} new draft(s), ${json.refreshed} refreshed${skips.length ? `, ${skips.length} skipped` : ''}`
+              : `No ads generated — ${summarizeSkips(skips) || `${skips.length} vehicle(s) skipped`}.`,
+            skips.length
+              ? {
+                  description: built
+                    ? summarizeSkips(skips)
+                    : skips[0].detail || 'Open Run history for the full detail.',
+                  duration: 10_000,
+                }
+              : undefined,
           );
         } else {
           toast.success('Saved');
@@ -181,13 +195,26 @@ export function useAutomation(accountKey: string | null): Automation {
     [act, report?.enabled, form],
   );
 
+  const dirty = formKey(form) !== formKey(saved);
+
+  // Tell the navigation guard what's actually unsaved, rather than leaving it to
+  // infer it from raw DOM edits. Left to the heuristic it gets this wrong in both
+  // directions: it keeps flagging inputs whose values a save already committed
+  // (so switching sub-account prompts about edits that are safely on the server),
+  // and it never sees the Selects or the size chips, which aren't form controls.
+  const { markClean, markDirty } = useUnsavedChanges();
+  useEffect(() => {
+    if (dirty) markDirty();
+    else markClean();
+  }, [dirty, markClean, markDirty]);
+
   return {
     report,
     loading,
     busy,
     form,
     saved,
-    dirty: formKey(form) !== formKey(saved),
+    dirty,
     set: (key, value) => setForm((f) => ({ ...f, [key]: value })),
     reset: () => setForm(saved),
     reload,

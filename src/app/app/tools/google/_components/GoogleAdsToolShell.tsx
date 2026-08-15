@@ -37,11 +37,9 @@ import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { UserPicker, type UserPickerUser } from '@/components/user-picker';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { toast } from '@/lib/toast';
-import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
-import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import type { PacerAd, PacerPlan, DirectoryUser, PeriodSummary } from '@/lib/ad-pacer/types';
 import { CopyPlanModal, type CopyFieldOptions } from '@/app/app/tools/meta/_components/CopyPlanModal';
-import { makeAd, fmt, fmtDate } from '@/lib/ad-pacer/helpers';
+import { makeAd } from '@/lib/ad-pacer/helpers';
 import { COLORS as SHARED_COLORS } from '@/lib/ad-pacer/constants';
 import {
   PacerReadOnlyContext,
@@ -50,15 +48,15 @@ import {
   AddPlanButton,
   AccountNotesButton,
   AdSummaryRow,
-  PacerRow,
-  Tooltip,
   AdEditorModal,
+  Tooltip,
   BulkAddAdsModal,
   Field,
   ComparePanel,
   StatusBattery,
 } from '@/app/app/tools/_shared';
 import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
+import { GooglePacingCard } from './GooglePacingCard';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax', 'Demand Gen'] as const;
@@ -121,47 +119,6 @@ function AdStatusPill({ status }: { status: string }) {
   );
 }
 
-// Budget type / source tag styling (mirrors Meta's row tags).
-
-// Google-specific slots injected into the shared <PacerRow> (mirrors Meta's
-// MetaSyncInfo / link picker). Read google* fields instead of meta* ones.
-function GoogleSyncInfo({ ad, timeZone }: { ad: PacerAd; timeZone: string }) {
-  if (!ad.googleCampaignId || (!ad.googleStartDate && !ad.googleEndDate)) return null;
-  const effectiveEnd = buildPacerCalc(ad, Date.now(), timeZone).effectiveEnd;
-  const parts: string[] = [
-    `Google run: ${ad.googleStartDate ? fmtDate(ad.googleStartDate) : '—'} → ${
-      ad.googleEndDate ? fmtDate(ad.googleEndDate) : 'ongoing'
-    }`,
-  ];
-  if (effectiveEnd && (!ad.googleEndDate || ad.googleEndDate > effectiveEnd)) {
-    parts.push(`Paced to ${fmtDate(effectiveEnd)} (month end)`);
-  }
-  return (
-    <Tooltip label={parts.join(' · ')} placement="top">
-      <span className="inline-flex flex-shrink-0 items-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-        <InformationCircleIcon className="w-4 h-4" />
-      </span>
-    </Tooltip>
-  );
-}
-
-// Read-only link status for the PacerRow's link slot. Google campaigns are
-// linked at import time (no manual ad-set picker like Meta), so this just
-// reflects the connection state.
-function GoogleLinkBadge({ ad }: { ad: PacerAd }) {
-  if (!ad.googleCampaignId) {
-    return (
-      <span className="text-[11px] text-[var(--muted-foreground)]">Not linked to Google</span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
-      <GoogleAdsBrandIcon className="h-3.5 w-3.5" />
-      {ad.googleChannelType || 'Google'} · linked
-    </span>
-  );
-}
-
 export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const { accountKey, accountData, setAccount } = useAccount();
   const { confirm } = useLoomiDialog();
@@ -180,7 +137,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [importOpen, setImportOpen] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Basic (default) vs Detailed plan view — Detailed adds the Design +
@@ -192,28 +148,19 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     null,
   );
   const [notesCount, setNotesCount] = useState<number | null>(null);
-  // Pace-view per-card expand state (mirrors Meta's BudgetPacerPanel).
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const toggleExpanded = (id: string) =>
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   const swrKey = accountKey
     ? `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`
     : null;
   const { data, isLoading, mutate } = useSWR<PacerPlan>(swrKey, fetcher, { revalidateOnFocus: false });
   const ads = useMemo<PacerAd[]>(() => data?.ads ?? [], [data]);
-  // Rendered rows = sidebar filters (mirrors Meta's applyFilters) + the search
-  // box, applied to the planner table + pacing cards.
-  const visibleAds = useMemo(() => {
-    const filtered = applyFilters(ads, filters, currentUserId);
-    const q = search.trim().toLowerCase();
-    return q ? filtered.filter((a) => (a.name ?? '').toLowerCase().includes(q)) : filtered;
-  }, [ads, filters, currentUserId, search]);
+  // Rendered rows = the sidebar filters (mirrors Meta's applyFilters). The
+  // free-text search box was removed; the Filters sidebar is the one place that
+  // narrows the list, so there is no second, competing filter to reason about.
+  const visibleAds = useMemo(
+    () => applyFilters(ads, filters, currentUserId),
+    [ads, filters, currentUserId],
+  );
   // Period list (Google-scoped) for the "copy from another month" modal.
   const { data: periodsData } = useSWR<{ periods: PeriodSummary[] }>(
     accountKey
@@ -256,6 +203,10 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             baseCarryover: data.baseCarryover ?? null,
             addedCarryover: data.addedCarryover ?? null,
             priorOverUnder: data.priorOverUnder ?? null,
+            // Google allocator settings (spec §3/§9) — the card's unit and the
+            // per-label intended budgets.
+            allocationMode: data.allocationMode ?? 'pct',
+            eventBudgets: data.eventBudgets ?? {},
             ads,
             siblingsByName: data.siblingsByName,
           }
@@ -393,32 +344,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   // One-ad mutation → optimistic full-replace persist (autosave).
   const updateAd = (next: PacerAd) =>
     persist(ads.map((a) => (a.id === next.id ? next : a)));
-  // Cross-month accounting persists onto the row itself (fullRunAppliedToMonth /
-  // lifetimeMonthSplit), so the standard full-replace PUT saves it.
-  const resolveCrossMonth = (
-    ad: PacerAd,
-    action: 'apply_full_run' | 'split' | 'clear' | 'link',
-    splitMap?: Record<string, number>,
-    linkedPrevAdId?: string,
-  ) => {
-    if (action === 'apply_full_run')
-      updateAd({ ...ad, fullRunAppliedToMonth: ad.period, lifetimeMonthSplit: null, linkedPrevAdId: null });
-    else if (action === 'split')
-      updateAd({
-        ...ad,
-        fullRunAppliedToMonth: null,
-        lifetimeMonthSplit: JSON.stringify(splitMap ?? {}),
-      });
-    else if (action === 'link')
-      updateAd({
-        ...ad,
-        fullRunAppliedToMonth: null,
-        lifetimeMonthSplit: ad.lifetimeMonthSplit ?? '{}',
-        linkedPrevAdId: linkedPrevAdId ?? null,
-      });
-    else updateAd({ ...ad, fullRunAppliedToMonth: null, lifetimeMonthSplit: null, linkedPrevAdId: null });
-  };
-
   // Activity log — the per-ad endpoints are keyed by accountKey + adId on the
   // shared MetaAdsPacerAd table, so Google rows reuse them. Refetch after each
   // change so the editor's live log updates.
@@ -463,29 +388,107 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     if (res.ok) mutate();
   };
 
-  // Push a row's daily budget to its linked Google campaign budget.
-  const pushDailyBudget = async (
-    adId: string,
-    value: string,
-  ): Promise<{ ok: boolean; text: string }> => {
-    if (!accountKey) return { ok: false, text: 'No account selected' };
+  // The pacing card's single write path: ad rows and/or its period-scoped
+  // settings, in ONE full-replace PUT. Deliberately not split into two calls —
+  // a mode switch changes both at once, and two PUTs in the same tick race, with
+  // the one carrying the pre-switch rows overwriting the other (that wiped every
+  // allocation on the account). Callers that change only settings omit `ads` and
+  // this sends the current set unchanged.
+  const persistCard = async (payload: {
+    ads?: PacerAd[];
+    allocationMode?: 'pct' | 'amt';
+    eventBudgets?: Record<string, number>;
+  }) => {
+    if (!accountKey || !data) return;
+    const nextAds = payload.ads ?? ads;
+    const settings = {
+      ...(payload.allocationMode !== undefined ? { allocationMode: payload.allocationMode } : {}),
+      ...(payload.eventBudgets !== undefined ? { eventBudgets: payload.eventBudgets } : {}),
+    };
+    // Reflect optimistically so the table doesn't flicker back through the old
+    // numbers while the save is in flight.
+    mutate({ ...data, ads: nextAds, ...settings }, { revalidate: false });
     try {
       const res = await fetch(
-        `/api/google-ads-pacer/${encodeURIComponent(accountKey)}/push-budget?period=${period}`,
+        `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            ads: nextAds.map((a) => ({ ...a, platform: 'google' })),
+            ...settings,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error();
+      mutate();
+    } catch {
+      toast.error('Could not save');
+      mutate();
+    }
+  };
+
+  // §8 apply the card's recommended dailies — ONE batched mutate for the account.
+  // The server recomputes the plan from stored allocations, so a stale tab can't
+  // push last hour's numbers.
+  const [pushingBudgets, setPushingBudgets] = useState(false);
+  const pushAllBudgets = async (adIds?: readonly string[]) => {
+    if (!accountKey || pushingBudgets) return;
+    setPushingBudgets(true);
+    try {
+      const res = await fetch(
+        `/api/google-ads-pacer/${encodeURIComponent(accountKey)}/push-budgets?period=${period}`,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ adId, dailyBudget: value }),
+          // Empty/absent = the whole drifted batch; a list = exactly these
+          // campaigns, drift gate off (§14).
+          body: JSON.stringify(adIds && adIds.length > 0 ? { adIds: [...adIds] } : {}),
         },
       );
-      const data = await readJsonSafe(res);
-      if (!res.ok) {
-        return { ok: false, text: (data?.error as string) || `Push failed (${res.status})` };
+      const body = await readJsonSafe(res);
+      if (!res.ok) throw new Error((body?.error as string) || `Push failed (${res.status})`);
+      const pushedCount = (body?.pushedCount as number) ?? 0;
+      const single = adIds != null && adIds.length === 1;
+      const skipped = (body?.skipped as unknown[] | undefined)?.length ?? 0;
+      // Name the held-back campaigns rather than reporting a bare count — "3
+      // skipped" with no reason is the kind of message people learn to ignore.
+      const heldBack = (
+        (body?.skipped as { name: string; reason: string }[] | undefined) ?? []
+      ).filter((s) => s.reason !== 'below_threshold');
+      if (pushedCount === 0) {
+        // A deliberate single apply that pushed nothing means it was structurally
+        // blocked, not merely within range — say which, rather than the batch's
+        // "already within range", which would be a lie for a below-threshold pick
+        // the server was told to honour.
+        const why = (body?.skipped as { name: string; reason: string }[] | undefined)?.[0];
+        toast.success(
+          single && why
+            ? `${why.name} could not be pushed (${why.reason.replace(/_/g, ' ')})`
+            : skipped > 0
+              ? 'Every campaign is already within range — nothing to push'
+              : 'Nothing to push',
+        );
+      } else if (single) {
+        const one = (body?.pushed as { name: string; from: number; to: number }[] | undefined)?.[0];
+        toast.success(
+          one
+            ? `${one.name}: daily budget set to $${one.to.toFixed(2)} in Google`
+            : 'Daily budget set in Google',
+        );
+      } else {
+        toast.success(
+          `Set ${pushedCount} daily budget${pushedCount === 1 ? '' : 's'} in Google` +
+            (heldBack.length > 0
+              ? ` · skipped ${heldBack.map((s) => s.name).join(', ')}`
+              : ''),
+        );
       }
       mutate();
-      return { ok: true, text: 'Pushed to Google' };
     } catch (e) {
-      return { ok: false, text: e instanceof Error ? e.message : 'Push failed' };
+      toast.error(e instanceof Error ? e.message : 'Push failed');
+    } finally {
+      setPushingBudgets(false);
     }
   };
 
@@ -582,9 +585,49 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     );
   }
 
+  // The plan toolbar: search, sync, and Add Plan. Defined once and placed by the
+  // active tab — the planner keeps it in its header row, the pacing card takes it
+  // as a prop so it sits with the table it acts on rather than above the whole card.
+  const planActions = (
+    <div className="flex items-center gap-2">
+      {connected && (
+        <Tooltip label="Sync actual spend from Google">
+          <button
+            type="button"
+            onClick={syncFromGoogle}
+            disabled={syncing || frozen}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Sync from Google"
+          >
+            <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+          </button>
+        </Tooltip>
+      )}
+      {!frozen && (
+        <AddPlanButton
+          onCreateNew={() => setBulkAddOpen(true)}
+          onOpenCopy={() => setShowCopyModal(true)}
+          onImport={connected ? () => setImportOpen(true) : undefined}
+          importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
+          importLabel="Import from Google"
+          importHint="Bring existing Google campaigns in as rows"
+          createLabel="Add campaign"
+          createHint="Name, budget and flight dates — one row per campaign"
+          hasOtherPeriods={otherPeriodsWithAds}
+        />
+      )}
+    </div>
+  );
+
   return (
     <PacerReadOnlyContext.Provider value={frozen}>
-    <div className="flex h-full flex-col pb-2">
+    {/* Height is NOT pinned to the viewport. `h-full` here made this a
+        fixed-height flex column, so the last child — the plan table — got
+        shrunk to whatever space was left (185px against 756px of rows) and
+        clipped, with nothing able to scroll it. Growing to content and letting
+        the app shell's own overflow-y-auto do the scrolling is what Meta's
+        planner does. */}
+    <div className="flex flex-col pb-2">
       <Header
         tab={tab}
         onTab={setTab}
@@ -606,12 +649,19 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       {/* Scope row — sub-account avatar + name + status battery, mirroring
           Meta. Keeps the tool name in the header and the account identity here. */}
       <div className="mb-6 flex items-center gap-3 min-w-0">
+        {/* No box, and the logo runs at its own aspect. A dealer wordmark is
+            wide; squeezing it into a 56px square with a 15% inset rendered it a
+            few pixels tall and unreadable. `auto` fixes the height and lets the
+            width follow, capped so a very wide mark can't push the name off. */}
         <AccountAvatar
           name={accountData?.dealer ?? accountKey}
           accountKey={accountKey}
           logos={accountData?.logos ?? undefined}
-          size={56}
-          className="flex-shrink-0 rounded-xl border border-[var(--border)] bg-[var(--muted)]"
+          size={52}
+          aspect="auto"
+          maxWidth={200}
+          logoInsetClassName="p-0"
+          className="flex-shrink-0"
         />
         <div className="flex flex-col gap-1.5 min-w-0">
           <span className="truncate text-2xl font-bold leading-tight text-[var(--foreground)]">
@@ -622,7 +672,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       </div>
 
       {!connected && (
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+        <div className="mb-5 mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
           <span>
             Google Ads isn&apos;t connected — you can still plan &amp; pace manually. Connect to
             auto-import campaigns and sync spend.
@@ -662,63 +712,16 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
-      {(tab === 'planner' || tab === 'pacing') && (
-      <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
-          Campaigns · {periodLabel(period)}{' '}
-          <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
-        </span>
-        <div className="flex items-center gap-2">
-          {/* Search ads (mirrors Meta) */}
-          <div className="relative">
-            <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search ads…"
-              aria-label="Search ads by name"
-              className="w-44 rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                aria-label="Clear search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-              >
-                <XMarkIcon className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          {connected && (
-            <button
-              type="button"
-              onClick={syncFromGoogle}
-              disabled={syncing || frozen}
-              title="Sync actual spend from Google"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
-              aria-label="Sync from Google"
-            >
-              <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            </button>
-          )}
-          {/* Add Plan dropdown (mirrors Meta): create from scratch, copy from a
-              prior month, or import from Google (import shown only when linked). */}
-          {!frozen && (
-            <AddPlanButton
-              onCreateNew={() => setBulkAddOpen(true)}
-              onOpenCopy={() => setShowCopyModal(true)}
-              onImport={connected ? () => setImportOpen(true) : undefined}
-              importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
-              importLabel="Import from Google"
-              importHint="Bring existing Google campaigns in as rows"
-              hasOtherPeriods={otherPeriodsWithAds}
-            />
-          )}
+      {/* Search / sync / add — rendered here for the planner, and handed to the
+          pacing card so it can sit directly above its own table. */}
+      {tab === 'planner' && (
+        <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+            Campaigns · {periodLabel(period)}{' '}
+            <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
+          </span>
+          {planActions}
         </div>
-      </div>
       )}
 
       {tab === 'reconcile' ? (
@@ -768,41 +771,28 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           {!frozen && ' Add one, or sync from Google.'}
         </div>
       ) : tab === 'pacing' ? (
-        // Pacing tab — pace-adjusted account header + the "averages, not caps"
-        // note, then stacked PacerRow cards (mirrors Meta's Spend Pacing).
+        // Pacing tab — the top-down allocator card (google-pacing-card spec).
+        // Replaces the per-campaign island-budget pacer: the account's payable is
+        // the source and every campaign's daily is derived from its share of it.
         <div className="mt-1">
-          <GooglePacingHeader ads={ads} timeZone={tz} period={period} />
-          <div className="mb-3 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-            <InformationCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--primary)]" />
-            <span>
-              Google daily budgets are averages, not caps. Actual daily spend can run up to 2× the
-              rate on a busy day, so single-day swings aren&apos;t overspend — the real cap is the
-              monthly ceiling (daily rate × 30.4).
-            </span>
-          </div>
-          {visibleAds.map((ad, i) => (
-            <PacerRow
-              key={ad.id}
-              ad={ad}
-              index={i}
+          {plan && (
+            <GooglePacingCard
+              accountKey={accountKey}
+              period={period}
+              plan={plan}
+              ads={ads}
+              visibleAds={visibleAds}
               timeZone={tz}
-              expanded={expandedIds.has(ad.id)}
-              onToggleExpanded={() => toggleExpanded(ad.id)}
-              onActualChange={(v) => updateAd({ ...ad, pacerActual: v })}
-              onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
-              onMuteToggle={() => updateAd({ ...ad, alertsMuted: !ad.alertsMuted })}
-              onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
-              onResolveCrossMonth={(action, splitMap, linkedPrevAdId) =>
-                resolveCrossMonth(ad, action, splitMap, linkedPrevAdId)
-              }
-              siblings={data?.siblingsByName?.[ad.name] ?? null}
-              synced={!!ad.googleCampaignId && !!ad.pacerSyncedAt}
-              linkPicker={<GoogleLinkBadge ad={ad} />}
-              syncInfo={<GoogleSyncInfo ad={ad} timeZone={tz} />}
-              pushLabel="Push to Google"
-              pushIcon={<GoogleAdsBrandIcon className="h-3.5 w-3.5" />}
+              frozen={frozen}
+              onPersist={persistCard}
+              onPushBudgets={pushAllBudgets}
+              pushing={pushingBudgets}
+              googleConnected={connected}
+              tableActions={planActions}
+              onSyncFromGoogle={syncFromGoogle}
+              syncing={syncing}
             />
-          ))}
+          )}
         </div>
       ) : (
         // Plan view — Meta-style table of AdSummaryRow.
@@ -945,96 +935,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       />
     </div>
     </PacerReadOnlyContext.Provider>
-  );
-}
-
-/**
- * §5 pace-adjusted account header for the Pacing tab. The headline percent is a
- * roll-up of per-campaign month-end PROJECTIONS over target — not raw
- * percent-spent (which reads misleadingly low mid-month) — so 100% = on track to
- * hit the number. Shows the served actual + target dollars (the receipts) and
- * days elapsed alongside, exactly like the Meta header.
- */
-function GooglePacingHeader({
-  ads,
-  timeZone,
-  period,
-}: {
-  ads: PacerAd[];
-  timeZone: string;
-  period: string;
-}) {
-  const roll = useMemo(() => {
-    const now = Date.now();
-    let target = 0;
-    let actual = 0;
-    let projected = 0;
-    let count = 0;
-    for (const ad of ads) {
-      if (ad.platform !== 'google') continue;
-      const card = buildGooglePacingCard(ad, now, timeZone);
-      if (card.target <= 0) continue;
-      target += card.target;
-      actual += card.actual;
-      projected += card.projected;
-      count += 1;
-    }
-    return { target, actual, projected, count };
-  }, [ads, timeZone]);
-
-  // Days elapsed / in month for the "day X/Y" caption (informational).
-  const [py, pm] = period.split('-').map(Number);
-  const daysInMonth = new Date(py, pm, 0).getDate();
-  const now = new Date();
-  const isCurrent = now.getFullYear() === py && now.getMonth() + 1 === pm;
-  const isPast = new Date(py, pm - 1, 1) < new Date(now.getFullYear(), now.getMonth(), 1);
-  const daysElapsed = isCurrent ? Math.min(now.getDate(), daysInMonth) : isPast ? daysInMonth : 0;
-
-  if (roll.count === 0 || roll.target <= 0) return null;
-
-  // Pace-adjusted: projected month-end ÷ target. 100% = on track.
-  const pacePct = Math.round((roll.projected / roll.target) * 100);
-  const barColor =
-    pacePct >= 95 && pacePct <= 110
-      ? SHARED_COLORS.success
-      : pacePct < 95
-        ? SHARED_COLORS.lifetime
-        : SHARED_COLORS.warn;
-
-  return (
-    <div className="mb-3 flex flex-wrap items-start justify-between gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-      <div className="flex items-end gap-6">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Target spend
-          </div>
-          <div className="mt-1 text-lg font-bold tabular-nums">{fmt(roll.target)}</div>
-        </div>
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Actual (served)
-          </div>
-          <div className="mt-1 text-lg font-bold tabular-nums" style={{ color: SHARED_COLORS.daily }}>
-            {fmt(roll.actual)}
-          </div>
-        </div>
-      </div>
-      <div className="text-right">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Projected pace
-        </div>
-        <div className="mt-1 text-lg font-bold tabular-nums">{pacePct}% of target</div>
-        <div className="text-[10px] text-[var(--muted-foreground)]">
-          day {daysElapsed}/{daysInMonth} · {roll.count} campaign{roll.count === 1 ? '' : 's'}
-        </div>
-        <div className="ml-auto mt-1.5 h-1 w-40 overflow-hidden rounded-full bg-[var(--muted)]">
-          <div
-            className="h-full rounded-full"
-            style={{ width: `${Math.min(100, pacePct)}%`, background: barColor }}
-          />
-        </div>
-      </div>
-    </div>
   );
 }
 

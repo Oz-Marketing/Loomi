@@ -14,7 +14,8 @@ import {
   normalizeEmailAddress,
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
-import { getMessagingSummaryForContacts } from '@/lib/contacts/queries';
+import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
+import { collectSegmentContactIds } from '@/lib/segments/resolve';
 import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import {
@@ -39,9 +40,12 @@ import {
   CRM_PUSH_PROVIDERS,
   EXECUTABLE_NODE_TYPES,
   FlowValidationError,
+  TASK_PRIORITIES,
+  UPDATABLE_CONTACT_FIELDS,
   validateFlowGraph,
   validateTriggersForPublish,
   collectConditionFieldKeys,
+  collectListIds,
   type FlowValidationIssue,
   type NodeType,
   type TriggerType,
@@ -720,6 +724,41 @@ export async function publishFlow(id: string): Promise<FlowSummary> {
         severity: 'error',
         fix: `Add the custom field "${key}" to this account (Settings → Custom Fields), or fix the step/trigger that references it.`,
       });
+    }
+  }
+
+  // 4) Every list referenced by an add_to_list / remove_from_list step
+  //    must belong to THIS account. Lists are per-sub-account rows, so a
+  //    template deployed to a second dealer still carries the first
+  //    dealer's list id — publishing that would either no-op forever or
+  //    (worse) look like it worked while writing nowhere.
+  const listIds = collectListIds(graphNodes);
+  if (listIds.length > 0) {
+    const lists = await prisma.contactList.findMany({
+      where: { id: { in: listIds } },
+      select: { id: true, name: true, accountKey: true },
+    });
+    const byId = new Map(lists.map((l) => [l.id, l]));
+    for (const node of graphNodes) {
+      if (node.type !== 'add_to_list' && node.type !== 'remove_from_list') continue;
+      const listId = String(node.config.listId || '').trim();
+      if (!listId) continue; // already reported by validateFlowGraph
+      const list = byId.get(listId);
+      if (!list) {
+        issues.push({
+          nodeId: node.id,
+          message: 'The selected contact list no longer exists.',
+          severity: 'error',
+          fix: 'Open the step and pick an existing list.',
+        });
+      } else if (list.accountKey !== flow.accountKey) {
+        issues.push({
+          nodeId: node.id,
+          message: `List "${list.name}" belongs to a different sub-account.`,
+          severity: 'error',
+          fix: 'Open the step and pick a list that belongs to this sub-account. Flows deployed from a template need their list re-picked per sub-account.',
+        });
+      }
     }
   }
 
@@ -1532,14 +1571,13 @@ async function resolveAudienceContactIds(
   });
   if (!definition.groups || definition.groups.length === 0) return [];
 
+  // Delegate to the shared segment resolver so a flow's audience trigger
+  // and the segment builder's preview are answered by exactly one piece
+  // of code — including its SQL fast path. This used to be a bespoke
+  // scan over raw Prisma rows, which is how messaging conditions came to
+  // mean different things here than in the UI.
   const fields = await getAccountFilterableFields(accountKey);
-  const matched: string[] = [];
-  await forEachContactBatch(accountKey, {}, (batch) => {
-    for (const c of evaluateFilter(batch as unknown as Contact[], definition, fields)) {
-      matched.push(c.id);
-    }
-  });
-  return matched;
+  return collectSegmentContactIds(accountKey, definition, fields);
 }
 
 /**
@@ -1725,7 +1763,7 @@ async function resolveDateReminderContactIds(
   const isCustom = def?.isCustom === true;
 
   const matched: string[] = [];
-  await forEachContactBatch(flow.accountKey, {}, (batch) => {
+  await forEachContactBatch(flow.accountKey, { select: CONTACT_SELECT }, (batch) => {
     for (const contact of batch) {
       const anchor = parseTriggerDate(readContactFieldValue(contact, field, isCustom));
       if (!anchor) continue;
@@ -1736,7 +1774,7 @@ async function resolveDateReminderContactIds(
       if (!dateMatches) continue;
       if (
         hasFilter &&
-        evaluateFilter([contact as unknown as Contact], filterDef!, fields).length === 0
+        evaluateFilter([serializeContact(contact as never)], filterDef!, fields).length === 0
       ) {
         continue;
       }
@@ -1924,6 +1962,25 @@ export async function processEnrollmentTick(enrollmentId: string): Promise<void>
     case 'add_tag':
     case 'remove_tag': {
       await executeTagNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
+    case 'add_to_list':
+    case 'remove_from_list': {
+      await executeListMembershipNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
+    case 'update_field': {
+      await executeUpdateFieldNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
+    case 'create_task': {
+      await executeCreateTaskNode(enrollment, node);
       const next = pickNextNode(node, edgesByFromId, null);
       await advanceEnrollment(enrollmentId, next, null);
       return;
@@ -2193,28 +2250,14 @@ async function evaluateConditionBranch(
 
   const contact = await prisma.contact.findUnique({
     where: { id: enrollment.contactId },
+    select: { ...CONTACT_SELECT, accountKey: true },
   });
   if (!contact) return 'else';
 
-  // Hydrate messaging fields (hasReceivedEmail/Sms/Message,
-  // hasOpenedEmail, lastMessageDate) that the rule evaluator may
-  // reference. These are materialised at read time — they aren't
-  // columns on Contact — so without this step those rules would
-  // always evaluate as undefined → falsy.
-  const summaries = await getMessagingSummaryForContacts(
-    contact.accountKey,
-    [contact.id],
-  );
-  const summary = summaries.get(contact.id);
-  const hydratedContact: Record<string, unknown> = {
-    ...contact,
-    hasReceivedMessage: summary?.hasReceivedMessage ?? false,
-    hasReceivedEmail: summary?.hasReceivedEmail ?? false,
-    hasReceivedSms: summary?.hasReceivedSms ?? false,
-    hasOpenedEmail: summary?.hasOpenedEmail ?? false,
-    hasClickedEmail: summary?.hasClickedEmail ?? false,
-    lastMessageDate: summary?.lastMessageDate ?? '',
-  };
+  // Serialize so the rule evaluator sees the same Contact shape the
+  // builder does — derived fullName, ISO dates, and the engagement
+  // rollups behind hasOpenedEmail / lastMessageDate.
+  const hydratedContact = serializeContact(contact);
 
   const fields = await getAccountFilterableFields(contact.accountKey);
 
@@ -2318,6 +2361,306 @@ async function executeTagNode(
 }
 
 // ─────────────────────────────────────────────────────
+// List-membership node execution — add_to_list / remove_from_list
+//
+// Writes ContactListMembership, the same table the Contacts → Lists UI
+// and the list-audience blast resolver read. Both directions are
+// idempotent (skipDuplicates on add, deleteMany on remove) so a retried
+// tick is harmless.
+//
+// The list is verified to belong to the *contact's* account before we
+// touch it. Publish already blocks cross-account list ids, but a
+// template re-synced onto an instance after publish could reintroduce
+// one, and a flow must never write into another dealer's list.
+// ─────────────────────────────────────────────────────
+async function executeListMembershipNode(
+  enrollment: { id: string; contactId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  const listId = String(node.config.listId || '').trim();
+  if (!listId) {
+    await recordStepSkip(enrollment.id, node.id, 'no list configured');
+    return;
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: { accountKey: true },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const list = await prisma.contactList.findUnique({
+    where: { id: listId },
+    select: { id: true, name: true, accountKey: true },
+  });
+  if (!list) {
+    await recordStepFailure(enrollment.id, node.id, `list ${listId} no longer exists`);
+    return;
+  }
+  if (list.accountKey !== contact.accountKey) {
+    await recordStepFailure(
+      enrollment.id,
+      node.id,
+      `list "${list.name}" belongs to a different sub-account`,
+    );
+    return;
+  }
+
+  if (node.type === 'add_to_list') {
+    // createMany + skipDuplicates rather than upsert: the composite PK
+    // means a re-run would otherwise throw P2002, and we don't want to
+    // bump `addedAt` on a contact who's already a member.
+    await prisma.contactListMembership.createMany({
+      data: [{ listId: list.id, contactId: enrollment.contactId }],
+      skipDuplicates: true,
+    });
+  } else {
+    await prisma.contactListMembership.deleteMany({
+      where: { listId: list.id, contactId: enrollment.contactId },
+    });
+  }
+
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId: enrollment.id,
+      nodeId: node.id,
+      status: 'updated',
+      metadata: stringifyConfig({ op: node.type, listId: list.id, list: list.name }),
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────
+// Update-field node execution
+//
+// Writes either a whitelisted Contact column or a key inside the
+// customFields JSON blob (`custom:<key>`). The value runs through
+// mergetags first so "{{vehicleMake}} owner" style templating works.
+//
+// Identity columns (email, phone) are NOT writable — see
+// UPDATABLE_CONTACT_FIELDS. They carry per-account unique constraints,
+// so a flow rewriting one could collide with an existing contact and
+// fail the whole enrollment.
+// ─────────────────────────────────────────────────────
+
+// Contact columns typed as DateTime — the value has to be coerced to a
+// Date before Prisma will accept it.
+const DATE_CONTACT_FIELDS = new Set<string>([
+  'lastServiceDate',
+  'nextServiceDate',
+  'leaseEndDate',
+  'warrantyEndDate',
+  'purchaseDate',
+  'dateOfBirth',
+  'dateAdded',
+]);
+
+async function executeUpdateFieldNode(
+  enrollment: { id: string; contactId: string; flowId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  const field = String(node.config.field || '').trim();
+  if (!field) {
+    await recordStepSkip(enrollment.id, node.id, 'no field configured');
+    return;
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: {
+      id: true,
+      accountKey: true,
+      email: true,
+      phone: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+      vehicleYear: true,
+      vehicleMake: true,
+      vehicleModel: true,
+      dateOfBirth: true,
+      customFields: true,
+    },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const value = applyMergetags(
+    String(node.config.value ?? ''),
+    mergetagCtx(enrollment, node, contact),
+  );
+
+  if (field.startsWith('custom:')) {
+    const key = field.slice('custom:'.length).trim();
+    if (!key) {
+      await recordStepFailure(enrollment.id, node.id, 'custom field key is empty');
+      return;
+    }
+    const blob =
+      contact.customFields && typeof contact.customFields === 'object'
+        ? { ...(contact.customFields as Record<string, unknown>) }
+        : {};
+    // An empty value clears the key outright rather than storing "" —
+    // keeps `has value` / `is empty` filters behaving predictably.
+    if (value === '') delete blob[key];
+    else blob[key] = value;
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { customFields: blob as Prisma.InputJsonValue },
+    });
+  } else {
+    if (!UPDATABLE_CONTACT_FIELDS.includes(field)) {
+      await recordStepFailure(
+        enrollment.id,
+        node.id,
+        `field "${field}" is not writable by a flow step`,
+      );
+      return;
+    }
+    let coerced: string | Date | null = value === '' ? null : value;
+    if (DATE_CONTACT_FIELDS.has(field) && value !== '') {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        await recordStepFailure(
+          enrollment.id,
+          node.id,
+          `"${value}" is not a valid date for ${field}`,
+        );
+        return;
+      }
+      coerced = parsed;
+    }
+    await prisma.contact.update({
+      where: { id: contact.id },
+      data: { [field]: coerced } as Prisma.ContactUpdateInput,
+    });
+  }
+
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId: enrollment.id,
+      nodeId: node.id,
+      status: 'updated',
+      metadata: stringifyConfig({ op: 'update_field', field, value }),
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────
+// Create-task node execution
+//
+// Files a row on the Projects board (the Task model) for the flow's
+// sub-account. Title + description run through mergetags so the task
+// reads "Follow up with Dana Ruiz" rather than "{{firstName}}".
+//
+// Idempotent per (enrollment, node): a retried tick would otherwise
+// file a duplicate task, and unlike a tag write there's no natural
+// dedupe key on Task. We check our own step log instead.
+// ─────────────────────────────────────────────────────
+async function executeCreateTaskNode(
+  enrollment: { id: string; contactId: string; flowId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  const existing = await prisma.loomiFlowEnrollmentStep.findFirst({
+    where: { enrollmentId: enrollment.id, nodeId: node.id, status: 'updated' },
+    select: { id: true },
+  });
+  if (existing) return;
+
+  const rawTitle = String(node.config.title || '').trim();
+  if (!rawTitle) {
+    await recordStepSkip(enrollment.id, node.id, 'no task title configured');
+    return;
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: {
+      id: true,
+      accountKey: true,
+      email: true,
+      phone: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+      vehicleYear: true,
+      vehicleMake: true,
+      vehicleModel: true,
+      dateOfBirth: true,
+      customFields: true,
+    },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const ctx = mergetagCtx(enrollment, node, contact);
+  const title = applyMergetags(rawTitle, ctx).slice(0, 300);
+  const description = applyMergetags(String(node.config.description || ''), ctx);
+
+  const priority = String(node.config.priority || 'medium').trim() || 'medium';
+  const dueInDaysRaw = Number(node.config.dueInDays);
+  const dueDate = Number.isFinite(dueInDaysRaw)
+    ? new Date(Date.now() + dueInDaysRaw * 86_400_000)
+    : null;
+
+  const assigneeUserId = String(node.config.assigneeUserId || '').trim() || null;
+  const teamKey = String(node.config.teamKey || '').trim() || null;
+
+  const flow = await prisma.loomiFlow.findUnique({
+    where: { id: enrollment.flowId },
+    select: { name: true },
+  });
+
+  const task = await prisma.task.create({
+    data: {
+      accountKey: contact.accountKey,
+      title,
+      description: description || null,
+      // Not `flow` — the kind describes the work the task asks a human
+      // to do, and that's a plain follow-up, not "build a flow".
+      kind: 'generic',
+      status: 'todo',
+      priority: TASK_PRIORITIES.includes(priority) ? priority : 'medium',
+      dueDate,
+      assigneeUserId,
+      teamKey,
+      // Task has no contactId column, so the contact travels in
+      // `details` — the same JSON bag the per-type intake fields use.
+      details: {
+        source: 'flow',
+        flowId: enrollment.flowId,
+        flowName: flow?.name ?? '',
+        nodeId: node.id,
+        enrollmentId: enrollment.id,
+        contactId: contact.id,
+        contactName: ctx.fullName || '',
+        contactEmail: contact.email ?? '',
+        contactPhone: contact.phone ?? '',
+      } as Prisma.InputJsonValue,
+      linkedAssetType: 'flow',
+      linkedAssetId: enrollment.flowId,
+    },
+    select: { id: true },
+  });
+
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId: enrollment.id,
+      nodeId: node.id,
+      status: 'updated',
+      metadata: stringifyConfig({ op: 'create_task', taskId: task.id, title }),
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────
 // Email node execution (reuses send infrastructure)
 // ─────────────────────────────────────────────────────
 
@@ -2410,6 +2753,11 @@ async function executeEmailNode(
     if (!subject) subject = String(node.config.subject || 'Untitled');
   }
 
+  // Keep the un-personalized subject for the wrapper's display name.
+  // The rendered one below is per-contact ("Thanks, Dana"), which would
+  // make the wrapper's name flap with whoever was sent to last.
+  const templateSubject = subject;
+
   // Personalize: substitute {{firstName}} / {{vehicleMake}} / custom-field
   // mergetags in the subject + body. (Previously only the SMS path did
   // this, so flow emails shipped literal {{…}} tokens.)
@@ -2423,10 +2771,11 @@ async function executeEmailNode(
   // one row per flow email send, created on demand and reused.
   const wrapperCampaign = await getOrCreateFlowWrapperCampaign(
     enrollment.flowId,
-    node.id,
+    node,
     subject,
     html,
     contact.accountKey,
+    templateSubject,
   );
 
   // Upsert (not create): the wrapper campaign is reused per (flow,node),
@@ -2534,34 +2883,107 @@ async function recordStepFailure(
   });
 }
 
+/** Log a no-op step and keep going. Used when a step is unconfigured —
+ *  the contact shouldn't be stranded over a blank field. */
+async function recordStepSkip(
+  enrollmentId: string,
+  nodeId: string,
+  reason: string,
+): Promise<void> {
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId,
+      nodeId,
+      status: 'skipped',
+      metadata: stringifyConfig({ reason }),
+    },
+  });
+}
+
+/** The stable identity of a flow's wrapper campaign. Never change this
+ *  format — it's the unique key both wrapper tables upsert on, so a new
+ *  shape would orphan every existing wrapper and split its analytics. */
+export function flowWrapperKey(flowId: string, nodeId: string): string {
+  return `Flow:${flowId}/Node:${nodeId}`;
+}
+
+/**
+ * Human-readable display name for a wrapper campaign.
+ *
+ * The wrapper's `name` used to be the raw key ("Flow:cmsq…/Node:cmsq…"),
+ * which is what surfaced in the Blasts list — unreadable, and it gave no
+ * hint the row came from a flow. The key now lives only in
+ * `flowNodeKey`; `name` is free to be legible and is refreshed on every
+ * send so renaming a flow or retitling a step propagates.
+ */
+export function flowWrapperDisplayName(
+  flowName: string,
+  stepLabel: string,
+): string {
+  const flow = flowName.trim() || 'Untitled flow';
+  const step = stepLabel.trim();
+  return step ? `${flow} · ${step}` : flow;
+}
+
+/** Best label for a messaging step: the author's custom node title, then
+ *  the subject/message it sends, then a generic fallback. Kept short —
+ *  this lands in a table cell. */
+function stepLabelForNode(node: NodeForExecution, fallback: string): string {
+  const explicit = String(node.config.label || node.config.title || '').trim();
+  if (explicit) return explicit.slice(0, 60);
+  const subject = String(node.config.subject || node.config.message || '').trim();
+  if (subject) return subject.slice(0, 60);
+  return fallback.slice(0, 60);
+}
+
 // Persistent wrapper-campaign per (flow node) — one shell row that
 // every send for this node attaches recipients to. Lets the existing
 // SendGrid webhook handler and EmailEvent dedupe path keep working
 // without flow-specific branches.
 async function getOrCreateFlowWrapperCampaign(
   flowId: string,
-  nodeId: string,
+  node: NodeForExecution,
   subject: string,
   html: string,
   accountKey: string,
+  /** Subject BEFORE mergetag substitution — for the display name. A
+   *  template-driven step carries no inline `config.subject`, so without
+   *  this every such wrapper would read "· Email step". */
+  templateSubject?: string,
 ): Promise<{ id: string }> {
+  const key = flowWrapperKey(flowId, node.id);
+  const flow = await prisma.loomiFlow.findUnique({
+    where: { id: flowId },
+    select: { name: true },
+  });
+  const name = flowWrapperDisplayName(
+    flow?.name ?? '',
+    stepLabelForNode(node, (templateSubject || '').trim() || 'Email step'),
+  );
   // Atomic upsert on the unique flowNodeKey (ON CONFLICT) so two
   // concurrent first-sends for the same node converge on one wrapper
   // campaign instead of racing two duplicate shells (which would split
   // recipient rows + per-node analytics).
-  const name = `Flow:${flowId}/Node:${nodeId}`;
   return prisma.emailBlast.upsert({
-    where: { flowNodeKey: name },
+    where: { flowNodeKey: key },
     create: {
-      flowNodeKey: name,
+      flowNodeKey: key,
       name,
       subject: subject || 'Flow email',
       htmlContent: html || '',
-      status: 'processing',
+      // Terminal on purpose. A wrapper is a shell the flow engine sends
+      // THROUGH, not a campaign with a queue — 'processing' made it look
+      // like an in-flight blast (and made the blast sweep want to pick
+      // it up; processDueEmailBlasts now skips wrappers outright, and a
+      // terminal status is the second line of defence).
+      status: 'completed',
       sourceType: 'drag-drop',
       accountKeys: JSON.stringify([accountKey]),
     },
-    update: {},
+    // Refresh the display name (and the rendered content behind it) so a
+    // flow rename or a step retitle shows up wherever the wrapper is
+    // listed. flowNodeKey is deliberately untouched.
+    update: { name, subject: subject || 'Flow email', htmlContent: html || '' },
     select: { id: true },
   });
 }
@@ -2774,6 +3196,277 @@ export async function getFlowAnalytics(
     totalOpens,
     totalClicks,
   };
+}
+
+// ─────────────────────────────────────────────────────
+// Enrollment history (powers the flow overview's Enrollments tab)
+//
+// getFlowAnalytics answers "how is this flow doing"; this answers "who
+// went through it, and what happened to each of them" — the per-contact
+// view you need when a real flow is live and someone asks whether a
+// specific person got the email.
+// ─────────────────────────────────────────────────────
+
+/** Human label for a graph node. Prefers the author's own naming, then
+ *  whatever the step is configured to send, then the type. Shared by the
+ *  enrollment list so the timeline reads "Send Email · Thanks for
+ *  reaching out" rather than a cuid. */
+export function nodeDisplayLabel(
+  type: string,
+  config: Record<string, unknown>,
+): string {
+  const explicit = String(config.label || config.title || '').trim();
+  if (explicit) return explicit;
+  const subject = String(config.subject || config.message || '').trim();
+  if (subject) return subject.slice(0, 60);
+  return type
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+export interface FlowEnrollmentStepRow {
+  id: string;
+  nodeId: string;
+  nodeType: string;
+  nodeLabel: string;
+  status: string;
+  branch: string;
+  executedAt: string;
+  /** Flattened `metadata.reason` / `.error` — why a step skipped or
+   *  failed, shown inline in the timeline. Empty on clean steps. */
+  detail: string;
+}
+
+export interface FlowEnrollmentRow {
+  id: string;
+  contactId: string;
+  contactName: string;
+  contactEmail: string;
+  status: EnrollmentStatus;
+  enrolledAt: string;
+  completedAt: string;
+  nextRunAt: string;
+  currentNodeId: string;
+  currentNodeLabel: string;
+  /** Emails this contact was sent BY THIS FLOW, and what they did with
+   *  them. Opens/clicks are distinct-per-recipient, matching how
+   *  getFlowAnalytics counts them. */
+  sends: number;
+  opens: number;
+  clicks: number;
+  bounces: number;
+  /** Steps that errored for this contact — the "why did this person not
+   *  get it" signal. */
+  failures: number;
+  lastActivityAt: string;
+  steps: FlowEnrollmentStepRow[];
+}
+
+export interface FlowEnrollmentPage {
+  rows: FlowEnrollmentRow[];
+  /** Total matching the current status + search filter. */
+  total: number;
+  /** Unfiltered per-status totals, for the tab's filter chips. */
+  counts: { active: number; completed: number; exited: number; failed: number; all: number };
+}
+
+const ENROLLMENT_SEARCH_CONTACT_CAP = 500;
+
+export async function listFlowEnrollments(
+  flowId: string,
+  options?: {
+    status?: EnrollmentStatus;
+    /** Matches contact name or email, case-insensitive. */
+    search?: string;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<FlowEnrollmentPage> {
+  const limit = Math.max(1, Math.min(200, options?.limit ?? 50));
+  const offset = Math.max(0, options?.offset ?? 0);
+  const search = (options?.search ?? '').trim();
+
+  const flow = await prisma.loomiFlow.findUnique({
+    where: { id: flowId },
+    select: { accountKey: true },
+  });
+  if (!flow) {
+    return {
+      rows: [],
+      total: 0,
+      counts: { active: 0, completed: 0, exited: 0, failed: 0, all: 0 },
+    };
+  }
+
+  // Node labels come from the graph, not the step rows — one query for
+  // the whole flow beats a join per step.
+  const nodes = await prisma.loomiFlowNode.findMany({
+    where: { flowId },
+    select: { id: true, type: true, config: true },
+  });
+  const nodeMeta = new Map(
+    nodes.map((n) => {
+      const config = parseJson<Record<string, unknown>>(n.config, {});
+      return [n.id, { type: n.type, label: nodeDisplayLabel(n.type, config) }];
+    }),
+  );
+
+  // Unfiltered status tallies drive the filter chips, so they're
+  // computed before the search/status narrowing below.
+  const grouped = await prisma.loomiFlowEnrollment.groupBy({
+    by: ['status'],
+    where: { flowId },
+    _count: { _all: true },
+  });
+  const statusCounts: Record<string, number> = {};
+  for (const g of grouped) statusCounts[g.status] = g._count._all;
+  const counts = {
+    active: statusCounts.active ?? 0,
+    completed: statusCounts.completed ?? 0,
+    exited: statusCounts.exited ?? 0,
+    failed: statusCounts.failed ?? 0,
+    all: Object.values(statusCounts).reduce((sum, n) => sum + n, 0),
+  };
+
+  // Search resolves to contact ids first. Enrollment rows carry no
+  // contact columns, so there's nothing to match on directly.
+  let contactIdFilter: string[] | null = null;
+  if (search) {
+    const matches = await prisma.contact.findMany({
+      where: {
+        accountKey: flow.accountKey ?? undefined,
+        OR: [
+          { email: { contains: search, mode: 'insensitive' } },
+          { fullName: { contains: search, mode: 'insensitive' } },
+          { firstName: { contains: search, mode: 'insensitive' } },
+          { lastName: { contains: search, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+      take: ENROLLMENT_SEARCH_CONTACT_CAP,
+    });
+    contactIdFilter = matches.map((c) => c.id);
+    // No contacts matched → no enrollments can match either. Short-
+    // circuit rather than issuing a `contactId in []` query.
+    if (contactIdFilter.length === 0) {
+      return { rows: [], total: 0, counts };
+    }
+  }
+
+  const where: Prisma.LoomiFlowEnrollmentWhereInput = {
+    flowId,
+    ...(options?.status ? { status: options.status } : {}),
+    ...(contactIdFilter ? { contactId: { in: contactIdFilter } } : {}),
+  };
+
+  const [total, enrollments] = await Promise.all([
+    prisma.loomiFlowEnrollment.count({ where }),
+    prisma.loomiFlowEnrollment.findMany({
+      where,
+      orderBy: { enrolledAt: 'desc' },
+      skip: offset,
+      take: limit,
+      include: {
+        // Ascending so the timeline reads top-to-bottom in the order the
+        // contact actually walked the graph.
+        steps: { orderBy: { executedAt: 'asc' } },
+      },
+    }),
+  ]);
+
+  if (enrollments.length === 0) return { rows: [], total, counts };
+
+  // Hydrate contact identity + engagement for just this page.
+  const contacts = await prisma.contact.findMany({
+    where: { id: { in: enrollments.map((e) => e.contactId) } },
+    select: { id: true, email: true, firstName: true, lastName: true, fullName: true },
+  });
+  const contactById = new Map(contacts.map((c) => [c.id, c]));
+
+  // recipientId → enrollment, so a single events query fans back out to
+  // the right rows. Distinct on (recipientId, eventType) for the same
+  // reason getFlowAnalytics does it: a recipient row is reused across
+  // re-entry cycles, so raw event volume would overcount.
+  const recipientToEnrollment = new Map<string, string>();
+  for (const e of enrollments) {
+    for (const s of e.steps) {
+      if (s.emailRecipientId) recipientToEnrollment.set(s.emailRecipientId, e.id);
+    }
+  }
+  const engagement = new Map<string, { opens: number; clicks: number; bounces: number }>();
+  if (recipientToEnrollment.size > 0) {
+    const events = await prisma.emailEvent.findMany({
+      where: {
+        recipientId: { in: [...recipientToEnrollment.keys()] },
+        eventType: { in: ['open', 'click', 'bounce'] },
+      },
+      select: { recipientId: true, eventType: true },
+      distinct: ['recipientId', 'eventType'],
+    });
+    for (const ev of events) {
+      const enrollmentId = ev.recipientId
+        ? recipientToEnrollment.get(ev.recipientId)
+        : undefined;
+      if (!enrollmentId) continue;
+      const bucket =
+        engagement.get(enrollmentId) ?? { opens: 0, clicks: 0, bounces: 0 };
+      if (ev.eventType === 'open') bucket.opens += 1;
+      else if (ev.eventType === 'click') bucket.clicks += 1;
+      else bucket.bounces += 1;
+      engagement.set(enrollmentId, bucket);
+    }
+  }
+
+  const rows: FlowEnrollmentRow[] = enrollments.map((e) => {
+    const contact = contactById.get(e.contactId);
+    const name =
+      contact?.fullName?.trim() ||
+      `${contact?.firstName ?? ''} ${contact?.lastName ?? ''}`.trim();
+    const engaged = engagement.get(e.id) ?? { opens: 0, clicks: 0, bounces: 0 };
+    const steps: FlowEnrollmentStepRow[] = e.steps.map((s) => {
+      const meta = parseJson<{ reason?: string; error?: string }>(s.metadata, {});
+      const node = nodeMeta.get(s.nodeId);
+      return {
+        id: s.id,
+        nodeId: s.nodeId,
+        nodeType: node?.type ?? 'unknown',
+        // A step can outlive the node it ran on (the graph was edited
+        // after the contact passed through). Say so rather than showing
+        // a bare cuid.
+        nodeLabel: node?.label ?? 'Deleted step',
+        status: s.status,
+        branch: s.branch ?? '',
+        executedAt: s.executedAt.toISOString(),
+        detail: meta.reason || meta.error || '',
+      };
+    });
+    const current = e.currentNodeId ? nodeMeta.get(e.currentNodeId) : undefined;
+    const lastStep = steps.length > 0 ? steps[steps.length - 1] : null;
+    return {
+      id: e.id,
+      contactId: e.contactId,
+      // A contact hard-deleted after enrolling leaves the enrollment
+      // behind (no FK), so fall back rather than rendering blanks.
+      contactName: name || (contact ? '' : 'Deleted contact'),
+      contactEmail: contact?.email ?? '',
+      status: e.status as EnrollmentStatus,
+      enrolledAt: e.enrolledAt.toISOString(),
+      completedAt: e.completedAt?.toISOString() ?? '',
+      nextRunAt: e.nextRunAt?.toISOString() ?? '',
+      currentNodeId: e.currentNodeId ?? '',
+      currentNodeLabel: current?.label ?? '',
+      sends: steps.filter((s) => s.status === 'sent').length,
+      opens: engaged.opens,
+      clicks: engaged.clicks,
+      bounces: engaged.bounces,
+      failures: steps.filter((s) => s.status === 'failed').length,
+      lastActivityAt: lastStep?.executedAt ?? e.enrolledAt.toISOString(),
+      steps,
+    };
+  });
+
+  return { rows, total, counts };
 }
 
 // ─────────────────────────────────────────────────────
@@ -2999,7 +3692,7 @@ async function executeSmsNode(
 
   const wrapperCampaign = await getOrCreateFlowWrapperSmsBlast(
     enrollment.flowId,
-    node.id,
+    node,
     body,
     contact.accountKey,
   );
@@ -3087,22 +3780,31 @@ async function executeSmsNode(
  *  surface already understands. */
 async function getOrCreateFlowWrapperSmsBlast(
   flowId: string,
-  nodeId: string,
+  node: NodeForExecution,
   message: string,
   accountKey: string,
 ): Promise<{ id: string }> {
   // Atomic upsert on the unique flowNodeKey — see the email wrapper.
-  const name = `Flow:${flowId}/Node:${nodeId}`;
+  const key = flowWrapperKey(flowId, node.id);
+  const flow = await prisma.loomiFlow.findUnique({
+    where: { id: flowId },
+    select: { name: true },
+  });
+  const name = flowWrapperDisplayName(
+    flow?.name ?? '',
+    stepLabelForNode(node, 'SMS step'),
+  );
   return prisma.smsBlast.upsert({
-    where: { flowNodeKey: name },
+    where: { flowNodeKey: key },
     create: {
-      flowNodeKey: name,
+      flowNodeKey: key,
       name,
       message: message || 'Flow SMS',
-      status: 'processing',
+      // Terminal on purpose — see the email wrapper.
+      status: 'completed',
       accountKeys: JSON.stringify([accountKey]),
     },
-    update: {},
+    update: { name, message: message || 'Flow SMS' },
     select: { id: true },
   });
 }

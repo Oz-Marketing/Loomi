@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
@@ -34,11 +34,15 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { FlowIcon } from '@/components/icon-map';
 import { FlowDiagram, type FlowNode } from '@/components/flows/flow-diagram';
 import { DeployFlowModal } from '@/components/flows/deploy-flow-modal';
+import { FlowEnrollmentsTab } from '@/components/flows/flow-enrollments-tab';
+import { FlowSettingsForm } from '@/components/flows/flow-settings-form';
+import type { FlowSettings } from '@/components/flows/builder/types';
 import { AccountAvatar } from '@/components/account-avatar';
 
-type DetailTab = 'overview' | 'settings';
+type DetailTab = 'overview' | 'enrollments' | 'settings';
 const TABS: { key: DetailTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Squares2X2Icon },
+  { key: 'enrollments', label: 'Enrollments', icon: UsersIcon },
   { key: 'settings', label: 'Settings', icon: Cog6ToothIcon },
 ];
 
@@ -93,6 +97,10 @@ interface FlowDetailApi {
   edges: FlowGraphEdgeApi[];
   parentTemplate: FlowParentTemplateApi | null;
   instances: FlowInstanceRefApi[];
+  /** Worker defaults (re-entry, quiet hours, goal, max duration, DND).
+   *  Always present — the service normalises missing values to
+   *  DEFAULT_FLOW_SETTINGS on read. */
+  settings: FlowSettings;
 }
 
 interface FlowAnalyticsApi {
@@ -198,6 +206,118 @@ function PublishSwitch({
   );
 }
 
+/**
+ * Header title that turns into a text input when clicked.
+ *
+ * Sizing is the fiddly part: the input has to occupy exactly the same
+ * box as the <h2> or the badges beside it jump on every edit. An
+ * invisible sizer span mirrors the value at the same type scale and the
+ * input is absolutely positioned over it, so the header width tracks
+ * the text as you type.
+ *
+ * Enter or blur commits; Escape reverts. A rejected rename (duplicate
+ * name) keeps you in the editor with the text intact rather than
+ * silently discarding what you typed.
+ */
+function EditableFlowName({
+  name,
+  canEdit,
+  onRename,
+}: {
+  name: string;
+  canEdit: boolean;
+  onRename: (next: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Guards the blur handler: Escape blurs the input, and without this
+  // the resulting blur would commit the very edit Escape just cancelled.
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!editing) setValue(name);
+  }, [name, editing]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  async function commit() {
+    if (saving) return;
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      return;
+    }
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === name) {
+      setValue(name);
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    const ok = await onRename(trimmed);
+    setSaving(false);
+    if (ok) setEditing(false);
+    else inputRef.current?.focus();
+  }
+
+  if (!canEdit) {
+    return <h2 className="text-2xl font-bold truncate">{name || 'Untitled flow'}</h2>;
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        title="Click to rename"
+        className="group inline-flex items-center gap-1.5 min-w-0 -mx-1 px-1 rounded-md hover:bg-[var(--muted)]/60 transition-colors"
+      >
+        <h2 className="text-2xl font-bold truncate text-left">
+          {name || 'Untitled flow'}
+        </h2>
+        <PencilIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+      </button>
+    );
+  }
+
+  return (
+    <span className="relative inline-block max-w-full align-middle">
+      {/* Invisible sizer — keeps the input exactly as wide as its text
+          so the status badges beside it don't shift while typing. */}
+      <span
+        aria-hidden
+        className="invisible whitespace-pre text-2xl font-bold px-1"
+      >
+        {value || 'Untitled flow'}
+      </span>
+      <input
+        ref={inputRef}
+        autoFocus
+        value={value}
+        disabled={saving}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelledRef.current = true;
+            setValue(name);
+            setEditing(false);
+          }
+        }}
+        aria-label="Flow name"
+        className="absolute inset-0 w-full text-2xl font-bold bg-transparent border-b border-[var(--primary)] px-1 focus:outline-none disabled:opacity-60"
+      />
+    </span>
+  );
+}
+
 function StatCard({
   icon: Icon,
   value,
@@ -228,8 +348,15 @@ function StatCard({
 function FlowOverview({ flowId }: { flowId: string }) {
   const subHref = useSubaccountHref();
   const router = useRouter();
-  const { isAdmin, accounts } = useAccount();
-  const { confirm, prompt } = useLoomiDialog();
+  // `isAdmin` here is the account SWITCHER's mode ("All accounts"), not a
+  // role — it gates the cross-account affordances (deploy, per-instance
+  // resync). Whether you may edit THIS flow is a role question, so the
+  // Settings tab keys off canManage instead; otherwise the tab vanished
+  // the moment you scoped into the sub-account that owns the flow, which
+  // is exactly when you'd want it.
+  const { isAdmin, accounts, userRole } = useAccount();
+  const canManage = userRole !== 'client';
+  const { confirm } = useLoomiDialog();
   const [deployOpen, setDeployOpen] = useState(false);
   const [resyncing, setResyncing] = useState(false);
   // Overview/Settings tab switcher. Rename + archive + delete used
@@ -388,18 +515,14 @@ function FlowOverview({ flowId }: { flowId: string }) {
     }
   }
 
-  async function handleRename() {
-    if (!flow) return;
-    const next = await prompt({
-      title: 'Rename flow',
-      message: 'Pick a new name for this flow.',
-      defaultValue: flow.name || '',
-      confirmLabel: 'Rename',
-      required: true,
-    });
-    if (next === null) return;
+  // Rename now happens inline on the header title (click it to edit)
+  // rather than through a dialog buried in the Settings tab. Returns
+  // false so the editor can restore the old name and keep focus when
+  // the server rejects (duplicate name, permissions).
+  async function handleRename(next: string): Promise<boolean> {
+    if (!flow) return false;
     const trimmed = next.trim();
-    if (!trimmed || trimmed === flow.name) return;
+    if (!trimmed || trimmed === flow.name) return true;
     const res = await fetch(`/api/flows/${flow.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -408,10 +531,11 @@ function FlowOverview({ flowId }: { flowId: string }) {
     if (!res.ok) {
       const payload = await res.json().catch(() => ({}));
       toast.error(payload.error || 'Rename failed');
-      return;
+      return false;
     }
     toast.success('Flow renamed.');
     await mutate();
+    return true;
   }
 
   // Header-menu destructive actions. After success, navigate back to
@@ -481,7 +605,11 @@ function FlowOverview({ flowId }: { flowId: string }) {
             <FlowIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-2xl font-bold truncate">{flow.name || 'Untitled flow'}</h2>
+                <EditableFlowName
+                  name={flow.name}
+                  canEdit={canManage}
+                  onRename={handleRename}
+                />
                 <span
                   className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusMeta.badge}`}
                 >
@@ -549,9 +677,11 @@ function FlowOverview({ flowId }: { flowId: string }) {
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.key;
-            // Settings tab is admin-only — sub-account users see the
-            // overview but can't archive/delete flows.
-            if (tab.key === 'settings' && !isAdmin) return null;
+            // Client users are read-only over flows — they see the
+            // overview + who's enrolled, but can't change settings or
+            // archive/delete. Everyone else gets the tab regardless of
+            // which account the switcher is scoped to.
+            if (tab.key === 'settings' && !canManage) return null;
             return (
               <button
                 key={tab.key}
@@ -591,10 +721,29 @@ function FlowOverview({ flowId }: { flowId: string }) {
         />
       )}
 
-      {activeTab === 'settings' ? (
+      {activeTab === 'enrollments' ? (
+        isTemplate ? (
+          // A template has no enrollments of its own — they live on the
+          // instances it was deployed to. Point there instead of showing
+          // a permanently-empty table.
+          <div className="glass-card rounded-xl px-4 py-12 text-center">
+            <UsersIcon className="w-7 h-7 text-[var(--muted-foreground)] mx-auto mb-2" />
+            <p className="text-sm text-[var(--foreground)]">
+              Templates don&rsquo;t enrol contacts
+            </p>
+            <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              Open one of the deployments listed on the Overview tab to see who
+              went through that sub-account&rsquo;s copy.
+            </p>
+          </div>
+        ) : (
+          <FlowEnrollmentsTab flowId={flow.id} />
+        )
+      ) : activeTab === 'settings' ? (
         <FlowSettingsTab
-          flowName={flow.name || 'Untitled flow'}
-          onRename={handleRename}
+          flowId={flow.id}
+          settings={flow.settings}
+          onSettingsSaved={() => void mutate()}
           onArchive={handleArchive}
           onDelete={handleDelete}
         />
@@ -1050,44 +1199,38 @@ function FlowOverview({ flowId }: { flowId: string }) {
 }
 
 /**
- * Settings tab body — admin-only destructive actions for the flow.
- * Mirrors the LP detail page's "Settings" tab shape with a danger-zone
- * card per action. Heavier-weight than a one-line button row, but
- * makes the consequences obvious (each action gets a description).
+ * Settings tab body.
+ *
+ * Two groups: the worker-facing flow settings (re-entry, quiet hours,
+ * goal, max duration, DND) — which used to be reachable only through the
+ * cog inside the builder canvas — followed by the lifecycle actions.
+ * Danger-zone card per destructive action so the consequences are
+ * spelled out rather than hidden behind a confirm dialog.
+ *
+ * Renaming deliberately isn't here: the header title is click-to-edit.
  */
 function FlowSettingsTab({
-  flowName,
-  onRename,
+  flowId,
+  settings,
+  onSettingsSaved,
   onArchive,
   onDelete,
 }: {
-  flowName: string;
-  onRename: () => void | Promise<void>;
+  flowId: string;
+  settings: FlowSettings;
+  onSettingsSaved: () => void;
   onArchive: () => void | Promise<void>;
   onDelete: () => void | Promise<void>;
 }) {
   return (
-    <div className="space-y-4 max-w-2xl">
-      <div className="glass-card rounded-2xl p-5">
-        <div className="flex items-start gap-2 mb-3">
-          <PencilIcon className="mt-0.5 w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
-          <div>
-            <h3 className="text-sm font-semibold leading-tight">Rename</h3>
-            <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Change the flow&rsquo;s display name. The flow id stays the same — links
-              and deployed instances aren&rsquo;t affected.
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => void onRename()}
-          className="inline-flex items-center gap-1.5 px-3 h-9 text-sm rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
-        >
-          <PencilIcon className="w-4 h-4" />
-          Rename &ldquo;{flowName}&rdquo;
-        </button>
-      </div>
+    <div className="space-y-4 max-w-3xl">
+      <FlowSettingsForm
+        flowId={flowId}
+        initial={settings}
+        onSaved={onSettingsSaved}
+      />
+
+      {/* No Rename card — the header title is click-to-edit. */}
 
       {/* Archive — soft delete. Recoverable for 30 days. */}
       <section className="rounded-2xl p-5 border border-amber-500/30 bg-amber-500/5">

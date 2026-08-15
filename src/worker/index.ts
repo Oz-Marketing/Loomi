@@ -39,7 +39,9 @@ import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
 import { generateAllAccounts } from '@/lib/ad-generator/automation/generate-ads';
 import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
+import { sweepMediaExpiration } from '@/lib/services/media-expiration';
 import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
+import { runDueAudienceSyncs } from '@/lib/segments/sync/run';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
@@ -74,6 +76,15 @@ const ADGEN_EXPIRE_QUEUE = 'loomi.adgen.expire';
 // only detects that a manufacturer reissued a document and tells someone. Runs
 // well clear of the generate chain because nothing downstream depends on it.
 const ADGEN_GUIDELINES_QUEUE = 'loomi.adgen.guidelines';
+// Media asset rights: retire assets past their licence/effective date and warn
+// ahead of the ones approaching it. Independent of the ad chain — it governs the
+// source material, not the ads built from it — so it runs on its own slot.
+const MEDIA_RIGHTS_QUEUE = 'loomi.media.rights-sweep';
+// Audience sync: push saved segments to ad platforms (Google Customer
+// Match et al). Runs after the overnight CRM ingest so a day's new and
+// updated contacts are reflected, and well clear of the ad-generation
+// chain, which it has nothing to do with.
+const AUDIENCE_SYNC_QUEUE = 'loomi.audience-sync';
 
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
@@ -229,6 +240,41 @@ async function runAdgenExpire(): Promise<void> {
   }
 }
 
+async function runAudienceSync(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const { processed, failed } = await runDueAudienceSyncs();
+    if (processed > 0) {
+      console.log(
+        `[worker] audience sync: ${processed} due, ${failed} failed in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] audience sync failed', err);
+  }
+}
+
+async function runMediaRightsSweep(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const r = await sweepMediaExpiration();
+    if (r.expired.length || r.warned.length) {
+      console.log(
+        `[worker] media rights: ${r.expired.length} asset(s) EXPIRED, ` +
+          `${r.warned.length} warned, ${r.scanned} scanned in ${Date.now() - startedAt}ms`,
+      );
+    }
+    // A sweep that couldn't record itself is the one case worth logging even
+    // though nothing happened: the MediaSweepRun row is how anyone confirms this
+    // job is still alive, so its absence has to be visible somewhere.
+    if (!r.runId) {
+      console.warn('[worker] media rights: sweep ran but no MediaSweepRun row was written');
+    }
+  } catch (err) {
+    console.error('[worker] sweepMediaExpiration failed', err);
+  }
+}
+
 async function runAdgenGuidelines(): Promise<void> {
   const startedAt = Date.now();
   try {
@@ -290,6 +336,22 @@ async function main(): Promise<void> {
   await boss.createQueue(ADGEN_EXPIRE_QUEUE);
   await boss.work(ADGEN_EXPIRE_QUEUE, async () => {
     await runAdgenExpire();
+  });
+
+  // createQueue before work/schedule. pg-boss v10+ requires the queue to
+  // exist, and it throws from schedule() otherwise — inside main(), which
+  // takes the WHOLE worker down at boot, stopping every other scheduled
+  // job with it. This one was missing: it survives today only because the
+  // queue row already exists in the production database, so it would have
+  // failed on any fresh environment.
+  await boss.createQueue(AUDIENCE_SYNC_QUEUE);
+  await boss.work(AUDIENCE_SYNC_QUEUE, async () => {
+    await runAudienceSync();
+  });
+
+  await boss.createQueue(MEDIA_RIGHTS_QUEUE);
+  await boss.work(MEDIA_RIGHTS_QUEUE, async () => {
+    await runMediaRightsSweep();
   });
 
   await boss.createQueue(ADGEN_GUIDELINES_QUEUE);
@@ -363,6 +425,17 @@ async function main(): Promise<void> {
   // that matters.
   await boss.schedule(ADGEN_GUIDELINES_QUEUE, '0 7 * * *');
   console.log('[worker] scheduled', ADGEN_GUIDELINES_QUEUE, 'daily at 07:00 UTC');
+
+  // 07:30 UTC — clear of the ad chain. Nothing downstream depends on it, and a
+  // rights warning is a planning signal rather than something that has to land
+  // before the day's generation runs.
+  // 08:00 UTC — after the overnight contact sync has landed, so an
+  // audience reflects the day's CRM changes rather than yesterday's.
+  await boss.schedule(AUDIENCE_SYNC_QUEUE, '0 8 * * *');
+  console.log('[worker] scheduled', AUDIENCE_SYNC_QUEUE, 'daily at 08:00 UTC');
+
+  await boss.schedule(MEDIA_RIGHTS_QUEUE, '30 7 * * *');
+  console.log('[worker] scheduled', MEDIA_RIGHTS_QUEUE, 'daily at 07:30 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

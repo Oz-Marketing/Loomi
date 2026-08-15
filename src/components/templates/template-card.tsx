@@ -59,6 +59,9 @@ export interface TemplateCardProps {
   editable?: boolean;
   /** Extra badges (e.g. an ad's Scheduled/Expired badge). */
   badges?: ReactNode;
+  /** How much this template actually gets used. Omit on surfaces that don't
+   *  track it — the row simply doesn't render. */
+  usage?: TemplateCardUsage;
   actions?: TemplateCardAction[];
   onClick?: () => void;
   onCategoryChange?: (category: string | null) => void;
@@ -67,6 +70,61 @@ export interface TemplateCardProps {
   selectable?: boolean;
   selected?: boolean;
   onToggleSelect?: () => void;
+}
+
+/** Usage counts for the card's mini bar. See the ad templates usage endpoint. */
+export interface TemplateCardUsage {
+  /** Live ads built from this template. */
+  total: number;
+  /** Of `total`, how many the automation produced (the rest are hand-built). */
+  auto: number;
+  /** Ads made from it and later archived — shown only as a muted aside. */
+  archived?: number;
+}
+
+/**
+ * A one-line usage readout: "12 ads · 8 auto" over a two-tone bar.
+ *
+ * The bar encodes the manual/automated SPLIT, not the volume — volume is the
+ * number, and a bar scaled across the library would be meaningless on a card
+ * that doesn't know the library's maximum. The split is what tells a designer
+ * whether a template is theirs or the robot's.
+ */
+function UsageBar({ usage }: { usage: TemplateCardUsage }) {
+  const { total, auto } = usage;
+  const archived = usage.archived ?? 0;
+  if (total <= 0) {
+    return (
+      <span className="mt-1 block text-[11px] text-[var(--muted-foreground)]">
+        Not used yet{archived > 0 ? ` · ${archived} archived` : ''}
+      </span>
+    );
+  }
+  const manual = Math.max(0, total - auto);
+  const autoPct = Math.round((auto / total) * 100);
+  const label = auto > 0 && manual > 0
+    ? `${manual} built by hand, ${auto} by the automation`
+    : auto > 0
+      ? `All ${auto} produced by the automation`
+      : `All ${manual} built by hand`;
+  return (
+    <div className="mt-1.5" title={`${label}${archived > 0 ? ` · ${archived} archived` : ''}`}>
+      <div className="flex items-baseline justify-between gap-2 text-[11px]">
+        <span className="text-[var(--foreground)]">
+          {total} ad{total === 1 ? '' : 's'}
+        </span>
+        <span className="truncate text-[var(--muted-foreground)]">
+          {auto > 0 ? `${autoPct}% auto` : 'all manual'}
+        </span>
+      </div>
+      {/* Manual (brand) vs automated (muted) — the automation is the quieter of
+          the two because a person's choice is the interesting signal. */}
+      <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-[var(--muted)]" aria-hidden="true">
+        <span className="bg-[var(--primary)]" style={{ width: `${100 - autoPct}%` }} />
+        <span className="bg-[var(--primary)]/35" style={{ width: `${autoPct}%` }} />
+      </div>
+    </div>
+  );
 }
 
 function StatusBadge({ status }: { status: TemplateCardStatus }) {
@@ -96,6 +154,7 @@ export function TemplateCard({
   isClient = false,
   editable = false,
   badges,
+  usage,
   actions = [],
   onClick,
   onCategoryChange,
@@ -300,6 +359,9 @@ export function TemplateCard({
             <span className="truncate">{scope.label}</span>
           </span>
         )}
+
+        {/* Usage — how often this template actually gets picked up. */}
+        {usage && <UsageBar usage={usage} />}
 
         {/* Authorship: status badge + circle avatar + name (name/avatar hidden for clients), no timestamp */}
         {showAuthorLine && (

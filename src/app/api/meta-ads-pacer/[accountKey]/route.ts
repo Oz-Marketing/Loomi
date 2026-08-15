@@ -16,6 +16,8 @@ import {
   notifyAssignment,
   notifyApprovalChange,
 } from '@/lib/notifications/service';
+import { misplacedAdRows } from '@/lib/ad-pacer/plan-save';
+import { serializeEventBudgets } from '@/lib/ad-pacer/labels';
 import {
   type AuditInput,
   diffTrackedAdFields,
@@ -48,10 +50,22 @@ interface IncomingAd {
   internalApproval?: string;
   clientApproval?: string;
   allocation?: string | null;
+  // Google allocator (§3): percent-of-payable input, live only in percent mode.
+  // `allocation` stays the dollar target the rest of the tool reads.
+  allocationPercent?: string | null;
   pacerActual?: string | null;
   pacerDailyBudget?: string | null;
   pacerTodayDate?: string | null;
   pacerEndDate?: string | null;
+  // Google allocator (§4/§6): lock flag and the manual funding-window override.
+  pacerLocked?: boolean;
+  /** §12 Reserved — set from the pacing row. Manual only; nothing derives it. */
+  pacerReserved?: boolean;
+  googleFlightStartOverride?: string | null;
+  googleFlightEndOverride?: string | null;
+  // Labels (§9) — JSON array, cross-platform. Sent already serialized by the
+  // client (via ad-pacer/labels) so this route stores it verbatim.
+  pacerTags?: string | null;
   creativeLink?: string | null;
   clientName?: string | null;
   digitalDetails?: string | null;
@@ -76,6 +90,12 @@ interface IncomingAd {
 interface IncomingPeriodPayload {
   baseBudgetGoal?: string | null;
   addedBudgetGoal?: string | null;
+  // Google allocator (§3/§9), both period-scoped. Unlike the budget goals these
+  // are NOT owned by the BudgetLine ledger — the ledger decides how much money
+  // the month has, not how the desk splits it across campaigns — so they stay
+  // writable on a budget-managed month.
+  allocationMode?: 'pct' | 'amt' | null;
+  eventBudgets?: Record<string, number> | null;
   ads?: IncomingAd[];
 }
 
@@ -169,6 +189,45 @@ export async function PUT(
   const incomingAds: IncomingAd[] = Array.isArray(body.ads) ? body.ads : [];
   const incomingIds = incomingAds.map((ad) => ad.id).filter(Boolean) as string[];
 
+  // ── Wrong-scope write guard ──
+  // This PUT is a full replace for (plan, period, platform): rows of that scope
+  // missing from the payload are deleted, and every row in it gets `period`
+  // written to the target. So a payload carrying rows that live elsewhere is
+  // doubly destructive — it wipes THIS month and re-parents the other month's
+  // (or account's, or platform's) rows into it, emptying that side too. No
+  // legitimate flow moves an ad row between scopes (copy-from creates new rows),
+  // so this can only be a stale client. Fail loudly instead of shredding both.
+  if (incomingIds.length > 0) {
+    const owners = await prisma.metaAdsPacerAd.findMany({
+      where: { id: { in: incomingIds } },
+      select: { id: true, planId: true, period: true, platform: true },
+    });
+    const misplaced = misplacedAdRows(owners, {
+      planId: plan.id,
+      period,
+      platform: postPlatform,
+    });
+    if (misplaced.length > 0) {
+      const otherPeriods = [
+        ...new Set(
+          misplaced
+            .filter((row) => row.planId === plan.id && row.period !== period)
+            .map((row) => row.period),
+        ),
+      ].sort();
+      const origin = otherPeriods.length
+        ? otherPeriods.join(', ')
+        : 'another account or platform';
+      return NextResponse.json(
+        {
+          error: `This save carried ${misplaced.length} ad row(s) belonging to ${origin} — refusing to move them into ${period}. Reload the page and try again.`,
+          code: 'period_mismatch',
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   // Snapshot the current state of ALL ads in this period before the upsert so
   // we can (a) detect assignment/approval changes for notifications and (b)
   // diff tracked fields for the automatic audit log (Change 10), including
@@ -193,6 +252,13 @@ export async function PUT(
       flightStart: true,
       flightEnd: true,
       liveDate: true,
+      // Tracked by the audit diff (TRACKED_AD_FIELDS) — these must be selected
+      // or every save logs a phantom "undefined → false" lock change.
+      pacerLocked: true,
+      pacerReserved: true,
+      pacerTags: true,
+      googleFlightStartOverride: true,
+      googleFlightEndOverride: true,
     },
   });
   const existingById = new Map(existingAds.map((a) => [a.id, a]));
@@ -262,13 +328,28 @@ export async function PUT(
     for (const key of Object.keys(budgetData)) delete budgetData[key];
   }
 
+  // Google allocator settings ride the same period-budget row but are NOT the
+  // ledger's business, so they're collected after the budget-managed guard and
+  // land regardless of it. Google-only: a Meta save must never write them.
+  const allocatorData: Record<string, string | null> = {};
+  if (postPlatform === 'google') {
+    if ('allocationMode' in body) {
+      allocatorData.googleAllocationMode = body.allocationMode === 'amt' ? 'amt' : 'pct';
+    }
+    if ('eventBudgets' in body) {
+      allocatorData.googleEventBudgets = serializeEventBudgets(body.eventBudgets);
+    }
+  }
+
   await prisma.$transaction(async (tx) => {
-    // Period budget — upsert only when the caller manages budget goals.
-    if (Object.keys(budgetData).length > 0) {
+    // Period budget — upsert only when the caller sent goals or allocator
+    // settings. Merged into one write so a save never touches the row twice.
+    const periodData = { ...budgetData, ...allocatorData };
+    if (Object.keys(periodData).length > 0) {
       await tx.metaAdsPacerPeriodBudget.upsert({
         where: { planId_period: { planId: plan.id, period } },
-        create: { planId: plan.id, period, ...budgetData },
-        update: budgetData,
+        create: { planId: plan.id, period, ...periodData },
+        update: periodData,
       });
     }
 
@@ -313,10 +394,16 @@ export async function PUT(
         internalApproval: ad.internalApproval || 'Pending Approval',
         clientApproval: ad.clientApproval || 'Pending Approval',
         allocation: nullable(ad.allocation),
+        allocationPercent: nullable(ad.allocationPercent),
         pacerActual: nullable(ad.pacerActual),
         pacerDailyBudget: nullable(ad.pacerDailyBudget),
         pacerTodayDate: nullable(ad.pacerTodayDate),
         pacerEndDate: nullable(ad.pacerEndDate),
+        pacerLocked: ad.pacerLocked === true,
+        pacerReserved: ad.pacerReserved === true,
+        pacerTags: nullable(ad.pacerTags),
+        googleFlightStartOverride: nullable(ad.googleFlightStartOverride),
+        googleFlightEndOverride: nullable(ad.googleFlightEndOverride),
         creativeLink: nullable(ad.creativeLink),
         clientName: nullable(ad.clientName),
         digitalDetails: nullable(ad.digitalDetails),

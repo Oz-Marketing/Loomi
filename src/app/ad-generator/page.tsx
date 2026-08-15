@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
@@ -27,8 +27,11 @@ import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
-import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
+import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
+import { SizePicker } from '@/components/ad-generator/size-picker';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import {
   facetsForAd,
@@ -60,6 +63,12 @@ type Creative = {
   expiresAt?: string | null;
   /** Auto-generated only: why the generator held it as a draft. */
   reviewNotes?: string | null;
+  /** Whether this ad still follows its source template's design. */
+  templateSync?: 'synced' | 'detached';
+  /** Design hash of the template revision this ad's doc came from. */
+  templateDocHash?: string | null;
+  /** Set when a person edited this ad's own design. */
+  docEditedAt?: string | null;
   doc?: TemplateDoc | null;
   data: AdData;
 };
@@ -76,6 +85,11 @@ export default function AdGeneratorListPage() {
   const { confirm } = useLoomiDialog();
   const router = useRouter();
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
+  /** templateId → its CURRENT design, and that design's hash (see the fetch below). */
+  const [templateDocs, setTemplateDocs] = useState<Record<string, TemplateDoc>>({});
+  const [templateHashes, setTemplateHashes] = useState<Record<string, string>>({});
+  /** Ad id currently pulling its template's design, for the button's busy state. */
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [scratchOpen, setScratchOpen] = useState(false);
@@ -85,9 +99,16 @@ export default function AdGeneratorListPage() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [facetSel, setFacetSel] = useState<FacetSelection>({});
   const [offerWindow, setOfferWindow] = useState<OfferWindow>('all');
-  // Whether "Generate from OEM offers" is worth offering: automation has to be
-  // configured AND have a template mapped, or a run can only report zero.
-  const [automationReady, setAutomationReady] = useState(false);
+  // What's standing between this sub-account and a generate run. A run needs
+  // automation set up AND a template mapped, or it can only ever report zero —
+  // but the entry point stays visible either way and says which piece is missing.
+  // Hiding it outright sent people hunting for a menu item that wasn't there,
+  // including from the automation page's own "use New ad → Generate from OEM
+  // offers" empty state.
+  const [automationBlocker, setAutomationBlocker] = useState<'unconfigured' | 'no-template' | null>(
+    'unconfigured',
+  );
+  const automationReady = automationBlocker === null;
   const [generating, setGenerating] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
   const [candidates, setCandidates] = useState<GenerateCandidate[]>([]);
@@ -119,10 +140,23 @@ export default function AdGeneratorListPage() {
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
         if (cancelled) return;
-        setDbTemplates((d.templates ?? []).filter((t) => t.doc).map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc)));
+        const withDocs = (d.templates ?? []).filter((t) => t.doc);
+        setDbTemplates(withDocs.map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc)));
+        // Each template's CURRENT design, kept raw and by hash. The hash tells the
+        // list which ads are on an older design; the raw doc is what an ad's card
+        // must switch to after a sync, since the previews render from the ad's own
+        // doc rather than from a stored image.
+        setTemplateDocs(Object.fromEntries(withDocs.map((t) => [t.id, t.doc as TemplateDoc])));
+        setTemplateHashes(
+          Object.fromEntries(withDocs.map((t) => [t.id, designHash(t.doc as TemplateDoc)])),
+        );
       })
       .catch(() => {
-        if (!cancelled) setDbTemplates([]);
+        if (!cancelled) {
+          setDbTemplates([]);
+          setTemplateDocs({});
+          setTemplateHashes({});
+        }
       });
     return () => {
       cancelled = true;
@@ -173,7 +207,7 @@ export default function AdGeneratorListPage() {
   // admin-gated, and a 403 here should stay silent rather than toast.
   useEffect(() => {
     if (!accountKey || !isManager) {
-      setAutomationReady(false);
+      setAutomationBlocker('unconfigured');
       return;
     }
     let cancelled = false;
@@ -188,7 +222,9 @@ export default function AdGeneratorListPage() {
           } | null,
         ) => {
           if (cancelled) return;
-          setAutomationReady(!!d?.configured && !!d?.scope?.templateMap?.all);
+          setAutomationBlocker(
+            !d?.configured ? 'unconfigured' : !d.scope?.templateMap?.all ? 'no-template' : null,
+          );
           setMaxAdsPerRun(d?.scope?.maxAdsPerRun ?? 10);
           // Only vehicles that could actually produce an ad — on the lot with at
           // least one live offer. The dialog narrows further from there.
@@ -208,7 +244,7 @@ export default function AdGeneratorListPage() {
         },
       )
       .catch(() => {
-        if (!cancelled) setAutomationReady(false);
+        if (!cancelled) setAutomationBlocker('unconfigured');
       });
     return () => {
       cancelled = true;
@@ -420,12 +456,14 @@ export default function AdGeneratorListPage() {
   // From scratch: a blank ad (empty doc) at the chosen name + starting size(s),
   // opened straight in the builder's ad mode so the designer starts on an empty
   // canvas with no layers.
-  async function createBlank(name: string, sizes: CatalogSize[], vehicleMode: VehicleFieldsMode) {
+  async function createBlank(name: string, sizes: LibrarySize[], vehicleMode: VehicleFieldsMode) {
     if (!accountKey) {
       toast.error('Select an account first');
       return;
     }
-    const chosen = sizes.length ? sizes : [{ name: 'Square', width: 1080, height: 1080 } as CatalogSize];
+    const chosen: { name: string; width: number; height: number }[] = sizes.length
+      ? sizes
+      : [{ name: 'Square', width: 1080, height: 1080 }];
     setCreating(true);
     try {
       const trimmed = name.trim() || 'Untitled ad';
@@ -474,6 +512,69 @@ export default function AdGeneratorListPage() {
       toast.success('Deleted');
     } catch (err) {
       toast.error(`Couldn't delete: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Pull the source template's current design into one ad.
+   *
+   * The other half of the save-time push, and what makes declining it safe: an ad
+   * that shows "Template updated" can take the change later, on its own. `force`
+   * is the explicit reset of a customized ad, which discards its design, so it
+   * asks first.
+   */
+  async function syncFromTemplate(id: string, force: boolean) {
+    const ad = (creatives ?? []).find((x) => x.id === id);
+    if (force) {
+      const ok = await confirm({
+        title: 'Reset to template?',
+        message: `“${ad?.name ?? 'This ad'}” has its own design. Resetting replaces it with the template's current design and discards those changes. The offer values are kept.`,
+        confirmLabel: 'Reset to template',
+        cancelLabel: 'Keep its design',
+      });
+      if (!ok) return;
+    }
+    setSyncing(id);
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${id}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const { result } = (await res.json()) as {
+        result?: { outcome: string; detail?: string; demoted?: boolean };
+      };
+      if (result?.outcome === 'updated') {
+        // Reflect the new state without a refetch. `doc` MUST be carried across:
+        // each card renders its preview from the ad's own doc, so updating only the
+        // link fields left the badge correct and the picture stale until a reload.
+        setCreatives((c) =>
+          (c ?? []).map((x) =>
+            x.id === id
+              ? {
+                  ...x,
+                  doc: templateDocs[x.templateId] ?? x.doc,
+                  templateSync: 'synced',
+                  templateDocHash: templateHashes[x.templateId] ?? x.templateDocHash,
+                  docEditedAt: null,
+                  updatedAt: new Date().toISOString(),
+                }
+              : x,
+          ),
+        );
+        toast.success('Updated to the template design');
+      } else if (result?.outcome === 'blocked') {
+        toast.warning(
+          `Kept its current design: ${result.detail ?? 'the template update fails preflight for this ad.'}`,
+        );
+      } else {
+        toast.error(result?.detail ?? "That ad couldn't be updated");
+      }
+    } catch (err) {
+      toast.error(`Couldn't update: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSyncing(null);
     }
   }
 
@@ -600,29 +701,45 @@ export default function AdGeneratorListPage() {
                   </button>
                   {/* Generating from the OEM feed is a way of making ads, so it
                       belongs with the other two rather than on the automation
-                      dashboard. Hidden until automation is set up — without a
-                      template mapped it would only ever report "0 generated". */}
-                  {automationReady && (
-                    <>
-                      <div className="my-1 border-t border-[var(--border)]" />
-                      <button
-                        type="button"
-                        disabled={generating || !accountKey}
-                        onClick={() => {
-                          setNewOpen(false);
-                          setGenOpen(true);
-                        }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
-                      >
-                        <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
-                        <span>
-                          Generate from OEM offers
-                          <span className="block text-[11px] text-[var(--muted-foreground)]">
-                            Pick the models and offer types, then build drafts.
-                          </span>
+                      dashboard. A run needs automation set up with a template
+                      mapped, or it can only ever report "0 generated" — but the
+                      entry point stays put and routes to the missing setup instead
+                      of vanishing, which just looked like the feature was absent. */}
+                  <div className="my-1 border-t border-[var(--border)]" />
+                  {automationReady ? (
+                    <button
+                      type="button"
+                      disabled={generating || !accountKey}
+                      onClick={() => {
+                        setNewOpen(false);
+                        setGenOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
+                    >
+                      <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
+                      <span>
+                        Generate from OEM offers
+                        <span className="block text-[11px] text-[var(--muted-foreground)]">
+                          Pick the models and offer types, then build drafts.
                         </span>
-                      </button>
-                    </>
+                      </span>
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/ad-generator/automation${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`}
+                      onClick={() => setNewOpen(false)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      <BoltIcon className="w-4 h-4 flex-shrink-0" />
+                      <span>
+                        Generate from OEM offers
+                        <span className="block text-[11px] text-[var(--muted-foreground)]">
+                          {automationBlocker === 'no-template'
+                            ? 'Needs a template mapped — open automation settings.'
+                            : 'Set up ad automation for this sub-account first.'}
+                        </span>
+                      </span>
+                    </Link>
                   )}
                 </div>
               )}
@@ -815,6 +932,18 @@ export default function AdGeneratorListPage() {
                           Auto
                         </span>
                       )}
+                      {/* Customized = this ad owns its design and template edits
+                          skip it. Worth stating on the card, because it's the
+                          reason a template fix didn't show up here. */}
+                      {c.docEditedAt && (
+                        <span
+                          title={`Edited on ${new Date(c.docEditedAt).toLocaleDateString()} — this ad keeps its own design, so template updates skip it`}
+                          className="flex items-center gap-0.5 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]"
+                        >
+                          <PencilSquareIcon className="h-2.5 w-2.5" />
+                          Custom
+                        </span>
+                      )}
                       <span className="truncate">{template?.name ?? c.templateId}</span>
                     </div>
                     <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
@@ -826,6 +955,32 @@ export default function AdGeneratorListPage() {
                         <> · offer ends {new Date(c.expiresAt).toLocaleDateString()}</>
                       )}
                     </div>
+                    {/* The template has moved on since this ad was built. Offered
+                        rather than applied: a design change has to be someone's
+                        decision, and for a customized ad it costs them their edit. */}
+                    {isBehindTemplate(
+                      { doc: c.doc, templateDocHash: c.templateDocHash, templateSync: c.templateSync, autoGenerated: c.autoGenerated },
+                      templateHashes[c.templateId] ?? null,
+                    ) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void syncFromTemplate(c.id, !!c.docEditedAt);
+                        }}
+                        disabled={syncing === c.id}
+                        // Amber here too, so the "your ad is behind its template"
+                        // affordance is one colour everywhere it appears — and so it
+                        // stands out from a card that is otherwise all brand colour.
+                        className="mt-1.5 flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400"
+                      >
+                        <ArrowPathIcon className={`h-3 w-3 ${syncing === c.id ? 'animate-spin' : ''}`} />
+                        {syncing === c.id
+                          ? 'Updating…'
+                          : c.docEditedAt
+                            ? 'Template changed · reset to it'
+                            : 'Template updated · apply'}
+                      </button>
+                    )}
                   </div>
                   <button
                     onClick={(e) => {
@@ -1029,7 +1184,11 @@ export default function AdGeneratorListPage() {
 /**
  * "From scratch" setup step — name the ad and pick a starting size before the
  * builder opens, so a brand-new design starts at the right dimensions instead
- * of always defaulting to a 1080 square. Sizes come from the shared catalog.
+ * of always defaulting to a 1080 square.
+ *
+ * Sizes come from the size library (`/ad-generator/sizes`) — the same list the
+ * builder's Sizes panel reads. This modal used to render a code-side catalog
+ * instead, so sizes a team added were simply absent here.
  */
 function ScratchSetupModal({
   creating,
@@ -1038,14 +1197,25 @@ function ScratchSetupModal({
 }: {
   creating: boolean;
   onClose: () => void;
-  onStart: (name: string, sizes: CatalogSize[], vehicleMode: VehicleFieldsMode) => void;
+  onStart: (name: string, sizes: LibrarySize[], vehicleMode: VehicleFieldsMode) => void;
 }) {
-  const groups = useMemo(() => catalogByCategory(), []);
+  const { sizes, facets, loading } = useSizeLibrary();
   const [name, setName] = useState('Untitled ad');
   const [vehicleMode, setVehicleMode] = useState<VehicleFieldsMode>('none');
-  const [selected, setSelected] = useState<CatalogSize[]>(() => [AD_SIZE_CATALOG_DEFAULT(groups)]);
-  const toggle = (s: CatalogSize) =>
-    setSelected((cur) => (cur.some((x) => x.name === s.name) ? cur.filter((x) => x.name !== s.name) : [...cur, s]));
+  const [selected, setSelected] = useState<LibrarySize[]>([]);
+  const toggle = (s: LibrarySize) =>
+    setSelected((cur) => (cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, s]));
+  const selectedIds = useMemo(() => new Set(selected.map((s) => s.id)), [selected]);
+
+  // Preselect a sensible default once the library lands — a square if there is
+  // one (matches the old 1080 default), else whatever's first. Runs only while
+  // nothing is selected, so it can't fight the user's picks on a revalidation.
+  useEffect(() => {
+    if (selected.length || !sizes.length) return;
+    const square = sizes.find((s) => s.width === s.height);
+    setSelected([square ?? sizes[0]]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sizes]);
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-16" onClick={onClose}>
@@ -1093,52 +1263,19 @@ function ScratchSetupModal({
           </div>
         </div>
 
-        <div className="mb-1 flex items-baseline justify-between">
+        <div className="mb-1.5 flex items-baseline justify-between">
           <span className="text-xs font-medium text-[var(--foreground)]">Starting sizes</span>
           <span className="text-[11px] text-[var(--muted-foreground)]">{selected.length} selected</span>
         </div>
-        <div className="max-h-[44vh] space-y-4 overflow-y-auto pr-1">
-          {groups.map((grp) => (
-            <div key={grp.category}>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {grp.sizes.map((s) => {
-                  const ratio = s.width / s.height;
-                  const boxW = ratio >= 1 ? 28 : 28 * ratio;
-                  const boxH = ratio >= 1 ? 28 / ratio : 28;
-                  const on = selected.some((x) => x.name === s.name);
-                  return (
-                    <button
-                      key={s.name}
-                      type="button"
-                      onClick={() => toggle(s)}
-                      aria-pressed={on}
-                      title={`${s.name} · ${s.width}×${s.height}`}
-                      className={`relative flex items-center gap-2 rounded-xl border p-2.5 text-left transition-colors ${
-                        on ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]/40' : 'border-[var(--border)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {on && (
-                        <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--primary)] text-white">
-                          <CheckIcon className="h-3 w-3" />
-                        </span>
-                      )}
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded bg-[var(--muted)]/50">
-                        <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px] font-semibold text-[var(--foreground)]">{s.name}</div>
-                        <div className="truncate text-[10px] text-[var(--muted-foreground)]">
-                          {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        <div className="max-h-[44vh] overflow-y-auto pr-1">
+          <SizePicker sizes={sizes} facets={facets} loading={loading} selectedIds={selectedIds} onToggle={toggle} />
         </div>
+        <Link
+          href="/ad-generator/sizes"
+          className="mt-2 inline-block text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]"
+        >
+          Manage size library →
+        </Link>
 
         <div className="mt-5 flex items-center justify-end gap-2">
           <button onClick={onClose} disabled={creating} className="rounded-lg px-3 py-2 text-sm text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50">
@@ -1159,9 +1296,3 @@ function ScratchSetupModal({
   );
 }
 
-/** Default starting size for the scratch modal — Instagram Square if present
- *  (matches the prior 1080 default), else the first catalog size. */
-function AD_SIZE_CATALOG_DEFAULT(groups: { sizes: CatalogSize[] }[]): CatalogSize {
-  const all = groups.flatMap((g) => g.sizes);
-  return all.find((s) => s.name === 'Instagram Square') ?? all[0];
-}

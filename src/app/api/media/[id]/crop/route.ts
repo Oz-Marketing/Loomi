@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import sharp from 'sharp';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
+import { canAccessAsset } from '@/lib/services/media';
 import {
   s3PublicUrl,
   buildS3Key,
@@ -13,16 +14,6 @@ import {
 import { generateThumbnail } from '@/lib/media-thumbnails';
 
 /** Check access to an asset based on its accountKey. null = admin-level. */
-function checkAccess(
-  session: { user: { role: string; accountKeys?: string[] } },
-  accountKey: string | null,
-): boolean {
-  const { role, accountKeys = [] } = session.user;
-  if (role === 'developer' || role === 'super_admin') return true;
-  if (role === 'admin' && accountKeys.length === 0) return true;
-  if (accountKey === null) return false;
-  return accountKeys.includes(accountKey);
-}
 
 function croppedName(filename: string): string {
   const dot = filename.lastIndexOf('.');
@@ -56,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const asset = await prisma.mediaAsset.findUnique({ where: { id } });
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -99,7 +90,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         thumbnailKey,
         altText: asset.altText,
         category: asset.category,
-        folderId: asset.folderId,
         uploadedBy: session!.user.id,
       },
     });
@@ -117,7 +107,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           thumbnailUrl: created.thumbnailKey ? s3PublicUrl(created.thumbnailKey) : undefined,
           altText: created.altText,
           category: created.category,
-          folderId: created.folderId,
           archivedAt: null,
           createdAt: created.createdAt.toISOString(),
           source: 's3' as const,

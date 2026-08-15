@@ -25,6 +25,10 @@ function submissionToCsvRow(row: FormSubmissionRow): string {
     row.contactId,
     contactLabel,
     JSON.stringify(row.data),
+    // Embed metadata (`meta_*` params from the host page). Serialized
+    // like `data` — the leading `{` also keeps a hostile value from
+    // being read as a spreadsheet formula.
+    JSON.stringify(row.metadata),
     row.ipAddress,
     row.referrer,
   ].map(escapeCsvCell).join(',');
@@ -56,6 +60,7 @@ export async function GET(
         'contactId',
         'contact',
         'data',
+        'metadata',
         'ipAddress',
         'referrer',
       ].join(',');

@@ -1,9 +1,15 @@
 import { prisma } from '@/lib/prisma';
+import { anthropicConfigured } from '@/lib/anthropic';
+import { generateAdCopy } from '@/lib/ai/ad-copy';
 import { evoxConfigured } from '@/lib/integrations/evox';
 import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { createNotification } from '@/lib/notifications/service';
+import { brandLogoData } from '../brand-logos';
+import { templatesForAccount } from '../template-access';
 import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
+import { approvalIsCurrent } from '../coop-approval';
+import { approvalStatusFor } from '../coop-approval-store';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
 import { resolveTemplateCoopCheck } from '../coop-template-check-store';
@@ -13,8 +19,11 @@ import { preflight, summarizePreflight, type CoopDesignVerdict } from '../prefli
 import { mergeRenderData, renderCreativeSizes, renderCreativeToS3 } from '../render-creative';
 import { isS3Configured } from '@/lib/s3';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
+import { designHash, resolveSyncState } from '../template-sync';
 import type { AdData } from '../types';
 import { creativeOfferKey, offerFingerprint } from './fingerprint';
+import { copyForCreative } from './generate-copy';
+import type { SkippedVehicle } from './skip-reasons';
 import {
   chooseVehicleImage,
   pickStockUnit,
@@ -53,20 +62,9 @@ import { selectOffer, type SelectableOfferType } from './select-offer';
 
 const NOTIFY_LINK = '/ad-generator';
 
-export type SkipReason =
-  | 'stock_gate'
-  | 'no_eligible_offer'
-  | 'no_template'
-  /** EVOX has no licensed imagery for the model, and dealer photos are never
-   *  used. Reported separately from `preflight_failed` because it's the one skip
-   *  reason with a purely commercial fix — extending EVOX coverage — rather than
-   *  anything to change in the data or the template. */
-  | 'no_vehicle_imagery'
-  /** A required OEM sales-event mark has no element to render into. */
-  | 'no_event_slot'
-  | 'preflight_failed'
-  | 'render_failed'
-  | 'cap_reached';
+// The reason vocabulary lives in `skip-reasons` so the run-history UI can label a
+// skip without importing this server-only module.
+export type { SkipReason, SkippedVehicle } from './skip-reasons';
 
 export interface GeneratedAd {
   creativeId: string;
@@ -87,12 +85,6 @@ export interface GeneratedAd {
   warnings: string[];
   /** True when this run updated an existing draft rather than creating one. */
   updated: boolean;
-}
-
-export interface SkippedVehicle {
-  vehicle: string;
-  reason: SkipReason;
-  detail: string;
 }
 
 export interface GenerateResult {
@@ -224,12 +216,14 @@ export async function generateForAccount(
   const branding = safeJson<{ colors?: Record<string, string> }>(account?.branding ?? null);
   const logos = safeJson<Record<string, string>>(account?.logos ?? null);
 
-  // Candidate templates: published + active, this sub-account's own or global.
+  // Candidate templates: published + active, and in scope for this sub-account —
+  // its own, the shared library, or one shared with it.
   const templateRows = await prisma.adTemplateDoc
     .findMany({
-      where: { status: 'published', isActive: true, OR: [{ accountKey: config.accountKey }, { accountKey: null }] },
-      select: { id: true, name: true, accountKey: true, doc: true, updatedAt: true },
+      where: { status: 'published', isActive: true },
+      select: { id: true, name: true, accountKey: true, sharedAccountKeys: true, doc: true, updatedAt: true },
     })
+    .then((rows) => templatesForAccount(rows, { accountKey: config.accountKey }))
     .catch(() => []);
   const candidates: TemplateCandidate[] = [];
   for (const r of templateRows) {
@@ -287,17 +281,25 @@ export async function generateForAccount(
    * on one template from making eight identical round trips to read it back.
    */
   const designVerdicts = new Map<string, CoopDesignVerdict | null>();
+  /**
+   * @param templateId  Identity to memoise and (when persisting) cache under.
+   * @param persist     False for an ad's OWN customized design: it must be
+   *                    checked, but storing the result under the template's id
+   *                    would overwrite the template's cached verdict with a
+   *                    verdict about a different document.
+   */
   const designVerdictFor = async (
     templateId: string,
     doc: TemplateDoc,
     entry: { id: string; pack: CoopRulePack } | null,
+    persist = true,
   ): Promise<CoopDesignVerdict | null> => {
     if (!entry) return null;
     const key = `${templateId}::${entry.id}`;
     if (designVerdicts.has(key)) return designVerdicts.get(key) ?? null;
     let verdict: CoopDesignVerdict | null = null;
     try {
-      const v = await resolveTemplateCoopCheck({ templateId, doc, packId: entry.id, pack: entry.pack });
+      const v = await resolveTemplateCoopCheck({ templateId, doc, packId: entry.id, pack: entry.pack, persist });
       verdict = {
         make: v.make,
         packVersion: v.packVersion,
@@ -391,6 +393,51 @@ export async function generateForAccount(
     }
     const tpl = resolution.template;
 
+    // Review notes for this ad. Declared here because the very first thing worth
+    // telling a reviewer — "your customized design was kept" — is decided next.
+    const warnings: string[] = [];
+
+    // ── the ad this offer already has, if any ──
+    //
+    // Looked up BEFORE preflight and render because it decides WHICH design this
+    // run is working with. A re-run used to overwrite `doc` with the template's
+    // current design unconditionally, which quietly did two things: it pushed
+    // template edits into live ads with no prompt, and it destroyed any design
+    // change a reviewer had made to the ad. A customized ad now keeps its own
+    // design, and everything downstream — the event-slot check, preflight, the
+    // render — runs against the design that will actually ship, not the one the
+    // template happens to hold.
+    const existing = await prisma.adCreative
+      .findUnique({
+        where: {
+          accountKey_templateId_offerFingerprint: {
+            accountKey: config.accountKey,
+            templateId: tpl.id,
+            offerFingerprint: fingerprint,
+          },
+        },
+        select: {
+          id: true,
+          status: true,
+          doc: true,
+          autoGenerated: true,
+          templateSync: true,
+          copy: true,
+          copySource: true,
+        },
+      })
+      .catch(() => null);
+    const followsTemplate = !existing || resolveSyncState(existing) === 'synced';
+    const existingDoc = existing?.doc ? safeJson<TemplateDoc>(existing.doc) : null;
+    // Fall back to the template when a detached ad's own doc can't be parsed:
+    // refusing to generate would strand the offer over a corrupt blob.
+    const activeDoc = followsTemplate ? tpl.doc : (existingDoc ?? tpl.doc);
+    if (!followsTemplate && existingDoc) {
+      warnings.push(
+        `This ad has been customized, so it keeps its own design — edits to "${tpl.name}" were not applied. Reset it to the template if you want them.`,
+      );
+    }
+
     // ── data ──
     let data: AdData = incentiveToFieldPatch(inc, {
       year: g.year,
@@ -400,13 +447,14 @@ export async function generateForAccount(
     });
     data.dealerName = account?.dealer ?? '';
     data.brandColor = branding?.colors?.primary ?? '';
-    data.logoUrl = logos?.light ?? logos?.dark ?? '';
+    // Every logo variant, so a template element pinned to one (e.g. the logo on a
+    // dark panel) renders that file instead of falling back to the default.
+    Object.assign(data, brandLogoData(logos));
 
     // A specific unit, so makes whose rules demand a VIN can finally be automated.
     const oemRule = oemRules.get(g.make) ?? null;
     const required = requiredFieldsFor(inc.type === 'cash' ? 'discount' : inc.type, oemRule);
     const unit = pickStockUnit(units, inc.trim);
-    const warnings: string[] = [];
     // Set when an OEM sales event is in force for the run window and the template
     // has somewhere to put its mark.
     let eventName: string | null = null;
@@ -459,7 +507,7 @@ export async function generateForAccount(
     // omits it looks fine and is not claimable, which is the worst combination.
     const event = await resolveEventAsset(g.make, window.start, data.offerType ?? 'custom');
     if (event) {
-      const hasSlot = tpl.doc.elements.some(
+      const hasSlot = activeDoc.elements.some(
         (el) => el.binding?.kind === 'field' && el.binding.key === 'eventLogoUrl',
       );
       if (!hasSlot) {
@@ -507,15 +555,43 @@ export async function generateForAccount(
     const disclaimer = await resolveDisclaimerText(data, { make: g.make });
     data.disclaimer = disclaimer.text;
 
+    // ── launch copy ──
+    //
+    // Generated here rather than at launch time so the words are frozen with the
+    // offer they describe, and only when the row doesn't already have them: copy
+    // is expensive, and re-drafting on every nightly re-run would mean the same
+    // ad says something different each morning.
+    let copyJson: string | null = existing?.copy ?? null;
+    let copySource: string | null = existing?.copySource ?? null;
+    if (!copyJson) {
+      const outcome = await copyForCreative({
+        doc: activeDoc,
+        data,
+        dealerName: account?.dealer ?? '',
+        vehicle: { year: g.year, make: g.make, model: g.model },
+        coopPack: coopPacks.get(g.make)?.pack ?? null,
+        // AI drafts only where a key is configured; without one every ad gets the
+        // deterministic caption, which is a floor rather than a failure.
+        draft: anthropicConfigured() ? generateAdCopy : undefined,
+      });
+      copyJson = JSON.stringify(outcome.copy);
+      copySource = outcome.source;
+      warnings.push(...outcome.warnings);
+    }
+
     // ── preflight (coherence + permission) ──
     const coopEntry = coopPacks.get(g.make) ?? null;
     const coopPack = coopEntry?.pack ?? null;
-    const coopDesign = await designVerdictFor(tpl.id, tpl.doc, coopEntry);
-    const renderData = mergeRenderData(tpl.doc, data);
+    // Keyed by the ad when the ad owns its design, so a customized board is
+    // checked on its own merits and never written over the template's verdict.
+    const coopDesign = followsTemplate
+      ? await designVerdictFor(tpl.id, activeDoc, coopEntry)
+      : await designVerdictFor(`creative:${existing!.id}`, activeDoc, coopEntry, false);
+    const renderData = mergeRenderData(activeDoc, data);
     // Intersect with what this template actually has: a size selected before a
     // template swap can name an id the new one doesn't define, and rendering an
     // empty set throws. Falling back to "all" beats failing the run.
-    const docSizeIds = tpl.doc.sizes.map((s) => s.id);
+    const docSizeIds = activeDoc.sizes.map((s) => s.id);
     const sizeIds = wantedSizes.length ? docSizeIds.filter((id) => wantedSizes.includes(id)) : [];
     const renderSizeIds = sizeIds.length ? sizeIds : undefined;
     if (wantedSizes.length && !sizeIds.length) {
@@ -524,24 +600,51 @@ export async function generateForAccount(
       );
     }
 
-    const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: renderSizeIds });
+    const pf = preflight({ doc: activeDoc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: renderSizeIds });
     for (const issue of pf.issues.filter((i) => i.severity === 'warning')) warnings.push(issue.message);
     if (!pf.ok) {
       skipped.push({ vehicle, reason: 'preflight_failed', detail: summarizePreflight(pf) });
       continue;
     }
 
-    // ── status: `ready` requires a VERIFIED co-op pack ──
+    // ── status: what makes an ad `ready` without a person looking at it ──
+    //
+    // Two independent forms of evidence, either of which is sufficient:
+    //
+    //   1. The manufacturer PRE-APPROVED this template's current design. This is
+    //      the real-world path: co-op signs off on the plate, and every ad from it
+    //      inherits that. The approval is design-scoped, so a template edited
+    //      since approval falls back to a draft rather than riding a stale sign-off.
+    //   2. A VERIFIED co-op rule pack exists and preflight passed against it —
+    //      the machine-checked path, and the original gate.
+    //
+    // Neither on file means nobody and nothing has vouched for this ad, so it
+    // stays a draft and says why. Note that until packs are transcribed, (1) is
+    // the ONLY path that can produce a `ready` ad — which is the point of it.
+    const approval = await approvalStatusFor({
+      templateId: tpl.id,
+      doc: activeDoc,
+      make: g.make,
+      activePackVersion: coopPack?.version ?? null,
+    });
     let status: 'draft' | 'ready' = 'draft';
     if (config.mode === 'ready') {
-      if (coopPack?.verified) status = 'ready';
+      if (approvalIsCurrent(approval)) status = 'ready';
+      else if (coopPack?.verified) status = 'ready';
       else {
         warnings.push(
-          coopPack
-            ? `Held as a draft: the ${g.make} co-op pack (${coopPack.version}) is not marked verified.`
-            : `Held as a draft: no ${g.make} co-op pack is on file, so no manufacturer advertising rules were checked.`,
+          `Held as a draft: ${approval.reason}` +
+            (coopPack
+              ? ` The ${g.make} co-op pack (${coopPack.version}) is also not marked verified.`
+              : ` No ${g.make} co-op pack is on file either, so no manufacturer advertising rules were checked.`),
         );
       }
+    }
+    // Recorded even when it didn't change the status, because "this ad rode a
+    // template approval" is the answer to who permitted it, and a reviewer must be
+    // able to see a stale approval on an ad that is otherwise fine.
+    if (approval.state !== 'none' && approval.state !== 'current') {
+      warnings.push(approval.reason);
     }
 
     // ── render ──
@@ -560,7 +663,7 @@ export async function generateForAccount(
       if (isS3Configured()) {
         const persisted = await renderCreativeToS3({
           creativeId: renderKey,
-          doc: tpl.doc,
+          doc: activeDoc,
           data,
           accountKey: config.accountKey,
           sizeIds: renderSizeIds,
@@ -569,7 +672,7 @@ export async function generateForAccount(
         sizeCount = persisted.length;
       } else {
         const pixels = await renderCreativeSizes({
-          doc: tpl.doc,
+          doc: activeDoc,
           data,
           accountKey: config.accountKey,
           sizeIds: renderSizeIds,
@@ -588,16 +691,6 @@ export async function generateForAccount(
 
     const expiresAt = inc.endDate ? new Date(inc.endDate) : null;
     const name = `${vehicle} — ${describeOffer(inc)}`;
-    const existing = await prisma.adCreative.findUnique({
-      where: {
-        accountKey_templateId_offerFingerprint: {
-          accountKey: config.accountKey,
-          templateId: tpl.id,
-          offerFingerprint: fingerprint,
-        },
-      },
-      select: { id: true, status: true },
-    });
 
     // Never demote an ad a human already promoted to `ready`.
     const nextStatus = existing?.status === 'ready' ? 'ready' : status;
@@ -623,16 +716,33 @@ export async function generateForAccount(
         coopCheckedVersion: coopPack?.version ?? null,
         reviewNotes: warnings.length ? JSON.stringify(warnings) : null,
         createdByName: 'Ad automation',
+        copy: copyJson,
+        copySource,
+        // Automated ads follow their template by default — that is the whole
+        // point of them: the template is the only place a person can correct
+        // fifty machine-built ads at once.
+        templateSync: 'synced',
+        templateDocHash: designHash(tpl.doc),
       },
       update: {
         name,
         data: JSON.stringify(data),
-        doc: JSON.stringify(tpl.doc),
         status: nextStatus,
         thumbnailUrl,
         expiresAt: expiresAt && !Number.isNaN(expiresAt.getTime()) ? expiresAt : null,
         coopCheckedVersion: coopPack?.version ?? null,
         reviewNotes: warnings.length ? JSON.stringify(warnings) : null,
+        // Written on update too, so a row that predates copy generation (or whose
+        // earlier run had no key configured) picks it up on the next pass. A row
+        // that already had copy kept it — `copyJson` is that same value here.
+        copy: copyJson,
+        copySource,
+        // The DESIGN is only rewritten while the ad still follows the template.
+        // A customized ad keeps its own board; its offer VALUES still refresh
+        // above, because those belong to the OEM programme, not to the design.
+        ...(followsTemplate
+          ? { doc: JSON.stringify(tpl.doc), templateDocHash: designHash(tpl.doc) }
+          : {}),
       },
     });
 

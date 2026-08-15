@@ -1,5 +1,7 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
+import { logoVariantDataKey } from './brand-logos';
+import { effectiveElements } from './size-scope';
 import { cssSafeFamily } from './fonts';
 
 /**
@@ -26,6 +28,13 @@ function resolveBinding(b: Binding | undefined, data: AdData): string {
     case 'field':
       return data[b.key] ?? '';
     case 'brand':
+      // A pinned logo variant, falling back to whichever logo the ad is using —
+      // an account with no `dark` file on record still gets a logo rather than a
+      // hole. `brandLogoData` normally fills every variant key for exactly this
+      // reason; the fallback covers data assembled without it.
+      if (b.key === 'logoUrl' && b.variant) {
+        return data[logoVariantDataKey(b.variant)] || data.logoUrl || '';
+      }
       return data[b.key] ?? '';
   }
 }
@@ -218,26 +227,41 @@ interface RenderCtx {
   /** Builder canvas: show empty text bindings as muted placeholders so every
    *  element stays visible + selectable. Off for export. */
   preview: boolean;
+  /** Preview only: keep wrong-offer-type elements on the canvas, dimmed. */
+  dimOffType: boolean;
   /** Keys of number-typed fields — their values render with thousands commas. */
   numberKeys: Set<string>;
 }
 
+/**
+ * Conditional visibility (`visibleWhen`): the element shows only when the gating
+ * field's value is in the allowed set (e.g. a `%` badge only for `offerType: apr`).
+ *
+ * Exported because the builder needs the SAME answer to decide which elements to
+ * outline and hit-test. Two copies of this rule is how the canvas ended up drawing
+ * frames for blocks it wasn't rendering.
+ */
+export function isElementVisibleFor(el: DocElement, data: AdData): boolean {
+  if (!el.visibleWhen) return true;
+  return el.visibleWhen.in.includes(String(data[el.visibleWhen.field] ?? ''));
+}
+
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
   const { width, height, brand, brandStack } = ctx;
-  // Conditional visibility (`visibleWhen`): the element shows only when the gating
-  // field's value is in the allowed set (e.g. a `%` badge only for `offerType: apr`).
-  // On export the wrong-type element is omitted entirely; in the builder it's kept
-  // but dimmed (like a per-size hidden element) so the designer can still edit it.
-  const condHidden =
-    !!el.visibleWhen && !el.visibleWhen.in.includes(String(data[el.visibleWhen.field] ?? ''));
-  if (condHidden && !ctx.preview) return '';
+  // On export a wrong-type element is omitted entirely; in the builder it's kept
+  // but dimmed when the All tab asks to see every type at once.
+  const condHidden = !isElementVisibleFor(el, data);
+  // Omitted on export, and in preview too unless the builder asked to see every
+  // offer type at once. Four offer blocks occupying one spot read as a smear when
+  // they're all kept, which defeated the point of previewing a single type.
+  if (condHidden && !(ctx.preview && ctx.dimOffType)) return '';
   // data-el-id lets the builder find + move this node live during a drag.
   const idAttr = ` data-el-id="${esc(el.id)}"`;
   // A `visibleWhen`-gated element (wrong offer type) is dimmed/blurred in the
   // builder so the designer can still see + edit it; it's omitted on export.
   // An EYE-hidden element (`box.hidden`) is removed from the artboard entirely
   // (see the render-loop filter) — never dimmed — so it reads as truly hidden.
-  const dim = ctx.preview && condHidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
+  const dim = condHidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
   // Element-level compositing: opacity (any type) + blend mode. When dimmed in
   // preview, the dim opacity wins so "hidden" stays legible; blend still applies.
   const opacityFx = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
@@ -407,7 +431,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
-export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: { preview?: boolean }): string {
+export function renderDoc(
+  doc: TemplateDoc,
+  data: AdData,
+  size: AdSize,
+  opts?: { preview?: boolean; dimOffType?: boolean },
+): string {
   const { width, height } = size;
   const brand = (data.brandColor && esc(data.brandColor)) || '#4f46e5';
 
@@ -423,10 +452,20 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
       : '';
   const brandStack = `${fontFamily ? `'${fontFamily}', ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
   const numberKeys = new Set(doc.fields.filter((f) => f.type === 'number').map((f) => f.key));
-  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false, numberKeys };
+  const ctx: RenderCtx = {
+    width,
+    height,
+    brand,
+    brandStack,
+    preview: opts?.preview ?? false,
+    dimOffType: opts?.dimOffType ?? false,
+    numberKeys,
+  };
 
   const layout = doc.layouts[size.id] ?? {};
-  const body = doc.elements
+  // Per-size style overrides are merged here, so every downstream read (fit
+  // markers, colours, image fit) sees the element as THIS size renders it.
+  const body = effectiveElements(doc, size.id)
     .map((el) => ({ el, box: layout[el.id] }))
     // Eye-hidden elements are removed from the artboard in BOTH preview and
     // export — hiding a layer takes it off the canvas, not just dims it. Elements

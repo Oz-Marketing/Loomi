@@ -84,9 +84,17 @@ export const EmbeddedFormBlock: React.FC<EmbeddedFormProps> = ({
             slug={preloaded.slug}
             template={preloaded.schema}
             attribution={attribution}
+            // `note_`/`meta_` params from the LP URL, resolved for this
+            // specific form server-side. Undefined in the editor path
+            // below — the canvas has no visitor query string.
+            helpTextOverrides={preloaded.noteOverrides}
+            metadata={preloaded.metadata}
           />
         ) : (
-          <FormRenderer template={preloaded.schema} />
+          <FormRenderer
+            template={preloaded.schema}
+            options={{ helpTextOverrides: preloaded.noteOverrides }}
+          />
         )}
       </div>
     );

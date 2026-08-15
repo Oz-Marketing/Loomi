@@ -28,7 +28,7 @@ import {
   fmtDaysLeft,
   fmtDaysBasisPhrase,
 } from '@/lib/ad-pacer/helpers';
-import { fmtPeriodLong } from '@/lib/ad-pacer/period';
+import { fmtPeriodLong, fmtPeriodShort } from '@/lib/ad-pacer/period';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
@@ -41,7 +41,10 @@ import {
   type BudgetChange,
   type HealthHoverDay,
 } from '@/lib/ad-pacer/pacing-engine';
-import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
+import {
+  OVERAGE_ALLOWANCE_DEFAULT,
+  RAISE_STEP_CAP,
+} from '@/lib/ad-pacer/constants';
 import { zonedTodayIso } from '@/lib/timezone';
 import {
   GooglePacingBadges,
@@ -55,6 +58,7 @@ import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
 import { DollarInput, Field, readonlyClass, labelClass } from './inputs';
 import { MetricBox } from './metrics';
+import { LabelChips } from './LabelChips';
 
 /**
  * Bar color for a day's delivery ratio (spend ÷ that-day's-budget): green when
@@ -332,6 +336,8 @@ export function PacerRow({
   pushIcon,
   statusMismatch,
   overageAllowance,
+  allLabels,
+  onTagsChange,
 }: {
   ad: PacerAd;
   index: number;
@@ -350,6 +356,10 @@ export function PacerRow({
     action: 'apply_full_run' | 'split' | 'clear' | 'link',
     splitMap?: Record<string, number>,
     linkedPrevAdId?: string,
+    /** apply_full_run: the month the run BILLS in. Omit for the ad's own month;
+     *  a LATER month makes it a cross-month flight, which posts an Out against
+     *  this month and an In against that one in the reconciliation ledger. */
+    billedMonth?: string,
   ) => void;
   /** Prior-period ads for the manual "continues a prior-month run" picker, each
    *  { id, name, period }. Shown only for an unsynced split run (synced runs
@@ -379,6 +389,11 @@ export function PacerRow({
   /** Per-account Meta single-day flexibility (0.25–0.75) for the
    *  recommendation engine's shortfall boundary (server-derived). */
   overageAllowance?: number;
+  /** The account's label vocabulary (§9), so the add-label popover offers what
+   *  already exists instead of inviting near-duplicates. */
+  allLabels?: readonly string[];
+  /** Omit to hide the label control entirely (surfaces that don't tag). */
+  onTagsChange?: (nextTags: string[]) => void;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = budgetTypeColor(ad.budgetType);
@@ -538,16 +553,24 @@ export function PacerRow({
   // decides whether the box shows a number or the word "No change".
   const dailyDelta = calc.recDaily - calc.dailyBudget;
 
-  // Health-based accent colors the left stripe AND the compact pacing badge in
-  // the summary row. On Meta daily lines the direction comes from the ENGINE
-  // (§6.1/§6.4) so the badge can never contradict the recommendation; lifetime
-  // and Google lines pass no direction and keep the legacy classification.
-  const health = useMemo(
+  // The one over/under verdict for this row: the engine's band and warm-up /
+  // delivery gates applied to the projection the card DISPLAYS (calc.projected
+  // — the Projected Spend box). Badge, footer message and its dollar figure all
+  // read this, so the three can't tell three different stories. null = no call
+  // (warm-up); undefined = not a Meta daily line (lifetime / Google keep the
+  // legacy classification).
+  const metaDirection = useMemo(
     () =>
       metaRec != null
-        ? classifyPacerHealth(ad, calc, pacingDirection(metaRec, calc.budget))
-        : classifyPacerHealth(ad, calc),
-    [ad, calc, metaRec],
+        ? pacingDirection(metaRec, calc.budget, calc.projected)
+        : undefined,
+    [metaRec, calc.budget, calc.projected],
+  );
+  // Health-based accent colors the left stripe AND the compact pacing badge in
+  // the summary row.
+  const health = useMemo(
+    () => classifyPacerHealth(ad, calc, metaDirection),
+    [ad, calc, metaDirection],
   );
 
   // Resolved = the user billed the ad's full run in its own month
@@ -597,6 +620,18 @@ export function PacerRow({
   const cmSelValue: '' | 'split' | 'bill' = resolvedFullRun
     ? 'bill'
     : ad.lifetimeMonthSplit != null
+      ? 'split'
+      : '';
+  // The months the run could bill in: its own month plus any LATER month it
+  // reaches. Billing in a later month is the cross-month case — the run's
+  // origin-month dollars move to the month that invoices them.
+  const cmBillMonths = cmMonths.filter((mm) => mm >= ad.period);
+  const cmBillOptions = cmBillMonths.length > 1 ? cmBillMonths : [ad.period];
+  // The <select>'s own value carries WHICH month was chosen, so a run billed in
+  // a later month shows that month rather than a generic "Bill in one month".
+  const cmSelectValue = resolvedFullRun
+    ? `bill:${ad.fullRunAppliedToMonth}`
+    : cmSelValue === 'split'
       ? 'split'
       : '';
   // Cross-month accounting is opt-in per ad via a footer toggle — the dropdown
@@ -835,6 +870,18 @@ export function PacerRow({
                 );
               })()}
             </div>
+            {/* Labels (§9) — editable here rather than in the collapsed header,
+                which is a single click target for expanding the row and can't
+                hold a popover. Independent of Base/Added above: a label says
+                which push a line belongs to, not which pool pays for it. */}
+            {onTagsChange && (
+              <LabelChips
+                tags={ad.pacerTags}
+                allLabels={allLabels ?? []}
+                readOnly={readOnly}
+                onChange={onTagsChange}
+              />
+            )}
           </div>
         </div>
         {/* Right cluster: the Flight window. The platform Ad Status used to sit
@@ -1043,12 +1090,19 @@ export function PacerRow({
           <div className="flex w-full flex-col gap-2 sm:w-[260px] flex-shrink-0">
             <select
               id={`cm-${ad.id}`}
-              value={cmSelValue}
+              value={cmSelectValue}
               disabled={readOnly}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === 'bill') {
-                  onResolveCrossMonth('apply_full_run');
+                if (v.startsWith('bill')) {
+                  // "bill:YYYY-MM" — the month the whole run invoices in.
+                  const month = v.slice('bill:'.length);
+                  onResolveCrossMonth(
+                    'apply_full_run',
+                    undefined,
+                    undefined,
+                    month && month !== ad.period ? month : undefined,
+                  );
                 } else if (v === 'split') {
                   // Seed an even-split map so the single-row reference has values;
                   // sibling rows override it when the ad spans months (#58).
@@ -1069,7 +1123,16 @@ export function PacerRow({
                 Cross-Month Accounting
               </option>
               <option value="split">Split across months</option>
-              <option value="bill">Bill in one month</option>
+              {cmBillOptions.length > 1 ? (
+                cmBillOptions.map((mm) => (
+                  <option key={mm} value={`bill:${mm}`}>
+                    Bill all in {fmtPeriodShort(mm)}
+                    {mm === ad.period ? ' (this month)' : ''}
+                  </option>
+                ))
+              ) : (
+                <option value={`bill:${ad.period}`}>Bill in one month</option>
+              )}
             </select>
             {cmSelValue === 'bill' && (
               <div
@@ -1560,9 +1623,14 @@ export function PacerRow({
           );
         }
         // The state descriptor speaks (the rec box already showed the number):
-        // on-track reassures, adjust explains the raise/trim, delivery-low says
-        // a bigger budget won't fix a delivery problem. Falls back to the plain
-        // projection bands without a target.
+        // on-track reassures, over/under explains the raise/trim, delivery-low
+        // says a bigger budget won't fix a delivery problem. Falls back to the
+        // plain projection bands without a target.
+        //
+        // The two GATES (warm-up, delivery) are read off the engine state; the
+        // arithmetic over/under call is read off `metaDirection`, i.e. the
+        // Projected Spend box measured against the engine's band — the same
+        // verdict driving the badge, so badge and prose always agree.
         if (metaRec != null) {
           switch (metaRec.state) {
             case 'warmup':
@@ -1614,34 +1682,50 @@ export function PacerRow({
                   rejection, and feed freshness, then re-evaluate.
                 </p>
               );
-            case 'adjust':
-              return metaRec.direction === 'trim' ? (
-                <p
-                  className="m-0 text-[11px] leading-relaxed"
-                  style={{ color: COLORS.warn }}
-                >
-                  Projected to overspend by{' '}
-                  {fmt(Math.max(0, metaRec.projectedRunrate - calc.budget))} by{' '}
-                  {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
-                  {fmt(calc.recDaily)} to stay on target
-                  {metaRec.largeJump ? ' — a large change, monitor it' : ''}.
-                </p>
-              ) : (
-                <p
-                  className="m-0 text-[11px] leading-relaxed"
-                  style={{ color: COLORS.lifetime }}
-                >
-                  On pace to underspend by{' '}
-                  {fmt(Math.max(0, calc.budget - metaRec.projectedRunrate))} —
-                  setting the daily budget to {fmt(calc.recDaily)} uses the
-                  full target by {fmtDate(effectiveEnd)}
-                  {metaRec.largeJump
-                    ? ' (a large jump — stage it and monitor)'
-                    : ''}
-                  .
-                </p>
-              );
-            case 'on_track':
+            // on_track / adjust — the purely arithmetic call, and the one place
+            // the engine's own state is NOT what speaks. The direction and the
+            // dollar figure both come from `calc.projected` (the Projected
+            // Spend box) measured against the engine's band, so the prose, the
+            // figure and the badge are one verdict. Reading the engine's
+            // run-rate projection here is what put "underspend by $54.73" under
+            // a box showing $376.69 of a $385 target.
+            default: {
+              // Re-derived rather than read off metaRec.largeJump: the engine
+              // only sets that flag on its own `adjust` states, so a row the
+              // box calls off-band while the run rate reads on-track would
+              // otherwise lose the "stage it" caveat.
+              const largeJump =
+                calc.dailyBudget > 0 &&
+                Math.abs(calc.recDaily - calc.dailyBudget) / calc.dailyBudget >
+                  RAISE_STEP_CAP;
+              if (metaDirection === 'over') {
+                return (
+                  <p
+                    className="m-0 text-[11px] leading-relaxed"
+                    style={{ color: COLORS.warn }}
+                  >
+                    Projected to overspend by{' '}
+                    {fmt(calc.projected - calc.budget)} by{' '}
+                    {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
+                    {fmt(calc.recDaily)} to stay on target
+                    {largeJump ? ' — a large change, monitor it' : ''}.
+                  </p>
+                );
+              }
+              if (metaDirection === 'under') {
+                return (
+                  <p
+                    className="m-0 text-[11px] leading-relaxed"
+                    style={{ color: COLORS.lifetime }}
+                  >
+                    On pace to underspend by{' '}
+                    {fmt(calc.budget - calc.projected)} — setting the daily
+                    budget to {fmt(calc.recDaily)} uses the full target by{' '}
+                    {fmtDate(effectiveEnd)}
+                    {largeJump ? ' (a large jump — stage it and monitor)' : ''}.
+                  </p>
+                );
+              }
               return (
                 <p
                   className="m-0 text-[11px] leading-relaxed"
@@ -1650,6 +1734,7 @@ export function PacerRow({
                   On track for {fmtDate(effectiveEnd)} — no change needed.
                 </p>
               );
+            }
           }
         }
         const overspendThreshold = calc.budget * 1.05;

@@ -19,7 +19,7 @@ import {
   MegaphoneIcon,
   PhoneIcon,
   PresentationChartLineIcon,
-  RectangleGroupIcon,
+  PhotoIcon,
   StarIcon,
   UserPlusIcon,
   UsersIcon,
@@ -110,7 +110,7 @@ const NAV: NavItem[] = [
       // Out-of-home sits under Local Presence rather than Digital Ads: it is
       // how the dealer shows up in the market, and it is the one channel here
       // that isn't digital at all.
-      { href: '/billboards', label: 'Billboards', icon: RectangleGroupIcon },
+      { href: '/billboards', label: 'Billboards', icon: PhotoIcon },
     ],
   },
   {

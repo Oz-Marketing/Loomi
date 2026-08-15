@@ -16,6 +16,9 @@ import type { PacerAd } from './types';
 // so "today" resolves to 2026-06-15 and a June flight starting on the 1st is
 // already running while one starting on the 20th has not begun.
 const NOW = Date.UTC(2026, 5, 15, 18, 0, 0); // 2026-06-15 12:00 MDT
+// Two months on: the June period is long closed. Used for the settlement checks
+// below — "in progress" has to mean still running, not merely started.
+const NOW_AUG = Date.UTC(2026, 7, 5, 18, 0, 0); // 2026-08-05 12:00 MDT
 const TZ = 'America/Denver';
 const PERIOD = '2026-06';
 
@@ -71,7 +74,7 @@ describe('isEligibleForLivePacing (§0.2)', () => {
     expect(isEligibleForLivePacing(mk({ adStatus: 'Off' }), NOW, TZ)).toBe(false);
   });
 
-  it('excludes a lifetime ad — booked once on completion (§3), not paced (CFMOTO Event Ad)', () => {
+  it('excludes a lifetime ad — Meta controls delivery, so there is no daily lever to pace', () => {
     expect(
       isEligibleForLivePacing(mk({ budgetType: 'Lifetime' }), NOW, TZ),
     ).toBe(false);
@@ -84,10 +87,11 @@ describe('isEligibleForLivePacing (§0.2)', () => {
   });
 });
 
-// §3 — a LIFETIME ad still running is excluded from the over/under base (both
-// its actual slice and its allocation) so it contributes $0 variance; once it
-// completes it re-enters the base and books its single variance naturally.
-describe('isLifetimeInProgress (§3)', () => {
+// "Is this lifetime run delivering right now" — started and not yet finished.
+// It no longer gates the over/under (a running lifetime ad's spend counts toward
+// its month like any other line); what remains is the plain state predicate the
+// Google daily roll-up uses to INCLUDE running lifetime lines.
+describe('isLifetimeInProgress', () => {
   it('flags a lifetime ad that is live and has started', () => {
     expect(
       isLifetimeInProgress(mk({ budgetType: 'Lifetime', adStatus: 'Live' }), NOW, TZ),
@@ -104,11 +108,11 @@ describe('isLifetimeInProgress (§3)', () => {
     ).toBe(true);
   });
 
-  it('does NOT flag a daily ad (only lifetime ads leave the base while running)', () => {
+  it('does NOT flag a daily ad', () => {
     expect(isLifetimeInProgress(mk({ budgetType: 'Daily' }), NOW, TZ)).toBe(false);
   });
 
-  it('does NOT flag a COMPLETED lifetime ad — it re-enters the base and books once', () => {
+  it('does NOT flag a COMPLETED lifetime ad', () => {
     expect(
       isLifetimeInProgress(
         mk({ budgetType: 'Lifetime', adStatus: 'Completed Run' }),
@@ -132,6 +136,43 @@ describe('isLifetimeInProgress (§3)', () => {
         TZ,
       ),
     ).toBe(false);
+  });
+
+  // A closed month keeps whatever status its rows had at close
+  // (reconcileCompletedRuns only touches writable periods), so a June ad left on
+  // "Live" must not read as still running in August.
+  it('does NOT flag a FINISHED run still sitting on Live (June row, viewed in August)', () => {
+    expect(
+      isLifetimeInProgress(
+        mk({ budgetType: 'Lifetime', adStatus: 'Live' }),
+        NOW_AUG,
+        TZ,
+      ),
+    ).toBe(false);
+  });
+
+  it('does NOT flag an undated lifetime run once its pacing month is over', () => {
+    expect(
+      isLifetimeInProgress(
+        mk({ budgetType: 'Lifetime', adStatus: 'Live', flightEnd: null }),
+        NOW_AUG,
+        TZ,
+      ),
+    ).toBe(false);
+  });
+
+  // The bike-night pattern: a June-period run that finishes in early July is
+  // genuinely still running on Jul 1 — the origin month's edge must not settle it
+  // early — and is finished by August.
+  it('keeps a cross-month run in progress past its origin month, then settles it', () => {
+    const crossMonth = mk({
+      budgetType: 'Lifetime',
+      adStatus: 'Live',
+      flightStart: '2026-06-26',
+      flightEnd: '2026-07-03',
+    });
+    expect(isLifetimeInProgress(crossMonth, Date.UTC(2026, 6, 1, 18), TZ)).toBe(true);
+    expect(isLifetimeInProgress(crossMonth, NOW_AUG, TZ)).toBe(false);
   });
 });
 
@@ -353,27 +394,28 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
     expect(v.klass).toBe('real');
   });
 
-  it('an in-progress lifetime ad → lifetime-in-progress: $0 billed, slice held out', () => {
+  // A running lifetime ad is NOT held out of the over/under. It spends close to
+  // its set budget whether or not the run has closed, so its spend counts toward
+  // the month the whole time it is live — exactly like a daily line, which is
+  // also only part-delivered mid-month. Holding it out made the month's
+  // over/under silently ignore real spend.
+  it('counts a RUNNING lifetime ad in the over/under, like any other line', () => {
     const v = classifyAdVariance(
       mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }),
       PERIOD,
       NOW,
       TZ,
     );
-    expect(v.klass).toBe('lifetime-in-progress');
-    expect(v.billedActual).toBe(0);
-    expect(v.contribution).toBe(0);
+    expect(v.klass).toBe('real');
+    expect(v.billedActual).toBeCloseTo(180);
     expect(v.inMonthSpend).toBeCloseTo(180);
-    // Flight ends this month → settles at month-close, NOT deferred (Prompt 2).
-    expect(v.settlesThisMonth).toBe(true);
+    expect(v.contribution).toBeCloseTo(180 - 500);
   });
 
-  it('a single-month ad settles this month; a cross-month lifetime run is deferred', () => {
-    const single = classifyAdVariance(mk({ allocation: '100', pacerActual: '120' }), PERIOD, NOW, TZ);
-    expect(single.settlesThisMonth).toBe(true);
-    // Lifetime run whose flight extends into a later month → deferred (settles
-    // in the final month at flight completion), so settlesThisMonth is false.
-    const crossMonth = classifyAdVariance(
+  it('counts a running lifetime run that extends into a later month too', () => {
+    // Deferring THIS is the job of an explicit mark (split across months, or
+    // "bill all in <month>"), never of "the run hasn't closed yet".
+    const v = classifyAdVariance(
       mk({
         budgetType: 'Lifetime',
         adStatus: 'Live',
@@ -385,20 +427,17 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
       NOW,
       TZ,
     );
-    expect(crossMonth.klass).toBe('lifetime-in-progress');
-    expect(crossMonth.settlesThisMonth).toBe(false);
+    expect(v.klass).toBe('real');
+    expect(v.billedActual).toBeCloseTo(180);
   });
 
-  it('a stale metaEndDate (prior run) does not mask a cross-month lifetime run', () => {
-    // Genuine cross-month run (planner flightEnd in July) but the ad set still
-    // carries a prior run's stop date in May — the stale-end guard must defer to
-    // flightEnd, so the run is still recognized as deferred (settles later).
+  it('bills a lifetime run cross-month ONLY on the explicit mark', () => {
     const v = classifyAdVariance(
       mk({
         budgetType: 'Lifetime',
         adStatus: 'Live',
-        flightEnd: '2026-07-15',
-        metaEndDate: '2026-05-20', // stale — before the pacing month
+        flightEnd: '2026-07-20',
+        fullRunAppliedToMonth: '2026-07', // billed in July, ran from June
         allocation: '500',
         pacerActual: '180',
       }),
@@ -406,26 +445,9 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
       NOW,
       TZ,
     );
-    expect(v.klass).toBe('lifetime-in-progress');
-    expect(v.settlesThisMonth).toBe(false);
-  });
-
-  it('an open-ended lifetime run (no end date) settles this month, not deferred', () => {
-    const v = classifyAdVariance(
-      mk({
-        budgetType: 'Lifetime',
-        adStatus: 'Live',
-        flightEnd: null,
-        metaEndDate: null,
-        allocation: '500',
-        pacerActual: '180',
-      }),
-      PERIOD,
-      NOW,
-      TZ,
-    );
-    expect(v.klass).toBe('lifetime-in-progress');
-    expect(v.settlesThisMonth).toBe(true);
+    // June contributes nothing — the run is counted in the month it bills.
+    expect(v.billedActual).toBe(0);
+    expect(v.inMonthSpend).toBeCloseTo(180);
   });
 
   it('a COMPLETED lifetime ad is real — its single variance books', () => {
@@ -449,16 +471,15 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
         pacerActual: '49.79',
         pacerRunSpend: '79.91',
       }), // billed-cross-month: in 49.79 / billed 79.91
-      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }), // lifetime in-progress: in 180 / billed 0
+      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }), // running lifetime: in 180 / billed 180
     ];
     const d = decomposeMonthVariance(ads, PERIOD, NOW, TZ);
     expect(d.totalInMonth).toBeCloseTo(120 + 49.79 + 180); // what spent this month
-    expect(d.overUnderActual).toBeCloseTo(120 + 79.91 + 0); // over/under basis
-    expect(d.billedElsewhere).toBeCloseTo(79.91 - 49.79); // billed cross-month
-    expect(d.heldOutLifetime).toBeCloseTo(180);
+    // The running lifetime ad's spend is in the basis too — the ONLY gap left is
+    // the run deliberately billed cross-month.
+    expect(d.overUnderActual).toBeCloseTo(120 + 79.91 + 180);
+    expect(d.billedElsewhere).toBeCloseTo(79.91 - 49.79);
     expect(d.crossMonthCount).toBe(1);
-    expect(d.heldOutCount).toBe(1);
-    expect(d.heldOutDeferredCount).toBe(0); // its flight ends this month
     expect(d.perAd).toHaveLength(3);
   });
 });
@@ -492,6 +513,102 @@ describe('clampToMonth — Meta end vs planner flight', () => {
       mk({ metaEndDate: null, flightEnd: '2026-07-15', period: '2026-06' }),
     );
     expect(effectiveEnd).toBe('2026-06-30');
+  });
+});
+
+// google-pacing-card spec §6 — a Google line's flight AUTO-DERIVES from the
+// campaign's own synced dates (previously ignored: only the meta*/planner fields
+// were read, so a mid-month launch paced from the 1st and read as behind all
+// month). The manual override is for a funding window the API can't express.
+describe('scheduleEndpoints / clampToMonth — Google lines (§6)', () => {
+  const g = (overrides: Partial<PacerAd>) =>
+    mk({ platform: 'google', flightStart: null, flightEnd: null, ...overrides });
+
+  it("uses the Google campaign's start, not the month start (AC 4)", () => {
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-06-06', googleEndDate: null }),
+    );
+    expect(effectiveStart).toBe('2026-06-06');
+    // No Google end + no planner flight = paces to month end.
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('gives a long-running campaign the FULL month, never its lifetime start (AC 5)', () => {
+    // Started two years ago and still running: June must read as Jun 1–30, which
+    // is what the clamp produces — the lifetime start is only ever an input to it.
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2024-03-11', googleEndDate: null }),
+    );
+    expect(effectiveStart).toBe('2026-06-01');
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('clamps a Google end that runs past the month to the month end', () => {
+    const { effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-01-01', googleEndDate: '2026-09-30' }),
+    );
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('honors a mid-month Google end date', () => {
+    const { effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-06-01', googleEndDate: '2026-06-18' }),
+    );
+    expect(effectiveEnd).toBe('2026-06-18');
+  });
+
+  it('lets a manual override win over the synced dates (funded mid-month)', () => {
+    // The campaign existed on the 1st, but the money did not arrive until the
+    // 12th — Google cannot express that, so the desk states it.
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({
+        googleStartDate: '2026-06-01',
+        googleEndDate: null,
+        googleFlightStartOverride: '2026-06-12',
+        googleFlightEndOverride: '2026-06-25',
+      }),
+    );
+    expect(effectiveStart).toBe('2026-06-12');
+    expect(effectiveEnd).toBe('2026-06-25');
+  });
+
+  it('ignores a stale override end left over from a prior month', () => {
+    // An override copied/left from May must not zero out June's flight.
+    const { effectiveEnd } = clampToMonth(
+      g({
+        googleStartDate: '2026-06-01',
+        googleEndDate: '2026-06-30',
+        googleFlightEndOverride: '2026-05-20',
+      }),
+    );
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('falls back to the planner flight when Google sent no dates (manual row)', () => {
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ flightStart: '2026-06-05', flightEnd: '2026-06-22' }),
+    );
+    expect(effectiveStart).toBe('2026-06-05');
+    expect(effectiveEnd).toBe('2026-06-22');
+  });
+
+  it('leaves Meta rows on the Meta precedence (no cross-contamination)', () => {
+    // googleStartDate set on a Meta row (shouldn't happen, but must not leak).
+    const { effectiveStart } = clampToMonth(
+      mk({
+        platform: 'meta',
+        metaStartDate: '2026-06-03',
+        googleStartDate: '2026-06-20',
+      }),
+    );
+    expect(effectiveStart).toBe('2026-06-03');
+  });
+
+  it('excludes a Google campaign whose own start is later this month', () => {
+    // Launches on the 20th, today is the 15th — not yet pacing.
+    expect(
+      isEligibleForLivePacing(g({ googleStartDate: '2026-06-20' }), NOW, TZ),
+    ).toBe(false);
   });
 });
 

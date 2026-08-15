@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateFilter } from './smart-list-engine';
+import { addFilterDays, evaluateFilter } from './smart-list-engine';
 import { getFilterableFields, type FilterDefinition } from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
 
@@ -61,6 +61,54 @@ describe('tag operators', () => {
   });
 });
 
+// The engine is the last line of defence for filter JSON already sitting
+// in the database, so every one of these has to narrow to nothing rather
+// than fall through to "matches everyone" — which is what a blast or an
+// ad-platform export would then act on.
+describe('fail-closed semantics', () => {
+  it('an operator from the wrong type family matches nobody', () => {
+    // The re-typed-custom-field case: `last_service_date` was declared a
+    // date, saved segments hold date operators, someone flips it to text.
+    const retyped = getFilterableFields([
+      { key: 'last_service_date', label: 'Last Service Date', type: 'text', category: 'custom' },
+    ]);
+    const d = def('last_service_date', 'more_than_days_ago', '166');
+    expect(evaluateFilter([contact], d, retyped)).toHaveLength(0);
+  });
+
+  it('a value-taking operator with a blank value matches nobody', () => {
+    // `contains ""` is true for every string — the classic fail-open.
+    expect(matches(def('deal_type', 'is_one_of', ''))).toBe(false);
+    expect(matches(def('unit_age_at_purchase', 'num_gte', '   '))).toBe(false);
+  });
+
+  it('a range operator missing its upper bound matches nobody', () => {
+    expect(matches(def('last_purchase_date', 'between', daysAgo(30)))).toBe(false);
+  });
+
+  it('an unknown operator matches nobody', () => {
+    expect(matches(def('deal_type', 'sounds_like', 'Purchase'))).toBe(false);
+  });
+
+  it('an empty definition matches nobody', () => {
+    expect(evaluateFilter([contact], { version: 1, logic: 'AND', groups: [] }, fields)).toHaveLength(0);
+  });
+
+  it('a group with no conditions matches nobody', () => {
+    const empty: FilterDefinition = {
+      version: 1,
+      logic: 'AND',
+      groups: [{ id: 'g', logic: 'AND', conditions: [] }],
+    };
+    expect(evaluateFilter([contact], empty, fields)).toHaveLength(0);
+  });
+
+  it('still matches when the filter is genuinely satisfiable', () => {
+    // Guard against over-correcting into "nothing ever matches".
+    expect(matches(def('deal_type', 'is_one_of', 'Purchase'))).toBe(true);
+  });
+});
+
 describe('relative-date operators (the new ones)', () => {
   it('within_last_days matches a recent past date', () => {
     expect(matches(def('last_purchase_date', 'within_last_days', '30'))).toBe(true);
@@ -77,5 +125,45 @@ describe('relative-date operators (the new ones)', () => {
       customFields: { last_purchase_date: new Date(Date.now() + 5 * 86_400_000).toISOString() },
     } as unknown as Contact;
     expect(matches(def('last_purchase_date', 'within_last_days', '30'), future)).toBe(false);
+  });
+});
+
+describe('relative-date bounds are calendar days, not 24h multiples', () => {
+  // Regression: the bounds used to be `todayStart - days * 86400000`,
+  // which lands at 23:00 (or 01:00) rather than midnight whenever the
+  // span crosses a daylight-saving change. The engine floors the row's
+  // date before comparing and the SQL translator doesn't, so those two
+  // only agree when the bound is a real midnight — this diverged for
+  // roughly half the year, and a differential test caught it only
+  // because it happened to run after midnight.
+  it('lands on midnight across a DST boundary', () => {
+    // Mid-August (DST) back to mid-February (standard time).
+    const august = new Date(2026, 7, 14, 0, 0, 0, 0);
+    const back180 = addFilterDays(august, -180);
+
+    expect(back180.getHours()).toBe(0);
+    expect(back180.getMinutes()).toBe(0);
+    expect(back180.getSeconds()).toBe(0);
+
+    // …and forward across the other transition.
+    const february = new Date(2026, 1, 15, 0, 0, 0, 0);
+    const fwd180 = addFilterDays(february, 180);
+    expect(fwd180.getHours()).toBe(0);
+  });
+
+  // The bug only exists where the clock actually changes. CI runs in
+  // UTC, where a 24h-multiple shift IS midnight and there is nothing to
+  // catch — so this half is conditional, while the invariant above holds
+  // in every zone. (A first version of this test asserted the difference
+  // unconditionally and failed CI for exactly that reason.)
+  const observesDst =
+    new Date(2026, 0, 1).getTimezoneOffset() !==
+    new Date(2026, 6, 1).getTimezoneOffset();
+
+  it.skipIf(!observesDst)('a 24h-multiple shift does NOT, which is the bug', () => {
+    const august = new Date(2026, 7, 14, 0, 0, 0, 0);
+    const naive = new Date(august.getTime() - 180 * 86_400_000);
+    // Pins the difference so nobody "simplifies" the helper back.
+    expect(naive.getHours()).not.toBe(0);
   });
 });

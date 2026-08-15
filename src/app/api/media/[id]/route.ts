@@ -1,22 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { s3PublicUrl, deleteFromS3 } from '@/lib/s3';
+import { deleteFromS3 } from '@/lib/s3';
+import {
+  buildAssetMetadata,
+  serializeMediaAsset,
+  type AssetMetadataData,
+  canAccessAsset,
+} from '@/lib/services/media';
 
-// ── Access helpers ──
-
-/** Check access to an asset based on its accountKey. null = admin-level. */
-function checkAccess(
-  session: { user: { role: string; accountKeys?: string[] } },
-  accountKey: string | null,
-): boolean {
-  const { role, accountKeys = [] } = session.user;
-  if (role === 'developer' || role === 'super_admin') return true;
-  if (role === 'admin' && accountKeys.length === 0) return true;
-  // Admin-level assets: only accessible by devs/unrestricted admins (above)
-  if (accountKey === null) return false;
-  return accountKeys.includes(accountKey);
-}
+/** The DAM metadata keys PATCH accepts. */
+const METADATA_KEYS = [
+  'oem',
+  'assetSource',
+  'assetCategory',
+  'modelYear',
+  'vehicleModel',
+  'rightsHolder',
+  'tags',
+  // Rights (Phase 3)
+  'licenseType',
+  'licenseRef',
+  'licenseStartsAt',
+  'licenseExpiresAt',
+  'usageScope',
+  'territoryScope',
+  'exclusive',
+  'talentReleaseOnFile',
+  'derivativesPermitted',
+  'sublicensingPermitted',
+  'expiresAt',
+] as const;
 
 /**
  * PATCH /api/media/[id]
@@ -28,7 +42,8 @@ function checkAccess(
  * Body (all optional, at least one required):
  *   - name: string — display filename
  *   - altText: string | null — accessible alt text; pass null/'' to clear
- *   - folderId: string | null — move to a folder ('root'/null = the scope root)
+ *   - oem, assetSource, assetCategory, modelYear, vehicleModel, rightsHolder,
+ *     tags — DAM metadata; null/'' clears, absent leaves untouched
  */
 export async function PATCH(
   req: NextRequest,
@@ -40,7 +55,25 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const data: { filename?: string; altText?: string | null; folderId?: string | null; archivedAt?: Date | null } = {};
+  const data: {
+    filename?: string;
+    altText?: string | null;
+    archivedAt?: Date | null;
+  } & AssetMetadataData = {};
+
+  // DAM metadata — only keys actually present in the body are touched, which is
+  // what keeps this a sparse PATCH.
+  const metadataInput: Record<string, unknown> = {};
+  for (const key of METADATA_KEYS) {
+    if (key in body) metadataInput[key] = body[key];
+  }
+  if (Object.keys(metadataInput).length > 0) {
+    const result = buildAssetMetadata(metadataInput);
+    if ('error' in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    Object.assign(data, result.data);
+  }
 
   if (body.archived !== undefined) {
     if (typeof body.archived !== 'boolean') {
@@ -69,7 +102,7 @@ export async function PATCH(
     }
   }
 
-  if (Object.keys(data).length === 0 && body.folderId === undefined) {
+  if (Object.keys(data).length === 0) {
     return NextResponse.json({ error: 'No editable fields provided' }, { status: 400 });
   }
 
@@ -78,43 +111,13 @@ export async function PATCH(
     return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   }
 
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-  }
-
-  // Move to a folder — the target must be in the SAME scope as the asset.
-  if (body.folderId !== undefined) {
-    const target = body.folderId && body.folderId !== 'root' ? String(body.folderId) : null;
-    if (target) {
-      const folder = await prisma.mediaFolder.findUnique({ where: { id: target }, select: { accountKey: true } });
-      if (!folder || (folder.accountKey ?? null) !== (asset.accountKey ?? null)) {
-        return NextResponse.json({ error: 'Folder not found in this scope' }, { status: 400 });
-      }
-    }
-    data.folderId = target;
   }
 
   const updated = await prisma.mediaAsset.update({ where: { id }, data });
 
-  return NextResponse.json({
-    file: {
-      id: updated.id,
-      name: updated.filename,
-      url: s3PublicUrl(updated.s3Key),
-      type: updated.mimeType,
-      size: updated.size,
-      width: updated.width,
-      height: updated.height,
-      thumbnailUrl: updated.thumbnailKey ? s3PublicUrl(updated.thumbnailKey) : undefined,
-      altText: updated.altText,
-      category: updated.category,
-      folderId: updated.folderId,
-      archivedAt: updated.archivedAt ? updated.archivedAt.toISOString() : null,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
-      source: 's3' as const,
-    },
-  });
+  return NextResponse.json({ file: serializeMediaAsset(updated) });
 }
 
 /**
@@ -136,7 +139,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   }
 
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -144,6 +147,19 @@ export async function DELETE(
   await deleteFromS3(asset.s3Key);
   if (asset.thumbnailKey) {
     await deleteFromS3(asset.thumbnailKey);
+  }
+
+  // Rendition ROWS cascade with the master, but their bucket objects don't —
+  // Prisma's onDelete only reaches the database. Collected before the delete,
+  // because afterwards there's nothing left to enumerate them from.
+  const renditions = await prisma.mediaRendition.findMany({
+    where: { assetId: id },
+    select: { s3Key: true },
+  });
+  for (const r of renditions) {
+    await deleteFromS3(r.s3Key).catch(() => {
+      // Best-effort: a leaked derivative is untidy, a failed delete is worse.
+    });
   }
 
   // Delete from DB

@@ -13,6 +13,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import { normalizePhoneNumber } from '@/lib/contact-hygiene';
 
 /** Status callback payload shape — Twilio sends these as form data. */
 export interface TwilioStatusCallbackPayload {
@@ -121,7 +122,50 @@ export async function processTwilioStatusCallback(
     }
   }
 
+  // Roll the SMS engagement timestamps forward so "messaged in the last
+  // N days" is an indexed column read rather than an aggregate join.
+  // 'sent' and 'delivered' both count as reaching the contact, matching
+  // the event types the old read-time aggregate looked for.
+  if ((status === 'sent' || status === 'delivered') && payload.To && payload.accountKey) {
+    await touchSmsEngagement(payload.accountKey, payload.To, new Date());
+  }
+
   return created;
+}
+
+/**
+ * Advance a contact's SMS engagement rollups, forward-only — Twilio
+ * status callbacks arrive out of order routinely (a 'sent' can land
+ * after its 'delivered'), and a late older event must not walk the
+ * timestamp back.
+ *
+ * Matched on the normalised phone, which is how contacts store it.
+ */
+async function touchSmsEngagement(
+  accountKey: string,
+  to: string,
+  timestamp: Date,
+): Promise<void> {
+  const phone = normalizePhoneNumber(to);
+  if (!phone) return;
+
+  await prisma.contact.updateMany({
+    where: {
+      accountKey,
+      phone,
+      OR: [{ lastSmsAt: null }, { lastSmsAt: { lt: timestamp } }],
+    },
+    data: { lastSmsAt: timestamp },
+  });
+
+  await prisma.contact.updateMany({
+    where: {
+      accountKey,
+      phone,
+      OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: timestamp } }],
+    },
+    data: { lastMessageAt: timestamp },
+  });
 }
 
 /**

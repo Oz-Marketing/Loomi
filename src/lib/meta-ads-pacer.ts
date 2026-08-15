@@ -18,12 +18,26 @@ import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 // §3: the ONE "lifetime ad still running" predicate, shared with the client so
 // the over/under base excludes the same ads everywhere.
 import {
-  isLifetimeInProgress,
   effectiveActual,
   classifyAdVariance,
   computeSplitRunSettlement,
+  scheduleEndpoints,
 } from '@/lib/ad-pacer/pacer-calc';
+// The cross-month spend chain (raw → out → in → counted), its per-flight ledger
+// and the conservation invariant. Derived on read from the ad rows; the only
+// stored intent is each flight's billed month (fullRunAppliedToMonth).
+import {
+  buildFlightLedger,
+  checkConservation,
+  countedSpendRow,
+  rawMonthSpend,
+  rollupCrossMonth,
+  type ConservationCheck,
+  type CrossMonthLine,
+  type FlightLedgerEntry,
+} from '@/lib/ad-pacer/cross-month-ledger';
 import { deriveOverageAllowance } from '@/lib/ad-pacer/pacing-engine';
+import { parseEventBudgets } from '@/lib/ad-pacer/labels';
 import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
@@ -291,6 +305,12 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
       (platform === 'google' ? budget?.googleBaseCarryover : budget?.baseCarryover) ?? null,
     addedCarryover:
       (platform === 'google' ? budget?.googleAddedCarryover : budget?.addedCarryover) ?? null,
+    // Google allocator (spec §3/§9). Google-only: the allocator doesn't exist on
+    // the Meta card, so Meta gets nulls rather than a mode it can't honor.
+    // Percent is the default mode for a plan that has never set one.
+    allocationMode:
+      platform === 'google' ? (budget?.googleAllocationMode === 'amt' ? 'amt' : 'pct') : null,
+    eventBudgets: platform === 'google' ? parseEventBudgets(budget?.googleEventBudgets) : null,
     // §0.1: resolved at this single boundary — Account.markup override, else
     // the agency default — so every consumer (client + getPriorOverUnder) gets
     // a concrete factor and never re-resolves or holds a literal.
@@ -303,9 +323,6 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
     overageAllowance,
     ads: ads.map((ad) => ({
       ...ad,
-      // §3: lifetime ad still running — the Over/Under view excludes it from the
-      // settle-able base while it runs (it still shows in total spend).
-      lifetimeInProgress: isLifetimeInProgress(ad, nowMs, tz),
       // Cross-month clarity: this ad's over/under contribution + WHY it differs
       // from plan (real vs cross-month timing). Computed here so the Pacer card,
       // the Over/Under page, and reconciliation all agree (§0.4).
@@ -543,13 +560,26 @@ export async function reconcileCompletedRuns(
       id: true,
       name: true,
       adStatus: true,
+      budgetType: true,
+      period: true,
+      flightStart: true,
       flightEnd: true,
+      liveDate: true,
+      metaStartDate: true,
       metaEndDate: true,
       platform: true,
+      // Google rows end on their Google dates, not Meta's — omit these and a
+      // Google campaign whose flight ended never auto-completes.
+      googleStartDate: true,
+      googleEndDate: true,
+      googleFlightStartOverride: true,
+      googleFlightEndOverride: true,
     },
   });
+  // Same end-date precedence the pacing window uses, so "auto-marked Completed
+  // Run" and "this flight is over" can never disagree.
   const toComplete = ads.filter((a) => {
-    const end = a.metaEndDate ?? a.flightEnd;
+    const end = scheduleEndpoints(a).rawEnd;
     return end != null && todayIso > end; // strictly past the last flight day
   });
   if (toComplete.length === 0) return 0;
@@ -773,7 +803,36 @@ export async function getPeriodPlanView(
   };
   })();
 
-  return { ...view, markup: liveMarkup, siblingsByName };
+  return {
+    ...view,
+    markup: liveMarkup,
+    siblingsByName,
+    ads: refreshDerivedAdFlags(
+      (view as { ads?: unknown }).ads,
+      period,
+      tz,
+    ),
+  };
+}
+
+/**
+ * Re-derive the per-ad "as of now" flags over whatever the view produced.
+ *
+ * `variance` describes an ad's state RIGHT NOW — it is not part of the historical
+ * record, so a frozen month must not serve the value baked into its snapshot at
+ * freeze time. Same reasoning as re-resolving `markup` live above. Idempotent on
+ * the live branches, which just computed it from the same inputs.
+ */
+function refreshDerivedAdFlags(ads: unknown, period: string, tz: string): unknown {
+  if (!Array.isArray(ads)) return ads;
+  const nowMs = Date.now();
+  return ads.map((ad) => {
+    const row = ad as Parameters<typeof classifyAdVariance>[0];
+    return {
+      ...(ad as Record<string, unknown>),
+      variance: classifyAdVariance(row, period, nowMs, tz),
+    };
+  });
 }
 
 // ─── Carryover (Change 7) ──────────────────────────────────────────────────
@@ -781,7 +840,10 @@ export async function getPeriodPlanView(
 export interface PriorOverUnder {
   period: string; // the prior month (YYYY-MM)
   clientBudget: number; // combined gross (Base + Added)
-  spendTarget: number; // combined gross × markup
+  spendTarget: number; // gross × markup, MINUS any reserved allocations (§12)
+  /** Σ reserved allocations removed from spendTarget — reported so a smaller
+   *  target is explainable rather than mysterious. */
+  reservedExcluded: number;
   actual: number; // combined actual spend
   variance: number; // actual − spendTarget (negative = underspent)
   carryover: number; // −variance: +ve means "spend this much more next month"
@@ -798,6 +860,9 @@ export interface PriorOverUnder {
  * NOTE: called from the route AFTER getPeriodPlanView, never from inside it —
  * it calls getPeriodPlanView(prior), so nesting it would recurse.
  */
+/** Cents-precision rounding for the over/under figures. */
+const round2Money = (n: number): number => Math.round(n * 100) / 100;
+
 export async function getPriorOverUnder(
   accountKey: string,
   period: string,
@@ -813,7 +878,20 @@ export async function getPriorOverUnder(
   const clientBudget =
     (isNaN(baseGoal) ? 0 : baseGoal) + (isNaN(addedGoal) ? 0 : addedGoal);
   // view.markup is already the resolved factor (fetchPeriodPlan boundary, §0.1).
-  const spendTarget = effectiveSpendTarget(clientBudget, view.markup ?? 0);
+  const grossSpendTarget = effectiveSpendTarget(clientBudget, view.markup ?? 0);
+  // §12 — a RESERVED line holds budget for a campaign that could not spend yet.
+  // Leaving its target in the month's spend target books the whole reserve as an
+  // underspend and carries it forward as though the account had missed, when in
+  // fact nothing was ever going to be spent there. Take it out of the target,
+  // and report how much was taken so the smaller number is explainable.
+  const reservedExcluded = round2Money(
+    (view.ads ?? []).reduce(
+      (s: number, a: { pacerReserved?: boolean | null; allocation?: string | null }) =>
+        a.pacerReserved ? s + (Number(a.allocation) || 0) : s,
+      0,
+    ),
+  );
+  const spendTarget = round2Money(Math.max(0, grossSpendTarget - reservedExcluded));
   // §2: a resolved straddler counts its full run in its own month.
   const actual = (view.ads ?? []).reduce(
     (
@@ -833,6 +911,7 @@ export async function getPriorOverUnder(
     period: prior,
     clientBudget,
     spendTarget,
+    reservedExcluded,
     actual,
     variance,
     carryover: -variance,
@@ -1226,16 +1305,29 @@ export interface ReconciliationMonth {
   appliedOut: number; // Σ ledger amount sourced FROM this month (consumed)
   unapplied: number; // carryover − appliedOut (still reconcilable)
   appliedIn: number; // Σ ledger amount applied INTO this month
-  /**
-   * §3: this month has ≥1 LIFETIME ad still running — excluded from the
-   * over/under base (its variance books once when the run completes). Drives
-   * the 'lifetime · in progress' badge and explains why, for the live month,
-   * total spend can differ from the settle-able over/under.
-   */
-  hasLifetimeInProgress: boolean;
   /** CM4: per-ad over/under contributions for this month — powers the
    *  Reconciliation row drill-down (which ads drove the variance). */
   ads: ReconAdVariance[];
+  // ── Cross-month spend chain (spec §2 columns 5–8, 10) ──
+  // The auditable decomposition of `actual`: a reader can trace raw → adjustment
+  // → counted without anything moving behind the curtain. `rawSpend` is the
+  // immutable anchor; `countedSpend` is derived and is what `variance` measures.
+  /** Immutable Σ of the month's own Meta-dated spend. Never adjusted. */
+  rawSpend: number;
+  /** Σ settled origin-month slices LEAVING this month (billed later). */
+  crossMonthOut: number;
+  /** Σ settled slices ARRIVING here from earlier months (billed this month). */
+  crossMonthIn: number;
+  /** `rawSpend − crossMonthOut + crossMonthIn`. Derived, never entered. */
+  countedSpend: number;
+  /**
+   * Σ UNSETTLED cross-month slices sitting in this month's raw that will leave
+   * at settlement. Informational — does NOT affect countedSpend yet, so no month
+   * ever goes light for dollars that have not arrived (spec §4).
+   */
+  pendingForward: number;
+  /** The flight lines behind the Out / In / Pending cells (spec §6). */
+  crossMonthLines: CrossMonthLine[];
 }
 
 /**
@@ -1255,6 +1347,14 @@ export interface CarryoverApplication {
 export interface YearReconciliation {
   year: number;
   markup: number;
+  /**
+   * The per-flight cross-month ledger behind the Out / In / Pending columns
+   * (spec §3), and the conservation check that proves no dollar was orphaned or
+   * double counted (spec §5). `conservation.balanced === false` must FLAG the
+   * reconciliation rather than silently pass.
+   */
+  crossMonthFlights: FlightLedgerEntry[];
+  conservation: ConservationCheck;
   /** The live month carryovers land in; '' when the year has no live month. */
   targetPeriod: string;
   months: ReconciliationMonth[];
@@ -1334,6 +1434,15 @@ export async function getYearReconciliation(
       unappliedMonths: [],
       appliedThisMonth: { base: 0, added: 0, total: 0 },
       applications: [],
+      crossMonthFlights: [],
+      conservation: {
+        sumOut: 0,
+        sumIn: 0,
+        carryIn: 0,
+        carryOut: 0,
+        delta: 0,
+        balanced: true,
+      },
     };
   }
 
@@ -1393,13 +1502,6 @@ export async function getYearReconciliation(
   const budgetByPeriod = new Map(budgets.map((b) => [b.period, b]));
   const adCountByPeriod = new Map<string, number>();
   const actualByPeriod = new Map<string, number>(); // Σ all pacerActual (total spend)
-  // §3: per-period sums for LIFETIME ads still in progress — excluded from the
-  // settle-able over/under base (both actual slice AND allocation) so a running
-  // lifetime ad contributes $0 variance; it still counts toward total spend and
-  // books its single variance once it completes (re-enters the base naturally).
-  const ipLifeActualByPeriod = new Map<string, number>();
-  const ipLifeAllocByPeriod = new Map<string, number>();
-  const ipLifePeriods = new Set<string>();
   // CM4: per-ad over/under contribution + timing class, grouped by month, for
   // the Reconciliation row drill-down (same classifier the Over/Under page uses).
   const adVarByPeriod = new Map<string, ReconAdVariance[]>();
@@ -1414,6 +1516,24 @@ export async function getYearReconciliation(
     excludeAllocByPeriod: splitExcludeAllocByPeriod,
     settlementByPeriod: runSettlementByPeriod,
   } = computeSplitRunSettlement(adRows, reconNowMs, tz);
+
+  // Cross-month spend chain (spec §2/§3/§5). Built over EVERY row in the window
+  // because a flight's origin slice and its billed month live in different rows.
+  // `actualByPeriod` below stays Σ effectiveActual — the two agree for a settled
+  // flight with consistent Meta data, and where they diverge it is precisely the
+  // case the ledger exists to expose (a pending flight, or Meta's run figure
+  // disagreeing with the month slices).
+  // Split-marked runs settle by the OTHER mechanism (Prompt 1: once on the final
+  // month against the Meta lifetime budget), so they are kept out of this ledger
+  // — two settlement mechanisms must never both move the same flight's dollars.
+  // Same precedence the in-progress hold-out already applies below.
+  const flightLedger = buildFlightLedger(
+    adRows.filter((a) => !splitMemberIds.has(a.id)),
+    reconNowMs,
+    tz,
+  );
+  const crossMonthByPeriod = rollupCrossMonth(flightLedger, periods);
+  const conservation = checkConservation(flightLedger, periods);
 
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
@@ -1447,17 +1567,6 @@ export async function getYearReconciliation(
           },
     );
     adVarByPeriod.set(a.period, list);
-    // Split-run members are excluded via the split maps above (their whole run
-    // is held out of every month's base + settled once on the final month), so
-    // don't ALSO fold them into the in-progress hold-out — that would double-count.
-    if (isLifetimeInProgress(a, reconNowMs, tz) && !splitMemberIds.has(a.id)) {
-      ipLifePeriods.add(a.period);
-      ipLifeActualByPeriod.set(a.period, (ipLifeActualByPeriod.get(a.period) ?? 0) + n);
-      const alloc = Number(a.allocation ?? 0);
-      if (!isNaN(alloc)) {
-        ipLifeAllocByPeriod.set(a.period, (ipLifeAllocByPeriod.get(a.period) ?? 0) + alloc);
-      }
-    }
   }
   const appliedOutByPeriod = new Map<string, number>();
   const appliedInByPeriod = new Map<string, number>();
@@ -1489,25 +1598,14 @@ export async function getYearReconciliation(
     const hasActual = tracked ? actualByPeriod.has(period) : isBackfilled;
     const appliedIn = appliedInByPeriod.get(period) ?? 0;
     const spendTarget = effectiveSpendTarget(clientBudget, markup);
-    // §3: exclude any LIFETIME ad still in progress from the SETTLE-ABLE base —
-    // both its actual slice and its allocation — so it contributes $0 to the
-    // over/under while running (it books its single variance on completion).
-    // `actual`/`spendTarget` displayed stay the honest totals; only `variance`
-    // uses the base. Settled months have no in-progress lifetime ad, so for them
-    // base == total and nothing changes.
-    const hasLifetimeInProgress = ipLifePeriods.has(period);
-    // Remove both the §3 in-progress lifetime ads AND any cross-month SPLIT run
-    // members from this month's settle-able base (actual + allocation). A split
-    // run never measures against the month's client budget — it settles once,
-    // against its Meta lifetime budget, on its final month (added below).
-    const baseActual =
-      actual -
-      (ipLifeActualByPeriod.get(period) ?? 0) -
-      (splitExcludeActualByPeriod.get(period) ?? 0);
-    const baseTarget =
-      spendTarget -
-      (ipLifeAllocByPeriod.get(period) ?? 0) -
-      (splitExcludeAllocByPeriod.get(period) ?? 0);
+    // A running LIFETIME ad is NOT held out: it spends close to its set budget
+    // whether or not the run has closed, so it counts toward the month's
+    // over/under the whole time it is live, like any daily line. Only a
+    // cross-month SPLIT run leaves the base — that one never measures against a
+    // month's client budget at all, because it settles once against its Meta
+    // lifetime budget on its final month (added below).
+    const baseActual = actual - (splitExcludeActualByPeriod.get(period) ?? 0);
+    const baseTarget = spendTarget - (splitExcludeAllocByPeriod.get(period) ?? 0);
     // The live month's target includes carryover applied INTO it, mirroring the
     // Pacer's adjusted target (base × markup + carryover). Past months never
     // receive carryover (appliedIn = 0), so theirs is unchanged.
@@ -1518,6 +1616,19 @@ export async function getYearReconciliation(
       baseActual - (baseTarget + appliedIn) + (runSettlementByPeriod.get(period) ?? 0);
     const carryover = -variance;
     const appliedOut = appliedOutByPeriod.get(period) ?? 0;
+    // The cross-month chain for this month. `rawSpend` is deliberately Σ
+    // pacerActual — the UNADJUSTED anchor — not `actual` (Σ effectiveActual),
+    // which already has the cross-month substitution folded in; using `actual`
+    // here would apply the adjustment twice. A backfilled month has no rows, so
+    // its raw is the historical figure.
+    const counted = countedSpendRow(
+      tracked
+        ? rawMonthSpend(adRows.filter((a) => a.period === period))
+        : isBackfilled
+          ? (histActual as number)
+          : 0,
+      crossMonthByPeriod.get(period),
+    );
     return {
       period,
       state: monthState(period, tz),
@@ -1534,8 +1645,13 @@ export async function getYearReconciliation(
       appliedOut,
       unapplied: carryover - appliedOut,
       appliedIn,
-      hasLifetimeInProgress,
       ads: adVarByPeriod.get(period) ?? [],
+      rawSpend: counted.rawSpend,
+      crossMonthOut: counted.out,
+      crossMonthIn: counted.in,
+      countedSpend: counted.countedSpend,
+      pendingForward: counted.pendingForward,
+      crossMonthLines: crossMonthByPeriod.get(period)?.lines ?? [],
     };
   });
 
@@ -1596,6 +1712,8 @@ export async function getYearReconciliation(
     markup,
     targetPeriod,
     months,
+    crossMonthFlights: flightLedger,
+    conservation,
     ytdVariance,
     ytdCarryover,
     ytdUnapplied,

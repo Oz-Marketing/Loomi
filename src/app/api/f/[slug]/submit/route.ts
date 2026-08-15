@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { submitForm, FormSubmitError } from '@/lib/forms/submit';
 import { FormValidationError } from '@/lib/forms/validate';
 import { checkRateLimit } from '@/lib/forms/rate-limit';
+import { META_FIELD_PREFIX, sanitizeMetadataRecord } from '@/lib/forms/embed-params';
 
 // Public endpoint — no auth. Receives form submissions from the hosted
 // /f/[slug] page AND from iframes/JS-embed snippets on customer sites.
@@ -75,6 +76,7 @@ export async function POST(
   // fields the client injects, never user-visible form schema fields —
   // we don't want them showing up in `submission.data`.
   const attribution = extractAttribution(rawData);
+  const metadata = extractEmbedMetadata(rawData);
 
   try {
     const result = await submitForm({
@@ -84,6 +86,7 @@ export async function POST(
         ipAddress: ip,
         userAgent: req.headers.get('user-agent'),
         referrer: req.headers.get('referer'),
+        metadata,
         ...attribution,
       },
     });
@@ -154,6 +157,25 @@ function extractAttribution(rawData: Record<string, unknown>): {
     utmTerm: pick('__loomi_utm_term'),
     utmContent: pick('__loomi_utm_content'),
   };
+}
+
+/**
+ * Pluck the `__loomi_meta_*` embed-metadata fields out of the raw
+ * payload (deleting them so they never reach `submission.data`) and
+ * re-apply the key/value rules from `embed-params`.
+ *
+ * The browser sanitized these before POSTing, but this endpoint is
+ * public and CORS-open — anyone can hand-roll a request with a thousand
+ * oversized keys. This pass, not the client's, is what bounds the row.
+ */
+function extractEmbedMetadata(rawData: Record<string, unknown>): Record<string, string> {
+  const collected: Record<string, unknown> = {};
+  for (const key of Object.keys(rawData)) {
+    if (!key.startsWith(META_FIELD_PREFIX)) continue;
+    collected[key.slice(META_FIELD_PREFIX.length)] = rawData[key];
+    delete rawData[key];
+  }
+  return sanitizeMetadataRecord(collected);
 }
 
 async function readBody(req: NextRequest): Promise<Record<string, unknown>> {

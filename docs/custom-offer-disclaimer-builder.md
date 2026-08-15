@@ -34,12 +34,14 @@ The mock is a Vite + Express app: a form, deterministic math, and a Claude call
 that assembles the disclaimer prose, decides MAAP status and co-op eligibility,
 and emits Monday.com board values.
 
+(The Monday output is out of scope — see §7. The offer stays native to Loomi.)
+
 **Taken:**
 
 - The form design and field list. It is the right shape and it is the part that
   took real domain knowledge.
 - The **Audi** and **Volkswagen** template bodies. These are real full-length OEM
-  language, and they parameterise fees that our seeded VW row hardcodes.
+  language, and they parameterize fees that our seeded VW row hardcodes.
 - The idea of **asking a human for Dealer Invoice Total**. This is the correct
   answer to the MAAP problem and the best idea in the package.
 - The deterministic calculations (payments total, total miles) and the money
@@ -69,7 +71,7 @@ and emits Monday.com board values.
    incremental without freezing a brand's month.
 4. **OEM keys use Loomi's canonical brand vocabulary** ([oems.ts](../src/lib/oems.ts)).
    No aliases, no composite pseudo-makes.
-5. **Monday.com output is a copy-to-clipboard panel, not an API integration.**
+5. **Nothing writes to Monday**, in any form. The offer stays native to Loomi.
    See §7.
 
 ## 4. Field and slug mapping
@@ -156,7 +158,7 @@ been edited since):
   payment × term.
 
 Both are fixed by the new `selling_price` and `monthly_payments_total` slugs. The
-mock's Audi/VW bodies already parameterise the `$699` / `$395` / `$0.20` /
+mock's Audi/VW bodies already parameterize the `$699` / `$395` / `$0.20` /
 `30,000` literals our row hardcodes, and should replace them.
 
 ### 4.5 OEM key mapping
@@ -241,24 +243,21 @@ nothing for anyone else until the Co-op team says otherwise. It needs the same
 `price_floor`-style arithmetic (a ceiling rather than a floor), so treat it as
 part of the §5 work.
 
-## 7. Monday.com
+## 7. Monday.com — out of scope
 
-**There is no Monday integration in Loomi.** No package, no `MONDAY_*` env var,
-no API route — every "Monday" hit in the repo is a day-of-week in the pacer or
-date picker.
+**Nothing here writes to Monday, in any form.** Not an API integration, and not
+the copy-to-clipboard handoff panel an earlier draft of this plan proposed. The
+offer stays native to Loomi.
 
-Writing to a Monthly Offer board would mean building against Monday's GraphQL
-API: a stored token, board and column IDs that break when someone renames a
-column, and error handling for a system due to be retired inside a year
-(Projects replaces Monday, committed 1 Apr 2027).
+For the record, since the mock is built around it: there is no Monday integration
+in Loomi at all — no package, no `MONDAY_*` env var, no API route. Every "Monday"
+hit in the repo is a day-of-week in the pacer or the date picker. Building one
+would mean a stored token and per-board column IDs that break when someone
+renames a column, for a system due to be retired inside a year (Projects replaces
+Monday, committed 1 Apr 2027).
 
-**Decision: ship the copy-to-clipboard panel, not the writer.** The mock already
-has this — a "Monday board values" block with per-field and copy-all buttons. It
-costs nothing, works on day one, and disappears cleanly when Monday does.
-
-Worth noting: `AdDisclaimerTemplate` and `AdOemOfferRule` were both ported *from*
-ODT's Monthly Offers system. The real destination for this output is Loomi's own
-offer records; the Monday panel is a bridge.
+`AdDisclaimerTemplate` and `AdOemOfferRule` were both ported *from* ODT's Monthly
+Offers system, and that is where this output belongs — Loomi's own offer records.
 
 ## 8. Powersports and agriculture
 
@@ -296,7 +295,7 @@ Nothing below is useful without these. See §10.
 - Add the 11 slugs to `DISCLAIMER_SLUGS` and the 11 inputs to
   `vehicleOffer.fields`, all `visibleWhen`-gated by offer type.
 - Compute `total_miles` and `monthly_payments_total` in `buildTokenValues`.
-- Replace the seeded Audi/VW template bodies with the mock's parameterised
+- Replace the seeded Audi/VW template bodies with the mock's parameterized
   versions; fix the two substitution bugs in §4.4.
 - Extend the token highlighter and the disclaimer editor's slug list.
 
@@ -307,7 +306,7 @@ shippable.
 `fields: SYSTEM_FIELDS` into a doc at CREATION and `adTemplateFromDoc` reads
 `doc.fields` back, so a doc's schema is frozen when it is made — a new system
 field reaches new docs and nothing else. Every one of the 10 templates in the dev
-library was missing all 11 Programme fields, which meant they existed in code,
+library was missing all 11 Program fields, which meant they existed in code,
 passed their tests, and were invisible in the app.
 
 `scripts/backfill-doc-system-fields.ts` appends any missing system field to each
@@ -331,7 +330,7 @@ Already present, no work needed:
   ([offer-card.tsx:99](../src/components/ad-generator/client-form/offer-card.tsx)).
   The earlier claim that Loomi "has no name for" this distinction was wrong; it
   has the same name the mock uses.
-- **The Programme section.** Phase 1's fields carry `group: 'Programme'`, and the
+- **The Program section.** Phase 1's fields carry `group: 'Program'`, and the
   form renders group sections generically, so the card appeared without any page
   change.
 - **Missing required fields.** `missingRequired` already surfaces them and blocks
@@ -341,19 +340,17 @@ Built in this phase:
 
 - **`deriveOfferFigures`** extracted in `disclaimer.ts` and shared, so the summary
   panel and the disclaimer cannot state different numbers.
-- **`offer-summary.ts`** — the calculated rows and the board handoff, pure and
-  tested.
-- **`OfferSummaryCard`** — shows each derived figure with its arithmetic
-  ("$389 × 36 mo"), then the Monthly Offer board values with per-row and
-  copy-all buttons. Manual entry only: an applied OEM incentive uses the
-  manufacturer's verbatim fine print, so there is no derivation of ours to check.
+- **`offer-summary.ts`** — the calculated rows, pure and tested.
+- **`OfferSummaryCard`** — shows each derived figure with the arithmetic that
+  produced it ("$389 × 36 mo"), rather than asking the reader to trust a total.
+  Manual entry only: an applied OEM incentive uses the manufacturer's verbatim
+  fine print, so there is no derivation of ours to check.
 
 Deferred to Phase 3:
 
 - **Co-op standing on the creative page.** It lives per TEMPLATE in
-  [`AdTemplateCoopApproval`](../prisma/schema.prisma), needs a fetch this page
-  doesn't currently make, and is deliberately ABSENT from the board handoff
-  rather than guessed — see the note in `boardValues`.
+  [`AdTemplateCoopApproval`](../prisma/schema.prisma) and needs a fetch this page
+  doesn't currently make.
 
 ### Phase 3 — MAAP and caps
 
@@ -435,6 +432,6 @@ Recorded so they are not rebuilt:
   here. The register detects that a document *changed*; a human decides what it
   means.
 - **A second rules format alongside `AdCoopRulePack`.**
-- **A Monday.com API writer** (§7).
+- **Any Monday.com output** — writer or copy-paste handoff (§7).
 - **A standalone service.** This is a Loomi feature; it inherits Loomi's auth,
   account scoping, and the ad-generator feature flag.

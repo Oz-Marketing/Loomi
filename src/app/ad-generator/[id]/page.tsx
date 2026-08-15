@@ -942,17 +942,10 @@ export default function AdGeneratorPage() {
               );
             })}
 
-          {/* Custom-offer handoff — the arithmetic behind the disclaimer, and the
-              board values to carry across. Manual entry only: an applied OEM
-              incentive carries the manufacturer's own fine print verbatim, so
+          {/* The arithmetic behind the disclaimer. Manual entry only: an applied
+              OEM incentive carries the manufacturer's own fine print verbatim, so
               there's no derivation of ours for anyone to check. */}
-          {showAutomotiveTools && offerSource === 'manual' && (
-            <OfferSummaryCard
-              data={renderData}
-              disclaimer={renderData.disclaimer ?? ''}
-              missingFields={missing}
-            />
-          )}
+          {showAutomotiveTools && offerSource === 'manual' && <OfferSummaryCard data={renderData} />}
         </div>
 
         {/* Preview + export */}

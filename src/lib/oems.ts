@@ -124,7 +124,7 @@ const OEM_GROUPS: Record<string, readonly string[]> = {
 
 /**
  * The brands a dealer-group acronym stands for, or null when the token isn't a
- * known group. Callers that need per-make behaviour (co-op packs, disclaimer
+ * known group. Callers that need per-make behavior (co-op packs, disclaimer
  * templates) expand explicitly; nothing expands implicitly.
  */
 export function expandBrandGroup(token: string): string[] | null {
@@ -178,10 +178,10 @@ export function normalizeOems(rawOems?: unknown, fallbackOem?: unknown): string[
     const normalized = token.trim();
     if (!normalized) continue;
     const lower = normalized.toLowerCase();
-    // Exact canonical match first, then known shorthand. An unrecognised token is
+    // Exact canonical match first, then known shorthand. An unrecognized token is
     // passed through unchanged rather than dropped — a brand we haven't listed is
     // still the account's brand, and silently losing it would be worse than
-    // carrying it uncanonicalised.
+    // carrying it uncanonicalized.
     const canonical = OEM_CANONICAL_BY_LOWER.get(lower) || OEM_ALIASES[lower] || normalized;
     const key = canonical.toLowerCase();
     if (seen.has(key)) continue;

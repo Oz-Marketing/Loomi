@@ -32,10 +32,10 @@ export const DISCLAIMER_SLUGS: Record<string, string> = {
   stock_number: 'Stock number',
   // ── Full-length OEM lease/finance language ────────────────────────────────
   // Manufacturer disclaimers (Audi, VW, and the brands still to be transcribed)
-  // itemise the lease economics clause by clause. Without these the templates
+  // itemize the lease economics clause by clause. Without these the templates
   // can only be stored with the fees hardcoded, which is how the seeded VW row
   // ended up quoting a $699 acquisition fee at every dealer.
-  selling_price: 'Selling price / capitalised cost — formatted. NOT the MSRP.',
+  selling_price: 'Selling price / capitalized cost — formatted. NOT the MSRP.',
   customer_down:
     'Customer down payment — formatted. NOT `due_at_signing`, which also includes the first payment and the acquisition fee.',
   acquisition_fee: 'Lease acquisition fee — formatted',

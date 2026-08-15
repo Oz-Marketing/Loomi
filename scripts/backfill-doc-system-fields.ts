@@ -7,7 +7,7 @@
  * `SYSTEM_FIELDS` reaches new docs and nothing else. Every template already in
  * the library keeps the schema it was born with.
  *
- * That is how the Programme fields (dealer invoice, advertising allowance,
+ * That is how the Program fields (dealer invoice, advertising allowance,
  * selling price, customer down, the lease fees…) came to exist in code, pass
  * their tests, and still be invisible in the app — no live template carried
  * them, so nobody could type one in, and the Audi/VW disclaimer bodies that
@@ -17,7 +17,7 @@
  * missing, matched by `key`. Existing entries are left exactly as they are —
  * a designer may have edited a label or a placeholder, and this is not the
  * place to overrule that. Field ORDER is preserved and additions go on the end,
- * so no form is reshuffled; new groups (Programme) simply appear last.
+ * so no form is reshuffled; new groups (Program) simply appear last.
  *
  * Idempotent: a second run reports nothing to do.
  *

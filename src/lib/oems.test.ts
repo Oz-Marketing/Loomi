@@ -10,7 +10,7 @@ import {
 } from './oems';
 
 describe('normalizeOems', () => {
-  it('canonicalises casing against the known brand list', () => {
+  it('canonicalizes casing against the known brand list', () => {
     expect(normalizeOems(['kia', 'SUBARU', 'cfmoto'])).toEqual(['Kia', 'Subaru', 'CFMoto']);
   });
 
@@ -38,8 +38,8 @@ describe('normalizeOems', () => {
   });
 
   // Dropping an unknown brand would lose real account data; carrying it
-  // uncanonicalised at least keeps it visible.
-  it('passes an unrecognised brand through unchanged', () => {
+  // uncanonicalized at least keeps it visible.
+  it('passes an unrecognized brand through unchanged', () => {
     expect(normalizeOems('Koenigsegg')).toEqual(['Koenigsegg']);
   });
 
@@ -96,7 +96,7 @@ describe('brand lists', () => {
 });
 
 describe('getAccountOems', () => {
-  it('reads and canonicalises from either field', () => {
+  it('reads and canonicalizes from either field', () => {
     expect(getAccountOems({ oems: ['vw'] })).toEqual(['Volkswagen']);
     expect(getAccountOems({ oem: 'chevy' })).toEqual(['Chevrolet']);
   });

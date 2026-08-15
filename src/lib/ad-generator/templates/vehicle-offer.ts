@@ -164,7 +164,7 @@ export const vehicleOffer: AdTemplate = {
     { key: 'salePrice', label: 'Sale price ($)', type: 'text', group: 'Offer', placeholder: '28995', visibleWhen: { field: 'offerType', in: ['sales_price'] } },
     // Shared across the typed offers
     { key: 'msrp', label: 'MSRP ($)', type: 'text', group: 'Offer', placeholder: '34000', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
-    // Full-length OEM lease economics. Manufacturer disclaimers itemise these
+    // Full-length OEM lease economics. Manufacturer disclaimers itemize these
     // clause by clause; without them a template can only hardcode the figures,
     // which is how the seeded VW row came to quote one dealer's $699 acquisition
     // fee at every dealer. `customerDown` is deliberately SEPARATE from
@@ -181,15 +181,15 @@ export const vehicleOffer: AdTemplate = {
     { key: 'price', label: 'Price', type: 'text', group: 'Offer', placeholder: '$299/mo', visibleWhen: { field: 'offerType', in: ['custom'] } },
     { key: 'terms', label: 'Terms', type: 'text', group: 'Offer', placeholder: '36 months · $2,999 due at signing', visibleWhen: { field: 'offerType', in: ['custom'] } },
     { key: 'expiration', label: 'Expiration', type: 'text', group: 'Offer', placeholder: 'Offer ends March 31' },
-    // Facts about the PROGRAMME rather than the offer — they don't change from
+    // Facts about the PROGRAM rather than the offer — they don't change from
     // one vehicle to the next, and the last two exist to make a pricing-floor
     // (MAAP) check possible at all. Nothing in Loomi has ever held the dealer's
     // invoice figure, which is why both transcribed co-op packs record the
     // manufacturers' pricing rules as "not expressible".
-    { key: 'states', label: 'States / regions', type: 'text', group: 'Programme', placeholder: 'ID; UT; WA; OR; CO', help: 'Where the offer is valid, as it should read in the disclaimer.' },
-    { key: 'dealerCode', label: 'Dealer code', type: 'text', group: 'Programme', placeholder: '32-1234', help: 'Manufacturer-assigned. Required in some OEM disclaimers.' },
-    { key: 'dealerInvoiceTotal', label: 'Dealer invoice total ($)', type: 'text', group: 'Programme', placeholder: '43200', help: 'Needed to check the advertised price against the brand’s pricing floor.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
-    { key: 'maapAllowance', label: 'Advertising allowance ($)', type: 'text', group: 'Programme', placeholder: '3000', help: 'The manufacturer allowance that lowers the pricing floor, if one applies.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
+    { key: 'states', label: 'States / regions', type: 'text', group: 'Program', placeholder: 'ID; UT; WA; OR; CO', help: 'Where the offer is valid, as it should read in the disclaimer.' },
+    { key: 'dealerCode', label: 'Dealer code', type: 'text', group: 'Program', placeholder: '32-1234', help: 'Manufacturer-assigned. Required in some OEM disclaimers.' },
+    { key: 'dealerInvoiceTotal', label: 'Dealer invoice total ($)', type: 'text', group: 'Program', placeholder: '43200', help: 'Needed to check the advertised price against the brand’s pricing floor.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
+    { key: 'maapAllowance', label: 'Advertising allowance ($)', type: 'text', group: 'Program', placeholder: '3000', help: 'The manufacturer allowance that lowers the pricing floor, if one applies.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
     { key: 'vin', label: 'VIN', type: 'text', group: 'Legal', placeholder: '1HGCM82633A004352', help: 'Optional — appended to the disclaimer.' },
     { key: 'stockNumber', label: 'Stock #', type: 'text', group: 'Legal', placeholder: 'H4421A', help: 'Optional — appended to the disclaimer.' },
     { key: 'disclaimer', label: 'Disclaimer', type: 'textarea', group: 'Legal', placeholder: 'Plus tax, title, license…', help: 'Auto-fills from the template + offer; edit to override.' },

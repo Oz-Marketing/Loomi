@@ -133,7 +133,7 @@ export interface LimitTerm {
  * measures a box; none could express "the advertised price may not fall below
  * dealer invoice less the advertising allowance", which is why both transcribed
  * packs record their brand's pricing rules as NOT EXPRESSIBLE. Loomi never held
- * the invoice figure either — that arrives with the Programme fields.
+ * the invoice figure either — that arrives with the Program fields.
  *
  * `limits` holds CANDIDATE limits, each a sum of terms, because at least one
  * brand states its cap two ways at once ("15% of MSRP or $3,500"). With more

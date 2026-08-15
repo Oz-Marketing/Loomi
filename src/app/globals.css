@@ -1,4 +1,19 @@
 @import "tailwindcss";
+
+/* Bind Tailwind's `dark:` variant to the app's own theme switch.
+ *
+ * Without this, `dark:` defaults to `prefers-color-scheme` — the OS — while
+ * everything else here themes off `[data-theme]`. The two disagree whenever a
+ * user picks a theme that isn't their OS setting, and then every `dark:`
+ * utility in the app fires under the wrong theme: on a dark OS with the light
+ * theme chosen, `dark:text-emerald-300` won and the selected offer pill washed
+ * out against its own tint.
+ *
+ * `data-theme` is always present — layout.tsx renders it and ThemeProvider
+ * rewrites it after hydration — so there is no unstamped state for this
+ * selector to miss.
+ */
+@custom-variant dark ([data-theme="dark"] &);
 /* @xyflow/react ships light-mode-only chrome by default. Importing
    here (rather than in the FlowBuilder component) lets our overrides
    below win the cascade — otherwise the per-component import loads

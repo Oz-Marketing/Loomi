@@ -2268,7 +2268,12 @@ export default function MediaPage() {
           <div className="flex items-center gap-3">
             <PhotoIcon className="w-7 h-7 text-[var(--primary)]" />
             <div>
-              <h2 className="text-2xl font-bold">Media Library</h2>
+              {/* "Asset Library", not "Media Library": this holds co-op PDFs,
+                  brand-guideline documents, fonts and campaign zips as well as
+                  images, and "media" quietly tells people not to look here for
+                  those. The route stays /media — no reason to break links over a
+                  label — and the model is still MediaAsset. */}
+              <h2 className="text-2xl font-bold">Asset Library</h2>
               <div className="flex items-center gap-2 text-sm mt-0.5 flex-wrap">
                 {isAdmin ? (
                   effectiveAccountKey ? (
@@ -2317,7 +2322,7 @@ export default function MediaPage() {
                 disabled={uploading}
               >
                 <ArrowUpTrayIcon className="w-4 h-4" />
-                {uploading ? 'Uploading...' : 'Add Media'}
+                {uploading ? 'Uploading...' : 'Add Assets'}
               </PrimaryButton>
             )}
             {effectiveAccountKey && (
@@ -2358,7 +2363,7 @@ export default function MediaPage() {
                     disabled={uploading}
                   >
                     <ArrowUpTrayIcon className="w-4 h-4" />
-                    {uploading ? 'Uploading...' : 'Add Media'}
+                    {uploading ? 'Uploading...' : 'Add Assets'}
                   </PrimaryButton>
                 )}
               </>

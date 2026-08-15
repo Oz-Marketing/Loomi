@@ -16,8 +16,9 @@
  *    (it's a decimal rate like 18.37), so it KEEPS its literal `$`.
  *  - `{APR}%` → `{{apr_rate}}` — Loomi's apr_rate carries its own percent sign.
  *
- * ⚠️ The Audi/VW bodies carry a hardcoded `©2026` notice, as supplied. That will
- * need revisiting each January until there's a slug for it.
+ *  - the supplied `©2026` notice → `©{{copyright_year}}`, which resolves to the
+ *    year the disclaimer is composed. Hardcoding it would have quietly shipped
+ *    the wrong year on every ad from 1 January until someone noticed.
  *
  * EVERY ROW IS `isDefault: false`, INCLUDING THE NEW ONES. `isDefault` is what
  * lets a template auto-apply on the UNATTENDED path (see disclaimer-resolve.ts) —
@@ -63,7 +64,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       'Monthly payments total {{monthly_payments_total}}. Your payment will vary based on dealer contribution and the ' +
       'final negotiated price. At lease end, lessee responsible for disposition fee of {{disposition_fee}}, ' +
       '{{overage_rate}}/mile over {{total_miles}} miles and excessive wear and use. No security deposit required. ' +
-      'VIN: {{vin}}. {{dealership_name}}. Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+      'VIN: {{vin}}. {{dealership_name}}. Offer ends {{offer_end_date}}. ©{{copyright_year}} Audi of America, Inc.',
   },
   {
     make: 'Audi',
@@ -76,7 +77,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       '{{monthly_payment}} based on amount financed of {{amount_financed}} for {{apr_term}} months at {{apr_rate}} APR ' +
       'with {{customer_down}} customer down payment. Monthly payments total {{monthly_payments_total}}. Excludes tax, ' +
       'title, license, options and dealer fees. Not all buyers will qualify. VIN: {{vin}}. {{dealership_name}}. ' +
-      'Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+      'Offer ends {{offer_end_date}}. ©{{copyright_year}} Audi of America, Inc.',
   },
   {
     make: 'Audi',
@@ -86,7 +87,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
     body:
       '{{sale_price}} purchase price available through {{offer_end_date}} for a new, unused {{vehicle}}. Based on MSRP ' +
       'of {{msrp}}. Excludes tax, title, license, options and dealer fees. VIN: {{vin}}. {{dealership_name}}. ' +
-      'Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+      'Offer ends {{offer_end_date}}. ©{{copyright_year}} Audi of America, Inc.',
   },
 
   // ── Volkswagen ─────────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       '{{disposition_fee}}, {{overage_rate}}/mile over {{total_miles}} miles and excessive wear and use. A ' +
       '{{disposition_fee}} fee applies if you purchase your lease vehicle. No security deposit required. Offer not ' +
       'valid in Puerto Rico. Offer not associated with a national Volkswagen incentive program. VIN: {{vin}}. ' +
-      '{{dealership_name}}. Offer ends {{offer_end_date}}. ©2026 Volkswagen of America, Inc.',
+      '{{dealership_name}}. Offer ends {{offer_end_date}}. ©{{copyright_year}} Volkswagen of America, Inc.',
   },
   {
     make: 'Volkswagen',
@@ -124,7 +125,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       'title, license, options and dealer fees. Not all buyers will qualify. Your payment will vary based on dealer ' +
       'contribution and the final negotiated price. Offer not valid in Puerto Rico. Offer not associated with a ' +
       'national Volkswagen incentive program. VIN: {{vin}}. {{dealership_name}}. Offer ends {{offer_end_date}}. ' +
-      '©2026 Volkswagen of America, Inc.',
+      '©{{copyright_year}} Volkswagen of America, Inc.',
   },
   {
     make: 'Volkswagen',
@@ -135,7 +136,7 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       '{{sale_price}} purchase price available through {{offer_end_date}} for a new, unused {{vehicle}}. Based on MSRP ' +
       'of {{msrp}}. Excludes tax, title, license, options and dealer fees. Offer not valid in Puerto Rico. Offer not ' +
       'associated with a national Volkswagen incentive program. VIN: {{vin}}. {{dealership_name}}. ' +
-      'Offer ends {{offer_end_date}}. ©2026 Volkswagen of America, Inc.',
+      'Offer ends {{offer_end_date}}. ©{{copyright_year}} Volkswagen of America, Inc.',
   },
 ];
 

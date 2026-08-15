@@ -188,6 +188,11 @@ export const vehicleOffer: AdTemplate = {
     // manufacturers' pricing rules as "not expressible".
     { key: 'states', label: 'States / regions', type: 'text', group: 'Program', placeholder: 'ID; UT; WA; OR; CO', help: 'Where the offer is valid, as it should read in the disclaimer.' },
     { key: 'dealerCode', label: 'Dealer code', type: 'text', group: 'Program', placeholder: '32-1234', help: 'Manufacturer-assigned. Required in some OEM disclaimers.' },
+    // The manufacturer copyright line resolves to the current year on its own;
+    // this only exists to pin it. `internal` because the one case that needs it
+    // — an ad built in December for a January campaign — is a scheduling
+    // decision, not something a dealer should have to think about.
+    { key: 'copyrightYear', label: 'Copyright year', type: 'text', group: 'Program', audience: 'internal', placeholder: 'auto — the current year', help: 'Only set this to override the year in the manufacturer copyright line, e.g. a December build for a January campaign.' },
     { key: 'dealerInvoiceTotal', label: 'Dealer invoice total ($)', type: 'text', group: 'Program', placeholder: '43200', help: 'Needed to check the advertised price against the brand’s pricing floor.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
     { key: 'maapAllowance', label: 'Advertising allowance ($)', type: 'text', group: 'Program', placeholder: '3000', help: 'The manufacturer allowance that lowers the pricing floor, if one applies.', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
     { key: 'vin', label: 'VIN', type: 'text', group: 'Legal', placeholder: '1HGCM82633A004352', help: 'Optional — appended to the disclaimer.' },

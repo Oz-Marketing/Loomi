@@ -49,6 +49,8 @@ export const DISCLAIMER_SLUGS: Record<string, string> = {
   // chance to get the arithmetic wrong in a legal document.
   total_miles: 'DERIVED: miles per year × (term ÷ 12) — thousands-separated',
   monthly_payments_total: 'DERIVED: monthly payment × term — formatted',
+  copyright_year:
+    'DERIVED: the year the disclaimer is composed, for the manufacturer copyright line (e.g. "©2026 Audi of America, Inc.")',
 };
 
 const DEALER_FEE_BOILERPLATE =
@@ -149,8 +151,22 @@ function pct(v: string | undefined): string | null {
   return t.endsWith('%') ? t : `${t}%`;
 }
 
+/**
+ * Options for the values that aren't carried by the offer itself.
+ *
+ * `now` exists so the copyright year is INJECTABLE rather than read from a
+ * global clock. Reading the clock inside this function would make the composed
+ * disclaimer non-deterministic — the same offer would produce different legal
+ * text either side of midnight on 31 December, and no test could assert on it
+ * without freezing time process-wide. It defaults, so no caller has to care.
+ */
+export interface TokenOptions {
+  /** Treated as "today" for the copyright year. Defaults to the current date. */
+  now?: Date;
+}
+
 /** Resolve `{slug}` values from the offer's structured fields (formatted). */
-export function buildTokenValues(data: AdData): Record<string, string> {
+export function buildTokenValues(data: AdData, opts: TokenOptions = {}): Record<string, string> {
   const v: Record<string, string> = {};
   const set = (k: string, val: string | null) => {
     if (val) v[k] = val;
@@ -187,6 +203,16 @@ export function buildTokenValues(data: AdData): Record<string, string> {
   // ── derived ──
   // One source of truth, shared with the form's summary panel.
   for (const [slug, fig] of Object.entries(deriveOfferFigures(data))) set(slug, fig.value);
+
+  // The manufacturer copyright line. A dealer may pin it via `copyrightYear`
+  // (an ad built in December for a January campaign carries the new year);
+  // otherwise it's the year the disclaimer is composed. Always resolves, so an
+  // OEM body can never print a raw `{{copyright_year}}` on a legal line.
+  // `getFullYear` is LOCAL time, which is the year we want: a Utah store
+  // composing an ad at 5pm on 31 December is still in 2026, and a UTC-based year
+  // would print 2027 on it.
+  const pinned = plain(data.copyrightYear);
+  set('copyright_year', pinned ?? String((opts.now ?? new Date()).getFullYear()));
   return v;
 }
 
@@ -215,8 +241,13 @@ export function substituteTokens(body: string, values: Record<string, string>): 
  * offer's authoritative fine print), it's used VERBATIM — no token substitution —
  * and only the shared boilerplate + VIN/Stock append still run (matching ODT).
  */
-export function composeDisclaimer(data: AdData, templateBody?: string, rawBody?: string): string {
-  const values = buildTokenValues(data);
+export function composeDisclaimer(
+  data: AdData,
+  templateBody?: string,
+  rawBody?: string,
+  opts: TokenOptions = {},
+): string {
+  const values = buildTokenValues(data, opts);
   let out: string;
   if (rawBody != null && rawBody.trim()) {
     out = rawBody.trim();

@@ -114,9 +114,11 @@ Loomi slugs with no mock counterpart — `due_at_signing`, `security_deposit`,
 `cost_per_thousand`, `discount_amount`, `discount_source`, `stock_number` — are
 unaffected and stay.
 
-### 4.3 New slugs (11)
+### 4.3 New slugs (12)
 
-Nine are new form inputs; two are **derived** and must never be typed.
+Nine are new form inputs and three are **derived** — never typed. `copyrightYear`
+is a tenth input, but an internal-only override for a value that resolves on its
+own.
 
 | New slug | New `AdData` key | Type | Notes |
 |---|---|---|---|
@@ -131,6 +133,7 @@ Nine are new form inputs; two are **derived** and must never be typed.
 | `dealer_code` | `dealerCode` | input | |
 | `total_miles` | — | **derived** | `milesPerYear × (leaseTerm ÷ 12)` |
 | `monthly_payments_total` | — | **derived** | `monthlyPayment × term` |
+| `copyright_year` | `copyrightYear` (optional pin) | **derived** | The manufacturer copyright line (`©{{copyright_year}} Audi of America, Inc.`). Defaults to the year the disclaimer is composed, in LOCAL time — a Utah store at 5pm on 31 December is still in 2026, and a UTC year would print 2027. `now` is injected into `buildTokenValues` rather than read from a global clock, so the same offer can't compose different legal text either side of midnight and tests can assert on it. Always resolves, so an OEM body can never print a raw token on a legal line. |
 
 Plus two MAAP-only inputs that are *not* slugs (they never appear in disclaimer
 text — they feed the check):

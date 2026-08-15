@@ -160,3 +160,51 @@ describe('full-length OEM lease clauses', () => {
     expect(v.due_at_signing).toBe('$5,087');
   });
 });
+
+describe('copyright_year', () => {
+  it('resolves to the year the disclaimer is composed', () => {
+    const v = buildTokenValues({ offerType: 'lease' }, { now: new Date('2027-03-14T12:00:00Z') });
+    expect(v.copyright_year).toBe('2027');
+  });
+
+  // The reason `now` is injected rather than read from a global clock: without
+  // it the same offer composes different legal text either side of midnight on
+  // 31 December, and no test can assert on it without freezing time process-wide.
+  //
+  // Constructed in LOCAL time on purpose. The year is the dealer's year, not
+  // UTC's — a Utah store composing an ad at 5pm on 31 December is still in 2026,
+  // and a UTC-based year would print 2027 on it.
+  it('is stable for a given date and changes across the local year boundary', () => {
+    const dec = buildTokenValues({ offerType: 'lease' }, { now: new Date(2026, 11, 31, 23, 59) });
+    const jan = buildTokenValues({ offerType: 'lease' }, { now: new Date(2027, 0, 1, 0, 1) });
+    expect(dec.copyright_year).toBe('2026');
+    expect(jan.copyright_year).toBe('2027');
+  });
+
+  // An ad built in December for a January campaign has to be able to carry the
+  // year it will actually run.
+  it('honors an explicitly pinned year', () => {
+    const v = buildTokenValues(
+      { offerType: 'lease', copyrightYear: '2027' },
+      { now: new Date('2026-12-15T12:00:00Z') },
+    );
+    expect(v.copyright_year).toBe('2027');
+  });
+
+  // It must ALWAYS resolve. A body ending "©{{copyright_year}} Audi of America"
+  // printing a raw token on a legal line is the failure this guards against.
+  it('always resolves, with no offer data at all', () => {
+    expect(buildTokenValues({}).copyright_year).toMatch(/^\d{4}$/);
+  });
+
+  it('substitutes into a manufacturer copyright line', () => {
+    const out = composeDisclaimer(
+      { offerType: 'sales_price', salePrice: '39500' },
+      'Purchase price {{sale_price}}. Excludes dealer fees. ©{{copyright_year}} Audi of America, Inc.',
+      undefined,
+      { now: new Date('2026-06-01T12:00:00Z') },
+    );
+    expect(out).toContain('©2026 Audi of America, Inc.');
+    expect(out).not.toContain('{{copyright_year}}');
+  });
+});

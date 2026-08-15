@@ -76,9 +76,12 @@ function resolveAccountSummary(accountKey: string, account: AccountData | null |
   return { dealer, cityState, industry };
 }
 
-export function UsersTab() {
+export function UsersTab({
+  agencyScope = false,
+  actionSlotId = 'settings-title-actions',
+}: { agencyScope?: boolean; actionSlotId?: string } = {}) {
   const router = useRouter();
-  const { isAccount, accountKey, accounts, userRole } = useAccount();
+  const { isAccount, accountKey, accounts, userRole, scopedAccountKeys } = useAccount();
   const canEditUsers = userRole === 'developer' || userRole === 'super_admin';
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,10 +111,20 @@ export function UsersTab() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Scoped to the active sub-account — and, when that sub-account is an
+  // organization, to its children too, so an org's Users tab rolls up the
+  // people across its sub-accounts instead of showing only those assigned to
+  // the parent itself. `scopedAccountKeys` is the same hierarchy expansion the
+  // rest of the roll-up views use.
+  //
+  // `agencyScope` opts out: Agency Settings is fleet-wide, and it renders in a
+  // modal that deliberately leaves the surrounding account scope alone, so the
+  // roster there must not inherit whichever sub-account you had open.
   const scopedUsers = useMemo(() => {
-    if (!isAccount || !accountKey) return users;
-    return users.filter((user) => user.accountKeys.includes(accountKey));
-  }, [users, isAccount, accountKey]);
+    if (agencyScope || !isAccount || !accountKey) return users;
+    const inScope = new Set(scopedAccountKeys?.length ? scopedAccountKeys : [accountKey]);
+    return users.filter((user) => user.accountKeys.some((k) => inScope.has(k)));
+  }, [users, agencyScope, isAccount, accountKey, scopedAccountKeys]);
 
   const filteredUsers = useMemo(() => {
     if (!search) return scopedUsers;
@@ -185,20 +198,25 @@ export function UsersTab() {
     return sortDirection === 'asc' ? '\u2191' : '\u2193';
   };
 
-  const titleActionsEl = typeof document !== 'undefined' ? document.getElementById('settings-title-actions') : null;
+  // Add User portals into the host's title bar so it sits beside the heading
+  // rather than floating above the table. Every host that renders this tab
+  // provides a slot: the top-level Settings page, the sub-account detail page,
+  // and the Agency Settings modal — the last under its own id, since a modal
+  // open over a settings page would otherwise find the page's slot first and
+  // drop its button behind the overlay.
+  const titleActionsEl =
+    typeof document !== 'undefined' ? document.getElementById(actionSlotId) : null;
+
+  const addUserButton = canEditUsers ? (
+    <PrimaryButton onClick={() => router.push('/settings/users/new')}>
+      <PlusIcon className="w-4 h-4" />
+      Add User
+    </PrimaryButton>
+  ) : null;
 
   return (
     <div>
-      {/* Portal action button into the settings title bar */}
-      {canEditUsers && titleActionsEl && createPortal(
-        <PrimaryButton
-          onClick={() => router.push('/settings/users/new')}
-        >
-          <PlusIcon className="w-4 h-4" />
-          Add User
-        </PrimaryButton>,
-        titleActionsEl,
-      )}
+      {addUserButton && titleActionsEl && createPortal(addUserButton, titleActionsEl)}
 
       <div className="mb-4">
         <div className="relative w-52">

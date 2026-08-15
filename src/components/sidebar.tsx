@@ -25,18 +25,8 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
-  BuildingStorefrontIcon,
-  UsersIcon,
-  SparklesIcon,
-  BriefcaseIcon,
-  CalculatorIcon,
-  BellAlertIcon,
-  BellIcon,
-  SwatchIcon,
-  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { OEM_INDUSTRIES } from '@/components/settings/use-settings-tabs';
 import { useTheme } from '@/contexts/theme-context';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
@@ -168,56 +158,18 @@ const adminNavItems: NavEntry[] = [
 // render; absolute items — Reporting / Ad Generator / Tools — stay global).
 const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 
-// Agency View — the platform-management tier. It doesn't run campaigns, so
-// there's nothing operational to show; with only Dashboard + Templates the rail
-// read as empty while the actual work (sub-accounts, users, platform config)
-// sat buried behind a Settings link. Those are surfaced here instead, split
-// into MANAGE (things you act on) and CONFIGURE (things you set once), so the
-// list is scannable rather than ten flat rows.
+// Agency scope on a NON-settings route — the fleet-wide roll-up views.
 //
-// Role-gated to mirror use-settings-tabs: plain admins don't see the elevated
-// (developer / super_admin) configuration items.
+// The platform-config destinations (sub-accounts, users, industries, …) no
+// longer live here: they moved into the Agency Settings rail, reached by the
+// cog in the top bar. What's left is the agency-level work — the roll-up
+// dashboard, the shared template library, and the media library (the Loomi
+// shared/OEM collection plus every sub-account's).
 //
-// `oemRelevant` mirrors the same gate in use-settings-tabs — this rail declares its
-// own items rather than reading that hook, so anything conditional has to be kept in
-// step in both places or the tab renders with no way to navigate to it.
-function buildAgencyNav(userRole: string | null, oemRelevant: boolean): NavEntry[] {
-  const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  const isElevated = userRole === 'developer' || userRole === 'super_admin';
-  const abs = (href: string, label: string, icon: IconComponent): NavItem => ({ href, label, icon, absolute: true });
-
-  // Media sits with Dashboard and Templates rather than under Manage: at agency
-  // level the library is the Loomi shared/OEM collection plus a roll-up of every
-  // sub-account's, which is something you work in, not something you configure.
-  // Without it the only way in was to switch into a sub-account first.
-  const items: NavEntry[] = [dashboardNav, templatesNav, mediaNav];
-
-  const manage: NavEntry[] = [];
-  if (hasAdminAccess) {
-    manage.push(abs('/settings/subaccounts', 'Sub-Accounts', BuildingStorefrontIcon));
-    manage.push(abs('/settings/users', 'Users', UsersIcon));
-    manage.push(abs('/settings/teams', 'Teams', UserGroupIcon));
-    manage.push(abs('/settings/contact-field-blueprints', 'Field Blueprints', Squares2X2Icon));
-    manage.push(abs('/settings/knowledge', 'Knowledge Base', SparklesIcon));
-  }
-  if (manage.length > 0) items.push({ divider: true, label: 'Manage' }, ...manage);
-
-  const configure: NavEntry[] = [];
-  if (isElevated) {
-    configure.push(abs('/settings/industries', 'Industries', BriefcaseIcon));
-    configure.push(abs('/settings/markup', 'Markup', CalculatorIcon));
-    configure.push(abs('/settings/alerts', 'Alerts', BellAlertIcon));
-  }
-  // Co-op guidelines: only for agencies with manufacturer relationships.
-  if (hasAdminAccess && oemRelevant) {
-    configure.push(abs('/settings/coop-guidelines', 'Co-op Guidelines', ShieldCheckIcon));
-  }
-  configure.push(abs('/settings/notifications', 'Notifications', BellIcon));
-  configure.push(abs('/settings/appearance', 'Appearance', SwatchIcon));
-  items.push({ divider: true, label: 'Configure' }, ...configure);
-
-  return items;
-}
+// These three are slated to be rehomed onto the Organization sub-account (see
+// docs/settings-architecture.md); until that lands they stay reachable here so
+// nothing goes dark.
+const agencyNavItems: NavEntry[] = [dashboardNav, templatesNav, mediaNav];
 
 /**
  * Organization nav. An org both rolls up its sub-accounts AND operates as an
@@ -261,17 +213,10 @@ export function Sidebar() {
 
   let navItems: NavEntry[];
   let prefix = '';
-  // Agency View now lists the settings destinations itself, so the rail must
-  // NOT flip to SettingsNav when you open one — the nav would swap out from
-  // under the link you just clicked.
-  const isAgencyView = isAdmin && !inSubaccountRoute;
+  const isAgencyScope = isAdmin && !inSubaccountRoute;
 
-  if (isAgencyView) {
-    // Agency View: platform management, surfaced inline instead of behind Settings.
-    navItems = buildAgencyNav(
-      userRole,
-      Object.values(accounts ?? {}).some((a) => OEM_INDUSTRIES.has(a?.category ?? '')),
-    );
+  if (isAgencyScope) {
+    navItems = agencyNavItems;
   } else if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;
@@ -381,7 +326,7 @@ export function Sidebar() {
         </>
       }
     >
-      {isSettingsPath(normalizedPath) && !isAgencyView ? (
+      {isSettingsPath(normalizedPath) ? (
         <SettingsNav backHref="/dashboard" backLabel="Back to Studio" collapsed={collapsed} />
       ) : (
         resolvedNavItems.map((entry, i) => {

@@ -448,7 +448,7 @@ function AccountSettingsTab() {
 // ════════════════════════════════════════
 // Knowledge Base Tab
 // ════════════════════════════════════════
-function KnowledgeBaseTab() {
+export function KnowledgeBaseTab() {
   const { markClean, markDirty } = useUnsavedChanges();
   const [content, setContent] = useState('');
   const [savedContent, setSavedContent] = useState('');

@@ -289,7 +289,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   }, [currentKey, recentStorageKey]);
 
   const handleSelect = (key: string | '__admin__') => {
-    const destinationLabel = key === '__admin__' ? 'Agency View' : (accounts[key]?.dealer || key);
+    const destinationLabel = key === '__admin__' ? 'Agency Settings' : (accounts[key]?.dealer || key);
     confirmNavigation(() => {
       // The reporting AND app surfaces don't use the studio `/subaccount/<slug>/*`
       // URL structure — their pages read the active account from context/cookie
@@ -450,7 +450,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
   );
   const triggerLabel = isAdmin
-    ? 'Agency View'
+    ? 'Agency Settings'
     : currentAccount?.dealer || currentKey || 'Select sub-account';
 
   return (
@@ -506,7 +506,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
                 className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--primary)] hover:opacity-80 transition-opacity"
               >
                 <ArrowLeftIcon className="w-3.5 h-3.5" />
-                Back to Agency View
+                Back to Agency Settings
               </button>
             </div>
           )}

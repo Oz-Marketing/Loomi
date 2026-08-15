@@ -75,6 +75,37 @@ const n = (v: unknown): number => {
   return Number.isFinite(x) ? x : 0;
 };
 
+/** Where each channel's own report lives, for the "open it" links. */
+const REPORT_HREF: Record<string, string> = {
+  google: '/ads/google',
+  meta: '/ads/meta',
+  stackadapt: '/ads/stackadapt',
+  email: '/ads/blasts',
+  ga4: '/websites',
+  reputation: '/reputation',
+};
+
+/**
+ * Channel name as the table's first cell. Channels with their own report link
+ * out — matching the arrow-on-hover affordance of `OverviewRow` below — and
+ * any channel not in `REPORT_HREF` stays plain text rather than linking
+ * somewhere it cannot open.
+ */
+function ChannelCell({ label, sourceKey }: { label: string; sourceKey: string }) {
+  const href = REPORT_HREF[sourceKey];
+  if (!href) return <span title={label}>{label}</span>;
+  return (
+    <Link
+      href={href}
+      title={label}
+      className="group flex items-center gap-1.5 transition-colors hover:text-[var(--primary)]"
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <ArrowRightIcon className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+    </Link>
+  );
+}
+
 export function MarketingOverview({ accountKey, dealer }: { accountKey: string; dealer: string }) {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -217,7 +248,7 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
                 <DataTable
                   head={['Channel', 'Spend', 'Impressions', 'Clicks', 'Conversions']}
                   rows={media.map((s) => [
-                    s.label,
+                    <ChannelCell key={s.key} label={s.label} sourceKey={s.key} />,
                     usd0(sourceSpend(s)),
                     num(n(s.metrics?.impressions)),
                     num(n(s.metrics?.clicks)),

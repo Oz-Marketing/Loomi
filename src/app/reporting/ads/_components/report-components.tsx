@@ -11,11 +11,15 @@ import type { ReportComponentProps } from './reports-config';
 import { MetaReport } from './meta-report';
 import { StackAdaptReport } from './stackadapt-report';
 import { GoogleReport } from './google-report';
-import { EmailReport } from './email-report';
+import { BlastsReport } from './blasts-report';
+import { AdTemplatesReport } from './ad-templates-report';
 
 export const REPORT_COMPONENTS: Record<string, ComponentType<ReportComponentProps>> = {
   meta: MetaReport,
   stackadapt: StackAdaptReport,
   google: GoogleReport,
-  email: EmailReport,
+  // `blasts` replaced `email` — the email-only report became Email & Text
+  // Blasts. /reporting/ads/email redirects, so old links still land.
+  blasts: BlastsReport,
+  'ad-templates': AdTemplatesReport,
 };

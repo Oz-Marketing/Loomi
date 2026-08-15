@@ -1,4 +1,5 @@
 import type { AdData } from './types';
+import { OFFER_TYPES } from './offer-text';
 import type { TemplateDoc } from './doc-types';
 import { enrichOfferFields } from './offer-text';
 import { missingRequired, type OemOfferRule, FIELD_LABELS } from './compliance';
@@ -96,8 +97,7 @@ function baseKey(key: string): string {
  * event window. A template needs a permanent slot for it — the generate step
  * refuses to build an ad when a REQUIRED event has nowhere to render — but on any
  * ordinary week the field is legitimately blank. Without this exemption the slot
- * that makes event compliance possible would block every ad outside an event,
- * which is the same trap `costPerThousand` set for lease ads.
+ * that makes event compliance possible would block every ad outside an event.
  *
  * Keep this list tiny and justified. Every entry weakens a check whose whole
  * purpose is catching holes in unattended output.
@@ -116,6 +116,45 @@ export const OPTIONAL_BINDING_KEYS = [
 ];
 
 /**
+ * Bindings that are empty by design only for CERTAIN offer types.
+ *
+ * `costPerThousand` is the case this exists for, and it blocked every lease ad
+ * built from the shared "Vehicle Offer" template. The value is DERIVED from an
+ * APR rate + term (`costPerThousand()` in incentive-apply), so an APR offer
+ * always has one and a lease/discount/sale never does. An element bound to it
+ * with no `visibleWhen` is therefore visible on a lease with nothing to show,
+ * and the empty-binding check correctly-but-uselessly failed the ad.
+ *
+ * Making it unconditionally optional would be the wrong fix: on an APR ad an
+ * empty cost-per-$1,000 is a REAL hole and must still block. So the exemption is
+ * scoped to the offer types where the field is never computed.
+ *
+ * Note this does not make the field un-required — when a manufacturer's rule
+ * demands it (Kia APR, Mazda lease), `missingRequired` raises a blocking
+ * `missing_required` regardless of what this says.
+ */
+const CONDITIONAL_OPTIONAL_BINDINGS: Record<string, (data: AdData) => boolean> = {
+  costPerThousand: (data) => (data.offerType ?? '') !== 'apr',
+  /**
+   * MSRP is part of the OFFER for a discount ("$4,000 OFF MSRP") and a sale price
+   * ("Sale price $31,995. MSRP $34,000") — `assembleOffer` puts it in the terms
+   * line for exactly those two, and their default disclaimers interpolate it. A
+   * lease or APR offer never references it, so an ungated MSRP element blocked
+   * those ads over a number their copy would never have printed.
+   */
+  msrp: (data) => !['discount', 'sales_price'].includes(data.offerType ?? ''),
+};
+
+/** Whether an empty value for `key` is expected rather than a hole. */
+function bindingMayBeEmpty(key: string, data: AdData): boolean {
+  const base = baseKey(key);
+  if (OPTIONAL_BINDING_KEYS.includes(base)) return true;
+  // A second offer's applicability is decided by ITS own offer type.
+  const scoped = key.startsWith('o2_') ? { ...data, offerType: data.o2_offerType } : data;
+  return CONDITIONAL_OPTIONAL_BINDINGS[base]?.(scoped) ?? false;
+}
+
+/**
  * Element ids visible for `data` in at least one of `sizeIds`, mapped to the
  * sizes they appear in. Honours both per-size `hidden` and the element's
  * `visibleWhen` condition, so an APR-only badge isn't demanded of a lease ad.
@@ -126,8 +165,22 @@ function visibleElementSizes(
   sizeIds: string[],
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
+  // A field already declares which offer types it applies to. An element bound to
+  // one INHERITS that when the designer set no condition of its own — otherwise
+  // preflight demands a value the client form wouldn't even ask for. This is the
+  // whole class of bug `costPerThousand` was one instance of: bind an element to
+  // an offer-type-specific field, forget the Show-for, and every ad of every
+  // other offer type fails on an empty binding. The o2_ field specs condition on
+  // `o2_offerType`, so the second offer is judged by its own type for free.
+  const fieldVisibility = new Map<string, { field: string; in: string[] }>();
+  for (const f of doc.fields ?? []) {
+    if (f.visibleWhen) fieldVisibility.set(f.key, f.visibleWhen);
+  }
   for (const el of doc.elements) {
-    if (el.visibleWhen && !el.visibleWhen.in.includes(data[el.visibleWhen.field] ?? '')) continue;
+    const cond =
+      el.visibleWhen ??
+      (el.binding?.kind === 'field' ? fieldVisibility.get(el.binding.key) : undefined);
+    if (cond && !cond.in.includes(data[cond.field] ?? '')) continue;
     const sizes: string[] = [];
     for (const sizeId of sizeIds) {
       const box = doc.layouts?.[sizeId]?.[el.id];
@@ -192,6 +245,12 @@ export interface CoopDesignVerdict {
  * Run every preflight check. Errors block the render; warnings are logged so a
  * reviewer can see them without the ad being skipped.
  */
+/** "an APR Financing offer", "a lease offer" — for messages people read. */
+function offerTypePhrase(offerType?: string): string {
+  const label = OFFER_TYPES.find((t) => t.value === offerType)?.label ?? offerType ?? 'custom';
+  return `${/^[aeiou]/i.test(label) ? 'an' : 'a'} ${label} offer`;
+}
+
 export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }: PreflightInput): PreflightResult {
   const issues: PreflightIssue[] = [];
   const sizes = sizeIds?.length ? sizeIds : doc.sizes.map((s) => s.id);
@@ -216,7 +275,10 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       severity: 'error',
       field: key,
       label,
-      message: `${label} is required for a ${data.offerType || 'custom'} offer${
+      // These now read on the creative form, not just in a run log, so the offer
+      // type gets its display label ("APR Financing", not "apr") and the article
+      // agrees with it — "a apr offer" was fine in a log and is not on screen.
+      message: `${label} is required for ${offerTypePhrase(data.offerType)}${
         oemRule?.make ? ` on ${oemRule.make}` : ''
       }.`,
     });
@@ -265,7 +327,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
     if (!elSizes || el.binding?.kind !== 'field') continue;
     const key = el.binding.key;
     boundFields.add(key);
-    if (OPTIONAL_BINDING_KEYS.includes(baseKey(key))) continue;
+    if (bindingMayBeEmpty(key, enriched)) continue;
     if ((enriched[key] ?? '').trim() !== '') continue;
     const acc = emptyBySizes.get(key) ?? new Set<string>();
     elSizes.forEach((s) => acc.add(s));

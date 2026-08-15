@@ -178,8 +178,8 @@ function buildQuickLinks(prefix: string): QuickLink[] {
     },
     {
       href: `${prefix}/media`,
-      label: 'Media Library',
-      description: 'Shared assets — images, logos, brand files.',
+      label: 'Asset Library',
+      description: 'Shared assets — images, logos, fonts, brand documents.',
       icon: PhotoIcon,
       tone: 'sky',
     },

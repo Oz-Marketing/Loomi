@@ -1,7 +1,8 @@
-import { escapeHtml, sendTransactionalEmail } from '@/lib/users/transactional-email';
-
-const APP_LOGO_LIGHT_URL =
-  'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6995362fd614c941e221bb2e.png';
+import {
+  escapeHtml,
+  resolveEmailLogoUrl,
+  sendTransactionalEmail,
+} from '@/lib/users/transactional-email';
 
 function renderInviteEmailHtml(input: {
   recipientName: string;
@@ -30,7 +31,7 @@ function renderInviteEmailHtml(input: {
           <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="width:100%;max-width:620px;">
             <tr>
               <td style="padding:0 0 14px 0;text-align:center;">
-                <img src="${APP_LOGO_LIGHT_URL}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
+                <img src="${resolveEmailLogoUrl()}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
               </td>
             </tr>
             <tr>

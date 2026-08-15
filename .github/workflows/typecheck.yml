@@ -1,10 +1,19 @@
 name: Typecheck
 
 on:
+  # KEEP THIS. Branch protection on main and staging requires a check literally
+  # named `verify`, which is this job running standalone on a PR. If this trigger
+  # goes away, that required check never reports and every PR blocks forever.
   pull_request:
-  push:
-    branches:
-      - main
+
+  # Called by deploy.yml and deploy-staging.yml so the same definition both runs
+  # and GATES the deploy — see the `verify` job in each.
+  #
+  # Deliberately no `push:` trigger. It used to run on pushes to main (and
+  # briefly staging), but that only ever reported: the deploy workflows fire on
+  # the same event and never looked at the result, so a red typecheck deployed
+  # anyway. Being called by them replaces that, without running twice per push.
+  workflow_call:
 
 jobs:
   verify:

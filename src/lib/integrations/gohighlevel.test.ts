@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeCampaign, aggregateStats } from './gohighlevel';
+import { normalizeCampaign } from './gohighlevel';
 
 /**
- * Parity for the GHL email normalization + aggregation, mirroring Oz Dealer
- * Tools' GoHighLevel::normalizeCampaign / aggregateStats. Engagement defaults
- * to 0 (not available via a Private Integration token).
+ * Parity for the previous provider's campaign normalization, mirroring Oz
+ * Dealer Tools' GoHighLevel::normalizeCampaign. Engagement defaults to 0 (not
+ * available via a Private Integration token).
+ *
+ * The companion aggregateStats parity suite went with the standalone email
+ * report — the Email & Text Blasts route sums these campaigns itself, into a
+ * shape it can merge with Loomi's own sends (lib/reporting/blasts.ts).
  */
 
 describe('normalizeCampaign', () => {
@@ -36,30 +40,5 @@ describe('normalizeCampaign', () => {
     expect(c.sent).toBe(50);
     expect(c.delivered).toBe(50);
     expect(c.delivery_rate).toBe(100);
-  });
-});
-
-describe('aggregateStats (Oz parity)', () => {
-  it('sums counts and computes blended rates', () => {
-    const campaigns = [
-      normalizeCampaign({ totalCount: 1000, successCount: 950, failed: 50, opened: 200, clicked: 40 }),
-      normalizeCampaign({ totalCount: 500, successCount: 500, failed: 0, opened: 100, clicked: 10 }),
-    ];
-    const agg = aggregateStats(campaigns);
-    expect(agg.total_campaigns).toBe(2);
-    expect(agg.total_sent).toBe(1500);
-    expect(agg.total_delivered).toBe(1450);
-    expect(agg.total_failed).toBe(50);
-    expect(agg.delivery_rate).toBe(96.7); // 1450/1500 → 96.666 → 96.7
-    expect(agg.avg_recipients).toBe(750);
-    // base = max(delivered, sent) = 1500 (Oz parity), so 300/1500 → 20.0
-    expect(agg.avg_open_rate).toBe(20);
-    expect(agg.has_engagement).toBe(true);
-  });
-
-  it('flags no engagement when opens/clicks/bounces are all zero', () => {
-    const agg = aggregateStats([normalizeCampaign({ totalCount: 100, successCount: 100 })]);
-    expect(agg.has_engagement).toBe(false);
-    expect(agg.avg_open_rate).toBe(0);
   });
 });

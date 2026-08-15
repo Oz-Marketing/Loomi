@@ -1148,7 +1148,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             <section className={`${sectionCardClass} lg:col-span-2`}>
               <h3 className={sectionHeadingClass}>Logo Variants</h3>
               <p className="text-[11px] text-[var(--muted-foreground)] mb-6 -mt-2">
-                Upload, choose from media library, or paste URLs for each logo variant. Used in email templates and previews.
+                Upload, choose from the asset library, or paste URLs for each logo variant. Used in email templates and previews.
               </p>
               {/* The Storefront Image slot was removed from this tab. The VALUE is
                   deliberately still loaded, saved and sent — a dozen surfaces read
@@ -1769,10 +1769,10 @@ function LogoSlot({
             setShowMediaPicker(true);
           }}
           className="px-2.5 py-1.5 text-[10px] font-medium rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors flex-shrink-0 inline-flex items-center gap-1.5"
-          title="Select from media library"
+          title="Select from asset library"
         >
           <PhotoIcon className="w-3.5 h-3.5" />
-          Media Library
+          Asset Library
         </button>
         <input
           type="text"

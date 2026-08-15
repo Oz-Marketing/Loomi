@@ -2242,23 +2242,38 @@ export default function MediaPage() {
          margins — 1.5rem, then 2rem from 768px. It was px-5 (1.25rem), so the
          full-bleed header overhung by 12px a side and this scroller grew a
          horizontal scrollbar. overflow-x-hidden is the backstop: nothing in a
-         media library should ever scroll sideways. */}
+         media library should ever scroll sideways.
+
+         NO padding-top, deliberately. A sticky `top: 0` child docks against this
+         scroller's CONTENT box, not its padding box, so any padding-top here
+         becomes a permanent strip between the chrome bar above and the docked
+         header — and because the header's backdrop only covers the header, the
+         grid scrolled visibly through that strip. Rest-state clearance comes
+         from `.content-dock-lead` below, which scrolls away instead. */}
       <div
         ref={scrollRef}
         data-scrolled="false"
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 pt-4 md:px-8"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 md:px-8"
       >
         {/* Rest-state clearance above the pinned header, which scrolls away
             beneath it — the same spacer SurfaceShell gives pages inside it.
             This route renders its own chrome, so it has to provide it. */}
         <div aria-hidden className="content-dock-lead" />
       {/* Header */}
-      <div className="page-sticky-header mb-6">
+      {/* mb-2, not mb-6: `.page-sticky-header` already carries 0.75rem of its own
+          bottom padding, so a 1.5rem margin on top of it left ~36px between the
+          title block and the tabs. */}
+      <div className="page-sticky-header mb-2">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3">
             <PhotoIcon className="w-7 h-7 text-[var(--primary)]" />
             <div>
-              <h2 className="text-2xl font-bold">Media Library</h2>
+              {/* "Asset Library", not "Media Library": this holds co-op PDFs,
+                  brand-guideline documents, fonts and campaign zips as well as
+                  images, and "media" quietly tells people not to look here for
+                  those. The route stays /media — no reason to break links over a
+                  label — and the model is still MediaAsset. */}
+              <h2 className="text-2xl font-bold">Asset Library</h2>
               <div className="flex items-center gap-2 text-sm mt-0.5 flex-wrap">
                 {isAdmin ? (
                   effectiveAccountKey ? (
@@ -2307,7 +2322,7 @@ export default function MediaPage() {
                 disabled={uploading}
               >
                 <ArrowUpTrayIcon className="w-4 h-4" />
-                {uploading ? 'Uploading...' : 'Add Media'}
+                {uploading ? 'Uploading...' : 'Add Assets'}
               </PrimaryButton>
             )}
             {effectiveAccountKey && (
@@ -2348,7 +2363,7 @@ export default function MediaPage() {
                     disabled={uploading}
                   >
                     <ArrowUpTrayIcon className="w-4 h-4" />
-                    {uploading ? 'Uploading...' : 'Add Media'}
+                    {uploading ? 'Uploading...' : 'Add Assets'}
                   </PrimaryButton>
                 )}
               </>
@@ -2408,7 +2423,24 @@ export default function MediaPage() {
                 forces the x axis from visible to auto, which is where the
                 horizontal scrollbar came from. overflow-x-hidden makes that
                 impossible regardless of what a future child does. */}
-            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[128px] lg:w-52 lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
+            {/* lg:top tracks the docked header: its height plus the header's
+                bottom margin plus a 4px breath. Changing either the header's
+                height or its mb-* means changing this too, or the rail docks
+                with a gap above it. */}
+            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[96px] lg:w-52 lg:max-h-[calc(100vh-11rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
+              {/* Search leads the rail, above scope. It narrows the same slice
+                  the controls below it define, so it belongs with them rather
+                  than floating over the grid. */}
+              <div className="relative">
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
+                <input
+                  type="text"
+                  value={overviewSearch}
+                  onChange={(e) => setOverviewSearch(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] py-2 pl-9 pr-3 text-sm text-[var(--foreground)]"
+                  placeholder={`Search ${scopeSearchLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}...`}
+                />
+              </div>
               <MediaScopeSection
                 scope={adminScope}
                 onScopeChange={setAdminScope}
@@ -2435,18 +2467,11 @@ export default function MediaPage() {
             </div>
             <div className="min-w-0 flex-1">
 
-              {/* Search — scoped to whatever the rail has selected, and it says so. */}
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="relative flex-1 max-w-xs">
-                  <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                  <input
-                    type="text"
-                    value={overviewSearch}
-                    onChange={(e) => setOverviewSearch(e.target.value)}
-                    className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                    placeholder={`Search ${scopeSearchLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}...`}
-                  />
-                </div>
+              {/* Search now leads the rail (it narrows the same slice the rail
+                  defines), so this row carries only what describes the result:
+                  which slice is showing, and the offer to save it. Right-aligned
+                  because it no longer has a left-hand control to sit beside. */}
+              <div className="mb-4 flex items-center justify-end gap-3">
                 {collectionName ? (
                   <button
                     onClick={() => setActiveCollectionId(null)}

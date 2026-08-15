@@ -187,9 +187,12 @@ export function MediaScopeSection({
   return (
     // Fills the rail wrapper, which owns the width.
     <div className="w-full min-w-0 space-y-3">
-      <div className="flex items-center justify-between px-2">
-        <span className="text-xs font-semibold text-[var(--foreground)]">Scope</span>
-        {scope.kind !== 'all' && (
+      {/* No "Scope" heading: this list leads the rail, directly under the search
+          box, so the only thing it could be is the scope. The row renders ONLY
+          when Reset is available — an always-present empty flex row would still
+          contribute a space-y-3 gap above the list. */}
+      {scope.kind !== 'all' && (
+        <div className="flex items-center justify-end px-2">
           <button
             type="button"
             onClick={() => onScopeChange({ kind: 'all' })}
@@ -198,8 +201,8 @@ export function MediaScopeSection({
             <XMarkIcon className="h-3 w-3" />
             Reset
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="space-y-0.5">
         <Row

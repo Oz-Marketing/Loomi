@@ -218,7 +218,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     label: 'Asset licence expiring',
     description:
       'A media asset\u2019s licence or effective date is approaching (30 days out, then 7). Time to renew or plan a replacement.',
-    category: 'Media Library',
+    category: 'Asset Library',
     // Digest: a licence 30 days out is a planning item, not an interruption.
     channel: 'digest',
     defaultEnabled: true,
@@ -228,7 +228,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     label: 'Asset out of licence',
     description:
       'A media asset has passed its licence or effective date. Creative still using it should be replaced.',
-    category: 'Media Library',
+    category: 'Asset Library',
     // Immediate: an asset in live creative past its licence is active exposure.
     channel: 'immediate',
     defaultEnabled: true,

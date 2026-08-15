@@ -32,6 +32,7 @@ import { useAccount } from '@/contexts/account-context';
 import { Select, type SelectOption } from '@/components/select';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { ShadowPanel, type AutomationView } from '@/components/ad-generator/automation/shadow-panel';
+import { ClientTemplateCard } from '@/components/ad-generator/automation/client-template-card';
 import { useAutomation, type Automation } from '@/components/ad-generator/automation/use-automation';
 
 type Status = 'ok' | 'warn' | 'failed' | 'skipped';
@@ -284,12 +285,37 @@ export default function AutomationDryRunPage() {
     [templates],
   );
 
+  // Non-admins get the one decision that is genuinely theirs — the design their
+  // automated ads use — instead of a locked door. The inspector (watch scope,
+  // offer policy, run caps, dry runs) stays admin-only.
+  // `userRole` is null until the session resolves, which made `isAdmin` false for
+  // a beat and flashed the dealer's single-card view at admins before the
+  // inspector replaced it. Unknown role is "not yet", not "not allowed".
+  if (userRole === null) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 py-8">
+        <div className="h-6 w-40 animate-pulse rounded bg-[var(--muted)]/60" />
+        <div className="mt-6 h-48 animate-pulse rounded-2xl bg-[var(--muted)]/40" />
+      </div>
+    );
+  }
+
   if (!isAdmin) {
     return (
-      <div className="mx-auto max-w-3xl px-6 py-16 text-center">
-        <p className="text-sm text-[var(--muted-foreground)]">
-          The automation inspector is limited to admins.
+      <div className="mx-auto max-w-5xl px-6 py-8">
+        <Link
+          href="/ad-generator"
+          className="mb-4 inline-flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+        >
+          <ArrowLeftIcon className="h-3.5 w-3.5" />
+          Ads
+        </Link>
+        <h1 className="mb-1 text-lg font-semibold text-[var(--foreground)]">Automatic ads</h1>
+        <p className="mb-6 max-w-2xl text-xs text-[var(--muted-foreground)]">
+          Manufacturer offers for {accountData?.dealer || 'this sub-account'} are turned into ads for
+          you each month.
         </p>
+        <ClientTemplateCard accountKey={accountKey} accountData={accountData} />
       </div>
     );
   }

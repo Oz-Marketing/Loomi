@@ -22,6 +22,7 @@ import {
   resolvePlaceConfig,
   getPlaceDetails,
 } from '@/lib/integrations/google-places';
+import { getReviewHistory, getHistoryCoverage } from '@/lib/reporting/review-history';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,10 +30,24 @@ export async function GET(req: NextRequest) {
   const { ctx, error } = await requireReportingAccess();
   if (error) return error;
 
-  const accountKey = req.nextUrl.searchParams.get('accountKey');
+  const sp = req.nextUrl.searchParams;
+  const accountKey = sp.get('accountKey');
   if (!accountKey) return NextResponse.json({ error: 'Missing accountKey' }, { status: 400 });
   if (!canAccessAccount(ctx.accountKeys, accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+
+  // Dates scope the HISTORY only; the live Places rating has no range — it is
+  // whatever the listing says right now. Defaults to the trailing year, which
+  // is the window the trend chart draws anyway.
+  const today = new Date();
+  const yearAgo = new Date(today);
+  yearAgo.setUTCFullYear(yearAgo.getUTCFullYear() - 1);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const startDate = sp.get('start_date') || iso(yearAgo);
+  const endDate = sp.get('end_date') || iso(today);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+    return NextResponse.json({ error: 'start_date / end_date must be YYYY-MM-DD' }, { status: 400 });
   }
 
   try {
@@ -59,11 +74,25 @@ export async function GET(req: NextRequest) {
       ? await getPlaceDetails(apiKey, cfg.competitorPlaceId).catch(() => null)
       : null;
 
+    // History comes from ReviewEvent, not Places — Places has no concept of
+    // "reviews in March", no distribution over a range, and no reply status.
+    // It is best-effort for the same reason the competitor is: the live rating
+    // is the headline, and an account that hasn't been swept yet should still
+    // get its current rating rather than an error page.
+    const [history, coverage] = await Promise.all([
+      getReviewHistory(accountKey, startDate, endDate).catch(() => null),
+      getHistoryCoverage(accountKey).catch(() => null),
+    ]);
+
     return NextResponse.json({
       accountKey,
       dealer: account?.dealer ?? accountKey,
+      startDate,
+      endDate,
       place,
       competitor,
+      history,
+      coverage,
     });
   } catch (err) {
     if (err instanceof PlacesError) {

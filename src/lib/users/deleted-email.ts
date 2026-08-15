@@ -1,16 +1,8 @@
-import nodemailer from 'nodemailer';
-
-const APP_LOGO_LIGHT_URL =
-  'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6995362fd614c941e221bb2e.png';
-
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
+import {
+  escapeHtml,
+  resolveEmailLogoUrl,
+  sendTransactionalEmail,
+} from '@/lib/users/transactional-email';
 
 function renderDeletedEmailHtml(recipientName: string): string {
   const name = escapeHtml(recipientName);
@@ -29,7 +21,7 @@ function renderDeletedEmailHtml(recipientName: string): string {
           <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="width:100%;max-width:620px;">
             <tr>
               <td style="padding:0 0 14px 0;text-align:center;">
-                <img src="${APP_LOGO_LIGHT_URL}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
+                <img src="${resolveEmailLogoUrl()}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
               </td>
             </tr>
             <tr>
@@ -77,28 +69,6 @@ export async function sendUserDeletedEmail(input: {
   to: string;
   recipientName: string;
 }): Promise<void> {
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = Number(process.env.SMTP_PORT || '587');
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpFrom = process.env.SMTP_FROM || smtpUser;
-
-  if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
-    throw new Error(
-      'Email is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, and optionally SMTP_FROM.',
-    );
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: Number.isFinite(smtpPort) ? smtpPort : 587,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
-  });
-
   const safeRecipientName = input.recipientName.trim() || input.to;
   const subject = 'Your Loomi Studio account has been removed';
   const html = renderDeletedEmailHtml(safeRecipientName);
@@ -110,11 +80,11 @@ export async function sendUserDeletedEmail(input: {
     'If you believe this was done in error, please contact your administrator.',
   ].join('\n');
 
-  await transporter.sendMail({
-    from: smtpFrom,
+  await sendTransactionalEmail({
     to: input.to,
     subject,
     html,
     text,
+    purpose: 'Account removal email',
   });
 }

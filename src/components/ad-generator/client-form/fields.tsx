@@ -10,23 +10,32 @@ import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import type { AdData, FieldSpec } from '@/lib/ad-generator/types';
 import { EvoxPickerModal } from './evox-picker';
 
-/** Per-offer-type pill colours. Identity, not severity — one hue per type. */
+/**
+ * Per-offer-type pill colours. Identity, not severity — one hue per type.
+ *
+ * The selected label's colour comes from `--offer-pill-ink`, set per theme in
+ * globals.css, NOT from a `dark:` utility. Tailwind's `dark:` variant is not
+ * wired to this app's `[data-theme]` switch — it still follows the OS — so on a
+ * dark OS with the light theme chosen, `dark:text-emerald-300` won and the
+ * selected pill washed out against its own tint. See the note by the
+ * `.offer-pill-on` rule.
+ */
 const OFFER_TYPE_TONE: Record<string, { on: string; off: string }> = {
   lease: {
-    on: 'border-indigo-500 bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
-    off: 'hover:border-indigo-400/60 hover:text-indigo-500',
+    on: 'offer-pill-on border-indigo-500 bg-indigo-500/15 [--offer-pill-ink:var(--pill-ink-indigo)]',
+    off: 'hover:border-indigo-400/60 hover:text-indigo-600',
   },
   apr: {
-    on: 'border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-300',
-    off: 'hover:border-emerald-400/60 hover:text-emerald-500',
+    on: 'offer-pill-on border-emerald-500 bg-emerald-500/15 [--offer-pill-ink:var(--pill-ink-emerald)]',
+    off: 'hover:border-emerald-400/60 hover:text-emerald-600',
   },
   discount: {
-    on: 'border-amber-500 bg-amber-500/15 text-amber-600 dark:text-amber-300',
-    off: 'hover:border-amber-400/60 hover:text-amber-500',
+    on: 'offer-pill-on border-amber-500 bg-amber-500/15 [--offer-pill-ink:var(--pill-ink-amber)]',
+    off: 'hover:border-amber-400/60 hover:text-amber-600',
   },
   sales_price: {
-    on: 'border-sky-500 bg-sky-500/15 text-sky-600 dark:text-sky-300',
-    off: 'hover:border-sky-400/60 hover:text-sky-500',
+    on: 'offer-pill-on border-sky-500 bg-sky-500/15 [--offer-pill-ink:var(--pill-ink-sky)]',
+    off: 'hover:border-sky-400/60 hover:text-sky-600',
   },
   custom: {
     on: 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--foreground)]',

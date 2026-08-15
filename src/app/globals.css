@@ -239,6 +239,30 @@ select[class*="bg-[var(--background)]"] {
   background-color: var(--card) !important;
 }
 
+/* Offer-type pills.
+   Tailwind's `dark:` variant is not bound to this app's `[data-theme]` switch —
+   with no `@custom-variant dark`, it still resolves against the OS. So a dark OS
+   with the light theme chosen applied every `dark:` colour anyway, and the
+   selected pill's label washed out against its own 15% tint. Driving the label
+   from a token defined under each theme block makes it follow the theme the user
+   actually picked. (The same mismatch is why the amber patches below exist.) */
+.offer-pill-on {
+  color: var(--offer-pill-ink);
+}
+:root,
+[data-theme='light'] {
+  --pill-ink-indigo: #3730a3;
+  --pill-ink-emerald: #065f46;
+  --pill-ink-amber: #92400e;
+  --pill-ink-sky: #075985;
+}
+[data-theme='dark'] {
+  --pill-ink-indigo: #a5b4fc;
+  --pill-ink-emerald: #6ee7b7;
+  --pill-ink-amber: #fcd34d;
+  --pill-ink-sky: #7dd3fc;
+}
+
 /* Light mode warning color tuning (keeps dark mode unchanged) */
 [data-theme='light'] .text-amber-500,
 [data-theme='light'] .text-amber-400,

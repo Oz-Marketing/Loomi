@@ -65,7 +65,7 @@ export async function PATCH(
     const updatePayload: Record<string, string | number | null | undefined> = {};
 
     // Simple string fields
-    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail', 'metaAdAccountId', 'stackadaptAdvertiserId', 'googleAdsCustomerId', 'ghlLocationId'] as const;
+    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail', 'metaAdAccountId', 'stackadaptAdvertiserId', 'googleAdsCustomerId', 'ghlLocationId', 'ga4PropertyId', 'ga4Platform', 'googlePlaceId', 'googleCompetitorPlaceId'] as const;
     for (const field of stringFields) {
       if (field in body) {
         const value = body[field];

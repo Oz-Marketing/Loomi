@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, type ComponentType } from 'react';
+import { useState, useEffect, useCallback, useMemo, type ComponentType } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -16,6 +16,7 @@ import {
   InboxStackIcon,
   MapIcon,
   MapPinIcon,
+  ScaleIcon,
   MegaphoneIcon,
   PhoneIcon,
   PresentationChartLineIcon,
@@ -34,7 +35,7 @@ import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
-import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
+import { visibleReports } from '../ads/_components/reports-config';
 
 /**
  * Reporting sidebar — branding + nav only. User identity, theme toggle, Studio
@@ -82,7 +83,8 @@ const REPORT_BRAND_ICON: Record<string, ComponentType<{ className?: string }>> =
 // rows on purpose, so the intended shape of Reporting is legible before the
 // data lands. Drop the flag as each one ships; delete a group only if its
 // last member is cut.
-const NAV: NavItem[] = [
+function buildNav(isClient: boolean): NavItem[] {
+  return [
   { key: 'dashboard', label: 'Dashboard', icon: HomeIcon, href: '/', matchExact: true },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon, href: '/contacts' },
   //
@@ -99,7 +101,7 @@ const NAV: NavItem[] = [
     key: 'digital-ads',
     label: 'Digital Ads',
     icon: MegaphoneIcon,
-    children: DIGITAL_ADS_REPORTS.map((r) => ({
+    children: visibleReports(isClient).map((r) => ({
       href: `/ads/${r.key}`,
       label: r.label,
       soon: r.status !== 'live',
@@ -126,6 +128,9 @@ const NAV: NavItem[] = [
     label: 'Sales & Service',
     icon: PresentationChartLineIcon,
     children: [
+      // First in the group: it is the question the rest of the group's numbers
+      // get used to answer.
+      { href: '/acquisition', label: 'Acquisition Cost', icon: ScaleIcon },
       { href: '/leads', label: 'Lead Performance', icon: UserPlusIcon },
       { href: '/sales-trend', label: 'Sales Trend', icon: ArrowTrendingUpIcon },
       { href: '/service-trend', label: 'Service Trend', icon: WrenchScrewdriverIcon },
@@ -134,22 +139,40 @@ const NAV: NavItem[] = [
       { href: '/direct-mail', label: 'Direct Mail ROI', icon: InboxStackIcon },
     ],
   },
-  // Staff-only comparison of every rooftop. Rendered for everyone; the page
-  // itself gates on role and on more than one account being in scope, so the
-  // nav doesn't need to duplicate that logic (and can't — it has no session).
-  { key: 'executive', label: 'Executive', icon: PresentationChartLineIcon, href: '/executive' },
+  // Staff-only comparison of every rooftop — the same "whose report is it"
+  // category as Ad Templates, so a client doesn't get the nav entry either.
+  //
+  // This used to be rendered for everyone, on the reasoning that the page
+  // gates on role anyway and the nav "can't — it has no session". The second
+  // half is no longer true: the sidebar reads `userRole` for the Digital Ads
+  // filter, so it can and should. The page keeps its own gate — a hidden nav
+  // entry is not a permission check.
+  ...(isClient
+    ? []
+    : [
+        {
+          key: 'executive',
+          label: 'Executive',
+          icon: PresentationChartLineIcon,
+          href: '/executive',
+        } as NavItem,
+      ]),
   // Top level, not under Digital Ads: the ledger covers every channel including
   // non-digital fee lines, so filing it under Digital Ads would understate what
   // it holds. Read-only here — authoring lives in the budget hub.
   { key: 'budget', label: 'Budget', icon: BanknotesIcon, href: '/budget' },
-];
+  ];
+}
 
 const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';
 
 export function ReportingSidebar() {
   const pathname = usePathname();
   const { collapsed } = useSidebarCollapse();
-  const { isAccount, accountKey } = useAccount();
+  const { isAccount, accountKey, userRole } = useAccount();
+  // Agency-only reports drop out of the nav entirely for clients — see the
+  // `internal` flag in reports-config.
+  const NAV = useMemo(() => buildNav(userRole === 'client'), [userRole]);
   const settingsActive = pathname.startsWith('/settings');
   // Sub-account settings render the SAME sector-gated sections as Studio, via
   // the shared sub-account detail page. Studio reaches it at
@@ -344,7 +367,7 @@ function GroupNav({
         </button>
         <div className="invisible absolute left-full top-0 z-50 ml-2 translate-x-1 opacity-0 transition-all duration-150 group-hover/nav:visible group-hover/nav:translate-x-0 group-hover/nav:opacity-100">
           <div className="glass-dropdown min-w-[190px] p-1.5 shadow-lg">
-            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
+            <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
               {item.label}
             </p>
             {item.children!.map((c) => (
@@ -398,7 +421,7 @@ function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
           {child.icon && <child.icon className="h-4 w-4" />}
           {child.label}
         </span>
-        <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider">
+        <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider">
           soon
         </span>
       </div>

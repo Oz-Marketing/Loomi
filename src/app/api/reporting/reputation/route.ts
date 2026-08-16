@@ -19,9 +19,9 @@ import { prisma } from '@/lib/prisma';
 import {
   PlacesError,
   getPlacesApiKey,
-  resolvePlaceConfig,
   getPlaceDetails,
 } from '@/lib/integrations/google-places';
+import { resolvePlaceConfig } from '@/lib/integrations/account-mapping';
 import { getReviewHistory, getHistoryCoverage } from '@/lib/reporting/review-history';
 
 export const dynamic = 'force-dynamic';
@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
         'not_configured',
       );
     }
-    const cfg = resolvePlaceConfig(accountKey);
+    const cfg = await resolvePlaceConfig(accountKey);
     if (!cfg) {
       throw new PlacesError('No Google place is mapped to this account yet.', 'no_place');
     }

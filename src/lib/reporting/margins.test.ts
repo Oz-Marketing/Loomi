@@ -1,13 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  applyMargins,
-  applyMetaMargins,
-  applyGoogleMargins,
-  applyStackAdaptMargins,
-  META_MARGIN_FIELDS,
-  STACKADAPT_MARGIN_FIELDS,
-  GOOGLE_MARGIN_FIELDS,
-} from './margins';
+import { applyMargins, applyMetaMargins, applyGoogleMargins, applyStackAdaptMargins, META_MARGIN_FIELDS, STACKADAPT_MARGIN_FIELDS, GOOGLE_MARGIN_FIELDS } from './margins';
 
 /**
  * Numbers below are the exact output of Oz Dealer Tools' PHP `applyMargins()`

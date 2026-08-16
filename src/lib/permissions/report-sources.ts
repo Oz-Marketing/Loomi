@@ -20,7 +20,7 @@
  * Server-only.
  */
 import { prisma } from '@/lib/prisma';
-import { resolveGa4Property } from '@/lib/integrations/ga4';
+import { resolveGa4Property } from '@/lib/integrations/account-mapping';
 import { REPORTS, type ReportKey } from './reports';
 
 export type SourceState = 'builtin' | 'connected' | 'missing';
@@ -64,7 +64,10 @@ export async function resolveReportSources(
     },
   });
 
-  const [callEvents, reviews, billboards, mailers, dmsEvents] = await Promise.all([
+  // GA4's mapping moved from an env map onto `Account.ga4PropertyId`, so
+  // resolving it is a query now — issued alongside the counts, not after them.
+  const [ga4PropertyId, callEvents, reviews, billboards, mailers, dmsEvents] = await Promise.all([
+    resolveGa4Property(accountKey),
     prisma.callEvent.count({ where: { accountKey }, take: 1 }),
     prisma.reviewEvent.count({ where: { accountKey }, take: 1 }),
     prisma.billboard.count({ where: { accountKey }, take: 1 }),
@@ -92,8 +95,7 @@ export async function resolveReportSources(
     ads: configured(account?.metaAdAccountId, 'Meta ad account'),
     google: configured(account?.googleAdsCustomerId, 'Google Ads account'),
     stackadapt: configured(account?.stackadaptAdvertiserId, 'StackAdapt advertiser'),
-    // GA4 property IDs come from an env map, not the account row.
-    websites: configured(resolveGa4Property(accountKey), 'GA4 property'),
+    websites: configured(ga4PropertyId, 'GA4 property'),
     business_profile: configured(
       account?.gbpConnection?.id ?? null,
       'Google Business Profile',

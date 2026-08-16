@@ -366,6 +366,30 @@ model Account {
   // Google Ads API credentials (developer token + OAuth) are agency-wide in env.
   // Ported from Oz Dealer Tools' per-org google_ads_customer_id / google_ads_margin.
   googleAdsCustomerId        String?
+  // GA4 property this sub-account's Website Analytics report reads, digits
+  // only, plus the website PLATFORM key that selects the VDP url pattern
+  // (dealer_com, dealer_spike, room58, …; see VDP_PLATFORM_PATTERNS).
+  //
+  // Both used to live in env — GA4_PROPERTY_MAP / GA4_PLATFORM_MAP — which
+  // meant onboarding a rooftop required editing an env var and REDEPLOYING,
+  // and left the Website report with no in-app page to send an agency user to
+  // when it came back unmapped. The env maps are still read as a fallback so
+  // the cutover needs no flag day; delete them once the backfill has run in
+  // every environment. See docs/reporting-redesign.md §5.
+  ga4PropertyId              String?
+  ga4Platform                String?
+  // Google Places listing behind the Reputation report, plus one competitor
+  // listing to benchmark against. Same env-to-DB move as the GA4 pair above
+  // (was GOOGLE_PLACES_MAP).
+  //
+  // googlePlaceId is also read in REVERSE by the review ingest, which knows a
+  // listing id and needs the account that owns it — so two accounts must never
+  // carry the same one. Not a unique constraint: nulls are the common case and
+  // the ingest already reports a collision rather than guessing, which is the
+  // safer failure (picking one would attribute a rooftop's reviews to its
+  // neighbour, silently).
+  googlePlaceId              String?
+  googleCompetitorPlaceId    String?
 
   // ── Audience sync consent ──
   //

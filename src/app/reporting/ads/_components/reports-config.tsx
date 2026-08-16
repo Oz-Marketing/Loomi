@@ -18,6 +18,7 @@ import {
   RectangleGroupIcon,
 } from '@heroicons/react/24/outline';
 import type { DateRangeKey } from './shared';
+import type { ReportLens } from '../../_components/lens';
 
 export interface ReportComponentProps {
   accountKey: string;
@@ -26,6 +27,11 @@ export interface ReportComponentProps {
   compareTo: string;
   isDark: boolean;
   onJump: (k: DateRangeKey) => void;
+  /**
+   * Which audience this render is for. Sections that exist to drive an
+   * optimization decision render only under 'team'; see _components/lens.tsx.
+   */
+  lens: ReportLens;
 }
 
 export interface ReportDef {
@@ -45,6 +51,25 @@ export interface ReportDef {
    * opposite: the whole point is the view across every account.
    */
   accountOptional?: boolean;
+  /**
+   * Agency-only. The report is about how WE work, not how the client's money
+   * performed, so it is hidden from the nav and refused by the route for the
+   * `client` role rather than merely reduced by the team lens.
+   *
+   * The lens answers "how much detail"; this answers "whose report is it".
+   * Ad Templates is the clear case: it ranks template usage ACROSS every
+   * account, so showing it to one client would expose the shape of the
+   * agency's work for all the others.
+   *
+   * OVERLAPS lib/permissions/reports.ts, which expresses the same idea as
+   * `group: 'internal'` + `defaultForClients: false` and is the direction of
+   * travel. Two reasons this flag still exists rather than deferring to it:
+   * that registry has no `ad_templates` key at all, and its enforcement is
+   * still behind PERMISSIONS_ENFORCE_CAPABILITIES. Fold this into the registry
+   * when enforcement is switched on — and delete this flag then, rather than
+   * leaving two places that decide the same thing.
+   */
+  internal?: boolean;
 }
 
 export const DIGITAL_ADS_REPORTS: ReportDef[] = [
@@ -55,7 +80,7 @@ export const DIGITAL_ADS_REPORTS: ReportDef[] = [
   // the email history carried over from the provider used before Loomi — see
   // lib/reporting/blasts.ts. The previous vendor is never named in the UI.
   { key: 'blasts', label: 'Email & Text Blasts', blurb: 'Email and text sends, plus flow performance', icon: PaperAirplaneIcon, status: 'live' },
-  { key: 'ad-templates', label: 'Ad Templates', blurb: 'Which ad templates get used, by hand and by the automation', icon: RectangleGroupIcon, status: 'live', accountOptional: true },
+  { key: 'ad-templates', label: 'Ad Templates', blurb: 'Which ad templates get used, by hand and by the automation', icon: RectangleGroupIcon, status: 'live', accountOptional: true, internal: true },
 ];
 
 /**
@@ -78,3 +103,11 @@ export function findReport(key: string): ReportDef | undefined {
 
 /** Live reports only — used for the tab bar (you can't open a "soon" report). */
 export const LIVE_REPORTS = DIGITAL_ADS_REPORTS.filter((r) => r.status === 'live');
+
+/**
+ * The reports a given role may see. Client users lose the `internal` ones
+ * entirely — from the nav, the tab bar, and the route.
+ */
+export function visibleReports(isClient: boolean): ReportDef[] {
+  return isClient ? DIGITAL_ADS_REPORTS.filter((r) => !r.internal) : DIGITAL_ADS_REPORTS;
+}

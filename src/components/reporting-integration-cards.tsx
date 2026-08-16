@@ -19,8 +19,9 @@ import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { VDP_PLATFORM_PATTERNS } from '@/lib/integrations/ga4-platforms';
 
-type FieldType = 'text' | 'margin' | 'secret';
+type FieldType = 'text' | 'margin' | 'secret' | 'select';
 
 interface FieldSpec {
   key: string;
@@ -28,6 +29,8 @@ interface FieldSpec {
   label: string;
   placeholder: string;
   help?: string;
+  /** `select` only — the allowed values, in the order they should be listed. */
+  options?: { value: string; label: string }[];
 }
 
 interface ReportingProvider {
@@ -42,6 +45,21 @@ interface ReportingProvider {
 }
 
 const MARGIN_HELP = 'Billed cost = actual ÷ (1 − margin/100). Blank = bill at face value.';
+
+/**
+ * Website platforms, derived from the VDP pattern table rather than retyped, so
+ * adding a platform there offers it here automatically and a value can never be
+ * saved that the report has no regex for. Blank = the `dealer_com` default.
+ */
+const VDP_PLATFORM_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Dealer.com (default)' },
+  ...Object.keys(VDP_PLATFORM_PATTERNS)
+    .filter((k) => k !== 'dealer_com')
+    .map((k) => ({
+      value: k,
+      label: k.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    })),
+];
 
 const PROVIDERS: ReportingProvider[] = [
   {
@@ -67,6 +85,53 @@ const PROVIDERS: ReportingProvider[] = [
     ],
   },
   {
+    value: 'ga4',
+    label: 'Google Analytics',
+    blurb: 'Website Analytics reporting — link this account’s GA4 property.',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/d0ee5bb79ca64c9d8a6f6a0b630716c3/6833828b-02f8-4d53-8223-523905b49da9.png',
+    connectedKey: 'ga4PropertyId',
+    fields: [
+      {
+        key: 'ga4PropertyId',
+        type: 'text',
+        label: 'GA4 property ID',
+        placeholder: '404123456',
+        help: 'Digits only — Admin → Property Settings in GA4. Not the "G-" measurement id.',
+      },
+      {
+        key: 'ga4Platform',
+        type: 'select',
+        label: 'Website platform',
+        placeholder: '',
+        options: VDP_PLATFORM_OPTIONS,
+        help: 'Selects the URL pattern used to count VDP (vehicle detail page) views. Wrong platform = zero VDPs.',
+      },
+    ],
+  },
+  {
+    value: 'places',
+    label: 'Google Places',
+    blurb: 'Reputation reporting — link the Google listing (and a competitor).',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/d0ee5bb79ca64c9d8a6f6a0b630716c3/6833828b-02f8-4d53-8223-523905b49da9.png',
+    connectedKey: 'googlePlaceId',
+    fields: [
+      {
+        key: 'googlePlaceId',
+        type: 'text',
+        label: 'Place ID',
+        placeholder: 'ChIJN1t_tDeuEmsRUsoyG83frY4',
+        help: 'This rooftop’s own Google listing. Review ingest matches on it, so no two accounts may share one.',
+      },
+      {
+        key: 'googleCompetitorPlaceId',
+        type: 'text',
+        label: 'Competitor place ID (optional)',
+        placeholder: 'ChIJ…',
+        help: 'One rival listing to benchmark rating and review count against.',
+      },
+    ],
+  },
+  {
     value: 'gohighlevel',
     label: 'GoHighLevel',
     blurb: 'Email campaign reporting — Private Integration token.',
@@ -86,6 +151,10 @@ interface AccountReporting {
   googleAdsMargin?: number | null;
   ghlLocationId?: string | null;
   ghlConfigured?: boolean;
+  ga4PropertyId?: string | null;
+  ga4Platform?: string | null;
+  googlePlaceId?: string | null;
+  googleCompetitorPlaceId?: string | null;
   [k: string]: unknown;
 }
 
@@ -321,6 +390,19 @@ function ProviderModal({
             {provider.fields.map((f) => (
               <label key={f.key} className="block">
                 <span className="text-sm font-medium">{f.label}</span>
+                {f.type === 'select' ? (
+                  <select
+                    value={values[f.key]}
+                    onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
+                  >
+                    {(f.options ?? []).map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
                 <input
                   type={f.type === 'secret' ? 'password' : 'text'}
                   inputMode={f.type === 'margin' ? 'decimal' : undefined}
@@ -335,6 +417,7 @@ function ProviderModal({
                   spellCheck={false}
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-sm outline-none focus:border-[var(--primary)]"
                 />
+                )}
                 {f.help && <span className="mt-1 block text-[11px] text-[var(--muted-foreground)]">{f.help}</span>}
               </label>
             ))}

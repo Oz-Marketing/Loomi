@@ -47,6 +47,8 @@ import {
   SpendBar,
   SpendDonut,
 } from './shared';
+import { connectTarget } from '../../_components/connect-targets';
+import type { ReportLens } from '../../_components/lens';
 import { ExportMenu } from './export-menu';
 import type { ReportDoc } from '@/lib/reporting/report-doc';
 
@@ -62,6 +64,12 @@ interface Metrics {
   offline_leads: number;
   offline_purchases: number;
   offline_purchase_value: number;
+  /**
+   * Raw pre-margin cost. Present ONLY for super-admin/developer — the API
+   * strips it for every other role, so treat `undefined` as "not permitted"
+   * rather than "zero". See stripInternalCost in api/reporting/_lib/guard.ts.
+   */
+  actual_cost?: number;
 }
 interface CampaignRow extends Metrics {
   id: string;
@@ -161,6 +169,7 @@ export function GoogleReport({
   compareTo,
   isDark,
   onJump,
+  lens,
 }: {
   accountKey: string;
   from: string;
@@ -168,6 +177,7 @@ export function GoogleReport({
   compareTo: string;
   isDark: boolean;
   onJump: (k: DateRangeKey) => void;
+  lens: ReportLens;
 }) {
   const { data, error, isLoading } = useSWR<GoogleData, Error & { code?: string }>(
     `/api/reporting/google?accountKey=${encodeURIComponent(accountKey)}&start_date=${from}&end_date=${to}&compare_to=${compareTo}`,
@@ -177,7 +187,12 @@ export function GoogleReport({
   if (isLoading) return <LoadingState />;
   if (error) {
     return error.code === 'not_configured' || error.code === 'no_customer' ? (
-      <EmptyState icon={LinkSlashIcon} title="Google Ads not connected" body={error.message} />
+      <EmptyState
+        icon={LinkSlashIcon}
+        title="Google Ads not connected"
+        body={error.message}
+        connect={connectTarget('google', accountKey)}
+      />
     ) : (
       <EmptyState icon={ExclamationTriangleIcon} title="Couldn't load Google Ads report" body={error.message} tone="error" />
     );
@@ -187,6 +202,16 @@ export function GoogleReport({
   const m = data.accountMetrics;
   const cmp = data.compare?.accountMetrics ?? null;
   const hasData = m.impressions > 0 || m.cost > 0 || data.campaigns.length > 0;
+  const team = lens === 'team';
+  // `actual_cost` only reaches super-admins — the API strips it for everyone
+  // else. So its presence, not a role check, is what says "show raw cost":
+  // the component never has to know the rule, only whether the number arrived.
+  const rawCost = typeof m.actual_cost === 'number' ? m.actual_cost : null;
+  // Spend on keywords that converted nothing in the window — the first thing an
+  // optimizer looks for, and previously something they had to eyeball the table
+  // for. Only meaningful against the keyword list the API actually returned
+  // (top 50 by impressions), so it is a floor, not the account total.
+  const wastedSpend = data.keywords.reduce((sum, k) => (k.conversions === 0 ? sum + k.cost : sum), 0);
 
   if (!hasData) {
     return (
@@ -225,13 +250,17 @@ export function GoogleReport({
     },
   ];
   if (data.searchTerms.length) {
+    const terms = team ? data.searchTerms : data.searchTerms.slice(0, 10);
     sections.push({
       title: 'Search terms',
       columns: [{ header: 'Search term', type: 'text' }, ...perfCols],
-      rows: data.searchTerms.map((s) => [s.term, s.impressions, s.clicks, s.ctr, s.cost, s.conversions]),
+      rows: terms.map((s) => [s.term, s.impressions, s.clicks, s.ctr, s.cost, s.conversions]),
     });
   }
-  if (data.keywords.length) {
+  // Gated like the on-screen sections: an export is the report, and a client
+  // PDF containing quality scores and impression share would hand over exactly
+  // what the lens is there to withhold.
+  if (team && data.keywords.length) {
     sections.push({
       title: 'Keywords',
       columns: [
@@ -250,7 +279,7 @@ export function GoogleReport({
       rows: data.locations.map((l) => [l.city, l.region, l.impressions, l.clicks, l.ctr, l.cost, l.conversions]),
     });
   }
-  if (data.auctionInsights.length) {
+  if (team && data.auctionInsights.length) {
     sections.push({
       title: 'Auction insights',
       columns: [
@@ -329,7 +358,7 @@ export function GoogleReport({
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.cost)} tone="primary" delta={pctDelta(m.cost, cmp?.cost)} />
+        <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.cost)} secondary={team && rawCost != null ? `${usd(rawCost)} media cost` : undefined} tone="primary" delta={pctDelta(m.cost, cmp?.cost)} />
         <Kpi icon={EyeIcon} label="Impressions" value={compact(m.impressions)} secondary={num(m.impressions)} tone="sky" delta={pctDelta(m.impressions, cmp?.impressions)} />
         <Kpi icon={CursorArrowRaysIcon} label="Clicks" value={compact(m.clicks)} secondary={num(m.clicks)} tone="violet" delta={pctDelta(m.clicks, cmp?.clicks)} />
         <Kpi icon={ChartBarIcon} label="CTR" value={pctText(m.ctr)} tone="emerald" delta={pointDelta(m.ctr, cmp?.ctr)} />
@@ -344,13 +373,17 @@ export function GoogleReport({
       )}
 
       <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1.5fr_1fr]">
-        <Section title="Top campaigns" icon={ChartBarIcon} subtitle={`${data.campaigns.length} total · click to drill into ad groups`}>
+        <Section
+          title="Top campaigns"
+          icon={ChartBarIcon}
+          subtitle={team ? `${data.campaigns.length} total · click to drill into ad groups` : `${data.campaigns.length} total`}
+        >
           {data.campaigns.length === 0 ? (
             <Muted>No campaigns delivered in this period.</Muted>
           ) : (
             <>
               <SpendBar items={data.campaigns.slice(0, 8).map((c) => ({ label: c.name, value: c.cost }))} isDark={isDark} />
-              <CampaignTable campaigns={data.campaigns} accountKey={accountKey} from={from} to={to} />
+              <CampaignTable campaigns={data.campaigns} accountKey={accountKey} from={from} to={to} expandable={team} />
             </>
           )}
         </Section>
@@ -365,16 +398,38 @@ export function GoogleReport({
       </Section>
 
       {data.searchTerms.length > 0 && (
-        <Section title="Top search terms" icon={MagnifyingGlassIcon} subtitle={`${data.searchTerms.length} shown`}>
+        <Section
+          title="Top search terms"
+          icon={MagnifyingGlassIcon}
+          subtitle={team ? `${data.searchTerms.length} shown` : 'what people typed to find you'}
+        >
           <SimpleTable
             head={['Search term', 'Impr.', 'Clicks', 'CTR', 'Cost', 'Conv.']}
-            rows={data.searchTerms.map((s) => [s.term, num(s.impressions), num(s.clicks), pctText(s.ctr), usd(s.cost), num(s.conversions)])}
+            rows={(team ? data.searchTerms : data.searchTerms.slice(0, 10)).map((s) => [
+              s.term,
+              num(s.impressions),
+              num(s.clicks),
+              pctText(s.ctr),
+              usd(s.cost),
+              num(s.conversions),
+            ])}
           />
         </Section>
       )}
 
-      {data.keywords.length > 0 && (
-        <Section title="Keywords" icon={KeyIcon} subtitle={`${data.keywords.length} shown`}>
+      {/* TEAM ONLY. Quality score and match type are levers, not results — a
+          client reading "your keyword scored 4/10" has no action available and
+          one more thing to be alarmed about on the call. */}
+      {team && data.keywords.length > 0 && (
+        <Section
+          title="Keywords"
+          icon={KeyIcon}
+          subtitle={
+            wastedSpend > 0
+              ? `${data.keywords.length} shown · ${usd(wastedSpend)} on zero-conversion keywords`
+              : `${data.keywords.length} shown`
+          }
+        >
           <SimpleTable
             head={['Keyword', 'Match', 'QS', 'Impr.', 'Clicks', 'CTR', 'Cost', 'Conv.']}
             rows={data.keywords.map((k) => [
@@ -400,7 +455,9 @@ export function GoogleReport({
         </Section>
       )}
 
-      {data.auctionInsights.length > 0 && (
+      {/* TEAM ONLY. Impression share answers "should we raise the budget or fix
+          Quality Score" — a bidding decision the agency makes, not the client. */}
+      {team && data.auctionInsights.length > 0 && (
         <Section title="Auction insights" icon={TrophyIcon} subtitle="Search impression share by campaign">
           <SimpleTable
             head={['Campaign', 'Impr. share', 'Top IS', 'Abs top IS', 'Lost (budget)', 'Lost (rank)']}
@@ -436,7 +493,7 @@ function ConversionsPanel({ m }: { m: Metrics }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((t) => (
         <div key={t.label} className="rounded-xl border border-[var(--border)] p-3">
-          <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
+          <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
           <p className="mt-1 text-lg font-bold tabular-nums">{t.value}</p>
         </div>
       ))}
@@ -446,16 +503,23 @@ function ConversionsPanel({ m }: { m: Metrics }) {
 
 // ── Campaign table with ad-group drilldown ──
 
+/**
+ * Campaign table. `expandable` drives the ad-group drilldown — team lens only,
+ * because an inert chevron a client can click into an empty pane is worse than
+ * no chevron, and ad-group structure is our working detail, not their result.
+ */
 function CampaignTable({
   campaigns,
   accountKey,
   from,
   to,
+  expandable,
 }: {
   campaigns: CampaignRow[];
   accountKey: string;
   from: string;
   to: string;
+  expandable: boolean;
 }) {
   const sorted = [...campaigns].sort((a, b) => b.cost - a.cost);
   const [showAll, setShowAll] = useState(false);
@@ -466,7 +530,7 @@ function CampaignTable({
       <div className={`overflow-x-auto ${showAll && overflowing ? 'max-h-[24rem] overflow-y-auto' : ''}`}>
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--card)]">
-            <tr className="text-left text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
               <th className="py-2 pr-3">Campaign</th>
               <th className="px-3 py-2 text-right">Spend</th>
               <th className="px-3 py-2 text-right">Impr.</th>
@@ -477,7 +541,14 @@ function CampaignTable({
           </thead>
           <tbody>
             {visible.map((c) => (
-              <CampaignRowExpandable key={c.id || c.name} campaign={c} accountKey={accountKey} from={from} to={to} />
+              <CampaignRowExpandable
+                key={c.id || c.name}
+                campaign={c}
+                accountKey={accountKey}
+                from={from}
+                to={to}
+                expandable={expandable}
+              />
             ))}
           </tbody>
         </table>
@@ -499,15 +570,17 @@ function CampaignRowExpandable({
   accountKey,
   from,
   to,
+  expandable,
 }: {
   campaign: CampaignRow;
   accountKey: string;
   from: string;
   to: string;
+  expandable: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useSWR<{ adGroups: AdGroupRow[] }>(
-    open && campaign.id
+    expandable && open && campaign.id
       ? `/api/reporting/google/ad-groups?accountKey=${encodeURIComponent(accountKey)}&campaign_id=${campaign.id}&start_date=${from}&end_date=${to}`
       : null,
     fetcher,
@@ -516,11 +589,17 @@ function CampaignRowExpandable({
   return (
     <>
       <tr
-        className="cursor-pointer border-t border-[var(--border)] hover:bg-[var(--muted)]/40"
-        onClick={() => setOpen((o) => !o)}
+        className={`border-t border-[var(--border)] hover:bg-[var(--muted)]/40 ${
+          expandable ? 'cursor-pointer' : ''
+        }`}
+        onClick={expandable ? () => setOpen((o) => !o) : undefined}
       >
         <td className="max-w-[240px] truncate py-2.5 pr-3" title={campaign.name}>
-          <ChevronRightIcon className={`mr-1 inline h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`} />
+          {expandable && (
+            <ChevronRightIcon
+              className={`mr-1 inline h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`}
+            />
+          )}
           {campaign.name}
         </td>
         <td className="px-3 py-2.5 text-right tabular-nums">{usd(campaign.cost)}</td>
@@ -529,7 +608,7 @@ function CampaignRowExpandable({
         <td className="px-3 py-2.5 text-right tabular-nums">{pctText(campaign.ctr)}</td>
         <td className="py-2.5 pl-3 text-right tabular-nums">{num(campaign.conversions)}</td>
       </tr>
-      {open && (
+      {expandable && open && (
         <tr className="bg-[var(--muted)]/20">
           <td colSpan={6} className="px-3 py-2">
             {isLoading ? (
@@ -539,7 +618,7 @@ function CampaignRowExpandable({
             ) : (
               <table className="w-full text-[11px]">
                 <thead>
-                  <tr className="text-left text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                     <th className="py-1 pr-3">Ad group</th>
                     <th className="px-3 py-1">Type</th>
                     <th className="px-3 py-1 text-right">Spend</th>

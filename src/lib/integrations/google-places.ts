@@ -46,11 +46,15 @@ export interface PlaceConfig {
 }
 
 /**
- * Resolve a sub-account → its Google place id (+ optional competitor). Reads
- * `GOOGLE_PLACES_MAP`; each value is either a place-id string or
- * `{ "placeId": "...", "competitorPlaceId": "..." }`. `null` when unmapped.
+ * LEGACY env lookup: sub-account → its Google place id (+ optional
+ * competitor), from `GOOGLE_PLACES_MAP`. Each value is either a place-id
+ * string or `{ "placeId": "...", "competitorPlaceId": "..." }`.
+ *
+ * Superseded by `Account.googlePlaceId` / `googleCompetitorPlaceId`. Call
+ * `resolvePlaceConfig()` in lib/integrations/account-mapping.ts, which reads
+ * the columns and falls back here.
  */
-export function resolvePlaceConfig(accountKey: string): PlaceConfig | null {
+export function resolvePlaceConfigFromEnv(accountKey: string): PlaceConfig | null {
   const raw = process.env.GOOGLE_PLACES_MAP?.trim();
   if (!raw) return null;
   try {
@@ -85,7 +89,7 @@ export type PlaceAccountLookup =
   | { status: 'unmapped' }
   | { status: 'ambiguous'; accountKeys: string[] };
 
-export function resolveAccountByPlaceId(placeId: string): PlaceAccountLookup {
+export function resolveAccountByPlaceIdFromEnv(placeId: string): PlaceAccountLookup {
   const raw = process.env.GOOGLE_PLACES_MAP?.trim();
   if (!raw) return { status: 'unmapped' };
 

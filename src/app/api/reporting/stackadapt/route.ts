@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireReportingAccess } from '../_lib/guard';
 import { canAccessAccount } from '@/lib/api-auth';
+import { ELEVATED_ROLES } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 import {
   StackAdaptError,
@@ -26,7 +27,7 @@ import {
   getDailyPerformance,
   getCreativePerformance,
 } from '@/lib/integrations/stackadapt';
-import { applyStackAdaptMargins } from '@/lib/reporting/margins';
+import { applyStackAdaptMargins, stripMarginInternals } from '@/lib/reporting/margins';
 import { resolveComparisonDates } from '@/lib/reporting/comparison';
 
 export const dynamic = 'force-dynamic';
@@ -115,7 +116,11 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    return NextResponse.json({
+    // Raw pre-margin cost and the margin percent are for optimizers, not
+    // clients — and not for account admins either (see
+    // docs/reporting-redesign.md, decision 2). Filtered here rather than in the
+    // report component: the lens chooses what to draw, this chooses what to send.
+    const payload = {
       accountKey,
       dealer: account?.dealer ?? accountKey,
       advertiserId,
@@ -129,7 +134,9 @@ export async function GET(req: NextRequest) {
       daily: daily.map((d) => applyStackAdaptMargins(d, margin)),
       creatives: creatives.map((c) => applyStackAdaptMargins(c, margin)),
       compare,
-    });
+    };
+    const seesRawCost = ELEVATED_ROLES.includes(ctx.user.role);
+    return NextResponse.json(seesRawCost ? payload : stripMarginInternals(payload));
   } catch (err) {
     if (err instanceof StackAdaptError) {
       const status = err.code === 'graphql_error' ? 502 : 400;

@@ -22,6 +22,7 @@ import {
   type CustomDateRange,
   type DateRangeKey,
 } from '../ads/_components/shared';
+import { useReportLens, LensToggle, ClientPreviewNotice } from '../_components/lens';
 import { Ga4Report } from './_components/ga4-report';
 import { OrgReportRollup } from '../_components/org-report-rollup';
 import { GA4_ROLLUP } from '../_components/rollup-configs';
@@ -31,6 +32,7 @@ export default function ReportingWebsitesPage() {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
+  const lensState = useReportLens();
   const [rangeKey, setRangeKey] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const { from, to } = resolveBounds(rangeKey, customRange);
@@ -52,6 +54,7 @@ export default function ReportingWebsitesPage() {
       />
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
+        <LensToggle {...lensState} />
         <DashboardToolbar
           dateRange={rangeKey}
           onDateRangeChange={setRangeKey}
@@ -63,6 +66,8 @@ export default function ReportingWebsitesPage() {
           minDate={ALL_TIME_FLOOR}
         />
       </div>
+
+      <ClientPreviewNotice {...lensState} />
 
       {isGroup ? (
         <div className="mt-8">
@@ -82,7 +87,7 @@ export default function ReportingWebsitesPage() {
           body="Choose a sub-account or organization from the top bar to see website analytics."
         />
       ) : (
-        <Ga4Report accountKey={accountKey} from={from} to={to} isDark={isDark} />
+        <Ga4Report accountKey={accountKey} from={from} to={to} isDark={isDark} lens={lensState.lens} />
       )}
     </>
   );

@@ -1,13 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  applyMargins,
-  applyMetaMargins,
-  applyGoogleMargins,
-  applyStackAdaptMargins,
-  META_MARGIN_FIELDS,
-  STACKADAPT_MARGIN_FIELDS,
-  GOOGLE_MARGIN_FIELDS,
-} from './margins';
+import { applyMargins, applyMetaMargins, applyGoogleMargins, applyStackAdaptMargins, META_MARGIN_FIELDS, STACKADAPT_MARGIN_FIELDS, GOOGLE_MARGIN_FIELDS, stripMarginInternals } from './margins';
 
 /**
  * Numbers below are the exact output of Oz Dealer Tools' PHP `applyMargins()`
@@ -101,5 +93,64 @@ describe('applyMargins (Oz parity)', () => {
     expect(out.actual_a).toBe(10);
     expect(out.b).toBe(20);
     expect(out).not.toHaveProperty('actual_b');
+  });
+});
+
+describe('stripMarginInternals', () => {
+  it('removes actual_* keys and the margin percent', () => {
+    const out = stripMarginInternals({
+      accountKey: 'young',
+      margin: 23,
+      accountMetrics: { cost: 130, actual_cost: 100, avg_cpc: 2.6, actual_avg_cpc: 2 },
+    });
+    expect(out).toEqual({
+      accountKey: 'young',
+      accountMetrics: { cost: 130, avg_cpc: 2.6 },
+    });
+  });
+
+  it('recurses through arrays of rows', () => {
+    // campaigns/daily/devices are all arrays of individually marked-up rows.
+    const out = stripMarginInternals({
+      campaigns: [
+        { name: 'Brand', cost: 130, actual_cost: 100 },
+        { name: 'PMax', cost: 65, actual_cost: 50 },
+      ],
+    });
+    expect(out).toEqual({ campaigns: [{ name: 'Brand', cost: 130 }, { name: 'PMax', cost: 65 }] });
+  });
+
+  it('reaches into the nested compare block', () => {
+    // The comparison window carries its own margin + marked-up rows; missing it
+    // would leak the same numbers one level down.
+    const out = stripMarginInternals({
+      compare: { label: 'Previous month', accountMetrics: { cost: 90, actual_cost: 70 }, margin: 23 },
+    });
+    expect(out).toEqual({ compare: { label: 'Previous month', accountMetrics: { cost: 90 } } });
+  });
+
+  it('leaves a payload with nothing to strip untouched', () => {
+    const input = { accountKey: 'young', accountMetrics: { cost: 100, clicks: 12 } };
+    expect(stripMarginInternals(input)).toEqual(input);
+  });
+
+  it('preserves nulls and does not confuse them with objects', () => {
+    expect(stripMarginInternals({ compare: null, dealer: 'Young' })).toEqual({
+      compare: null,
+      dealer: 'Young',
+    });
+  });
+
+  it('does not strip a field that merely contains "actual"', () => {
+    // The rule is a PREFIX. `actualized_spend` would be someone else's field.
+    const out = stripMarginInternals({ actualized_spend: 5, cost_actual: 9 });
+    expect(out).toEqual({ actualized_spend: 5, cost_actual: 9 });
+  });
+
+  it('does not mutate the input', () => {
+    const input = { margin: 23, accountMetrics: { cost: 130, actual_cost: 100 } };
+    stripMarginInternals(input);
+    expect(input.margin).toBe(23);
+    expect(input.accountMetrics.actual_cost).toBe(100);
   });
 });

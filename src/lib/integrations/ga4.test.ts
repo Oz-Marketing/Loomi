@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import {
   getGa4Config,
   isGa4Configured,
-  resolveGa4Property,
-  resolveGa4Platform,
+  resolveGa4PropertyFromEnv,
+  resolveGa4PlatformFromEnv,
   getTrafficOverview,
   getTrafficSources,
   getTopPages,
@@ -69,27 +69,27 @@ describe('getGa4Config', () => {
   });
 });
 
-describe('resolveGa4Property', () => {
+describe('resolveGa4PropertyFromEnv', () => {
   it('maps an account key to a numeric property id', () => {
     process.env.GA4_PROPERTY_MAP = JSON.stringify({ dealerA: '123456789', dealerB: 987654321 });
-    expect(resolveGa4Property('dealerA')).toBe('123456789');
-    expect(resolveGa4Property('dealerB')).toBe('987654321');
+    expect(resolveGa4PropertyFromEnv('dealerA')).toBe('123456789');
+    expect(resolveGa4PropertyFromEnv('dealerB')).toBe('987654321');
   });
 
   it('strips non-digits (e.g. "properties/123")', () => {
     process.env.GA4_PROPERTY_MAP = JSON.stringify({ dealerA: 'properties/123-456' });
-    expect(resolveGa4Property('dealerA')).toBe('123456');
+    expect(resolveGa4PropertyFromEnv('dealerA')).toBe('123456');
   });
 
   it('returns null for unmapped keys, no env, or malformed map', () => {
     process.env.GA4_PROPERTY_MAP = JSON.stringify({ dealerA: '123' });
-    expect(resolveGa4Property('missing')).toBeNull();
+    expect(resolveGa4PropertyFromEnv('missing')).toBeNull();
 
     delete process.env.GA4_PROPERTY_MAP;
-    expect(resolveGa4Property('dealerA')).toBeNull();
+    expect(resolveGa4PropertyFromEnv('dealerA')).toBeNull();
 
     process.env.GA4_PROPERTY_MAP = '{ bad json';
-    expect(resolveGa4Property('dealerA')).toBeNull();
+    expect(resolveGa4PropertyFromEnv('dealerA')).toBeNull();
   });
 });
 
@@ -120,7 +120,18 @@ describe('report mapping', () => {
 
   it('getTrafficOverview coerces metric strings to numbers', async () => {
     mockFetch([
-      { metricValues: [{ value: '1500' }, { value: '1200' }, { value: '800' }, { value: '4200' }, { value: '0.43' }, { value: '95.5' }] },
+      {
+        metricValues: [
+          { value: '1500' },
+          { value: '1200' },
+          { value: '800' },
+          { value: '4200' },
+          { value: '0.43' },
+          { value: '95.5' },
+          { value: '64' },
+          { value: '0.0427' },
+        ],
+      },
     ]);
     const o = await getTrafficOverview(cfg, '123', '2026-06-01', '2026-06-19');
     expect(o).toEqual({
@@ -130,7 +141,44 @@ describe('report mapping', () => {
       pageViews: 4200,
       bounceRate: 0.43,
       avgSessionDuration: 95.5,
+      keyEvents: 64,
+      keyEventRate: 0.0427,
     });
+  });
+
+  it('keeps fractional rates fractional rather than truncating them', async () => {
+    // bounceRate, avgSessionDuration and keyEventRate all arrive as decimals.
+    // Reading them through an int coercion would report every rate under 100%
+    // as zero, which looks like "no bounces" rather than like a bug.
+    mockFetch([
+      {
+        metricValues: [
+          { value: '10' },
+          { value: '9' },
+          { value: '4' },
+          { value: '30' },
+          { value: '0.72' },
+          { value: '41.8' },
+          { value: '3' },
+          { value: '0.3' },
+        ],
+      },
+    ]);
+    const o = await getTrafficOverview(cfg, '123', '2026-06-01', '2026-06-19');
+    expect(o.bounceRate).toBeCloseTo(0.72);
+    expect(o.avgSessionDuration).toBeCloseTo(41.8);
+    expect(o.keyEventRate).toBeCloseTo(0.3);
+  });
+
+  it('reports zero key events for a property with none configured', async () => {
+    // A site where nobody has marked anything as a key event. Zero is the
+    // honest answer — it must not read as an error or a missing section.
+    mockFetch([
+      { metricValues: [{ value: '500' }, { value: '400' }, { value: '250' }, { value: '900' }, { value: '0.5' }, { value: '60' }, { value: '0' }, { value: '0' }] },
+    ]);
+    const o = await getTrafficOverview(cfg, '123', '2026-06-01', '2026-06-19');
+    expect(o.keyEvents).toBe(0);
+    expect(o.keyEventRate).toBe(0);
   });
 
   it('getTrafficOverview returns zeros when GA4 sends no rows', async () => {
@@ -154,11 +202,11 @@ describe('report mapping', () => {
 
   it('getTrafficSources falls back to (unknown) for blank channels', async () => {
     mockFetch([
-      { dimensionValues: [{ value: 'Organic Search' }], metricValues: [{ value: '900' }, { value: '700' }] },
-      { dimensionValues: [{ value: '' }], metricValues: [{ value: '10' }, { value: '8' }] },
+      { dimensionValues: [{ value: 'Organic Search' }], metricValues: [{ value: '900' }, { value: '700' }, { value: '31' }] },
+      { dimensionValues: [{ value: '' }], metricValues: [{ value: '10' }, { value: '8' }, { value: '0' }] },
     ]);
     const sources = await getTrafficSources(cfg, '123', '2026-06-01', '2026-06-19');
-    expect(sources[0]).toEqual({ channel: 'Organic Search', sessions: 900, users: 700 });
+    expect(sources[0]).toEqual({ channel: 'Organic Search', sessions: 900, users: 700, keyEvents: 31 });
     expect(sources[1].channel).toBe('(unknown)');
   });
 
@@ -217,22 +265,22 @@ describe('report mapping', () => {
   });
 });
 
-describe('resolveGa4Platform', () => {
+describe('resolveGa4PlatformFromEnv', () => {
   it('maps an account key to a known platform', () => {
     process.env.GA4_PLATFORM_MAP = JSON.stringify({ dealerA: 'team_velocity', dealerB: 'room58' });
-    expect(resolveGa4Platform('dealerA')).toBe('team_velocity');
-    expect(resolveGa4Platform('dealerB')).toBe('room58');
+    expect(resolveGa4PlatformFromEnv('dealerA')).toBe('team_velocity');
+    expect(resolveGa4PlatformFromEnv('dealerB')).toBe('room58');
   });
 
   it('defaults to dealer_com for unmapped keys, unknown platforms, no env, or bad JSON', () => {
     process.env.GA4_PLATFORM_MAP = JSON.stringify({ dealerA: 'not_a_platform' });
-    expect(resolveGa4Platform('dealerA')).toBe('dealer_com');
-    expect(resolveGa4Platform('missing')).toBe('dealer_com');
+    expect(resolveGa4PlatformFromEnv('dealerA')).toBe('dealer_com');
+    expect(resolveGa4PlatformFromEnv('missing')).toBe('dealer_com');
 
     delete process.env.GA4_PLATFORM_MAP;
-    expect(resolveGa4Platform('dealerA')).toBe('dealer_com');
+    expect(resolveGa4PlatformFromEnv('dealerA')).toBe('dealer_com');
 
     process.env.GA4_PLATFORM_MAP = '{ bad';
-    expect(resolveGa4Platform('dealerA')).toBe('dealer_com');
+    expect(resolveGa4PlatformFromEnv('dealerA')).toBe('dealer_com');
   });
 });

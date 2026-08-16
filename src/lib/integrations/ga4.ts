@@ -16,6 +16,7 @@
  */
 
 import crypto from 'node:crypto';
+import { VDP_PLATFORM_PATTERNS, DEFAULT_VDP_PLATFORM } from './ga4-platforms';
 
 const OAUTH_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const DATA_BASE = 'https://analyticsdata.googleapis.com/v1beta';
@@ -55,12 +56,16 @@ export function isGa4Configured(): boolean {
 }
 
 /**
- * Resolve a sub-account key → GA4 numeric property id. v1 reads a JSON map from
- * `GA4_PROPERTY_MAP` (`{"dealerKey":"123456789"}`). Returns digits only, or
- * `null` when unmapped. Swap this one body for `Account.ga4PropertyId` post
- * migrate-deploy cutover.
+ * LEGACY env lookup: sub-account key → GA4 numeric property id, from the
+ * `GA4_PROPERTY_MAP` JSON (`{"dealerKey":"123456789"}`). Digits only, `null`
+ * when unmapped.
+ *
+ * The property now lives on `Account.ga4PropertyId`. Call
+ * `resolveGa4Property()` in lib/integrations/account-mapping.ts instead — it
+ * reads the column and falls back here. This stays only so environments that
+ * have not run the backfill keep reporting, and goes away with the env var.
  */
-export function resolveGa4Property(accountKey: string): string | null {
+export function resolveGa4PropertyFromEnv(accountKey: string): string | null {
   const raw = process.env.GA4_PROPERTY_MAP?.trim();
   if (!raw) return null;
   try {
@@ -74,35 +79,26 @@ export function resolveGa4Property(accountKey: string): string | null {
   }
 }
 
-/**
- * VDP (vehicle-detail-page) URL regex per dealer website platform — GA4
- * PARTIAL_REGEXP (RE2). Each matches individual vehicle pages while excluding
- * search/listing (SRP/VLP) pages. Ported verbatim from ODT. Add a platform here
- * and map an account to it via GA4_PLATFORM_MAP.
- */
-export const VDP_PLATFORM_PATTERNS: Record<string, string> = {
-  dealer_com: '/(new|used|certified)/[^/]+/[0-9]{4}-',
-  dealer_spike:
-    '(xInventoryDetail|xPreOwnedInventoryDetail|--[0-9]{4}-[A-Za-z].*[0-9]{3,}|/[A-Za-z]+/[0-9]{4}-[A-Za-z].*[0-9]{4,})',
-  dealer_eprocess: '/auto/(new|used|certified)-[0-9]{4}-',
-  room58: '(/vehicles/[0-9]{4}-[A-Za-z]|/vehicle-detail/[0-9])',
-  team_velocity: '/viewdetails/(new|used|certified)/[a-zA-Z0-9]+/[0-9]{4}-',
-};
+// Moved to ga4-platforms.ts so client components (the Integrations card's
+// platform dropdown) can read it without importing this module's `node:crypto`.
+// Re-exported because server callers already import it from here.
+export { VDP_PLATFORM_PATTERNS, DEFAULT_VDP_PLATFORM };
 
 /**
- * Resolve a sub-account → its website-platform key (selects the VDP regex).
- * Reads `GA4_PLATFORM_MAP` (`{"<accountKey>":"dealer_com"}`); defaults to
- * `dealer_com` (the most common DDC platform) when unmapped or unknown.
+ * LEGACY env lookup for the website-platform key (selects the VDP regex), from
+ * `GA4_PLATFORM_MAP`. Defaults to `dealer_com` (the most common DDC platform)
+ * when unmapped or unknown. Superseded by `Account.ga4Platform` — see
+ * `resolveGa4PropertyFromEnv` above.
  */
-export function resolveGa4Platform(accountKey: string): string {
+export function resolveGa4PlatformFromEnv(accountKey: string): string {
   const raw = process.env.GA4_PLATFORM_MAP?.trim();
-  if (!raw) return 'dealer_com';
+  if (!raw) return DEFAULT_VDP_PLATFORM;
   try {
     const map = JSON.parse(raw) as Record<string, string>;
     const v = map[accountKey];
-    return v && VDP_PLATFORM_PATTERNS[v] ? v : 'dealer_com';
+    return v && VDP_PLATFORM_PATTERNS[v] ? v : DEFAULT_VDP_PLATFORM;
   } catch {
-    return 'dealer_com';
+    return DEFAULT_VDP_PLATFORM;
   }
 }
 
@@ -235,7 +231,17 @@ async function runReport(cfg: Ga4Config, propertyId: string, body: RunReportBody
   return json?.rows ?? [];
 }
 
-const metricInt = (row: Ga4Row | undefined, i: number): number => Number(row?.metricValues?.[i]?.value ?? 0);
+/**
+ * Read a metric as a number. Despite the name this does NOT round — several
+ * fractional metrics (bounce rate, average duration, key-event rate) come
+ * through it, and truncating would zero every rate below 1. Prefer
+ * `metricFloat` at those call sites; the two are deliberately identical, the
+ * name is the documentation.
+ */
+const metricInt = (row: Ga4Row | undefined, i: number): number =>
+  Number(row?.metricValues?.[i]?.value ?? 0);
+/** Same read, named for the fractional metrics so intent is legible. */
+const metricFloat = metricInt;
 const dimVal = (row: Ga4Row, i: number): string => row.dimensionValues?.[i]?.value ?? '';
 
 // ── Reports (metrics/dimensions mirror GoogleAnalytics.php) ──
@@ -249,6 +255,18 @@ export interface Ga4Overview {
   bounceRate: number;
   /** Seconds. */
   avgSessionDuration: number;
+  /**
+   * Key events — what GA4 renamed "conversions" to in 2024. Form submits,
+   * click-to-call, VDP milestones: whatever the property has marked as one.
+   *
+   * Until this landed the website report could state no outcome at all, only
+   * traffic — and had no number that tied back to the ad reports. A property
+   * with nothing marked as a key event returns 0, which is honest: it means
+   * nobody has told GA4 what counts as a result on that site.
+   */
+  keyEvents: number;
+  /** Fraction 0..1 — share of sessions producing at least one key event. */
+  keyEventRate: number;
 }
 
 export async function getTrafficOverview(
@@ -266,6 +284,8 @@ export async function getTrafficOverview(
       { name: 'screenPageViews' },
       { name: 'bounceRate' },
       { name: 'averageSessionDuration' },
+      { name: 'keyEvents' },
+      { name: 'sessionKeyEventRate' },
     ],
   });
   const row = rows[0];
@@ -274,8 +294,12 @@ export async function getTrafficOverview(
     totalUsers: metricInt(row, 1),
     newUsers: metricInt(row, 2),
     pageViews: metricInt(row, 3),
-    bounceRate: metricInt(row, 4),
-    avgSessionDuration: metricInt(row, 5),
+    // bounceRate and the rate metrics are fractional — metricInt truncates, so
+    // read them as floats or every rate below 100% reports as zero.
+    bounceRate: metricFloat(row, 4),
+    avgSessionDuration: metricFloat(row, 5),
+    keyEvents: metricInt(row, 6),
+    keyEventRate: metricFloat(row, 7),
   };
 }
 
@@ -283,6 +307,7 @@ export interface Ga4Source {
   channel: string;
   sessions: number;
   users: number;
+  keyEvents: number;
 }
 
 export async function getTrafficSources(
@@ -294,13 +319,14 @@ export async function getTrafficSources(
   const rows = await runReport(cfg, propertyId, {
     dateRanges: [{ startDate, endDate }],
     dimensions: [{ name: 'sessionDefaultChannelGroup' }],
-    metrics: [{ name: 'sessions' }, { name: 'totalUsers' }],
+    metrics: [{ name: 'sessions' }, { name: 'totalUsers' }, { name: 'keyEvents' }],
     orderBys: [{ metric: { metricName: 'sessions' }, desc: true }],
   });
   return rows.map((r) => ({
     channel: dimVal(r, 0) || '(unknown)',
     sessions: metricInt(r, 0),
     users: metricInt(r, 1),
+    keyEvents: metricInt(r, 2),
   }));
 }
 
@@ -330,7 +356,7 @@ export async function getTopPages(
     title: dimVal(r, 0),
     path: dimVal(r, 1),
     views: metricInt(r, 0),
-    avgTime: metricInt(r, 1),
+    avgTime: metricFloat(r, 1),
   }));
 }
 
@@ -424,8 +450,8 @@ export async function getSourceMedium(
     sessions: metricInt(r, 0),
     users: metricInt(r, 1),
     newUsers: metricInt(r, 2),
-    bounceRate: metricInt(r, 3),
-    avgDuration: metricInt(r, 4),
+    bounceRate: metricFloat(r, 3),
+    avgDuration: metricFloat(r, 4),
     pageViews: metricInt(r, 5),
   }));
 }
@@ -475,7 +501,7 @@ export async function getVdpViews(
   const pages = rows.map((r) => {
     const views = metricInt(r, 0);
     totalViews += views;
-    return { title: dimVal(r, 0), path: dimVal(r, 1), views, users: metricInt(r, 1), avgDuration: metricInt(r, 2) };
+    return { title: dimVal(r, 0), path: dimVal(r, 1), views, users: metricInt(r, 1), avgDuration: metricFloat(r, 2) };
   });
   return { totalViews, pages };
 }

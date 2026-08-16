@@ -14,6 +14,7 @@ import {
   ArrowTopRightOnSquareIcon,
   ExclamationTriangleIcon,
   ChartBarIcon,
+  LinkSlashIcon,
 } from '@heroicons/react/24/outline';
 import {
   fetcher,
@@ -24,6 +25,7 @@ import {
   LoadingState,
   DataTable,
 } from '../../ads/_components/shared';
+import { connectTarget } from '../../_components/connect-targets';
 
 interface Review {
   author: string;
@@ -142,13 +144,31 @@ export function ReputationReport({ accountKey }: { accountKey: string }) {
 
   if (isLoading) return <LoadingState />;
   if (error) {
-    const body =
-      error.code === 'no_place'
-        ? 'No Google place is mapped to this account yet. Map it on the server, then refresh.'
-        : error.code === 'not_configured'
-          ? "Google Places isn't configured on the server yet."
-          : error.message;
-    return <EmptyState icon={ExclamationTriangleIcon} title="Couldn't load reputation" body={body} tone="error" />;
+    // Unmapped is a setup state an agency user can fix, not an error worth a
+    // red panel — see the same split in the GA4 report. `not_configured` is a
+    // missing server API key, so it has no per-account link.
+    if (error.code === 'no_place') {
+      return (
+        <EmptyState
+          icon={LinkSlashIcon}
+          title="Google listing not connected"
+          body="No Google place is linked to this account yet, so there is no rating or review history to show."
+          connect={connectTarget('places', accountKey)}
+        />
+      );
+    }
+    return (
+      <EmptyState
+        icon={ExclamationTriangleIcon}
+        title="Couldn't load reputation"
+        body={
+          error.code === 'not_configured'
+            ? "Google Places isn't configured on the server yet."
+            : error.message
+        }
+        tone="error"
+      />
+    );
   }
   if (!data) return null;
 

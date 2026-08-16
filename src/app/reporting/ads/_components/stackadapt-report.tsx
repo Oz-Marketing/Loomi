@@ -41,6 +41,8 @@ import {
   SpendBar,
   SpendDonut,
 } from './shared';
+import { connectTarget } from '../../_components/connect-targets';
+import type { ReportLens } from '../../_components/lens';
 import { ExportMenu } from './export-menu';
 import type { ReportDoc } from '@/lib/reporting/report-doc';
 
@@ -55,6 +57,8 @@ interface Metrics {
   cost_per_conversion: number;
   unique_impressions: number;
   frequency: number;
+  /** Raw pre-margin spend — super-admin only; absent means "not permitted". */
+  actual_spend?: number;
 }
 interface Row extends Metrics {
   id: string;
@@ -84,6 +88,7 @@ export function StackAdaptReport({
   compareTo,
   isDark,
   onJump,
+  lens,
 }: {
   accountKey: string;
   from: string;
@@ -91,6 +96,7 @@ export function StackAdaptReport({
   compareTo: string;
   isDark: boolean;
   onJump: (k: DateRangeKey) => void;
+  lens: ReportLens;
 }) {
   const { data, error, isLoading } = useSWR<StackAdaptData, Error & { code?: string }>(
     `/api/reporting/stackadapt?accountKey=${encodeURIComponent(accountKey)}&start_date=${from}&end_date=${to}&compare_to=${compareTo}`,
@@ -100,7 +106,12 @@ export function StackAdaptReport({
   if (isLoading) return <LoadingState />;
   if (error) {
     return error.code === 'not_configured' || error.code === 'no_advertiser' ? (
-      <EmptyState icon={LinkSlashIcon} title="StackAdapt not connected" body={error.message} />
+      <EmptyState
+        icon={LinkSlashIcon}
+        title="StackAdapt not connected"
+        body={error.message}
+        connect={connectTarget('stackadapt', accountKey)}
+      />
     ) : (
       <EmptyState icon={ExclamationTriangleIcon} title="Couldn't load StackAdapt report" body={error.message} tone="error" />
     );
@@ -109,6 +120,9 @@ export function StackAdaptReport({
 
   const m = data.accountMetrics;
   const cmp = data.compare?.accountMetrics ?? null;
+  const team = lens === 'team';
+  // Present only for super-admin — the API strips it for everyone else.
+  const rawSpend = typeof m.actual_spend === 'number' ? m.actual_spend : null;
   const hasData = m.impressions > 0 || m.spend > 0 || data.campaigns.length > 0;
 
   if (!hasData) {
@@ -136,10 +150,11 @@ export function StackAdaptReport({
   const sections: ReportDoc['sections'] = [
     { title: 'Campaigns', columns: perfCols('Campaign'), rows: perfRows(data.campaigns) },
   ];
-  if (data.campaignGroups.length) {
+  // Gated like the on-screen sections — an export is the report.
+  if (team && data.campaignGroups.length) {
     sections.push({ title: 'Campaign groups', columns: perfCols('Group'), rows: perfRows(data.campaignGroups) });
   }
-  if (data.creatives.length) {
+  if (team && data.creatives.length) {
     sections.push({ title: 'Creatives', columns: perfCols('Creative'), rows: perfRows(data.creatives) });
   }
   if (data.daily.length) {
@@ -192,7 +207,7 @@ export function StackAdaptReport({
       {/* OTT/CTV is impression-based — no clicks/CTR/CPC. Surface reach,
           frequency and CPM instead. */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.spend)} tone="primary" delta={pctDelta(m.spend, cmp?.spend)} />
+        <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.spend)} secondary={team && rawSpend != null ? `${usd(rawSpend)} media cost` : undefined} tone="primary" delta={pctDelta(m.spend, cmp?.spend)} />
         <Kpi icon={EyeIcon} label="Impressions" value={compact(m.impressions)} secondary={num(m.impressions)} tone="sky" delta={pctDelta(m.impressions, cmp?.impressions)} />
         <Kpi icon={UserGroupIcon} label="Reach" value={compact(m.unique_impressions)} secondary={`${num(m.unique_impressions)} unique`} tone="violet" delta={pctDelta(m.unique_impressions, cmp?.unique_impressions)} />
         <Kpi icon={ArrowPathIcon} label="Frequency" value={m.frequency.toFixed(1)} secondary="avg / user" tone="zinc" />
@@ -210,7 +225,15 @@ export function StackAdaptReport({
         </Section>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[1.5fr_1fr]">
+      {/* Campaign groups are TEAM ONLY — a group is how the agency organises
+          the buy, internal structure the client neither set up nor acts on.
+          When it's hidden the row collapses to a single column rather than
+          leaving campaigns marooned in a 1.5fr cell beside empty space. */}
+      <div
+        className={`grid grid-cols-1 items-start gap-6 ${
+          team ? 'lg:grid-cols-[1.5fr_1fr]' : ''
+        }`}
+      >
         <Section title="Top campaigns" icon={ChartBarIcon} subtitle={`${data.campaigns.length} total`}>
           {data.campaigns.length === 0 ? (
             <Muted>No campaigns delivered in this period.</Muted>
@@ -222,16 +245,19 @@ export function StackAdaptReport({
           )}
         </Section>
 
-        <Section title="Spend by campaign group" icon={RectangleGroupIcon}>
-          {data.campaignGroups.length === 0 ? (
-            <Muted>No campaign groups in this period.</Muted>
-          ) : (
-            <SpendDonut items={data.campaignGroups.slice(0, 6).map((g) => ({ label: g.name, value: g.spend }))} isDark={isDark} />
-          )}
-        </Section>
+        {team && (
+          <Section title="Spend by campaign group" icon={RectangleGroupIcon}>
+            {data.campaignGroups.length === 0 ? (
+              <Muted>No campaign groups in this period.</Muted>
+            ) : (
+              <SpendDonut items={data.campaignGroups.slice(0, 6).map((g) => ({ label: g.name, value: g.spend }))} isDark={isDark} />
+            )}
+          </Section>
+        )}
       </div>
 
-      {data.creatives.length > 0 && (
+      {/* TEAM ONLY. Creative-level delivery is a swap-this-asset decision. */}
+      {team && data.creatives.length > 0 && (
         <Section title="Top creatives" icon={FilmIcon} subtitle={`${data.creatives.length} shown`}>
           <PerfTable rows={data.creatives} firstCol="Creative" />
         </Section>

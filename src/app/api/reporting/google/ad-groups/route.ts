@@ -10,9 +10,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireReportingAccess } from '../../_lib/guard';
 import { canAccessAccount } from '@/lib/api-auth';
+import { ELEVATED_ROLES } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 import { GoogleAdsError, getGoogleCustomer, getAdGroupPerformance } from '@/lib/integrations/google-ads';
-import { applyGoogleMargins } from '@/lib/reporting/margins';
+import { applyGoogleMargins, stripMarginInternals } from '@/lib/reporting/margins';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +56,14 @@ export async function GET(req: NextRequest) {
     const margin = account?.googleAdsMargin ?? 0;
     const { cfg, customerId } = await getGoogleCustomer(accountKey);
     const adGroups = await getAdGroupPerformance(cfg, customerId, campaignId, startDate, endDate);
-    return NextResponse.json({ adGroups: adGroups.map((a) => applyGoogleMargins(a, margin)) });
+    // Same gate as the parent report. Missed when the other three routes were
+    // filtered, and the drilldown is not protected by the team lens hiding its
+    // chevron: this endpoint is reachable directly by any authenticated caller
+    // with access to the account, so the filter has to live here.
+    const payload = { adGroups: adGroups.map((a) => applyGoogleMargins(a, margin)) };
+    return NextResponse.json(
+      ELEVATED_ROLES.includes(ctx.user.role) ? payload : stripMarginInternals(payload),
+    );
   } catch (err) {
     if (err instanceof GoogleAdsError) {
       const status = err.code === 'api_error' ? 502 : 400;

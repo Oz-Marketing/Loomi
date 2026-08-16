@@ -9,25 +9,22 @@
  * axis choice rather than of the data. Units and dollars are different scales,
  * so they get two charts stacked in one column instead — same x, honest y.
  *
- * PALETTE. Validated (OKLab CVD separation, chroma, contrast, lightness band)
- * against BOTH the light and dark chart surfaces, so one set serves both
- * themes. The order matters: emerald and amber are the weakest pair under
- * protanopia, so indigo sits between them. Re-run the check before changing a
- * hue or adding a fifth series.
+ * PALETTE. Now lives in ui/chart-theme.ts, which is the single source for every
+ * Reporting chart — this file's palette WAS that source (it was the validated
+ * one; the ads module had a second, unreadable set), so it moved rather than
+ * changed. Re-run the validator before touching a hue; see that file's header.
  */
 
 import { useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import type { ApexOptions } from 'apexcharts';
 import { usd, usd0, num } from '../ads/_components/shared';
+import { SERIES_COLORS, gridColor, chartFg, surfaceGap } from './ui/chart-theme';
 
 const ReactApexChart = dynamic(() => import('react-apexcharts'), { ssr: false });
 
-/** Fixed categorical order — assign by entity, never by rank. */
-export const SERIES_COLORS = ['#059669', '#6366f1', '#d97706', '#ec4899'] as const;
-
-const gridColor = (isDark: boolean) => (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)');
-const chartFg = (isDark: boolean) => (isDark ? '#9ca3af' : '#525252');
+// Re-exported because report pages import it from here today.
+export { SERIES_COLORS };
 
 export interface StackSeries {
   name: string;
@@ -78,7 +75,7 @@ export function MonthlyStackChart({
       },
       // 2px surface-coloured gap between stacked segments so adjacent fills
       // read as separate bands without relying on hue alone.
-      stroke: { show: true, width: 2, colors: [isDark ? '#18181b' : '#ffffff'] },
+      stroke: { show: true, width: 2, colors: [surfaceGap(isDark)] },
       plotOptions: { bar: { borderRadius: 4, borderRadiusApplication: 'end', columnWidth: '58%' } },
       colors: [...SERIES_COLORS],
       dataLabels: { enabled: false },
@@ -261,7 +258,7 @@ export function MonthlyLineChart({
       colors: [SERIES_COLORS[1]],
       dataLabels: { enabled: false },
       legend: { show: false },
-      markers: { size: 4, strokeWidth: 2, strokeColors: isDark ? '#18181b' : '#ffffff' },
+      markers: { size: 4, strokeWidth: 2, strokeColors: surfaceGap(isDark) },
       xaxis: { categories, axisTicks: { show: false } },
       yaxis: {
         labels: {
@@ -368,7 +365,7 @@ export function ShareDonut({
       legend: { position: 'bottom' },
       colors: [...SERIES_COLORS],
       // 2px surface ring so adjacent arcs read apart without relying on hue.
-      stroke: { width: 2, colors: [isDark ? '#18181b' : '#ffffff'] },
+      stroke: { width: 2, colors: [surfaceGap(isDark)] },
       dataLabels: { enabled: true, formatter: (v: number) => `${Number(v).toFixed(0)}%` },
       plotOptions: {
         pie: {

@@ -14,9 +14,10 @@ import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, RangeControls } from '../_components/shared';
-import { findReport, LIVE_REPORTS } from '../_components/reports-config';
+import { findReport, visibleReports } from '../_components/reports-config';
 import { REPORT_COMPONENTS } from '../_components/report-components';
 import { useRange } from '../_components/range-context';
+import { useReportLens, LensToggle, ClientPreviewNotice } from '../../_components/lens';
 import { OrgReportRollup } from '../../_components/org-report-rollup';
 import { ADS_ROLLUP_CONFIGS } from '../../_components/rollup-configs';
 
@@ -26,16 +27,24 @@ export default function DigitalAdsReportPage() {
   const def = findReport(key);
   const Report = REPORT_COMPONENTS[key];
 
-  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts } = useAccount();
+  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts, userRole } = useAccount();
+  const isClient = userRole === 'client';
+  // Tab bar mirrors the nav: an internal report is not a tab for a client.
+  const tabs = visibleReports(isClient).filter((r) => r.status === 'live');
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const range = useRange();
+  const lensState = useReportLens();
   const rollupConfig = ADS_ROLLUP_CONFIGS[key];
   const dealers = Object.fromEntries(
     Object.entries(accounts).map(([k, a]) => [k, a.dealer || k]),
   );
 
-  if (!def || def.status !== 'live' || !Report) {
+  // Hiding the nav entry is not a gate — the URL is still typeable, and this
+  // page is the last thing between a client and a cross-account report. The
+  // 404-shaped copy is deliberate: "you may not see this" tells a client the
+  // report exists, which is itself more than they should learn.
+  if (!def || def.status !== 'live' || !Report || (isClient && def.internal)) {
     return (
       <>
         <PageHeader icon={ChartBarIcon} title="Report not found" />
@@ -71,7 +80,7 @@ export default function DigitalAdsReportPage() {
       {/* Sibling tabs + shared controls */}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-lg border border-[var(--border)] p-0.5">
-          {LIVE_REPORTS.map((r) => {
+          {tabs.map((r) => {
             const active = r.key === key;
             return (
               <Link
@@ -89,6 +98,8 @@ export default function DigitalAdsReportPage() {
             );
           })}
         </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+        <LensToggle {...lensState} />
         <RangeControls
           rangeKey={range.rangeKey}
           onRangeKey={range.setRangeKey}
@@ -98,7 +109,10 @@ export default function DigitalAdsReportPage() {
           onCompareTo={range.setCompareTo}
           floor={range.floor}
         />
+        </div>
       </div>
+
+      <ClientPreviewNotice {...lensState} />
 
       <div className="mt-8">
         {isGroup && rollupConfig ? (
@@ -124,6 +138,7 @@ export default function DigitalAdsReportPage() {
             compareTo={range.compareTo}
             isDark={isDark}
             onJump={range.onJump}
+            lens={lensState.lens}
           />
         )}
       </div>

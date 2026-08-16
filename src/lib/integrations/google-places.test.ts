@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   getPlacesApiKey,
   isPlacesConfigured,
-  resolvePlaceConfig,
+  resolvePlaceConfigFromEnv,
   getPlaceDetails,
 } from './google-places';
 
@@ -28,10 +28,10 @@ describe('getPlacesApiKey', () => {
   });
 });
 
-describe('resolvePlaceConfig', () => {
+describe('resolvePlaceConfigFromEnv', () => {
   it('accepts a bare place-id string', () => {
     process.env.GOOGLE_PLACES_MAP = JSON.stringify({ dealerA: 'ChIJabc' });
-    expect(resolvePlaceConfig('dealerA')).toEqual({ placeId: 'ChIJabc' });
+    expect(resolvePlaceConfigFromEnv('dealerA')).toEqual({ placeId: 'ChIJabc' });
   });
 
   it('accepts an object with an optional competitor', () => {
@@ -39,19 +39,19 @@ describe('resolvePlaceConfig', () => {
       dealerA: { placeId: 'ChIJus', competitorPlaceId: 'ChIJthem' },
       dealerB: { placeId: 'ChIJonly' },
     });
-    expect(resolvePlaceConfig('dealerA')).toEqual({ placeId: 'ChIJus', competitorPlaceId: 'ChIJthem' });
-    expect(resolvePlaceConfig('dealerB')).toEqual({ placeId: 'ChIJonly', competitorPlaceId: undefined });
+    expect(resolvePlaceConfigFromEnv('dealerA')).toEqual({ placeId: 'ChIJus', competitorPlaceId: 'ChIJthem' });
+    expect(resolvePlaceConfigFromEnv('dealerB')).toEqual({ placeId: 'ChIJonly', competitorPlaceId: undefined });
   });
 
   it('returns null for unmapped keys, no env, or malformed map', () => {
     process.env.GOOGLE_PLACES_MAP = JSON.stringify({ dealerA: 'ChIJabc' });
-    expect(resolvePlaceConfig('missing')).toBeNull();
+    expect(resolvePlaceConfigFromEnv('missing')).toBeNull();
 
     delete process.env.GOOGLE_PLACES_MAP;
-    expect(resolvePlaceConfig('dealerA')).toBeNull();
+    expect(resolvePlaceConfigFromEnv('dealerA')).toBeNull();
 
     process.env.GOOGLE_PLACES_MAP = '{ bad';
-    expect(resolvePlaceConfig('dealerA')).toBeNull();
+    expect(resolvePlaceConfigFromEnv('dealerA')).toBeNull();
   });
 });
 

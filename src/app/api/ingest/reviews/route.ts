@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { resolveAccountByPlaceId } from '@/lib/integrations/google-places';
+import { resolveAccountByPlaceId } from '@/lib/integrations/account-mapping';
 import { recordIngestRun } from '@/lib/contacts/ingest-runs';
 
 // POST /api/ingest/reviews
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const resolved = resolveAccountByPlaceId(placeId);
+  const resolved = await resolveAccountByPlaceId(placeId);
   if (resolved.status === 'ambiguous') {
     // Two accounts claiming one listing is a config error, and guessing which
     // one owns the reviews would quietly attribute a rooftop's reputation to

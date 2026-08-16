@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { requireAuth, requireRole, forbidden } from '@/lib/api-auth';
+import { requireAuth, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as listService from '@/lib/services/contact-lists';
 
 /**
@@ -27,7 +28,7 @@ export async function GET() {
  * assigned accounts; developers / super_admins are unrestricted.
  */
 export async function POST(req: Request) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

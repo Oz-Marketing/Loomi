@@ -8,7 +8,8 @@
  * show it rather than let someone find out at publish time.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, canAccessAccount, forbidden, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getMetaConfig, listAdSetsForPublish } from '@/lib/integrations/meta-ads';
@@ -19,7 +20,7 @@ export const maxDuration = 60;
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ accountKey: string }> }) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.view');
   if (error) return error;
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

@@ -4,7 +4,7 @@
  * Takes an assembled `ReportDoc` and returns a written analysis for the front
  * of the deliverable. Port of Oz Dealer Tools' `ad-meeting/analyze`.
  *
- * STAFF ONLY (MANAGEMENT_ROLES). Two reasons: the analysis is drafted and
+ * STAFF ONLY (`reporting.configure`). Two reasons: the analysis is drafted and
  * reviewed before a client ever sees it, and each call costs real Opus tokens —
  * neither is something a `client` role should be able to trigger.
  *
@@ -14,8 +14,7 @@
  * prose can never cite a figure the reader can't find on the page.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { isValidReportDoc, reportDocSizeError } from '@/lib/reporting/report-doc';
 import { AnalysisUnavailable, generateMeetingAnalysis } from '@/lib/reporting/meeting-analysis';
 
@@ -24,7 +23,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('reporting.configure');
   if (error) return error;
 
   let body: unknown;

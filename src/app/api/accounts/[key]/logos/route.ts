@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as accountService from '@/lib/services/accounts';
 import { uploadToS3, deleteFromS3, s3PublicUrl, s3KeyFromPublicUrl, isS3Configured } from '@/lib/s3';
 import { syncAccountBrandAssets } from '@/lib/services/brand-assets';
@@ -34,7 +33,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ key: string }> },
 ) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.subaccounts.edit');
   if (error) return error;
 
   try {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
 
 /**
@@ -16,7 +16,7 @@ import * as budget from '@/lib/services/budget';
  * a co-op line is the rooftop the money spends out of, not the one billed.
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.budget.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

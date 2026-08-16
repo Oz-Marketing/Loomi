@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { filterAccountKeysByAccess } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 
@@ -22,7 +21,7 @@ interface StatsEntry {
 }
 
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('studio.contacts.view');
   if (error) return error;
 
   try {

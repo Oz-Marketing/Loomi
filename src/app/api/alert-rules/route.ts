@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/roles';
+import { requirePermission } from '@/lib/permissions/require';
 import { listAlertRules } from '@/lib/services/alert-rules';
 
 /**
@@ -10,7 +9,7 @@ import { listAlertRules } from '@/lib/services/alert-rules';
  * the evaluable metrics are fixed (account pace, budget burn).
  */
 export async function GET() {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.alerts.view');
   if (error) return error;
 
   try {

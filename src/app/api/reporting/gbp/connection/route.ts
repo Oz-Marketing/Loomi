@@ -5,7 +5,7 @@
  *   POST   /api/reporting/gbp/connection               choose a location
  *   DELETE /api/reporting/gbp/connection?accountKey=…   disconnect
  *
- * STAFF ONLY (MANAGEMENT_ROLES) — all three mutate or expose who granted
+ * STAFF ONLY (`integrations.credentials.manage`) — all three mutate or expose who granted
  * access. The report route is the client-visible half.
  *
  * GET never returns the refresh token: it serializes `GbpConnectionStatus`,
@@ -14,8 +14,8 @@
  * picker is open.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { GbpError, listAllLocations, normalizeLocationId } from '@/lib/integrations/gbp';
 import {
@@ -29,7 +29,7 @@ export const dynamic = 'force-dynamic';
 
 /** Shared guard: management role + the account is in the caller's scope. */
 async function guard(accountKey: string | null) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('integrations.credentials.manage');
   if (error) return { error, session: null };
   if (!accountKey) {
     return {

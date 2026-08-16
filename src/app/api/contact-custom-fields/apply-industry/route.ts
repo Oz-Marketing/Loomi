@@ -12,14 +12,14 @@
 // admin Blueprints tab.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { applyIndustryBlueprintsToMatchingAccounts } from '@/lib/services/contact-custom-fields';
 
 export async function POST(req: NextRequest) {
   // Portfolio-wide sweep: gated to elevated roles only because the
   // service doesn't filter against the caller's account scope. Admins
   // with limited scope should use per-blueprint deploy instead.
-  const { error } = await requireRole('developer', 'super_admin');
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   let body: Record<string, unknown>;

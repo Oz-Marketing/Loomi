@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { getCampaignRow, updateCampaignPlan } from '@/lib/services/campaigns';
 import { CAMPAIGN_PLAN_VERSION, type CampaignPlan } from '@/lib/campaigns/types';
 
@@ -14,7 +15,7 @@ interface RouteParams {
  * confirm step — subject tweaks, dropped touches, clarification answers, etc.
  */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const { id } = await params;

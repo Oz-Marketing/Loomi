@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type Anthropic from '@anthropic-ai/sdk';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { getFlow } from '@/lib/services/loomi-flows';
 import { ANTHROPIC_FLOW_MODEL, getAnthropicClient } from '@/lib/anthropic';
 import {
@@ -42,7 +42,7 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id } = await context.params;

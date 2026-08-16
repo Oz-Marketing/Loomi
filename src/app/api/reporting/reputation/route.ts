@@ -27,7 +27,7 @@ import { getReviewHistory, getHistoryCoverage } from '@/lib/reporting/review-his
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'reputation', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

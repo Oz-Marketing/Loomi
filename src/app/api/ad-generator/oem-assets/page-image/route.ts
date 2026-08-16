@@ -20,7 +20,8 @@
  * a page can never go stale without the hash moving.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/api-auth';
+import { getAuthSession } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { renderGuidelinePages, type RenderedPage } from '@/lib/ad-generator/guideline-preview';
@@ -135,7 +136,7 @@ export async function GET(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.assets.view');
   if (error) return error;
 
   const docId = req.nextUrl.searchParams.get('docId') ?? '';

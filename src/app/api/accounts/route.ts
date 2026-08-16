@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireRole } from '@/lib/api-auth';
-import { ELEVATED_ROLES } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { normalizeOems } from '@/lib/oems';
 import * as accountService from '@/lib/services/accounts';
 import { normalizeAccountInputAliases } from '@/lib/account-field-aliases';
@@ -133,7 +133,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.subaccounts.create');
   if (error) return error;
   try {
     const payload = await req.json() as Record<string, unknown>;
@@ -234,7 +234,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.subaccounts.archive');
   if (error) return error;
   try {
     const key = req.nextUrl.searchParams.get('key');

@@ -44,7 +44,7 @@ function isValidTimezone(tz: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'call_tracking', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

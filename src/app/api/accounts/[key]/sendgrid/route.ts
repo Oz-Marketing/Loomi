@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import {
   setSendGridApiKey,
@@ -10,7 +10,6 @@ interface RouteParams {
   params: Promise<{ key: string }>;
 }
 
-const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
 
 /**
  * GET /api/accounts/[key]/sendgrid
@@ -19,7 +18,7 @@ const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
  * the verified-from-domain hint. Never returns the key itself.
  */
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('agency.subaccounts.view');
   if (error) return error;
 
   const { key } = await params;
@@ -56,7 +55,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
  * account fields.
  */
 export async function PUT(req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('integrations.credentials.manage');
   if (error) return error;
 
   const { key } = await params;

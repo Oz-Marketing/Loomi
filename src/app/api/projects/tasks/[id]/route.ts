@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as projects from '@/lib/services/projects';
 import { STATUSES, KIND_META } from '@/lib/projects/ui';
 
@@ -11,7 +11,7 @@ type Attachment = { id: string; name: string; url: string };
 
 /** GET /api/projects/tasks/[id] — task + comments + activity thread. */
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.view');
   if (error) return error;
   const { id } = await params;
 
@@ -23,7 +23,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
 /** PATCH /api/projects/tasks/[id] — update fields (status, assignee, …). */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.edit');
   if (error) return error;
   const { id } = await params;
 
@@ -75,7 +75,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 /** DELETE /api/projects/tasks/[id] — soft-archive a task. */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.edit');
   if (error) return error;
   const { id } = await params;
 

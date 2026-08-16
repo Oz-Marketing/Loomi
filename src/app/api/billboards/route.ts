@@ -1,14 +1,14 @@
 /**
  * Billboard authoring — POST /api/billboards
  *
- * STAFF ONLY (MANAGEMENT_ROLES). A board is an agency-managed asset — Oz signs
+ * STAFF ONLY (`reporting.configure`). A board is an agency-managed asset — Oz signs
  * the out-of-home contract — so unlike Marketing Lists this is not a surface a
  * dealer writes to. The read side lives at /api/reporting/billboards and IS
  * client-visible.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
 const VALID_STATUS = ['active', 'archived'];
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('reporting.configure');
   if (error) return error;
 
   const body = await req.json().catch(() => null);

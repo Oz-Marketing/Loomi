@@ -23,6 +23,15 @@ model User {
   accountKeys String    @default("[]") // JSON array of assigned account keys
   // org-scoped user transparently gains access to all rooftops under it
   // without listing each accountKey individually.
+  //
+  // Whether `accountKeys` is a limit or a formality: `all` = every account,
+  // `listed` = exactly the keys named, and an empty list under `listed` means
+  // NOTHING. Retires the overload where `[]` meant "all accounts" for an
+  // admin and "no accounts" for a client, distinguishable only by knowing that
+  // `authOptions.jwt` rewrites it at token-mint time. Backfilled to `all` for
+  // everyone unrestricted today, so nothing changes.
+  // See docs/permissions-architecture.md.
+  scopeMode   String    @default("listed") // all | listed
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -58,6 +67,147 @@ model User {
 
   // Budget
   budgetLineEvents BudgetLineEvent[] @relation("BudgetLineEventAuthor")
+
+  // Permissions
+  sectorRoles       UserSectorRole[]
+  capabilityGrants  UserCapabilityGrant[]      @relation("CapabilityGrantSubject")
+  capabilitiesGiven UserCapabilityGrant[]      @relation("CapabilityGrantedBy")
+  auditEntriesMade     PermissionAuditLog[]    @relation("PermissionAuditActor")
+  auditEntriesReceived PermissionAuditLog[]    @relation("PermissionAuditSubject")
+}
+
+// ─────────────────────────────────────────────────────
+// Permissions
+//
+// The assignment half of the model in docs/permissions-architecture.md. The
+// role DEFINITIONS live in code (src/lib/permissions/registry.ts) — only who
+// holds what is persisted, which keeps the permission table reviewable in a
+// diff instead of editable in a database.
+//
+// Not yet authoritative: `requirePermission()` still delegates to the legacy
+// `User.role` buckets until the per-sector PERMISSIONS_ENFORCE_* flags flip.
+// ─────────────────────────────────────────────────────
+
+// One role per user per sector — `sector: "studio", role: "designer"`. Absence
+// of a row is meaningful: no row for a sector means that sector is hidden from
+// the nav and its API returns 403.
+model UserSectorRole {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // agency | studio | reporting | projects
+  sector String
+  // Valid values depend on the sector — see SECTOR_ROLES in the registry.
+  // A `client`-tier user may only hold a `reporting` row; enforced by
+  // assertAssignableSectorRole(), and stale rows are ignored at resolution.
+  role   String
+
+  grantedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, sector])
+  @@index([userId])
+  @@index([sector, role])
+}
+
+// Sensitive capabilities, which no sector role can confer: sending a blast,
+// exporting contact PII, seeing cost/markup, rotating integration credentials,
+// impersonating a user. Explicit grant only, per user, optionally per account.
+//
+// `effect: "deny"` beats every grant including an `allow` on the same
+// capability, so a single row can carve an exception out of a broad role
+// without inventing a narrower one.
+model UserCapabilityGrant {
+  id         String @id @default(cuid())
+  userId     String
+  user       User   @relation("CapabilityGrantSubject", fields: [userId], references: [id], onDelete: Cascade)
+  // A Permission key — see SENSITIVE_CAPABILITIES in the registry.
+  capability String
+  effect     String @default("allow") // allow | deny
+  // Account this applies to. EMPTY STRING means "everywhere in the user's
+  // scope" — deliberately not null, because Postgres treats NULLs as distinct
+  // in a UNIQUE constraint, so a nullable column here would let two
+  // contradictory global grants for the same capability both insert. `''` is
+  // never a valid Account.key, so it can't collide with a real scope.
+  scopeKey   String @default("")
+
+  grantedById String?
+  grantedBy   User?    @relation("CapabilityGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, capability, scopeKey])
+  @@index([userId])
+  @@index([capability])
+}
+
+// Which reports a sub-account exposes to its CLIENT users.
+//
+// Narrowing only: a row can never grant a report the role's permission doesn't
+// already allow, and Budget/Executive are excluded at the registry level
+// (`CLIENT_ELIGIBLE_REPORTS`), so no row here can surface internal figures.
+//
+// Absence is meaningful but not "off": a missing row falls back to the
+// registry's `defaultForClients`, so adding a new report doesn't require
+// writing a row for every account before anyone can see it.
+model AccountReportAccess {
+  id         String  @id @default(cuid())
+  accountKey String
+  /// A ReportKey — see src/lib/permissions/reports.ts.
+  reportKey  String
+  enabled    Boolean
+
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([accountKey, reportKey])
+  @@index([accountKey])
+}
+
+// Who changed whose permissions, and who used a sensitive capability.
+//
+// Two kinds of entry, deliberately in one table so "what happened to this
+// user's access, and what did they then do with it" is a single query:
+//
+//   • `grant` / `revoke` / `role_change` — an administrative change. `actorId`
+//     made it, `subjectId` received it.
+//   • `use` — someone exercised a sensitive capability (sent a blast, exported
+//     contacts, impersonated). actor and subject are the same person.
+//   • `bypass` — a `developer`-tier user passed a check they hold no grant for.
+//     Break-glass is fine; silent break-glass is not.
+//
+// Append-only by convention: nothing in the app updates or deletes a row.
+model PermissionAuditLog {
+  id   String @id @default(cuid())
+  // grant | revoke | role_change | use | bypass
+  kind String
+
+  /// Who performed it. Null once the actor's user row is deleted — the entry
+  /// must outlive the account, which is the whole point of an audit trail.
+  actorId    String?
+  actor      User?   @relation("PermissionAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorEmail String // denormalised so the trail survives the user row
+
+  /// Who it was done to. Same person as the actor for `use` / `bypass`.
+  subjectId String?
+  subject   User?   @relation("PermissionAuditSubject", fields: [subjectId], references: [id], onDelete: SetNull)
+
+  /// The permission or sector role involved, e.g. `blast.send`, `studio.lead`.
+  permission String
+  /// Account this concerned, when it was account-specific.
+  scopeKey   String?
+  /// Free-text: the reason on a grant, or what a `use` entry actually did
+  /// ("sent blast <id> to 1,204 recipients").
+  detail     String?
+
+  createdAt DateTime @default(now())
+
+  @@index([subjectId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([permission, createdAt])
+  @@index([kind, createdAt])
 }
 
 model UserInvite {

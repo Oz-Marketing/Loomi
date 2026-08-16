@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as projects from '@/lib/services/projects';
 
 /**
@@ -9,7 +9,7 @@ import * as projects from '@/lib/services/projects';
  * initiativeId, status). Internal-staff only, account-scoped.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.view');
   if (error) return error;
 
   const scope = getAccountScope(session!);
@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
 
 /** POST /api/projects/tasks — create a single task. */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.create');
   if (error) return error;
 
   const scope = getAccountScope(session!);

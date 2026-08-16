@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, requireAuth } from '@/lib/api-auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import type { UserRole } from '@/lib/auth';
 
@@ -19,7 +20,7 @@ function parseAccountKeys(raw: string): string[] {
  * so the frontend can swap the JWT via session.update().
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer');
+  const { session, error } = await requirePermission('user.impersonate');
   if (error) return error;
 
   const { userId } = await req.json();

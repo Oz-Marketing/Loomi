@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 
 // GET /api/contacts/:id/events?accountKey=
@@ -13,7 +13,7 @@ type RouteContext = { params: Promise<{ contactId: string }> };
 const MAX_EVENTS = 500;
 
 export async function GET(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.view');
   if (error) return error;
 
   const { contactId } = await params;

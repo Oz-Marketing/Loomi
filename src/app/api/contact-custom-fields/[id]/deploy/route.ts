@@ -12,14 +12,15 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireRole, getAccountScope } from '@/lib/api-auth';
+import { getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { deployBlueprintToAccounts } from '@/lib/services/contact-custom-fields';
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contact_fields.manage');
   if (error) return error;
   const { id } = await params;
 

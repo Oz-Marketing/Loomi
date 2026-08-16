@@ -11,7 +11,11 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
 import { MultiSelect } from '@/components/ui/multi-select';
-import { roleDisplayName } from '@/lib/roles';
+import { SectorRoleManager } from '@/components/settings/sector-role-manager';
+import { CapabilityManager } from '@/components/settings/capability-manager';
+import { legacyTierFor } from '@/lib/permissions/legacy';
+import { canTierHoldRole, parseSectorRoleRef } from '@/lib/permissions/registry';
+import { roleDisplayName, type UserRole } from '@/lib/roles';
 import { safeJson } from '@/lib/safe-json';
 import { toast } from '@/lib/toast';
 import { ArrowLeftIcon, ArrowUpTrayIcon, TrashIcon } from '@heroicons/react/24/outline';
@@ -30,6 +34,9 @@ interface User {
   department: string | null;
   teamIds: string[];
   accountKeys: string[];
+  /** Fully-qualified sector-role refs, e.g. `studio.designer`. */
+  sectorRoles: string[];
+  capabilities: string[];
   createdAt: string;
 }
 
@@ -95,6 +102,8 @@ function UserDetailContent({
   const [teamIds, setTeamIds] = useState<string[]>([]);
   const [teamOptions, setTeamOptions] = useState<TeamOption[]>([]);
   const [accountKeys, setAccountKeys] = useState<string[]>([]);
+  const [sectorRoles, setSectorRoles] = useState<string[]>([]);
+  const [capabilities, setCapabilities] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Team options for the Teams picker (the delivery teams this user can join).
@@ -122,6 +131,8 @@ function UserDetailContent({
         setRole(data.role);
         setTeamIds(data.teamIds ?? []);
         setAccountKeys(data.accountKeys || []);
+        setSectorRoles(data.sectorRoles ?? []);
+        setCapabilities(data.capabilities ?? []);
         userSnapshotRef.current = {
           name: data.name,
           title: data.title ?? '',
@@ -129,6 +140,8 @@ function UserDetailContent({
           role: data.role,
           teamIds: JSON.stringify(data.teamIds ?? []),
           accountKeys: JSON.stringify(data.accountKeys || []),
+          sectorRoles: JSON.stringify(data.sectorRoles ?? []),
+          capabilities: JSON.stringify(data.capabilities ?? []),
         };
       })
       .catch(() => toast.error('User not found'))
@@ -137,6 +150,28 @@ function UserDetailContent({
 
   const userSnapshotRef = useRef<Record<string, string> | null>(null);
 
+  const tier = legacyTierFor(role as UserRole);
+
+  /**
+   * Changing the platform role changes which sectors are legal, so drop any
+   * sector role the new tier can't hold — demoting someone to Client has to
+   * clear their Studio and Projects rows here, not fail on save. The API prunes
+   * server-side too; this is so the form never shows a state it can't submit.
+   */
+  const handleRoleChange = (nextRole: string) => {
+    setRole(nextRole);
+    const nextTier = legacyTierFor(nextRole as UserRole);
+    setSectorRoles((prev) =>
+      prev.filter((ref) => {
+        const parsed = parseSectorRoleRef(ref);
+        // Role-level, not just sector-level: demoting a Reporting Analyst to
+        // Client has to drop the role outright rather than keep a grant that
+        // would show them Budget.
+        return parsed ? canTierHoldRole(nextTier, parsed.sector, parsed.role) : false;
+      }),
+    );
+  };
+
   const hasChanges = useMemo(() => {
     const snap = userSnapshotRef.current;
     if (!snap) return false;
@@ -144,11 +179,13 @@ function UserDetailContent({
       name, title, email, role,
       teamIds: JSON.stringify(teamIds),
       accountKeys: JSON.stringify(accountKeys),
+      sectorRoles: JSON.stringify(sectorRoles),
+      capabilities: JSON.stringify(capabilities),
     };
     // Password is additive — any non-empty password counts as a change
     if (password.length > 0) return true;
     return Object.keys(snap).some(k => snap[k] !== current[k]);
-  }, [name, title, email, role, teamIds, accountKeys, password]);
+  }, [name, title, email, role, teamIds, accountKeys, sectorRoles, capabilities, password]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -161,6 +198,8 @@ function UserDetailContent({
         role,
         teamIds,
         accountKeys,
+        sectorRoles,
+        capabilities,
       };
       if (password) body.password = password;
 
@@ -180,6 +219,11 @@ function UserDetailContent({
       setRole(updated.role);
       setTeamIds(updated.teamIds ?? []);
       setAccountKeys(updated.accountKeys || []);
+      // Read back from the response rather than keeping local state: a role
+      // change can prune sector roles server-side, and the form must show what
+      // was actually saved.
+      setSectorRoles(updated.sectorRoles ?? []);
+      setCapabilities(updated.capabilities ?? []);
       setPassword('');
       userSnapshotRef.current = {
         name: updated.name,
@@ -188,6 +232,8 @@ function UserDetailContent({
         role: updated.role,
         teamIds: JSON.stringify(updated.teamIds ?? []),
         accountKeys: JSON.stringify(updated.accountKeys || []),
+        sectorRoles: JSON.stringify(updated.sectorRoles ?? []),
+        capabilities: JSON.stringify(updated.capabilities ?? []),
       };
       if (session?.user.id === userId) {
         await update({
@@ -513,12 +559,32 @@ function UserDetailContent({
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Role</label>
-              <select value={role} onChange={e => setRole(e.target.value)} className={inputClass}>
+              <select value={role} onChange={e => handleRoleChange(e.target.value)} className={inputClass}>
                 {currentUserRole === 'developer' && <option value="developer">Developer</option>}
                 <option value="super_admin">Super Admin</option>
                 <option value="admin">Admin</option>
                 <option value="client">Client</option>
               </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>Sector Access</label>
+              <SectorRoleManager
+                value={sectorRoles}
+                onChange={setSectorRoles}
+                tier={tier}
+                disabled={!canEditUsers}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Sensitive Capabilities</label>
+              <CapabilityManager
+                value={capabilities}
+                onChange={setCapabilities}
+                tier={tier}
+                disabled={!canEditUsers}
+              />
             </div>
 
             {(role === 'admin' || role === 'client') && (

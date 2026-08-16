@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { getRelatedAccountKeys } from '@/lib/services/accounts';
@@ -47,7 +47,7 @@ function dndWriteValue(state: DndState): Prisma.InputJsonValue | typeof Prisma.D
 }
 
 export async function PATCH(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.edit');
   if (error) return error;
 
   const { contactId } = await params;

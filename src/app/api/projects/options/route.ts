@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { requireRole, getAccountScope } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { getAccounts } from '@/lib/services/accounts';
 import { listTeams, listInternalUsers } from '@/lib/services/teams';
 
@@ -10,7 +10,7 @@ import { listTeams, listInternalUsers } from '@/lib/services/teams';
  * directory. Internal-staff only.
  */
 export async function GET() {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.view');
   if (error) return error;
 
   const scope = getAccountScope(session!);

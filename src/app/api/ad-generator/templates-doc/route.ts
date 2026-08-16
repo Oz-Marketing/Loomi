@@ -16,7 +16,8 @@
  * return [] so the generator simply falls back to code templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
@@ -134,7 +135,7 @@ export async function GET(req: NextRequest) {
 
   // Admin: full list (incl. drafts) for the builder's Load.
   if (req.nextUrl.searchParams.get('all') === '1') {
-    const { error } = await requireRole('developer', 'super_admin', 'admin');
+    const { error } = await requirePermission('studio.adgen.view');
     if (error) return error;
     // ?accountKey=<key> → the group-authoring view: only that account's own
     // templates (access-gated). Otherwise the whole library.
@@ -197,7 +198,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
   const session = await getAuthSession();
 

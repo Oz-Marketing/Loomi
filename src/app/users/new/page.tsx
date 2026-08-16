@@ -6,6 +6,9 @@ import Link from 'next/link';
 import { ElevatedOnly } from '@/components/route-guard';
 import { AccountAssignmentManager } from '@/components/account-assignment-manager';
 import { useAccount } from '@/contexts/account-context';
+import { SectorRoleManager } from '@/components/settings/sector-role-manager';
+import { legacySectorRolesFor, legacyTierFor } from '@/lib/permissions/legacy';
+import type { UserRole } from '@/lib/roles';
 import { toast } from '@/lib/toast';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import PrimaryButton from '@/components/primary-button';
@@ -62,6 +65,12 @@ function NewUserContent({
   const [password, setPassword] = useState('');
   const [sendInvite, setSendInvite] = useState(true);
   const [role, setRole] = useState(defaultRole ?? 'client');
+  // Pre-filled with the same coarse mapping the Phase 1 backfill used, so a new
+  // user starts with the access their platform role implies and the creator
+  // narrows from there rather than building it up from nothing.
+  const [sectorRoles, setSectorRoles] = useState<string[]>(() =>
+    legacySectorRolesFor((defaultRole ?? 'client') as UserRole),
+  );
   const [department, setDepartment] = useState('');
   const [accountKeys, setAccountKeys] = useState<string[]>([]);
 
@@ -87,6 +96,7 @@ function NewUserContent({
         department: department || null,
         accountKeys,
         sendInvite,
+        sectorRoles,
       };
       if (!sendInvite) body.password = password;
 
@@ -116,6 +126,16 @@ function NewUserContent({
     } finally {
       setSaving(false);
     }
+  };
+
+  /**
+   * On create, the platform role picks a sensible starting set outright rather
+   * than filtering what's there — nobody has hand-tuned it yet, so inheriting
+   * the new role's defaults is more useful than preserving stale selections.
+   */
+  const handleRoleChange = (nextRole: string) => {
+    setRole(nextRole);
+    setSectorRoles(legacySectorRolesFor(nextRole as UserRole));
   };
 
   const inputClass = 'w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] focus:outline-none focus:border-[var(--primary)]';
@@ -231,12 +251,21 @@ function NewUserContent({
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Role</label>
-              <select value={role} onChange={e => setRole(e.target.value)} className={inputClass}>
+              <select value={role} onChange={e => handleRoleChange(e.target.value)} className={inputClass}>
                 {userRole === 'developer' && <option value="developer">Developer</option>}
                 <option value="super_admin">Super Admin</option>
                 <option value="admin">Admin</option>
                 <option value="client">Client</option>
               </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>Sector Access</label>
+              <SectorRoleManager
+                value={sectorRoles}
+                onChange={setSectorRoles}
+                tier={legacyTierFor(role as UserRole)}
+              />
             </div>
 
             {(role === 'admin' || role === 'client') && (

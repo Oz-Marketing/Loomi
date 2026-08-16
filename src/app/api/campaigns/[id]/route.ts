@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   archiveCampaign,
   restoreCampaign,
@@ -30,7 +31,7 @@ async function authorizeCampaign(
 
 /** GET /api/campaigns/[id] — full container + linked assets + derived status. */
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.view');
   if (error) return error;
 
   const { id } = await params;
@@ -44,7 +45,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
 /** PATCH /api/campaigns/[id] — rename or archive the container. */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const { id } = await params;
@@ -76,7 +77,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
  * channel surfaces too.
  */
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const { id } = await params;

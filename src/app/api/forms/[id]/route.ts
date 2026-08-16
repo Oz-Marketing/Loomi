@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   deleteForm,
   FormServiceError,
@@ -18,7 +19,7 @@ export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.forms.view');
   if (error) return error;
 
   const { id } = await context.params;
@@ -31,7 +32,7 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.forms.edit');
   if (error) return error;
 
   const { id } = await context.params;
@@ -61,7 +62,7 @@ export async function DELETE(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.forms.edit');
   if (error) return error;
 
   const { id } = await context.params;

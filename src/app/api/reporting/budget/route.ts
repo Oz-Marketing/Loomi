@@ -26,7 +26,7 @@ import { getReportingBudget } from '@/lib/reporting/budget-view';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'budget', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

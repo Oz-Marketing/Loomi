@@ -12,7 +12,8 @@
  * Admin-only — it burns MarketCheck + EVOX quota and exposes raw feed data.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { canAccessAccount, forbidden, getAccountScope, getAuthSession, requireRole } from '@/lib/api-auth';
+import { canAccessAccount, forbidden, getAccountScope, getAuthSession } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { dryRunOneVehicle } from '@/lib/ad-generator/automation/dry-run';
 import type { SelectableOfferType } from '@/lib/ad-generator/automation/select-offer';
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.generate');
   if (error) return error;
 
   let body: {

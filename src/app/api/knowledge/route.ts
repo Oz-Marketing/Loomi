@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { getSetting, setSetting, KNOWLEDGE_SETTING_KEY } from '@/lib/services/app-settings';
 
 // The AI knowledge base. Previously stored at loomi-knowledge.md on the
@@ -8,7 +7,7 @@ import { getSetting, setSetting, KNOWLEDGE_SETTING_KEY } from '@/lib/services/ap
 // (so edits were silently reverted). Now persisted in Postgres via AppSetting.
 
 export async function GET() {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.knowledge.manage');
   if (error) return error;
 
   try {
@@ -20,7 +19,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.knowledge.manage');
   if (error) return error;
 
   try {

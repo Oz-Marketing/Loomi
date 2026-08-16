@@ -14,7 +14,7 @@
  *   compare_start / compare_end — YYYY-MM-DD when compare_to=custom
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireReportingAccess } from '../_lib/guard';
+import { requireReportingAccess, stripInternalCost } from '../_lib/guard';
 import { canAccessAccount } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import {
@@ -51,7 +51,7 @@ function daysAgoIso(days: number): string {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'stackadapt', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;
@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    return NextResponse.json({
+    const payload = {
       accountKey,
       dealer: account?.dealer ?? accountKey,
       advertiserId,
@@ -129,7 +129,10 @@ export async function GET(req: NextRequest) {
       daily: daily.map((d) => applyStackAdaptMargins(d, margin)),
       creatives: creatives.map((c) => applyStackAdaptMargins(c, margin)),
       compare,
-    });
+    };
+    return NextResponse.json(
+      ctx.canViewSpend ? payload : stripInternalCost(payload),
+    );
   } catch (err) {
     if (err instanceof StackAdaptError) {
       const status = err.code === 'graphql_error' ? 502 : 400;

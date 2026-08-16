@@ -6,7 +6,7 @@
 // excluded.
 
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { KNOWN_PROVIDERS } from '@/lib/segments/sync/destination';
 
@@ -17,11 +17,7 @@ const SCHEDULES = new Set(['manual', 'daily']);
 const STATUSES = new Set(['active', 'paused']);
 
 export async function GET(_req: Request, { params }: RouteContext) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.segments.view');
   if (error) return error;
 
   const { id } = await params;
@@ -61,11 +57,7 @@ export async function GET(_req: Request, { params }: RouteContext) {
 }
 
 export async function POST(req: Request, { params }: RouteContext) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const { id } = await params;

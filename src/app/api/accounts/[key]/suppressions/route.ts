@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 
 interface RouteParams {
   params: Promise<{ key: string }>;
 }
 
-const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
@@ -30,7 +29,7 @@ function assertAdminScope(
  * UI can render an accurate count.
  */
 export async function GET(req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('agency.subaccounts.view');
   if (error) return error;
 
   const { key } = await params;
@@ -108,7 +107,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
  * just refresh the row.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('agency.subaccounts.edit');
   if (error) return error;
 
   const { key } = await params;

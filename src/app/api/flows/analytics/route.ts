@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { getFlowAnalytics, listFlows } from '@/lib/services/loomi-flows';
 
 // Aggregate analytics across every flow in scope. Fans out per-flow
@@ -18,12 +18,7 @@ import { getFlowAnalytics, listFlows } from '@/lib/services/loomi-flows';
 // Studio analytics page still asks for.
 
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-    'client',
-  );
+  const { session, error } = await requirePermission(['studio.flows.view', 'reporting.report.view']);
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

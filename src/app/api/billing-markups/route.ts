@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { ELEVATED_ROLES, MANAGEMENT_ROLES } from '@/lib/roles';
+import { requirePermission } from '@/lib/permissions/require';
 import { getBillingMarkups, setBillingMarkup } from '@/lib/services/markup';
 
 /**
@@ -14,13 +13,13 @@ import { getBillingMarkups, setBillingMarkup } from '@/lib/services/markup';
  *       save makes a typo in one row roll back the four that were right.
  */
 export async function GET() {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.markup.view');
   if (error) return error;
   return NextResponse.json({ markups: await getBillingMarkups() });
 }
 
 export async function PUT(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('finance.markup.manage');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}) as Record<string, unknown>);

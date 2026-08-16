@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  canAccessAccount,
-  forbidden,
-  getAccountScope,
-  requireRole,
-} from '@/lib/api-auth';
+import { canAccessAccount, forbidden, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { encryptToken } from '@/lib/crypto/encryption';
@@ -18,7 +14,6 @@ interface RouteParams {
   params: Promise<{ key: string; id: string }>;
 }
 
-const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
 
 /** Returns the destination iff it exists AND belongs to `key`; else null. */
 async function findScopedDestination(key: string, id: string) {
@@ -32,7 +27,7 @@ async function findScopedDestination(key: string, id: string) {
  * Body: { provider?, leadEmail?, enabled? }
  */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('integrations.credentials.manage');
   if (error) return error;
 
   const { key, id } = await params;
@@ -123,7 +118,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
  * DELETE /api/accounts/[key]/crm/[id]
  */
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('integrations.credentials.manage');
   if (error) return error;
 
   const { key, id } = await params;

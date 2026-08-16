@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  canAccessAccount,
-  forbidden,
-  getAccountScope,
-  requireRole,
-} from '@/lib/api-auth';
+import { canAccessAccount, forbidden, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   AccountSnippetServiceError,
   createAccountSnippet,
@@ -12,7 +8,7 @@ import {
 } from '@/lib/services/account-snippets';
 
 export async function GET() {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.blocks.view');
   if (error) return error;
 
   const snippets = await listAccountSnippets(getAccountScope(session!));
@@ -20,7 +16,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.blocks.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

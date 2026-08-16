@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { listContactsForAccount, CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
@@ -16,7 +16,7 @@ import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
 //   now because Phase A introduced no DB consumers yet.
 
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.contacts.view', 'reporting.report.view']);
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim() ?? '';
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.edit');
   if (error) return error;
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;

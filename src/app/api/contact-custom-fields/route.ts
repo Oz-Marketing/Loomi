@@ -13,7 +13,8 @@
 // across the board.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireRole, canAccessAccount, getAccountScope } from '@/lib/api-auth';
+import { requireAuth, canAccessAccount, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   CustomFieldValidationError,
   createField,
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
   const wantBlueprints = req.nextUrl.searchParams.get('blueprints') === 'true';
 
   if (wantBlueprints) {
-    const { error } = await requireRole('developer', 'super_admin', 'admin');
+    const { error } = await requirePermission('studio.contact_fields.view');
     if (error) return error;
 
     const blueprints = await listBlueprints();
@@ -60,7 +61,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contact_fields.manage');
   if (error) return error;
 
   let body: Record<string, unknown>;

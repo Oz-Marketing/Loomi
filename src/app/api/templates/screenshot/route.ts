@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as templateService from '@/lib/services/templates';
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
 import { isV2Template, parseV2Template } from '@/lib/email/types';
@@ -35,7 +34,7 @@ function sanitizeFileName(value: string): string {
  * Compile a library template and download a high-resolution PNG screenshot.
  */
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('studio.templates.view');
   if (error) return error;
 
   const design = req.nextUrl.searchParams.get('design');

@@ -78,4 +78,17 @@ describe('stripInternalCost — non-plain objects', () => {
     expect(out.daily[0].date).toBeInstanceOf(Date);
     expect(out.daily[0]).not.toHaveProperty('actual_spend');
   });
+
+  it("strips `margins`, StackAdapt's own plural margin field", () => {
+    // Distinct from `margin`. Nothing requests it today, but it lives in the
+    // same 89-field DeliveryStatsRecord list someone scrolls when adding a
+    // metric, and a singular-only check waves it through to a dealer.
+    const out = stripInternalCost({
+      spend: 100,
+      margins: 42,
+      margin: 30,
+      actual_spend: 70,
+    }) as Record<string, unknown>;
+    expect(out).toEqual({ spend: 100 });
+  });
 });

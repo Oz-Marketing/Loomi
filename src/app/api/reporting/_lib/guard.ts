@@ -218,7 +218,12 @@ export function stripInternalCost<T>(payload: T): T {
   if (payload && typeof payload === 'object' && isPlainObject(payload)) {
     const out: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
-      if (key.startsWith('actual_') || key === 'margin') continue;
+      // `margins` (plural) is StackAdapt's OWN margin field on
+      // DeliveryStatsRecord. Nothing requests it today, but it sits in the same
+      // 89-field list someone scrolls when adding a metric, and a singular-only
+      // check would wave it straight through to a dealer. Cheaper to block now
+      // than to notice later.
+      if (key.startsWith('actual_') || key === 'margin' || key === 'margins') continue;
       out[key] = stripInternalCost(value);
     }
     return out as T;

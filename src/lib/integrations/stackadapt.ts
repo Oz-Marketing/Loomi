@@ -100,8 +100,22 @@ async function gql<T>(
   return (json?.data ?? {}) as T;
 }
 
-// ── DeliveryStatsRecord field set (copied verbatim from the PHP fragment) ──
-const METRICS_FRAGMENT = `
+// ── DeliveryStatsRecord field set ──
+//
+// Everything up to `frequency` is copied verbatim from the PHP fragment. The
+// video block was added later, and its names were confirmed by introspecting
+// DeliveryStatsRecord against the live API (scripts/stackadapt-introspect.ts)
+// rather than inferred — there is an asymmetry that makes guessing dangerous:
+// the 25/50/75 marks are Q{n}Playbacks, but 100% is Completions, so the
+// natural guess "videoQ4PlaybacksBigint" does not exist.
+//
+// This fragment is shared by all five delivery queries, so one bad field name
+// 400s the ENTIRE StackAdapt report — totals, campaigns, daily, creatives —
+// rather than blanking a single section. Introspect before editing.
+//
+// Do NOT add `margins`: it is StackAdapt's own margin figure. guard.ts strips
+// it defensively, but it has no business being requested in the first place.
+export const METRICS_FRAGMENT = `
   impressionsBigint
   clicksBigint
   cost
@@ -112,15 +126,27 @@ const METRICS_FRAGMENT = `
   ecpm
   ecpa
   frequency
+  videoStartsBigint
+  videoQ1PlaybacksBigint
+  videoQ2PlaybacksBigint
+  videoQ3PlaybacksBigint
+  videoCompletionsBigint
+  videoCompletionRate
 `;
 
-interface RawStats {
+export interface RawStats {
   impressionsBigint?: string | number;
   clicksBigint?: string | number;
   cost?: string | number;
   conversionsBigint?: string | number;
   uniqueImpressionsBigint?: string | number;
   frequency?: string | number;
+  videoStartsBigint?: string | number;
+  videoQ1PlaybacksBigint?: string | number;
+  videoQ2PlaybacksBigint?: string | number;
+  videoQ3PlaybacksBigint?: string | number;
+  videoCompletionsBigint?: string | number;
+  videoCompletionRate?: string | number;
 }
 
 export interface StackAdaptMetrics {
@@ -134,6 +160,18 @@ export interface StackAdaptMetrics {
   cost_per_conversion: number;
   unique_impressions: number;
   frequency: number;
+  /**
+   * Video delivery funnel. All zero on a display-only buy, which is a real
+   * measurement rather than missing data — the UI keys off `video_starts` to
+   * decide whether a video section applies at all.
+   */
+  video_starts: number;
+  video_q1: number;
+  video_q2: number;
+  video_q3: number;
+  video_completions: number;
+  /** Completions per start, as a percent. StackAdapt computes this itself. */
+  video_completion_rate: number;
 }
 
 export interface StackAdaptRow extends StackAdaptMetrics {
@@ -162,13 +200,19 @@ export const EMPTY_STACKADAPT_METRICS: StackAdaptMetrics = {
   cost_per_conversion: 0,
   unique_impressions: 0,
   frequency: 0,
+  video_starts: 0,
+  video_q1: 0,
+  video_q2: 0,
+  video_q3: 0,
+  video_completions: 0,
+  video_completion_rate: 0,
 };
 
 /**
  * Normalize a DeliveryStatsRecord into our standard metric shape, recomputing
  * the rate/cost fields from raw counts (Oz parity — StackAdaptApi::normalizeStats).
  */
-function normalizeStats(s: RawStats): StackAdaptMetrics {
+export function normalizeStats(s: RawStats): StackAdaptMetrics {
   const impressions = intOf(s.impressionsBigint);
   const clicks = intOf(s.clicksBigint);
   const spend = floatOf(s.cost);
@@ -185,6 +229,16 @@ function normalizeStats(s: RawStats): StackAdaptMetrics {
     cost_per_conversion: conversions > 0 ? round2(spend / conversions) : 0,
     unique_impressions: intOf(s.uniqueImpressionsBigint),
     frequency: floatOf(s.frequency),
+    video_starts: intOf(s.videoStartsBigint),
+    video_q1: intOf(s.videoQ1PlaybacksBigint),
+    video_q2: intOf(s.videoQ2PlaybacksBigint),
+    video_q3: intOf(s.videoQ3PlaybacksBigint),
+    video_completions: intOf(s.videoCompletionsBigint),
+    // Taken from the API rather than recomputed. The other rates here are
+    // recomputed for byte-parity with the PHP, but PHP never carried this one,
+    // so there is no parity to preserve — and StackAdapt's own figure is the
+    // one a buyer sees in StackAdapt's UI, which is what they'll compare to.
+    video_completion_rate: round2(floatOf(s.videoCompletionRate)),
   };
 }
 

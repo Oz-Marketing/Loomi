@@ -505,3 +505,73 @@ export async function getVdpViews(
   });
   return { totalViews, pages };
 }
+
+// ── Admin API — property discovery ──
+
+/** One GA4 property the service account can see. */
+export interface Ga4PropertySummary {
+  /** Numeric id, digits only — what `Account.ga4PropertyId` stores. */
+  propertyId: string;
+  /** Property display name, e.g. "Young Chevrolet - GA4". */
+  displayName: string;
+  /** Parent account display name, useful when property names collide. */
+  accountName: string;
+}
+
+/**
+ * Every GA4 property this service account has been granted access to.
+ *
+ * Admin API rather than the Data API, and read with the SAME credential and
+ * scope (`analytics.readonly` covers both), so nothing new has to be
+ * provisioned to use it.
+ *
+ * This is what makes mapping properties to sub-accounts a review step rather
+ * than a hunt: the alternative is opening 38 GA4 properties by hand and copying
+ * the id out of Admin → Property Settings.
+ *
+ * A property missing here means the service account was never granted access to
+ * it — that is a Google-side permission to add, not a bug in the caller.
+ */
+export async function listGa4Properties(cfg: Ga4Config): Promise<Ga4PropertySummary[]> {
+  const token = await getAccessToken(cfg);
+  const out: Ga4PropertySummary[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = new URL('https://analyticsadmin.googleapis.com/v1beta/accountSummaries');
+    url.searchParams.set('pageSize', '200');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      throw new Ga4Error(
+        `Admin API ${res.status}: ${(await res.text()).slice(0, 300)}`,
+        'api_error',
+        res.status,
+      );
+    }
+    const body = (await res.json()) as {
+      accountSummaries?: {
+        displayName?: string;
+        propertySummaries?: { property?: string; displayName?: string }[];
+      }[];
+      nextPageToken?: string;
+    };
+
+    for (const acct of body.accountSummaries ?? []) {
+      for (const prop of acct.propertySummaries ?? []) {
+        // `property` comes back as "properties/404123456".
+        const id = (prop.property ?? '').replace(/[^0-9]/g, '');
+        if (!id) continue;
+        out.push({
+          propertyId: id,
+          displayName: prop.displayName ?? '(unnamed)',
+          accountName: acct.displayName ?? '(unnamed account)',
+        });
+      }
+    }
+    pageToken = body.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}

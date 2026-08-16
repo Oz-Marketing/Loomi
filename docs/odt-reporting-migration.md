@@ -19,7 +19,9 @@ Prisma).
 ## 1. Where we stand
 
 ODT has **22 reporting surfaces** (20 client-facing + 2 internal). Loomi
-Reporting now has **20 ported**: the Digital Ads group, Website Analytics,
+Reporting now has **20 ported** — but see §1.1: three of those twenty have
+never had server credentials and do not run anywhere. The twenty are the
+Digital Ads group, Website Analytics,
 Reputation (live + history), Business Profile, Call Tracking, Lead Performance,
 Sales Trend, Service Trend, Service Retention, Customer Heatmap, Direct Mail
 ROI, Budget, the Ad Meeting deliverable, the Marketing Overview, the Executive
@@ -47,8 +49,8 @@ into a vendor call later.
 | Facebook Ads | `/reporting/ads/meta` | ✅ ported |
 | OTT / CTV (StackAdapt) | `/reporting/ads/stackadapt` | ✅ ported |
 | Email Campaigns (GHL) | `/reporting/ads/blasts` | ✅ ported — now **Email & Text Blasts**, merged with Loomi sends (see below) |
-| Website Analytics (GA4) | `/reporting/websites` | ✅ ported |
-| Reputation Report | `/reporting/reputation` | ✅ ported — live rating, review history, trends, reply rates |
+| Website Analytics (GA4) | `/reporting/websites` | ⚠️ code ported, **not live** — no credential in any environment (§1.1) |
+| Reputation Report | `/reporting/reputation` | ⚠️ code ported, **not live** — no credential in any environment (§1.1) |
 
 Loomi additionally has three things ODT does not: **PDF + XLSX export**
 (`/api/reporting/export/*`, platform-agnostic), a **cross-account roll-up**
@@ -61,6 +63,57 @@ Budget Report covers and more. Bringing it into Reporting is a new read-only
 view over data Loomi already holds, not a port.
 
 ---
+
+### 1.1 Three ported reports have never run — no credentials, anywhere
+
+Verified 2026-08-16 by reading the **running process environment** on the
+production droplet (`/proc/<pid>/environ`, which is authoritative over any
+`.env` file), and the env file on staging. Local dev matches.
+
+| Report | Credential it needs | dev | staging | prod |
+|---|---|:--:|:--:|:--:|
+| Website Analytics | `GA4_SERVICE_ACCOUNT_JSON` | ✗ | ✗ | ✗ |
+| Reputation (live) | `GOOGLE_MAPS_API_KEY` / `GOOGLE_PLACES_API_KEY` | ✗ | ✗ | ✗ |
+| Business Profile | `GBP_CLIENT_ID` / `_SECRET` / `_REDIRECT_URI` | ✗ | ✗ | ✗ |
+
+For contrast, every integration Oz **already had a credential for** is live in
+production: `META_SYSTEM_USER_TOKEN`, the three `GOOGLE_ADS_*` variables, and
+`STACKADAPT_API_KEY`. So this is not a broken deploy or a missing env file — it
+is one setup step that was never finished, for exactly the three integrations
+that required a NEW credential to be provisioned in Google Cloud.
+
+**What a user sees.** `getGa4Config()`, `getPlacesApiKey()` and `getGbpConfig()
+each return null, so the route answers 503 `not_configured`. The reports render
+"not configured on the server yet" to everyone, and have since they shipped.
+
+**`GOOGLE_CLIENT_ID` is set in production and is NOT relevant here.** It is read
+only by `src/lib/auth.ts` — it is the Google SSO login. There is no fallback
+from `GBP_CLIENT_ID` to it, and adding one would be wrong: SSO and the Business
+Profile API need different OAuth clients and scopes.
+
+**Mapping IDs is downstream of this.** `Account.ga4PropertyId` and
+`Account.googlePlaceId` say *which* property or listing to read; the credential
+is what permits reading it. Populating the columns while the credentials are
+absent changes nothing — both reports still 503. Provision first, then map.
+
+Order of work:
+
+1. **GA4** — create a service account, grant it Viewer on each dealer property,
+   set `GA4_SERVICE_ACCOUNT_JSON`. The grant list then *is* the property
+   inventory: `listGa4Properties()` reads it back, so nobody copies 38 ids by
+   hand. Then `scripts/map-reporting-integrations.ts` proposes the mapping.
+2. **Places** — create a Maps/Places API key, set `GOOGLE_MAPS_API_KEY`. The
+   same script proposes a listing per rooftop from name + address. Review every
+   one: a wrong `googlePlaceId` is read in reverse by the review ingest and
+   files one rooftop's reviews under its neighbour.
+3. **Business Profile** — the two steps already documented below ("Business
+   Profile is the only per-account credential"). No mapping needed; each
+   rooftop connects itself through the Integrations page.
+
+`checkReportingCredentials()` (src/lib/integrations/credential-check.ts) logs
+this table at boot, so the next environment missing one says so on startup
+rather than when a client opens an empty report.
+
 
 ## 2. Full ODT inventory
 
@@ -86,9 +139,9 @@ All four ported. ✅
 
 | Report | Route | Data source | What it shows |
 |---|---|---|---|
-| Website Analytics | `reports/website-analytics` | GA4 Data API | ✅ ported |
-| **Business Profile** | `reports/gbp` | Google Business Profile API, **per-org OAuth** (`gbp_refresh_token`) | ✅ **shipped** — see "Business Profile is the only per-account credential" |
-| Reputation | `reports/reputation` | Google Places (live) + `ozrep` MySQL DB (history) | ✅ **shipped** — live rating + history/reply rates |
+| Website Analytics | `reports/website-analytics` | GA4 Data API | ⚠️ code ported, **not live** (§1.1) |
+| **Business Profile** | `reports/gbp` | Google Business Profile API, **per-org OAuth** (`gbp_refresh_token`) | ⚠️ code ported, **not live** — OAuth client never created (§1.1) |
+| Reputation | `reports/reputation` | Google Places (live) + `ozrep` MySQL DB (history) | ⚠️ code ported, **not live** (§1.1) |
 | **Call Tracking** | `reports/call-tracking` | `ozreports` DB via `OzReportsData::getCalls()` | ✅ **shipped** — required extending the bridge (`pushcalls`) |
 
 ### Sales & Service

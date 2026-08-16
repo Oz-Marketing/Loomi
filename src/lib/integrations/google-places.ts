@@ -193,3 +193,72 @@ export async function getPlaceDetails(apiKey: string, placeId: string): Promise<
     reviews,
   };
 }
+
+// ── Text search — listing discovery ──
+
+export interface PlaceCandidate {
+  placeId: string;
+  name: string;
+  address: string;
+  rating: number | null;
+  reviewCount: number;
+  businessStatus: string;
+}
+
+/**
+ * Search Google Places by free text — "Young Chevrolet, 123 Main St, Layton UT".
+ *
+ * Used to PROPOSE a listing for a sub-account, never to pick one silently. A
+ * dealership group has near-identical listings a few miles apart, plus separate
+ * service-department and parts listings for the same rooftop, so the top hit is
+ * frequently the wrong one. Callers get the candidate list and a human decides.
+ *
+ * That caution is not general nervousness: `Account.googlePlaceId` is read in
+ * REVERSE by the review ingest, so a wrong id here quietly files one rooftop's
+ * reviews under its neighbour.
+ */
+export async function searchPlacesByText(
+  apiKey: string,
+  query: string,
+  limit = 4,
+): Promise<PlaceCandidate[]> {
+  const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': apiKey,
+      'X-Goog-FieldMask':
+        'places.id,places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.businessStatus',
+    },
+    body: JSON.stringify({ textQuery: query, maxResultCount: limit }),
+  });
+
+  if (!res.ok) {
+    throw new PlacesError(
+      `Places search ${res.status}: ${(await res.text()).slice(0, 300)}`,
+      'api_error',
+    );
+  }
+
+  const body = (await res.json()) as {
+    places?: {
+      id?: string;
+      displayName?: { text?: string };
+      formattedAddress?: string;
+      rating?: number;
+      userRatingCount?: number;
+      businessStatus?: string;
+    }[];
+  };
+
+  return (body.places ?? [])
+    .filter((p) => p.id)
+    .map((p) => ({
+      placeId: p.id!,
+      name: p.displayName?.text ?? '(unnamed)',
+      address: p.formattedAddress ?? '',
+      rating: p.rating ?? null,
+      reviewCount: p.userRatingCount ?? 0,
+      businessStatus: p.businessStatus ?? 'OPERATIONAL',
+    }));
+}

@@ -24,7 +24,7 @@ import { getBillboards } from '@/lib/reporting/billboards';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'billboards', req: req });
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey');

@@ -12,7 +12,7 @@
 // would let a consent failure blank out an otherwise working preview.
 
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import {
   resolveEligibleForSync,
@@ -25,11 +25,7 @@ import {
 } from '@/lib/smart-list-validate';
 
 export async function POST(req: Request) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => null);

@@ -164,12 +164,46 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-export function ReportingIntegrationCards({ accountKey }: { accountKey: string }) {
+export function ReportingIntegrationCards({
+  accountKey,
+  /**
+   * Open one provider's modal from outside — the Reports tab's "Integrate"
+   * button uses this to land the user directly on the thing they need to fix,
+   * rather than on a grid of cards they then have to find it in.
+   */
+  openProvider,
+  onOpenProviderHandled,
+}: {
+  accountKey: string;
+  openProvider?: string | null;
+  onOpenProviderHandled?: () => void;
+}) {
   const url = `/api/accounts/${encodeURIComponent(accountKey)}`;
   const { data, mutate } = useSWR<AccountReporting>(url, fetcher);
   const [active, setActive] = React.useState<string | null>(null);
 
-  const activeMeta = PROVIDERS.find((p) => p.value === active) ?? null;
+  /**
+   * `openProvider` wins while it's set — the modal is CONTROLLED by the parent
+   * for the duration of an external request, and falls back to local state for
+   * an ordinary card click.
+   *
+   * An earlier version copied `openProvider` into local state in an effect.
+   * That fired correctly and still showed nothing: switching tabs remounts this
+   * component, so the copied state was discarded on the very next render.
+   * Deriving it means there is no copy to lose.
+   */
+  const requested = openProvider && PROVIDERS.some((p) => p.value === openProvider)
+    ? openProvider
+    : null;
+  const effectiveActive = requested ?? active;
+
+  const closeModal = () => {
+    setActive(null);
+    // Release the parent's request too, or it would immediately reopen.
+    onOpenProviderHandled?.();
+  };
+
+  const activeMeta = PROVIDERS.find((p) => p.value === effectiveActive) ?? null;
   const isConnected = (p: ReportingProvider) => Boolean(data?.[p.connectedKey]);
 
   return (
@@ -209,7 +243,7 @@ export function ReportingIntegrationCards({ accountKey }: { accountKey: string }
             accountKey={accountKey}
             provider={activeMeta}
             account={data ?? {}}
-            onClose={() => setActive(null)}
+            onClose={closeModal}
             onChanged={() => void mutate()}
           />,
           document.body,

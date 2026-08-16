@@ -17,8 +17,8 @@
  * ── THIS IS PRESENTATION, NOT A SECURITY BOUNDARY ───────────────────────────
  * The lens decides what to DRAW. It cannot decide what a client may receive —
  * anything sensitive is filtered server-side before the response is written
- * (see `stripMarginInternals`, which withholds raw cost and the margin percent
- * from anyone below super-admin). Never move a rule from there to here.
+ * (see `stripInternalCost`, which withholds raw cost and the margin percent
+ * from anyone without the `finance.spend.view` capability). Never move a rule from there to here.
  *
  * ── URL-BACKED ──────────────────────────────────────────────────────────────
  * `?view=client` survives a reload and pastes into Slack, which is what makes

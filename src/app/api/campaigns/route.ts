@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
 
 /**
@@ -10,7 +11,7 @@ import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
  * is for the manual step-by-step wizard.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.view');
   if (error) return error;
 
   const scope = getAccountScope(session!);
@@ -21,7 +22,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

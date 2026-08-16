@@ -28,6 +28,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
+import { visibleNav } from './nav-visibility';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
@@ -231,6 +232,29 @@ export function ReportingSidebar() {
 
   const toggleGroup = (key: string) => setOpen((o) => ({ ...o, [key]: !o[key] }));
 
+  // Which reports this user can actually open on this account. Null until it
+  // loads; see visibleNav for why that renders everything.
+  const [allowedReports, setAllowedReports] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const qs = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
+    fetch(`/api/reporting/my-reports${qs}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.reports) return;
+        setAllowedReports(new Set<string>(data.reports));
+      })
+      .catch(() => {
+        // Leave it null — show the full nav rather than hiding reports because
+        // one request failed.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
+
+  const nav = visibleNav(NAV, allowedReports);
+
   return (
     <SidebarFrame
       brand={
@@ -271,7 +295,7 @@ export function ReportingSidebar() {
       {isSettingsPath(pathname) ? (
         <SettingsNav backHref="/" backLabel="Back to Reporting" collapsed={collapsed} />
       ) : (
-        NAV.map((item) =>
+        nav.map((item) =>
           item.children ? (
             <GroupNav
               key={item.key}

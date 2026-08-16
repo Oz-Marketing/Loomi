@@ -3,8 +3,8 @@ import {
   canAccessAccount,
   forbidden,
   getAccountScope,
-  requireRole,
 } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { createForm, FormServiceError } from '@/lib/services/forms';
 import { getFormTemplatePreset } from '@/lib/forms/templates';
 
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.forms.edit');
   if (error) return error;
 
   const { accountKey, name, templateId, subaccountSlug } = await readBody(req);

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { parseCsv, importContacts, type ImportMapping } from '@/lib/contacts/import';
 import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
 import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
@@ -26,7 +26,7 @@ function isImportMode(value: string | null): value is ImportMode {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.import');
   if (error) return error;
 
   const mode = req.nextUrl.searchParams.get('mode');

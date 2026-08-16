@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireRole } from '@/lib/api-auth';
-import { ELEVATED_ROLES } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import * as accountService from '@/lib/services/accounts';
 import { accountToClientEntry, type ClientEntry } from '@/lib/services/clients';
@@ -37,7 +37,7 @@ export async function GET() {
 
 /** POST → create a new account. Mirrors POST /api/accounts. */
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.users.manage');
   if (error) return error;
 
   try {
@@ -85,7 +85,7 @@ export async function POST(req: NextRequest) {
  * keys are skipped (no implicit creation).
  */
 export async function PUT(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.users.manage');
   if (error) return error;
 
   try {
@@ -122,7 +122,7 @@ export async function PUT(req: NextRequest) {
 
 /** DELETE → remove an account. Mirrors DELETE /api/accounts. */
 export async function DELETE(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.users.manage');
   if (error) return error;
 
   try {

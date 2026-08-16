@@ -3,7 +3,7 @@
  *
  * STAFF ONLY. Connecting binds a dealership employee's Google grant to a Loomi
  * account; a `client` reading their own report has no business initiating it,
- * so this sits behind MANAGEMENT_ROLES while the report itself does not.
+ * so this sits behind `integrations.credentials.manage` while the report itself does not.
  *
  * Redirects to Google's consent screen with a signed `state` (see
  * lib/integrations/gbp-state.ts — ODT trusted an unsigned org id here).
@@ -12,8 +12,8 @@
  *   accountKey  — the account to bind the grant to (required)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { GbpError, buildAuthUrl, getGbpConfig } from '@/lib/integrations/gbp';
 import { signState } from '@/lib/integrations/gbp-state';
@@ -21,7 +21,7 @@ import { signState } from '@/lib/integrations/gbp-state';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('integrations.credentials.manage');
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey');

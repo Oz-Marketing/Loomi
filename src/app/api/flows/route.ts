@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   createFlow,
   flowNameTaken,
@@ -30,7 +30,7 @@ function clientAccountKeysFromSession(session: {
 }
 
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.flows.view', 'reporting.report.view']);
   if (error) return error;
 
   const accountKeyParam = req.nextUrl.searchParams.get('accountKey');
@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

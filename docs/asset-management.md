@@ -126,6 +126,29 @@ account key. A group account that carries three brands inherits all three withou
 any row being copied — which is v2's COPE principle expressed in a query instead
 of a folder tree.
 
+**Copies, for the case sharing doesn't cover.** A scope answers "publish once,
+everyone who should see it does". It does not answer "that rooftop has a photo
+this rooftop wants, as its own". `POST /api/media/[id]/copy` does: it writes a
+second asset in the destination scope with its own S3 object (a server-side
+`CopyObject`, so nothing streams through the app), carries the metadata,
+licence and approval state, and records `parentAssetId` so lineage stays
+answerable. Independence is the point — renaming, replacing or deleting the copy
+never touches the original, which a shared pointer could not promise.
+
+Permission follows where the copy LANDS, not where it came from
+(`checkAssetCopy`): into a sub-account you need write access to that account, so
+a restricted admin can copy between the accounts they hold; into the Loomi or a
+brand library you need to be an unrestricted admin, the same bar a scope move
+has, because it publishes to everyone. Clients never copy. Managed logos and
+fonts refuse, as they do for moves — Account settings owns their lifecycle.
+
+**There is no cross-account browsing view, deliberately.** Agency scope used to
+carry an "All Accounts" grid; it was retired with the scope (see
+docs/settings-architecture.md). Shared and OEM assets already resolve into every
+library that covers them, so an admin standing in any sub-account can see, filter
+and manage the shared pool in place — and take a copy of it. A second, fleet-wide
+browsing mode is a concept to learn, not a capability to gain.
+
 **Folders stay, and stay dumb.** They are a user convenience within a scope, not
 the classification system. No business meaning is read out of a folder name, ever.
 v2's warning about deep hierarchies applies: `MediaFolder` nests without limit

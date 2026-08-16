@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
   deleteTrigger,
@@ -11,7 +11,7 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string; triggerId: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id, triggerId } = await context.params;
@@ -42,7 +42,7 @@ export async function DELETE(
   _req: NextRequest,
   context: { params: Promise<{ id: string; triggerId: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id, triggerId } = await context.params;

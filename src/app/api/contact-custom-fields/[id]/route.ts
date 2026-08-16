@@ -10,7 +10,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireRole, canAccessAccount, getAccountScope } from '@/lib/api-auth';
+import { canAccessAccount, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   CustomFieldValidationError,
   deleteField,
@@ -43,7 +44,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contact_fields.manage');
   if (error) return error;
   const { id } = await params;
 
@@ -98,7 +99,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contact_fields.manage');
   if (error) return error;
   const { id } = await params;
 

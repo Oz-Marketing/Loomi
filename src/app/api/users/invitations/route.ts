@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { issueAndSendUserInvite } from '@/lib/users/invitations';
 
 export async function POST(req: NextRequest) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('agency.users.invite');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

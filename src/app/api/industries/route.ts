@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { ELEVATED_ROLES, MANAGEMENT_ROLES } from '@/lib/roles';
+import { requirePermission } from '@/lib/permissions/require';
 import { getIndustries, setIndustries } from '@/lib/services/industries';
 
 /**
@@ -14,7 +13,7 @@ import { getIndustries, setIndustries } from '@/lib/services/industries';
  *        round-trip from the manager UI.
  */
 export async function GET() {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.industries.view');
   if (error) return error;
 
   try {
@@ -26,7 +25,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}) as Record<string, unknown>);

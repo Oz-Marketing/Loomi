@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { INDUSTRY_TEMPLATES, type IndustryDefaults } from '@/data/industry-defaults';
 
@@ -44,7 +44,7 @@ async function readCustomTemplates(): Promise<Record<string, TemplateEntry>> {
  * precedence for fields while preserving the builtin flag.
  */
 export async function GET() {
-  const { error } = await requireRole('developer', 'super_admin');
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   const customTemplates = await readCustomTemplates();
@@ -71,7 +71,7 @@ export async function GET() {
  * Body: { name: string, fields: Record<string, { name: string; value: string }> }
  */
 export async function POST(req: NextRequest) {
-  const { error } = await requireRole('developer', 'super_admin');
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   try {
@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
  * Body: { name: string, fields: Record<string, { name: string; value: string }>, newName?: string }
  */
 export async function PUT(req: NextRequest) {
-  const { error } = await requireRole('developer', 'super_admin');
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   try {
@@ -147,7 +147,7 @@ export async function PUT(req: NextRequest) {
  * Body: { name: string }
  */
 export async function DELETE(req: NextRequest) {
-  const { error } = await requireRole('developer', 'super_admin');
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   try {

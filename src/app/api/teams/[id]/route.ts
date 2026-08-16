@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as teams from '@/lib/services/teams';
 
 /**
@@ -8,7 +7,7 @@ import * as teams from '@/lib/services/teams';
  * Accepts any of { name, description, color, sortOrder, memberIds, leadIds }.
  */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.teams.manage');
   if (error) return error;
 
   const { id } = await params;
@@ -45,7 +44,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 /** DELETE /api/teams/[id] — soft-archive a team. */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.teams.manage');
   if (error) return error;
 
   const { id } = await params;

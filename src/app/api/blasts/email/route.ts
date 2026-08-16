@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
+import { recordCapabilityUse } from '@/lib/permissions/audit';
 import {
   createEmailBlast,
   listEmailBlasts,
@@ -48,7 +49,7 @@ function normalizeRecipients(raw: unknown): EmailRecipientInput[] {
  * Lists recent email campaigns created in Loomi.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.email.view', 'reporting.report.view']);
   if (error) return error;
 
   const limitRaw = Number(req.nextUrl.searchParams.get('limit') || '20');
@@ -70,7 +71,12 @@ export async function GET(req: NextRequest) {
  * Creates a bulk email campaign and optionally processes it immediately.
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  // Staff only. The old guard admitted `client`, so a dealer-role user could
+  // email a contact list — closed deliberately, see "Deliberate narrowings" in
+  // docs/permissions-architecture.md. The `blast.send` capability narrows the
+  // send itself further still; that check is below, since it only applies when
+  // the request actually sends.
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));
@@ -99,12 +105,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Recipient limit is 1000 per email send' }, { status: 400 });
   }
 
-  if (session!.user.role === 'client') {
-    const allowed = new Set(session!.user.accountKeys ?? []);
-    const forbiddenRecipient = recipients.find((recipient) => !allowed.has(recipient.accountKey));
-    if (forbiddenRecipient) {
-      return NextResponse.json({ error: 'Forbidden recipient account selection' }, { status: 403 });
-    }
+  // (A `client`-role recipient-scoping branch used to sit here. It became
+  // unreachable when the guard above closed this route to clients.)
+
+  // Creating a draft is Studio work; putting it on the wire is not. Checked
+  // here rather than in the guard above because it depends on the body — a
+  // campaign saved for later needs no send capability at all.
+  if (processNow) {
+    const { error: sendError } = await requirePermission('blast.send');
+    if (sendError) return sendError;
   }
 
   try {
@@ -129,6 +138,12 @@ export async function POST(req: NextRequest) {
     }
 
     const processed = await processEmailBlast(created.id, { concurrency: 3 });
+    recordCapabilityUse(
+      { id: session!.user.id, email: session!.user.email },
+      'blast.send',
+      `Sent email blast ${created.id} ("${subject}") to ${recipients.length} recipient(s)`,
+      recipients[0]?.accountKey ?? null,
+    );
     return NextResponse.json({ campaign: processed, processed: true }, { status: 201 });
   } catch (err) {
     const messageText = err instanceof Error ? err.message : 'Failed to create email campaign';

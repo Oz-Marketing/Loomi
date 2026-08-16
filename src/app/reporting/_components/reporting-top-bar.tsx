@@ -140,15 +140,10 @@ export function ReportingTopBar({
         className="flex items-center justify-end gap-1 px-6"
         aria-label="Reporting utilities"
       >
-        <UtilityIconButton
-          title="Help & support"
-          onClick={() => {
-            window.open(
-              'mailto:support@loomilm.com?subject=Reporting%20help',
-              '_self',
-            );
-          }}
-        >
+        {/* The in-app help desk, same as Studio's. This used to be a mailto:,
+            which on a machine with no mail handler does nothing at all — the
+            button looked broken. The form files to the dev team either way. */}
+        <UtilityIconButton title="Help & support" onClick={openSupportModal}>
           <QuestionMarkCircleIcon className="h-5 w-5" />
         </UtilityIconButton>
 

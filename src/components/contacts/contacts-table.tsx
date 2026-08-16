@@ -87,44 +87,6 @@ const PAGE_SIZE = 50;
 
 // ── CSV export helpers ──
 
-const CSV_EXPORT_COLUMNS: { key: keyof Contact | 'tags'; label: string }[] = [
-  { key: 'fullName', label: 'Full Name' },
-  { key: 'firstName', label: 'First Name' },
-  { key: 'lastName', label: 'Last Name' },
-  { key: 'email', label: 'Email' },
-  { key: 'phone', label: 'Phone' },
-  { key: 'address1', label: 'Address' },
-  { key: 'city', label: 'City' },
-  { key: 'state', label: 'State' },
-  { key: 'postalCode', label: 'Postal Code' },
-  { key: 'country', label: 'Country' },
-  { key: 'source', label: 'Source' },
-  { key: 'tags', label: 'Tags' },
-  { key: 'dateAdded', label: 'Date Added' },
-  { key: 'vehicleYear', label: 'Vehicle Year' },
-  { key: 'vehicleMake', label: 'Vehicle Make' },
-  { key: 'vehicleModel', label: 'Vehicle Model' },
-];
-
-function csvEscape(value: string): string {
-  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-function buildCsv(contacts: Contact[]): string {
-  const headerLine = CSV_EXPORT_COLUMNS.map((c) => csvEscape(c.label)).join(',');
-  const lines = contacts.map((c) =>
-    CSV_EXPORT_COLUMNS.map((col) => {
-      if (col.key === 'tags') return csvEscape((c.tags ?? []).join('; '));
-      const raw = (c as unknown as Record<string, unknown>)[col.key];
-      return csvEscape(raw == null ? '' : String(raw));
-    }).join(','),
-  );
-  return [headerLine, ...lines].join('\n');
-}
-
 function downloadCsv(filename: string, csv: string) {
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -340,12 +302,40 @@ export function ContactsTable({
     }
   }
 
-  function handleExportCsv() {
+  /**
+   * Export goes through the server rather than building the CSV here.
+   *
+   * The rows are already in memory, so doing it locally would be less code —
+   * but then taking names, emails and phone numbers out of Loomi leaves no
+   * trace and can't be gated. `POST /api/contacts/export` checks
+   * `contacts.pii.export` and records who exported how many.
+   */
+  async function handleExportCsv() {
     if (selectedIds.size === 0) return;
-    const selected = contacts.filter((c) => selectedIds.has(c.id));
-    const stamp = new Date().toISOString().slice(0, 10);
-    downloadCsv(`contacts-${stamp}.csv`, buildCsv(selected));
-    toast.success(`Exported ${selected.length.toLocaleString()} contacts.`);
+    const count = selectedIds.size;
+    try {
+      const res = await fetch('/api/contacts/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contactIds: [...selectedIds],
+          ...(accountKey ? { accountKey } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(
+          res.status === 403
+            ? "You don't have permission to export contacts."
+            : detail?.error || 'Export failed',
+        );
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadCsv(`contacts-${stamp}.csv`, await res.text());
+      toast.success(`Exported ${count.toLocaleString()} contacts.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Export failed');
+    }
   }
 
   async function handleDelete() {

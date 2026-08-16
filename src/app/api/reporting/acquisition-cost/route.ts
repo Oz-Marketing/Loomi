@@ -12,7 +12,7 @@
  * here disagreeing with the report it came from.
  *
  * It also matters for the margin rule: spend arrives through the channel routes
- * with `stripMarginInternals` already applied per role, so this report cannot
+ * with `stripInternalCost` already applied per capability, so this report cannot
  * become a side door onto raw cost.
  *
  * Query params:

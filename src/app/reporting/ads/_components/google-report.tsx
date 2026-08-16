@@ -67,7 +67,7 @@ interface Metrics {
   /**
    * Raw pre-margin cost. Present ONLY for super-admin/developer — the API
    * strips it for every other role, so treat `undefined` as "not permitted"
-   * rather than "zero". See stripMarginInternals in lib/reporting/margins.ts.
+   * rather than "zero". See stripInternalCost in api/reporting/_lib/guard.ts.
    */
   actual_cost?: number;
 }

@@ -175,8 +175,32 @@ describe('sub-account settings sections', () => {
     expect(sectionKeys('reporting')).not.toContain('notifications');
   });
 
-  it('gives Reporting the core and nothing else', () => {
-    expect(sectionKeys('reporting')).toEqual(CORE);
+  it('gives Reporting the core plus Reports, and nothing else', () => {
+    expect(sectionKeys('reporting')).toEqual([
+      'general',
+      'users',
+      'branding',
+      'integrations',
+      // Which reports this sub-account's client users see — see
+      // components/settings/report-access-tab.
+      'reports',
+      'appearance',
+    ]);
+  });
+
+  it('keeps Reports out of the other sectors', () => {
+    expect(sectionKeys('studio')).not.toContain('reports');
+    expect(sectionKeys('app')).not.toContain('reports');
+  });
+
+  // It edits what CLIENTS are shown and is guarded by `reporting.configure`,
+  // which no client role carries. Rendering it for someone who can't save
+  // would be a dead panel at best.
+  it('hides Reports from users without admin access', () => {
+    const keys = subaccountSectionsForScope(
+      scope({ isAccount: true, hasAdminAccess: false, surface: 'reporting' }),
+    ).map((s) => s.key);
+    expect(keys).not.toContain('reports');
   });
 
   it('reads the legacy `company` key as `general`', () => {

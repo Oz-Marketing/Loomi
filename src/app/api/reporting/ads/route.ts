@@ -17,9 +17,8 @@
  * window resolution are the shared, unit-tested utilities in src/lib/reporting.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireReportingAccess } from '../_lib/guard';
+import { requireReportingAccess, stripInternalCost } from '../_lib/guard';
 import { canAccessAccount } from '@/lib/api-auth';
-import { ELEVATED_ROLES } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 import {
   MetaSyncError,
@@ -29,9 +28,9 @@ import {
   getDevicePerformance,
   getDailyPerformance,
   getDemographics,
-  getPlacementPerformance,
+  getCampaignCreatives,
 } from '@/lib/integrations/meta-ads';
-import { applyMetaMargins, stripMarginInternals } from '@/lib/reporting/margins';
+import { applyMetaMargins } from '@/lib/reporting/margins';
 import { resolveComparisonDates } from '@/lib/reporting/comparison';
 
 export const dynamic = 'force-dynamic';
@@ -53,7 +52,7 @@ function monthStartIso(): string {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'ads', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;
@@ -93,31 +92,15 @@ export async function GET(req: NextRequest) {
 
     // Primary period. Creatives are best-effort (the lib already swallows its
     // own errors and returns {}), so a partial Graph failure still renders.
-    // `getCampaignCreatives` used to run here too. It cost two extra Graph
-    // round-trips per report load (ad list, then thumbnails) and NOTHING
-    // consumed the result — no component ever rendered `campaignCreatives`. It
-    // comes back with the creative-performance section, which needs ad-level
-    // METRICS anyway; the helper only pulls impressions plus a thumbnail, so
-    // that section could not have been built on it as it stands.
-    const [accountMetrics, campaigns, devices, daily, demographics] =
+    const [accountMetrics, campaigns, devices, daily, demographics, creatives] =
       await Promise.all([
         getAccountMetrics(cfg, adAccountId, startDate, endDate),
         getCampaignPerformance(cfg, adAccountId, startDate, endDate),
         getDevicePerformance(cfg, adAccountId, startDate, endDate),
         getDailyPerformance(cfg, adAccountId, startDate, endDate),
         getDemographics(cfg, adAccountId, startDate, endDate),
+        getCampaignCreatives(cfg, adAccountId, startDate, endDate),
       ]);
-
-    // Enrichment — non-fatal. The placement breakdown is a newer ask than the
-    // rest of this report and needs no special permission, but an ad account
-    // that has never run a placement-eligible objective can error rather than
-    // return an empty set, and that must not take the whole report down.
-    const placements = await getPlacementPerformance(
-      cfg,
-      adAccountId,
-      startDate,
-      endDate,
-    ).catch(() => []);
 
     // Comparison period (optional). Mirrors Oz: account metrics + campaigns +
     // daily for the prior window, same margin applied.
@@ -145,10 +128,6 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    // Raw pre-margin cost and the margin percent are for optimizers, not
-    // clients — and not for account admins either (see
-    // docs/reporting-redesign.md, decision 2). Filtered here rather than in the
-    // report component: the lens chooses what to draw, this chooses what to send.
     const payload = {
       accountKey,
       dealer: account?.dealer ?? accountKey,
@@ -162,11 +141,12 @@ export async function GET(req: NextRequest) {
       devices: devices.map((d) => applyMetaMargins(d, margin)),
       daily: daily.map((d) => applyMetaMargins(d, margin)),
       demographics: demographics.map((d) => applyMetaMargins(d, margin)),
-      placements,
+      campaignCreatives: creatives,
       compare,
     };
-    const seesRawCost = ELEVATED_ROLES.includes(ctx.user.role);
-    return NextResponse.json(seesRawCost ? payload : stripMarginInternals(payload));
+    return NextResponse.json(
+      ctx.canViewSpend ? payload : stripInternalCost(payload),
+    );
   } catch (err) {
     if (err instanceof MetaSyncError) {
       // Config / linking problems are the caller's to fix (400 + code so the

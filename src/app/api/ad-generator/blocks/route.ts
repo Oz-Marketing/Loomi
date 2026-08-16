@@ -13,7 +13,8 @@
  * Resilient: if the table isn't migrated in this environment, GET returns [].
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -118,7 +119,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
   const session = await getAuthSession();
 

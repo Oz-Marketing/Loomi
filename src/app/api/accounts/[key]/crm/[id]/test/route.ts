@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { Contact, FormSubmission } from '@prisma/client';
-import {
-  canAccessAccount,
-  forbidden,
-  getAccountScope,
-  requireRole,
-} from '@/lib/api-auth';
+import { canAccessAccount, forbidden, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { decryptToken } from '@/lib/crypto/encryption';
 import { buildAdfXml, buildAdfSubject } from '@/lib/integrations/crm/adf';
@@ -17,7 +13,6 @@ interface RouteParams {
   params: Promise<{ key: string; id: string }>;
 }
 
-const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
 
 /**
  * POST /api/accounts/[key]/crm/[id]/test
@@ -27,7 +22,7 @@ const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
  * real lead comes through. Does not write a CrmDelivery row.
  */
 export async function POST(_req: NextRequest, { params }: RouteParams) {
-  const { error, session } = await requireRole(...MANAGEMENT_ROLES);
+  const { error, session } = await requirePermission('integrations.credentials.manage');
   if (error) return error;
 
   const { key, id } = await params;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   LandingPageServiceError,
   saveLandingPageAsTemplate,
@@ -16,7 +17,7 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.landing_pages.edit');
   if (error) return error;
 
   const { id } = await context.params;

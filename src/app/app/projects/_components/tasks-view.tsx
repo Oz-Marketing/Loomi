@@ -56,22 +56,36 @@ export function TasksView() {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
-  const { accountKey: globalAccountKey, isAdmin } = useAccount();
+  const { accountKey: globalAccountKey, isAdmin, isGroup, scopedAccountKeys } = useAccount();
 
-  // The fetch is scoped server-side only by the GLOBAL account (one account in
-  // account mode, all-in-scope for admins). The per-view multi-selects refine
-  // the result client-side.
-  const serverAccount = isAdmin ? '' : globalAccountKey ?? '';
+  // Which accounts this view spans. It used to be "one account, unless the
+  // switcher is in Agency View" — agency scope is gone, so the cross-account
+  // board now belongs to an ORGANIZATION account, which rolls its rooftops up
+  // (`scopedAccountKeys`) exactly as Contacts does.
+  const rollsUp = isAdmin || isGroup;
+  // The API filters by a single key, so a roll-up asks for everything in the
+  // caller's server-side scope and narrows to the subtree client-side, below.
+  const serverAccount = rollsUp ? '' : globalAccountKey ?? '';
   const swrKey = `/api/projects/tasks${serverAccount ? `?accountKey=${encodeURIComponent(serverAccount)}` : ''}`;
   const { data, isLoading, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
     revalidateOnFocus: false,
   });
   const tasks = data?.tasks ?? [];
 
+  // The account multi-select only applies to a roll-up view (a single account
+  // is locked + hidden). With nothing picked, an organization still has to be
+  // held to its own subtree — an empty list means "no filter", which would show
+  // every account the caller can reach.
+  const filterAccountKeys = useMemo(() => {
+    if (!rollsUp) return [];
+    if (!isGroup) return accountKeys;
+    const subtree = scopedAccountKeys ?? [];
+    return accountKeys.length > 0 ? accountKeys.filter((k) => subtree.includes(k)) : subtree;
+  }, [rollsUp, isGroup, accountKeys, scopedAccountKeys]);
+
   const filters: TaskFilters = useMemo(
     () => ({
-      // Account multi-select only applies for admins (account-mode is locked + hidden).
-      accountKeys: isAdmin ? accountKeys : [],
+      accountKeys: filterAccountKeys,
       teamKeys,
       assigneeUserIds,
       // Status is a table-only filter — the board uses status as its columns.
@@ -79,7 +93,7 @@ export function TasksView() {
       priorities,
       search,
     }),
-    [isAdmin, accountKeys, teamKeys, assigneeUserIds, statuses, priorities, search, view],
+    [filterAccountKeys, teamKeys, assigneeUserIds, statuses, priorities, search, view],
   );
 
   return (
@@ -97,7 +111,7 @@ export function TasksView() {
         // Status filter is table-only — the board uses status as its columns.
         statuses={view === 'table' ? statuses : undefined}
         onStatuses={view === 'table' ? setStatuses : undefined}
-        showAccountSelect={isAdmin}
+        showAccountSelect={rollsUp}
         viewToggle={<ViewToggle view={view} onChange={selectView} />}
         search={search}
         onSearch={setSearch}

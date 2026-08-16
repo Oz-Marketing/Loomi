@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireRole } from '@/lib/api-auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { coerceAudience, publishChangelogEntries } from '@/lib/changelog-publish';
@@ -49,7 +50,7 @@ export async function GET() {
  * came from this form or from a merged PR.
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('agency.changelog.manage');
   if (error) return error;
 
   try {

@@ -141,14 +141,12 @@ function mergeContactsByIdentity(
 }
 
 export default function ContactsPage() {
-  const { isAdmin, isGroup, accountKey, accounts, scopedAccountKeys } = useAccount();
+  const { isGroup, accountKey, accounts, scopedAccountKeys } = useAccount();
 
-  // Admin and group accounts both use the fan-out/union view. A group (an
-  // account with rooftops beneath it) restricts the fan-out to itself plus its
-  // descendants; a leaf account falls through to the single-account view.
-  if (isAdmin) {
-    return <AdminContactsView />;
-  }
+  // A group (an account with rooftops beneath it) uses the fan-out/union view,
+  // restricted to itself plus its descendants; a leaf account falls through to
+  // the single-account view. The unrestricted fan-out belonged to agency scope,
+  // which is retired.
   if (isGroup) {
     return <AdminContactsView restrictKeys={scopedAccountKeys} />;
   }

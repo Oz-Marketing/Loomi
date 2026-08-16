@@ -69,7 +69,7 @@ interface Metrics {
   /**
    * Raw pre-margin spend. Present ONLY for super-admin/developer — the API
    * strips it for every other role, so `undefined` means "not permitted", not
-   * "zero". See stripMarginInternals in lib/reporting/margins.ts.
+   * "zero". See stripInternalCost in api/reporting/_lib/guard.ts.
    */
   actual_spend?: number;
 }

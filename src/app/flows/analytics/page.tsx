@@ -13,20 +13,8 @@
  * embedded by both surfaces (studio with the page header on, reporting
  * with it off).
  */
-import { AdminOnly } from '@/components/route-guard';
 import { useAccount } from '@/contexts/account-context';
 import { FlowsAnalyticsBody } from '@/components/flows/flows-analytics-body';
-
-function AdminAnalyticsPage() {
-  return (
-    <FlowsAnalyticsBody
-      scopeKey="admin"
-      subtitle="Drip-series performance across all accounts"
-      showAccountColumn
-      presetAccountKey={null}
-    />
-  );
-}
 
 function AccountAnalyticsPage() {
   const { accountKey, accountData } = useAccount();
@@ -42,20 +30,9 @@ function AccountAnalyticsPage() {
   );
 }
 
+/** One view, scoped to the active sub-account — the all-accounts variant
+ *  belonged to agency scope, which is retired. */
 export default function FlowsAnalyticsPage() {
-  const { isAdmin, isAccount } = useAccount();
-
-  if (isAdmin) {
-    return (
-      <AdminOnly>
-        <AdminAnalyticsPage />
-      </AdminOnly>
-    );
-  }
-
-  if (isAccount) {
-    return <AccountAnalyticsPage />;
-  }
-
-  return null;
+  const { isAccount } = useAccount();
+  return isAccount ? <AccountAnalyticsPage /> : null;
 }

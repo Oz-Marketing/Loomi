@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   getEmailBlast,
   restoreEmailBlast,
@@ -17,11 +17,7 @@ interface RouteParams {
  * archived so a misclick doesn't silently no-op.
  */
 export async function POST(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;

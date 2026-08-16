@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  canAccessAccount,
-  forbidden,
-  getAccountScope,
-  requireRole,
-} from '@/lib/api-auth';
+import { canAccessAccount, forbidden, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { listLpTemplatesForAccount } from '@/lib/services/lp-templates';
 
 /**
@@ -15,7 +11,7 @@ import { listLpTemplatesForAccount } from '@/lib/services/lp-templates';
  * to build its picker.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.landing_pages.view');
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey');

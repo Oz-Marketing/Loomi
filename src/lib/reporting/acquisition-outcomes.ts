@@ -144,7 +144,7 @@ export async function getMonthlyOutcomes(
  *     routes return post-margin, so the two series are comparable. The raw
  *     platform spend is `amount × markupSnapshot`; that stays server-side and
  *     is never summed here. Exposing it would reopen the hole
- *     `stripMarginInternals` closed.
+ *     `stripInternalCost` closed.
  *
  * Keyed on `accountKey` (billed to), not `spendAccountKey` — this report asks
  * what THIS rooftop was charged, not whose ad account the money left from.

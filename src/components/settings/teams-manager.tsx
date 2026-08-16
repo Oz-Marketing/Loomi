@@ -60,9 +60,6 @@ export function TeamsManager({
   // null = closed; 'new' = create; TeamDTO = edit that team.
   const [editing, setEditing] = useState<TeamDTO | 'new' | null>(null);
 
-  const titleActionsEl =
-    typeof document !== 'undefined' ? document.getElementById('settings-title-actions') : null;
-
   const columns: SettingsColumn<TeamDTO>[] = [
     {
       key: 'team',
@@ -126,14 +123,16 @@ export function TeamsManager({
 
   return (
     <div>
-      {titleActionsEl &&
-        createPortal(
-          <PrimaryButton onClick={() => setEditing('new')}>
-            <PlusIcon className="h-4 w-4" />
-            New team
-          </PrimaryButton>,
-          titleActionsEl,
-        )}
+      {/* Create sits above the table, right-aligned — the same header row Users
+          and Sub-Accounts use. Teams has nothing to search yet, so the row is
+          just the button. It used to portal into the settings title bar, which
+          left it missing entirely inside the Agency Settings modal. */}
+      <div className="mb-4 flex items-center justify-end gap-4">
+        <PrimaryButton onClick={() => setEditing('new')}>
+          <PlusIcon className="h-4 w-4" />
+          Add Team
+        </PrimaryButton>
+      </div>
 
       <SettingsTable
         items={teams}
@@ -289,8 +288,11 @@ function TeamEditModal({
   }
 
   return createPortal(
+    // z-260, not 200: the Teams tab renders inside the Agency Settings modal,
+    // which is itself z-200. At the same level this only stayed on top by DOM
+    // order — one reorder away from opening behind the overlay.
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[260] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div

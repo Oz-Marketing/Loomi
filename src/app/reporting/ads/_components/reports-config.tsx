@@ -60,6 +60,14 @@ export interface ReportDef {
    * Ad Templates is the clear case: it ranks template usage ACROSS every
    * account, so showing it to one client would expose the shape of the
    * agency's work for all the others.
+   *
+   * OVERLAPS lib/permissions/reports.ts, which expresses the same idea as
+   * `group: 'internal'` + `defaultForClients: false` and is the direction of
+   * travel. Two reasons this flag still exists rather than deferring to it:
+   * that registry has no `ad_templates` key at all, and its enforcement is
+   * still behind PERMISSIONS_ENFORCE_CAPABILITIES. Fold this into the registry
+   * when enforcement is switched on — and delete this flag then, rather than
+   * leaving two places that decide the same thing.
    */
   internal?: boolean;
 }

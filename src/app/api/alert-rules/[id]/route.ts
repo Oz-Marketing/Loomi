@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { ELEVATED_ROLES } from '@/lib/roles';
+import { requirePermission } from '@/lib/permissions/require';
 import { updateAlertRule, type AlertRulePatch } from '@/lib/services/alert-rules';
 
 /**
@@ -13,7 +12,7 @@ export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error } = await requireRole(...ELEVATED_ROLES);
+  const { error } = await requirePermission('agency.platform.configure');
   if (error) return error;
 
   const { id } = await params;

@@ -44,7 +44,7 @@ function fail(message: string, code: string, status: number) {
 }
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'business_profile', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

@@ -94,36 +94,3 @@ export function applyGoogleMargins<T extends object>(
 ): T & Record<string, number> {
   return applyMargins(data, marginPercent, GOOGLE_MARGIN_FIELDS);
 }
-
-/**
- * Remove every `actual_<field>` key, and the `margin` percent itself, from a
- * report payload before it leaves the server.
- *
- * ── WHY THIS IS SERVER-SIDE ─────────────────────────────────────────────────
- * `applyMargins` preserves the raw platform cost alongside the billed figure,
- * and the routes return `margin` at the top level. No UI renders either, so
- * this was invisible — but it shipped to EVERY caller, which means a client
- * could open the network tab on their own report and read both the agency's
- * raw media cost and its margin percent straight out of the JSON. One of those
- * is commercially sensitive; together they are the agency's markup.
- *
- * Hiding the fields in the client bundle would not have fixed it, which is why
- * the team/client lens is presentation only and this is not: the lens decides
- * what to draw, this decides what to send.
- *
- * Recursive because the payload nests — `campaigns[]`, `daily[]`, `devices[]`,
- * and the whole `compare` block each carry their own marked-up rows.
- */
-export function stripMarginInternals<T>(payload: T): T {
-  if (Array.isArray(payload)) {
-    return payload.map((item) => stripMarginInternals(item)) as unknown as T;
-  }
-  if (payload === null || typeof payload !== 'object') return payload;
-
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
-    if (key === 'margin' || key.startsWith('actual_')) continue;
-    out[key] = stripMarginInternals(value);
-  }
-  return out as T;
-}

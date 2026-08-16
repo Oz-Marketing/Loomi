@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
@@ -25,7 +25,7 @@ const LOOMI_CAPABILITIES = {
 } as const;
 
 export async function GET(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.contacts.view', 'reporting.report.view']);
   if (error) return error;
 
   const { contactId } = await params;
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest, { params }: RouteContext) {
 }
 
 export async function PATCH(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.edit');
   if (error) return error;
 
   const { contactId } = await params;
@@ -208,7 +208,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
 }
 
 export async function DELETE(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.edit');
   if (error) return error;
 
   const { contactId } = await params;

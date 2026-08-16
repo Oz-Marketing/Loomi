@@ -23,10 +23,15 @@ const DRY_RUN = process.argv.includes('--dry-run');
 async function main() {
   // No skip guard, deliberately.
   //
-  // The set-based recompute costs ~11s across production's full 259k
-  // contacts-with-history, so "run it every deploy" is cheaper than the
-  // bookkeeping to avoid it — and it is idempotent, so re-running only
-  // reconfirms the same numbers.
+  // The recompute is idempotent and now writes only rows whose values
+  // actually changed (see applyUpdate in lib/contacts/event-rollups.ts), so a
+  // steady-state deploy does the aggregate scan and no writes at all. That
+  // makes "run it every deploy" cheaper than the bookkeeping to avoid it.
+  //
+  // The earlier claim here of "~11s across production's full 259k contacts"
+  // was wrong, and expensively so: without the no-op guard it was ~88s for a
+  // single 17.7k-contact rooftop and blew the deploy's 15-minute SSH budget on
+  // 2026-08-16, 23 accounts into 34.
   //
   // It also self-heals. The first attempt at this backfill was row-by-row
   // and blew the deploy's SSH timeout 14 of 33 accounts in. A global
@@ -57,11 +62,15 @@ async function main() {
     const startedAt = Date.now();
     const n = await recomputeAllContactEventRollups(accountKey);
     written += n;
-    console.log(`  ${accountKey}: ${n.toLocaleString()} contacts in ${Date.now() - startedAt}ms`);
+    // `n` is rows CHANGED, not rows examined — 0 is the healthy steady state
+    // now, not a sign the backfill has stopped doing its job.
+    console.log(
+      `  ${accountKey}: ${n.toLocaleString()} changed in ${Date.now() - startedAt}ms`,
+    );
   }
 
   console.log(
-    `${DRY_RUN ? '[dry run] ' : ''}Done — ${written.toLocaleString()} contacts updated in ${Date.now() - startedAll}ms.`,
+    `${DRY_RUN ? '[dry run] ' : ''}Done — ${written.toLocaleString()} contact(s) changed in ${Date.now() - startedAll}ms.`,
   );
 }
 

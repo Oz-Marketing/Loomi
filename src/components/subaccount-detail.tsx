@@ -620,10 +620,14 @@ export function SubAccountDetailPage({
       const res = await fetch(`/api/accounts?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshAccountList();
+        // This path navigates away, so the toast is the only thing that
+        // confirms the server agreed rather than the view just closing.
+        toast.success(`Deleted ${dealer || key}`);
         if (onBack) onBack();
         else router.push(basePath);
       } else {
-        toast.error('Failed to delete');
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || `Couldn't delete ${dealer || key}`);
       }
     } catch {
       toast.error('Failed to delete');

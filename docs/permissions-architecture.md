@@ -592,6 +592,49 @@ left at their default — storing only the differences would mean a later change
 to `defaultForClients` silently re-enabled something a dealer had switched off.
 Only actual changes are audit-logged.
 
+### Integration status
+
+Switching a report on doesn't make it work. Most reports are a view onto an
+integration, so enabling one for a dealer whose Meta ad account was never linked
+hands them an empty page — and the person who ticked the box has no way to know
+until the dealer complains. `resolveReportSources()` answers that per account,
+in three states that are deliberately different claims:
+
+| State | Means | Checked by |
+| --- | --- | --- |
+| `builtin` | Loomi's own data; nothing to connect | Contacts, Lists, Engagement, Leads |
+| `connected` | The source this report needs is there | A configured ID, or ingested rows |
+| `missing` | It isn't — the report will render empty | — |
+
+Some sources are a configured ID (`metaAdAccountId`, `googleAdsCustomerId`,
+`stackadaptAdvertiserId`, a `GbpConnection` row); others are the presence of
+ingested rows (reviews, calls, billboards, mail, DMS sale/service events). Both
+report as `connected`, but `detail` says which, so the badge never claims more
+than was actually checked.
+
+The banner totals only reports that are **on and empty** — a disconnected source
+on a report nobody sees isn't a problem worth shouting about. "Match connected"
+is the bulk action that does the real job: on for everything with a source, off
+for the rest.
+
+**The Integrate button only appears where there is somewhere to go.**
+`reportIntegration()` maps Meta / Google Ads / StackAdapt to their modal in the
+Integrations tab, and Business Profile to the report page that hosts its OAuth
+panel. Everything else returns `null` on purpose:
+
+- Websites (GA4) is mapped agency-wide in `GA4_PROPERTY_MAP`, not per account.
+- Reviews, calls, billboards, mail and the DMS trends are **ingested**. Nothing
+  to connect; the data either arrives or it doesn't.
+
+A button that opened the wrong screen would imply the fix is one click away when
+it isn't, so those rows show the badge and its tooltip and no button.
+
+One implementation note worth keeping. `ReportingIntegrationCards` derives its
+open modal from the parent's requested provider rather than copying it into
+local state in an effect. The effect version fired correctly and still showed
+nothing: switching tabs remounts that component, so the copy was discarded on
+the very next render.
+
 ### The nav filters itself
 
 `GET /api/reporting/my-reports` returns what the caller can open on an account,

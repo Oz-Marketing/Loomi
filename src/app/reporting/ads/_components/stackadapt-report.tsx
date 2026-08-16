@@ -22,6 +22,7 @@ import {
   InboxStackIcon,
   RectangleGroupIcon,
   FilmIcon,
+  PlayCircleIcon,
 } from '@heroicons/react/24/outline';
 import {
   type DateRangeKey,
@@ -57,6 +58,12 @@ interface Metrics {
   cost_per_conversion: number;
   unique_impressions: number;
   frequency: number;
+  video_starts: number;
+  video_q1: number;
+  video_q2: number;
+  video_q3: number;
+  video_completions: number;
+  video_completion_rate: number;
   /** Raw pre-margin spend — super-admin only; absent means "not permitted". */
   actual_spend?: number;
 }
@@ -121,6 +128,9 @@ export function StackAdaptReport({
   const m = data.accountMetrics;
   const cmp = data.compare?.accountMetrics ?? null;
   const team = lens === 'team';
+  // Zero starts means this wasn't a video buy at all. Showing a 0% completion
+  // rate would read as terrible video performance rather than "no video ran".
+  const hasVideo = m.video_starts > 0;
   // Present only for super-admin — the API strips it for everyone else.
   const rawSpend = typeof m.actual_spend === 'number' ? m.actual_spend : null;
   const hasData = m.impressions > 0 || m.spend > 0 || data.campaigns.length > 0;
@@ -170,6 +180,31 @@ export function StackAdaptReport({
       rows: data.daily.map((d) => [d.date, d.spend, d.impressions, d.cpm, d.conversions]),
     });
   }
+  // Gated like the on-screen section — an export is the report.
+  if (team && hasVideo) {
+    sections.push({
+      title: 'Video completion funnel',
+      columns: [
+        { header: 'Milestone', type: 'text' },
+        { header: 'Views', type: 'integer', total: 'none' },
+        { header: 'Of starts', type: 'text', total: 'none' },
+      ],
+      rows: (
+        [
+          ['Started', m.video_starts],
+          ['25%', m.video_q1],
+          ['50%', m.video_q2],
+          ['75%', m.video_q3],
+          ['Completed', m.video_completions],
+        ] as [string, number][]
+      ).map(([label, count]) => [
+        label,
+        count,
+        `${((count / m.video_starts) * 100).toFixed(1)}%`,
+      ]),
+    });
+  }
+
   const doc: ReportDoc = {
     title: `StackAdapt (OTT / CTV) — ${data.dealer}`,
     subtitle: `${prettyDate(data.startDate)} – ${prettyDate(data.endDate)}`,
@@ -184,6 +219,9 @@ export function StackAdaptReport({
       { label: 'Reach', value: num(m.unique_impressions), secondary: 'unique' },
       { label: 'Frequency', value: m.frequency.toFixed(1), secondary: 'avg / user' },
       { label: 'CPM', value: usd(m.cpm) },
+      ...(hasVideo
+        ? [{ label: 'Video completion', value: `${m.video_completion_rate.toFixed(1)}%` }]
+        : []),
       { label: 'Conversions', value: num(m.conversions), secondary: m.conversions > 0 ? `${usd(m.cost_per_conversion)} / conv` : undefined },
     ],
     sections,
@@ -205,12 +243,27 @@ export function StackAdaptReport({
       </div>
 
       {/* OTT/CTV is impression-based — no clicks/CTR/CPC. Surface reach,
-          frequency and CPM instead. */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+          frequency and CPM instead. Four-wide once the video tile appears, so
+          seven tiles land 4 + 3 rather than stranding one on its own row. */}
+      <div
+        className={`grid grid-cols-2 gap-3 md:grid-cols-3 ${
+          hasVideo ? 'lg:grid-cols-4' : 'lg:grid-cols-6'
+        }`}
+      >
         <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.spend)} secondary={team && rawSpend != null ? `${usd(rawSpend)} media cost` : undefined} tone="primary" delta={pctDelta(m.spend, cmp?.spend)} />
         <Kpi icon={EyeIcon} label="Impressions" value={compact(m.impressions)} secondary={num(m.impressions)} tone="sky" delta={pctDelta(m.impressions, cmp?.impressions)} />
         <Kpi icon={UserGroupIcon} label="Reach" value={compact(m.unique_impressions)} secondary={`${num(m.unique_impressions)} unique`} tone="violet" delta={pctDelta(m.unique_impressions, cmp?.unique_impressions)} />
         <Kpi icon={ArrowPathIcon} label="Frequency" value={m.frequency.toFixed(1)} secondary="avg / user" tone="zinc" />
+        {hasVideo && (
+          <Kpi
+            icon={PlayCircleIcon}
+            label="Video completion"
+            value={`${m.video_completion_rate.toFixed(1)}%`}
+            secondary={`${compact(m.video_completions)} of ${compact(m.video_starts)} starts`}
+            tone="emerald"
+            delta={pctDelta(m.video_completion_rate, cmp?.video_completion_rate)}
+          />
+        )}
         <Kpi icon={BoltIcon} label="CPM" value={usd(m.cpm)} tone="amber" delta={pctDelta(m.cpm, cmp?.cpm, true)} />
         <Kpi icon={CheckBadgeIcon} label="Conversions" value={num(m.conversions)} secondary={m.conversions > 0 ? `${usd(m.cost_per_conversion)} / conv` : undefined} tone="emerald" delta={pctDelta(m.conversions, cmp?.conversions)} />
       </div>
@@ -257,6 +310,31 @@ export function StackAdaptReport({
       </div>
 
       {/* TEAM ONLY. Creative-level delivery is a swap-this-asset decision. */}
+      {/* TEAM ONLY. Where viewers drop out is a creative-length and
+          placement decision; the client gets the completion rate as a KPI. */}
+      {team && hasVideo && (
+        <Section title="Video completion funnel" icon={PlayCircleIcon} subtitle="where viewers drop off">
+          <DataTable
+            head={['Milestone', 'Views', 'Of starts']}
+            rows={[
+              ['Started', m.video_starts, 100],
+              ['25%', m.video_q1, (m.video_q1 / m.video_starts) * 100],
+              ['50%', m.video_q2, (m.video_q2 / m.video_starts) * 100],
+              ['75%', m.video_q3, (m.video_q3 / m.video_starts) * 100],
+              ['Completed', m.video_completions, (m.video_completions / m.video_starts) * 100],
+            ].map(([label, count, pct]) => [
+              label as string,
+              num(count as number),
+              `${(pct as number).toFixed(1)}%`,
+            ])}
+          />
+          <p className="mt-3 text-xs text-[var(--muted-foreground)]">
+            Each row is a share of <em>starts</em>, not of the row above it, so the drop between
+            two milestones is the difference between their percentages.
+          </p>
+        </Section>
+      )}
+
       {team && data.creatives.length > 0 && (
         <Section title="Top creatives" icon={FilmIcon} subtitle={`${data.creatives.length} shown`}>
           <PerfTable rows={data.creatives} firstCol="Creative" />

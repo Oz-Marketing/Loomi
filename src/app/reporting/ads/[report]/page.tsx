@@ -7,14 +7,13 @@
  * the shared date/comparison controls.
  */
 
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { ChartBarIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageHeader } from '@/components/page-header';
 import { EmptyState, RangeControls } from '../_components/shared';
-import { findReport, visibleReports } from '../_components/reports-config';
+import { findReport } from '../_components/reports-config';
 import { REPORT_COMPONENTS } from '../_components/report-components';
 import { useRange } from '../_components/range-context';
 import { useReportLens, LensToggle, ClientPreviewNotice } from '../../_components/lens';
@@ -30,7 +29,6 @@ export default function DigitalAdsReportPage() {
   const { accountKey, accountData, isGroup, scopedAccountKeys, accounts, userRole } = useAccount();
   const isClient = userRole === 'client';
   // Tab bar mirrors the nav: an internal report is not a tab for a client.
-  const tabs = visibleReports(isClient).filter((r) => r.status === 'live');
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const range = useRange();
@@ -77,27 +75,14 @@ export default function DigitalAdsReportPage() {
         subtitle={`${def.blurb} — ${scopeLabel}.`}
       />
 
-      {/* Sibling tabs + shared controls */}
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-[var(--border)] p-0.5">
-          {tabs.map((r) => {
-            const active = r.key === key;
-            return (
-              <Link
-                key={r.key}
-                href={`/ads/${r.key}`}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  active
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                <r.icon className="h-3.5 w-3.5" />
-                {r.label}
-              </Link>
-            );
-          })}
-        </div>
+      {/* Controls only. The sibling tab strip that used to sit here (Meta /
+          OTT / Google Ads / Blasts / Ad Templates) was a second copy of the
+          same five links the sidebar already lists as children of Digital Ads,
+          so the current report was highlighted in two places at once and the
+          header carried a row that navigated nowhere new. The sidebar is the
+          one that survives: it is always visible, it groups these with every
+          other report, and it already respects the client/internal filter. */}
+      <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
         <div className="flex flex-wrap items-center gap-2.5">
         <LensToggle {...lensState} />
         <RangeControls

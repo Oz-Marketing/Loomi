@@ -189,6 +189,14 @@ export function SubAccountDetailPage({
   const settingsSections = useSubaccountSections();
   // Which integration card is open in the Integrations tab (null = no modal).
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
+  /**
+   * A provider the Reports tab asked us to open. Held here rather than in the
+   * cards because the request crosses tabs: the button lives under Reports and
+   * the modal under Integrations, so we switch tab first and hand the provider
+   * down.
+   */
+  const [pendingIntegration, setPendingIntegration] = useState<string | null>(null);
+
   const [savingIntegration, setSavingIntegration] = useState(false);
   // Close the integration modal on Escape.
   useEffect(() => {
@@ -748,6 +756,20 @@ export function SubAccountDetailPage({
     } else {
       setActiveTab(tabKey);
     }
+  };
+
+  /**
+   * Jump from the Reports tab to the integration that report needs.
+   *
+   * Goes through `handleTabClick` rather than `setActiveTab`: in settings mode
+   * the active tab is synced from the URL, so setting state alone gets undone
+   * on the next sync and the click appears to do nothing.
+   */
+  const openIntegration = (provider: string) => {
+    handleTabClick('integrations');
+    // Meta's modal is owned here; the rest belong to ReportingIntegrationCards.
+    if (provider === 'facebook') setActiveIntegration('facebook');
+    else setPendingIntegration(provider);
   };
 
   const content = (
@@ -1450,7 +1472,13 @@ export function SubAccountDetailPage({
             </button>
 
             {key && <CrmIntegrationCards accountKey={key} />}
-            {key && <ReportingIntegrationCards accountKey={key} />}
+            {key && (
+              <ReportingIntegrationCards
+                accountKey={key}
+                openProvider={pendingIntegration}
+                onOpenProviderHandled={() => setPendingIntegration(null)}
+              />
+            )}
           </div>
         )}
 
@@ -1627,7 +1655,7 @@ export function SubAccountDetailPage({
             Which reports this sub-account's CLIENT users see. Narrowing only —
             staff always see everything their role allows. */}
         {settingsMode && activeTab === 'reports' && (
-          <ReportAccessTab accountKey={key} />
+          <ReportAccessTab accountKey={key} onIntegrate={openIntegration} />
         )}
 
         {/* ════════════ NOTIFICATIONS TAB (settings mode only) ════════════

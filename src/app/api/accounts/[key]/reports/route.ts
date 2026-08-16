@@ -9,6 +9,7 @@ import {
   resolveClientReports,
   type ReportKey,
 } from '@/lib/permissions/reports';
+import { resolveReportSources } from '@/lib/permissions/report-sources';
 
 /**
  * Which reports this sub-account's CLIENT users are shown.
@@ -37,10 +38,16 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
   const { key } = await params;
   if (!canAccessAccount(getAccountScope(session!), key)) return forbidden();
 
-  const rows = await prisma.accountReportAccess.findMany({
-    where: { accountKey: key },
-    select: { reportKey: true, enabled: true },
-  });
+  const [rows, sources] = await Promise.all([
+    prisma.accountReportAccess.findMany({
+      where: { accountKey: key },
+      select: { reportKey: true, enabled: true },
+    }),
+    // Whether each report has anything behind it for this account. Switching a
+    // report on whose integration was never linked just gives the dealer an
+    // empty page, so the screen says so before you save.
+    resolveReportSources(key),
+  ]);
   const effective = resolveClientReports(rows);
 
   // Return the whole eligible list with each report's resolved state, rather
@@ -51,9 +58,12 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     reports: CLIENT_ELIGIBLE_REPORTS.map((report) => ({
       key: report.key,
       label: report.label,
+      group: report.group,
+      blurb: report.blurb,
       enabled: effective.has(report.key),
       isDefault: !rows.some((r) => r.reportKey === report.key),
       defaultForClients: report.defaultForClients,
+      source: sources[report.key],
     })),
   });
 }

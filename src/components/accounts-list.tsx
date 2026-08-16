@@ -90,9 +90,11 @@ export function AccountsList({
     else router.push(`${detailBasePath}/${key}`);
   };
   const { confirm } = useLoomiDialog();
-  const { userRole } = useAccount();
+  const { userRole, refreshAccounts } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
   const [accounts, setAccounts] = useState<Record<string, AccountData> | null>(null);
+  /** Key currently being deleted — disables its row button and shows a spinner. */
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<AccountSortField>('dealer');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
@@ -187,24 +189,47 @@ export function AccountsList({
 
 
   const handleDelete = async (key: string) => {
+    // Re-entry guard. There was no pending state, so a delete that took a
+    // moment looked like a dead button and got clicked again — firing a second
+    // confirm behind the first and a second DELETE for a row already going away.
+    if (deletingKey) return;
+
+    const label = accounts?.[key]?.dealer || key;
     const confirmed = await confirm({
       title: 'Delete Sub-account',
-      message: `Delete sub-account "${accounts?.[key]?.dealer || key}"? This cannot be undone.`,
+      message: `Delete sub-account "${label}"? This cannot be undone.`,
       confirmLabel: 'Delete',
       destructive: true,
     });
     if (!confirmed) return;
+
+    setDeletingKey(key);
     try {
       const res = await fetch(`/api/accounts?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
-      if (!res.ok) { const d = await res.json(); toast.error(d.error || 'Failed to delete'); return; }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        toast.error(d.error || `Couldn't delete ${label}`);
+        return;
+      }
       setAccounts(prev => {
         if (!prev) return prev;
         const next = { ...prev };
         delete next[key];
         return next;
       });
+      // Succeeding silently was the other half of "nothing happened": the row
+      // vanished with no confirmation that the server had agreed.
+      toast.success(`Deleted ${label}`);
+      // This list keeps its OWN copy of the accounts map, so removing the row
+      // above only fixes this table. The switcher, sidebar and every scoped
+      // report read AccountContext, which still held the deleted account until
+      // the page was reloaded by hand. Re-fetch it so the deletion propagates
+      // everywhere at once.
+      await refreshAccounts();
     } catch {
-      toast.error('Failed to delete account');
+      toast.error(`Couldn't delete ${label}`);
+    } finally {
+      setDeletingKey(null);
     }
   };
 
@@ -554,10 +579,16 @@ export function AccountsList({
                         <div className="flex items-center justify-end gap-0.5">
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDelete(key); }}
-                            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                            title="Delete sub-account"
+                            disabled={deletingKey !== null}
+                            aria-busy={deletingKey === key}
+                            className="p-1.5 rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--muted-foreground)]"
+                            title={deletingKey === key ? 'Deleting…' : 'Delete sub-account'}
                           >
-                            <TrashIcon className="w-4 h-4" />
+                            {deletingKey === key ? (
+                              <span className="block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            ) : (
+                              <TrashIcon className="w-4 h-4" />
+                            )}
                           </button>
                         </div>
                       </td>

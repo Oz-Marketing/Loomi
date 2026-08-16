@@ -635,6 +635,7 @@ export interface MetaCampaignRow extends ConversionSummary {
   cpc: number;
   spend: number;
   cost_per_conversion: number;
+  cpm: number;
 }
 
 export interface MetaDeviceRow {
@@ -786,7 +787,7 @@ export async function getCampaignPerformance(
   const rows = await metaInsights(cfg, adAccountId, {
     level: 'campaign',
     fields:
-      'campaign_id,campaign_name,impressions,clicks,ctr,cpc,spend,actions,cost_per_action_type,action_values',
+      'campaign_id,campaign_name,impressions,clicks,ctr,cpc,cpm,spend,actions,cost_per_action_type,action_values',
     time_range: JSON.stringify({ since, until }),
   });
   return rows.map((data) => ({
@@ -796,6 +797,10 @@ export async function getCampaignPerformance(
     clicks: intOf(data.clicks),
     ctr: floatOf(data.ctr),
     cpc: floatOf(data.cpc),
+    // Requested because the team-lens campaign table renders it. It is also
+    // margin-marked-up, so it has to come from Meta rather than be derived
+    // client-side from an already-grossed-up spend.
+    cpm: floatOf(data.cpm),
     spend: floatOf(data.spend),
     cost_per_conversion: costPerConversion(data.cost_per_action_type),
     ...summarizeConversions(data.actions, data.action_values),

@@ -8,13 +8,20 @@
 // figure that's 15% high). Recomputing from the event table is
 // idempotent by construction: run it once or fifty times, same answer.
 //
-// SET-BASED, not row-by-row. The first version of this issued one
-// UPDATE per contact. That's harmless for the ingest path, where a batch
-// touches a handful of customers — and catastrophic for a backfill: on
-// production's 259,307 contacts-with-history it was still going after 11
-// minutes and took the deploy down with it. Both entry points below are
-// now a single statement per account, so the cost scales with the number
-// of ACCOUNTS rather than the number of contacts.
+// SET-BASED, not row-by-row. The first version issued one UPDATE per
+// contact. Harmless for the ingest path, where a batch touches a handful
+// of customers — catastrophic for a backfill: on production's 259,307
+// contacts-with-history it was still going after 11 minutes and took the
+// deploy down with it. Both entry points are now a single statement per
+// account.
+//
+// AND IT WRITES ONLY WHAT CHANGED. Set-based alone was still not enough.
+// Rewriting every contact-with-history on every deploy cost ~88s for one
+// 17.7k rooftop — an UPDATE to an identical value still forces a new MVCC
+// tuple, seven index entries and a WAL record. On 2026-08-16 that blew the
+// deploy's 15-minute SSH budget 23 accounts into 34. `applyUpdate` now
+// carries an IS DISTINCT FROM guard, so a steady-state run writes nothing.
+// See its doc comment before removing it.
 //
 // The aggregates are deliberately LIFETIME-only — see the schema comment
 // on Contact. A rolling window changes with the clock rather than with
@@ -51,6 +58,30 @@ function aggregateSelect(accountKey: string, scope: Prisma.Sql): Prisma.Sql {
   `;
 }
 
+/**
+ * Apply the aggregate, SKIPPING rows whose values already match.
+ *
+ * Being set-based was necessary but not sufficient. One UPDATE per account
+ * still rewrote every contact-with-history on every run, and in Postgres an
+ * UPDATE is never free even when the new value equals the old one: MVCC writes
+ * a whole new tuple, seven indexed columns get new entries, and it all goes
+ * through WAL. On production that was ~88s for a single 17.7k-contact rooftop,
+ * and the deploy's 15-minute SSH budget ran out 23 accounts into 34 — killing
+ * the release even though the numbers had not changed since the last deploy.
+ *
+ * The `IS DISTINCT FROM` predicate makes the steady-state case write nothing.
+ * The aggregate still runs for every account every time, so this is NOT the
+ * "already populated?" skip guard the backfill's header warns about — that one
+ * looked satisfied after a partial run and abandoned the remaining rooftops
+ * forever. Here every account is still visited and every contact still
+ * compared; only the redundant WRITE is skipped, so a genuinely stale row is
+ * still found and fixed on the next run.
+ *
+ * `IS DISTINCT FROM` rather than `<>` because four of these columns are
+ * nullable, and `NULL <> NULL` is NULL — which would drop exactly the rows
+ * that need fixing. Casts are explicit so COUNT's bigint and SUM's numeric
+ * don't compare as "different" against the int4/float8 columns forever.
+ */
 function applyUpdate(accountKey: string, agg: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
     UPDATE "Contact" c SET
@@ -64,6 +95,15 @@ function applyUpdate(accountKey: string, agg: Prisma.Sql): Prisma.Sql {
     FROM (${agg}) agg
     WHERE c."id" = agg."contactId"
       AND c."accountKey" = ${accountKey}
+      AND (
+        c."serviceVisitCount"   IS DISTINCT FROM agg.service_count::int
+        OR c."saleCount"        IS DISTINCT FROM agg.sale_count::int
+        OR c."lifetimeSpend"    IS DISTINCT FROM agg.spend::double precision
+        OR c."firstServiceEventAt" IS DISTINCT FROM agg.first_service
+        OR c."lastServiceEventAt"  IS DISTINCT FROM agg.last_service
+        OR c."firstSaleEventAt"    IS DISTINCT FROM agg.first_sale
+        OR c."lastSaleEventAt"     IS DISTINCT FROM agg.last_sale
+      )
   `;
 }
 

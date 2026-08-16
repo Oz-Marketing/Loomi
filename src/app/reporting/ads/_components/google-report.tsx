@@ -382,7 +382,19 @@ export function GoogleReport({
             <Muted>No campaigns delivered in this period.</Muted>
           ) : (
             <>
-              <SpendBar items={data.campaigns.slice(0, 8).map((c) => ({ label: c.name, value: c.cost }))} isDark={isDark} />
+              {/* Sort BEFORE slicing. This took the first eight campaigns in
+                  whatever order the API returned them, under a heading that
+                  says "Top campaigns" and directly above a table that sorts by
+                  cost — so the chart routinely omitted the biggest spender
+                  while showing a $743 campaign. Pre-dates the redesign
+                  (#70); Meta's equivalent chart was already sorted. */}
+              <SpendBar
+                items={[...data.campaigns]
+                  .sort((a, b) => b.cost - a.cost)
+                  .slice(0, 8)
+                  .map((c) => ({ label: c.name, value: c.cost }))}
+                isDark={isDark}
+              />
               <CampaignTable campaigns={data.campaigns} accountKey={accountKey} from={from} to={to} expandable={team} />
             </>
           )}

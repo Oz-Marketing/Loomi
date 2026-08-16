@@ -79,11 +79,48 @@ export const COMPARE_LABELS: Record<string, string> = {
 
 // ── Formatters ──
 
-export const usd = (v: number) =>
-  v.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
-export const usd0 = (v: number) =>
-  v.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-export const num = (v: number) => Math.round(v).toLocaleString('en-US');
+/**
+ * A metric that is absent renders as an em dash, not a white screen.
+ *
+ * These formatters are typed `(v: number)`, which reads as a guarantee and is
+ * not one. Every report hand-writes an interface for its route's JSON and hands
+ * it to SWR as a generic; TypeScript then believes the payload matches and
+ * checks nothing at runtime. So any drift between what a route returns and what
+ * a component expects is invisible to `tsc` and fatal in the browser.
+ *
+ * That is not hypothetical. The team-lens campaign table rendered `usd(c.cpm)`
+ * while the Graph query never requested `cpm`, and `undefined.toLocaleString()`
+ * took down the ENTIRE Meta report — every section, for every agency user,
+ * because team is their default lens. One missing field from one vendor call
+ * blanked a client-facing page.
+ *
+ * Guarding here is deliberately a backstop, not a fix: the underlying gap still
+ * gets repaired at the route. But the failure mode changes from "the report is
+ * gone" to "one cell says —", which is the difference between an outage and a
+ * visible imperfection. Reports are read-only summaries; there is no correctness
+ * argument for preferring the crash.
+ */
+const finite = (v: number | null | undefined): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+export const usd = (v: number) => {
+  const n = finite(v);
+  return n === null
+    ? '—'
+    : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+};
+export const usd0 = (v: number) => {
+  const n = finite(v);
+  return n === null
+    ? '—'
+    : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+};
+export const num = (v: number) => {
+  const n = finite(v);
+  // Math.round(undefined) is NaN, which formats as the string "NaN" rather
+  // than throwing — so this one was never a crash, just a cell reading "NaN".
+  return n === null ? '—' : Math.round(n).toLocaleString('en-US');
+};
 /**
  * Short form for headline figures: 842 · 8.4k · 84k · 2.9M.
  *
@@ -92,12 +129,18 @@ export const num = (v: number) => Math.round(v).toLocaleString('en-US');
  * magnitude a monthly ad report lands on.
  */
 export const compact = (v: number) => {
+  const safe = finite(v);
+  if (safe === null) return '—';
+  v = safe;
   const abs = Math.abs(v);
   if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
   if (abs >= 1000) return `${(v / 1000).toFixed(abs >= 10_000 ? 0 : 1)}k`;
   return String(Math.round(v));
 };
-export const pctText = (v: number) => `${v.toFixed(2)}%`;
+export const pctText = (v: number) => {
+  const n = finite(v);
+  return n === null ? '—' : `${n.toFixed(2)}%`;
+};
 export const prettyDate = (iso: string) =>
   new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', {
     month: 'short',

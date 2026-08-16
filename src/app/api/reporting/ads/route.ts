@@ -28,7 +28,7 @@ import {
   getDevicePerformance,
   getDailyPerformance,
   getDemographics,
-  getCampaignCreatives,
+  getPlacementPerformance,
 } from '@/lib/integrations/meta-ads';
 import { applyMetaMargins } from '@/lib/reporting/margins';
 import { resolveComparisonDates } from '@/lib/reporting/comparison';
@@ -90,16 +90,15 @@ export async function GET(req: NextRequest) {
     // MetaSyncError (not_configured / no_ad_account) the catch maps to a status.
     const { cfg, adAccountId } = await getAdAccountConfig(accountKey);
 
-    // Primary period. Creatives are best-effort (the lib already swallows its
-    // own errors and returns {}), so a partial Graph failure still renders.
-    const [accountMetrics, campaigns, devices, daily, demographics, creatives] =
+    // Primary period.
+    const [accountMetrics, campaigns, devices, daily, demographics, placements] =
       await Promise.all([
         getAccountMetrics(cfg, adAccountId, startDate, endDate),
         getCampaignPerformance(cfg, adAccountId, startDate, endDate),
         getDevicePerformance(cfg, adAccountId, startDate, endDate),
         getDailyPerformance(cfg, adAccountId, startDate, endDate),
         getDemographics(cfg, adAccountId, startDate, endDate),
-        getCampaignCreatives(cfg, adAccountId, startDate, endDate),
+        getPlacementPerformance(cfg, adAccountId, startDate, endDate),
       ]);
 
     // Comparison period (optional). Mirrors Oz: account metrics + campaigns +
@@ -141,7 +140,7 @@ export async function GET(req: NextRequest) {
       devices: devices.map((d) => applyMetaMargins(d, margin)),
       daily: daily.map((d) => applyMetaMargins(d, margin)),
       demographics: demographics.map((d) => applyMetaMargins(d, margin)),
-      campaignCreatives: creatives,
+      placements: placements.map((p) => applyMetaMargins(p, margin)),
       compare,
     };
     return NextResponse.json(

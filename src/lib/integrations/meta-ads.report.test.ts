@@ -4,6 +4,7 @@ import {
   getCampaignPerformance,
   getDailyPerformance,
   getDevicePerformance,
+  getPlacementPerformance,
   type MetaConfig,
 } from './meta-ads';
 import { applyMetaMargins } from '@/lib/reporting/margins';
@@ -131,13 +132,65 @@ describe('getDailyPerformance', () => {
 });
 
 describe('getDevicePerformance', () => {
-  it('title-cases the device platform', async () => {
+  it('title-cases the device platform, underscores included', async () => {
+    // This previously asserted 'Mobile_app' — pinning a bug rather than the
+    // intent the test name states. Meta returns snake_case, and the raw value
+    // was reaching the client-facing donut legend as "Mobile_app".
     mockGraph([
       { device_platform: 'mobile_app', impressions: '900', clicks: '40', ctr: '4.4', spend: '50' },
       { device_platform: 'desktop', impressions: '300', clicks: '10', ctr: '3.3', spend: '20' },
     ]);
     const rows = await getDevicePerformance(CFG, 'act_1', '2026-06-01', '2026-06-30');
-    expect(rows.map((r) => r.device)).toEqual(['Mobile_app', 'Desktop']);
+    expect(rows.map((r) => r.device)).toEqual(['Mobile App', 'Desktop']);
     expect(rows[0].spend).toBe(50);
+  });
+});
+
+describe('getPlacementPerformance', () => {
+  it('drops the platform name Meta repeats inside the position', async () => {
+    // `facebook` + `facebook_reels` joined naively reads "Facebook · Facebook
+    // Reels", and the duplicate is exactly what the chart truncates away.
+    mockGraph([
+      {
+        publisher_platform: 'facebook',
+        platform_position: 'facebook_reels',
+        impressions: '100',
+        clicks: '5',
+        ctr: '5',
+        spend: '10',
+        cpm: '100',
+      },
+      {
+        publisher_platform: 'instagram',
+        platform_position: 'feed',
+        impressions: '80',
+        clicks: '4',
+        ctr: '5',
+        spend: '8',
+        cpm: '100',
+      },
+    ]);
+    const rows = await getPlacementPerformance(CFG, 'act_1', '2026-06-01', '2026-06-30');
+    expect(rows.map((r) => r.label)).toEqual(['Facebook · Reels', 'Instagram · Feed']);
+    // The unabbreviated parts stay available for anything that needs them.
+    expect(rows[0].position).toBe('Facebook Reels');
+  });
+
+  it('leaves a position that merely starts with a similar word alone', async () => {
+    mockGraph([
+      {
+        publisher_platform: 'facebook',
+        platform_position: 'facebookish_thing',
+        impressions: '10',
+        clicks: '1',
+        ctr: '10',
+        spend: '1',
+        cpm: '100',
+      },
+    ]);
+    const rows = await getPlacementPerformance(CFG, 'act_1', '2026-06-01', '2026-06-30');
+    // "Facebookish Thing" does not start with "Facebook " (note the space),
+    // so nothing is stripped.
+    expect(rows[0].label).toBe('Facebook · Facebookish Thing');
   });
 });

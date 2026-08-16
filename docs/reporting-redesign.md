@@ -113,16 +113,38 @@ quartile completions are the deliverable; impressions and clicks are close to
 meaningless on connected TV. Also missing: the domain/app placement report,
 which is the brand-safety answer when a dealer asks where their ad ran.
 
-**⚠️ BLOCKED — needs the schema, not more code.** StackAdapt's GraphQL schema is
-proprietary and not in their public docs; the field list Loomi uses was copied
-verbatim from ODT's PHP fragment. Guessing is not a safe fallback here:
-`METRICS_FRAGMENT` is shared by the account, campaign, campaign-group, daily
-AND creative queries, so one invalid field name does not degrade the video
-section — it fails all five requests and takes the entire StackAdapt report
-down. Run `scripts/stackadapt-introspect.ts` somewhere that has
-`STACKADAPT_API_KEY` (it prints the type's fields and highlights the
-video-looking ones), or ask StackAdapt support for the `DeliveryStatsRecord`
-field list. Implementation is maybe an hour once the names are known.
+**✅ RESOLVED 2026-08-16 — video shipped.** `scripts/stackadapt-introspect.ts`
+was run against the live API on production (the only environment with
+`STACKADAPT_API_KEY`). `DeliveryStatsRecord` has 89 fields; the video set is:
+
+```
+videoStartsBigint        BigInt   Video starts
+videoQ1PlaybacksBigint   BigInt   25% video completions
+videoQ2PlaybacksBigint   BigInt   50% video completions
+videoQ3PlaybacksBigint   BigInt   75% video completions
+videoCompletionsBigint   BigInt   100% Video Completions
+videoCompletionRate      Float    Video completions per video start
+```
+
+Declining to guess was the right call. The 25/50/75 marks are `Q{n}Playbacks`
+but 100% is `Completions`, so the natural guess `videoQ4PlaybacksBigint` does
+not exist — and because `METRICS_FRAGMENT` is shared by all five delivery
+queries, that one name would have taken down the whole StackAdapt report rather
+than blanking a section. `stackadapt.test.ts` now asserts each verified name and
+explicitly asserts Q4's absence, so a later edit "from memory" fails in CI.
+
+VCR is a client-visible KPI (hidden entirely when `video_starts` is 0 — a
+display-only buy is not a 0% completion rate), and the quartile funnel is a
+team-lens section, since where viewers drop off is a creative-length decision.
+
+**Also found: a `margins` field.** `DeliveryStatsRecord` exposes StackAdapt's own
+margin as `margins` — plural. `stripInternalCost` matched only `actual_*` and
+`margin`, so the plural would have passed straight through to clients had anyone
+added it while browsing that 89-field list. Nothing requested it, so nothing
+leaked; the guard now blocks it and the fragment carries a "do not add" note.
+
+Still open for StackAdapt: the domain/app **placement** report (brand safety —
+where the ad ran).
 
 Reach and frequency, incidentally, are NOT missing from StackAdapt — the
 fragment already requests `uniqueImpressionsBigint` and `frequency`, and the
@@ -449,7 +471,7 @@ about our own configuration is not a fact about the client's month.
 | 0 | ✅ **shipped** — report UI kit + chart theme + `EmptyState.connect` | Everything else renders through it; do it once |
 | 1 | ✅ **shipped** — GA4 + Places mappings → DB, integration cards | Unblocks §5, removes a deploy from onboarding |
 | 2 | ✅ **shipped** — client/team lens on Google + Meta | Highest-traffic reports, proves the pattern |
-| 3 | ✅ **mostly shipped** — Meta placement + reach/frequency, GA4 key events. StackAdapt VCR blocked (see below) | Each is additive to an existing route |
+| 3 | ✅ **shipped** — Meta placement + reach/frequency, GA4 key events, StackAdapt video (field names introspected 2026-08-16) | Each is additive to an existing route |
 | 4 | ✅ **shipped** — lens on StackAdapt + Websites, Ad Templates made agency-only, drilldown leak closed | Less mechanical than expected — see below |
 | 5 | ✅ **shipped** — Acquisition Cost report | The join nobody else can make |
 

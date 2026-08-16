@@ -248,16 +248,13 @@ export function EmptyState({
           {showConnect && (
             <Link
               href={connect!.href}
-              className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3.5 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
             >
               <PuzzlePieceIcon className="h-3.5 w-3.5" />
               {connect!.label}
             </Link>
           )}
         </div>
-      )}
-      {showConnect && (
-        <p className={`${LABEL} opacity-70`}>Visible to agency users only</p>
       )}
     </div>
   );

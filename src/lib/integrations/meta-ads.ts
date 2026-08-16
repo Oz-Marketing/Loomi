@@ -761,10 +761,19 @@ export async function getPlacementPerformance(
     .map((data) => {
       const platform = titleize(data.publisher_platform ?? 'unknown');
       const position = titleize(data.platform_position ?? 'unknown');
+      // Meta repeats the platform inside the position (`facebook` +
+      // `facebook_reels`), so the naive join reads "Facebook · Facebook
+      // Reels" — the duplicate word is what gets truncated away in the chart,
+      // leaving "Facebook · Facebook Re…". Strip it when it leads.
+      const shortPosition =
+        position.toLowerCase().startsWith(`${platform.toLowerCase()} `) &&
+        position.length > platform.length + 1
+          ? position.slice(platform.length + 1)
+          : position;
       return {
         platform,
         position,
-        label: `${platform} · ${position}`,
+        label: `${platform} · ${shortPosition}`,
         impressions: intOf(data.impressions),
         clicks: intOf(data.clicks),
         ctr: floatOf(data.ctr),
@@ -821,9 +830,11 @@ export async function getDevicePerformance(
     time_range: JSON.stringify({ since, until }),
   });
   return rows.map((data) => {
-    const device = data.device_platform ?? 'Unknown';
+    // titleize, not a bare capitalise: Meta returns `mobile_app`, and
+    // `charAt(0).toUpperCase()` left the underscore in — client-facing donut
+    // legends read "Mobile_app".
     return {
-      device: device.charAt(0).toUpperCase() + device.slice(1),
+      device: titleize(data.device_platform ?? 'unknown'),
       impressions: intOf(data.impressions),
       clicks: intOf(data.clicks),
       ctr: floatOf(data.ctr),

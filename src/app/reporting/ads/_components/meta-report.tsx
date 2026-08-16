@@ -290,7 +290,9 @@ export function MetaReport({
         <ExportMenu doc={doc} filenameBase={`meta-${data.dealer}-${data.startDate}-${data.endDate}`} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      {/* Four across: with reach and frequency there are eight tiles, and a
+          six-wide grid stranded the last two on a half-empty second row. */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
         <Kpi
           icon={CurrencyDollarIcon}
           label="Spend"

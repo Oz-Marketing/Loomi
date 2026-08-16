@@ -421,7 +421,7 @@ function ConversionsPanel({ m }: { m: Metrics }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       {tiles.map((t) => (
         <div key={t.label} className="rounded-xl border border-[var(--border)] p-3">
-          <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
+          <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
           <p className="mt-1 text-lg font-bold tabular-nums">{t.value}</p>
         </div>
       ))}

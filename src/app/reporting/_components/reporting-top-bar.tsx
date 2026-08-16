@@ -165,6 +165,8 @@ export function ReportingTopBar({
           </UtilityIconButton>
           {unreadNotifications > 0 && (
             <span
+              /* 9px is deliberate and exempt from the type scale: the count
+                 sits inside a 14px dot, and anything larger overflows it. */
               className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[9px] font-bold leading-none text-white"
               aria-hidden
             >
@@ -229,7 +231,7 @@ export function ReportingTopBar({
                       {userEmail || 'No email'}
                     </p>
                     {canViewRoleBadge && (
-                      <span className="mt-1 inline-block rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--primary)]">
+                      <span className="mt-1 inline-block rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-[var(--primary)]">
                         {userRole}
                       </span>
                     )}

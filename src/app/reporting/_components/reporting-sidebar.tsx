@@ -138,10 +138,24 @@ function buildNav(isClient: boolean): NavItem[] {
       { href: '/direct-mail', label: 'Direct Mail ROI', icon: InboxStackIcon },
     ],
   },
-  // Staff-only comparison of every rooftop. Rendered for everyone; the page
-  // itself gates on role and on more than one account being in scope, so the
-  // nav doesn't need to duplicate that logic (and can't — it has no session).
-  { key: 'executive', label: 'Executive', icon: PresentationChartLineIcon, href: '/executive' },
+  // Staff-only comparison of every rooftop — the same "whose report is it"
+  // category as Ad Templates, so a client doesn't get the nav entry either.
+  //
+  // This used to be rendered for everyone, on the reasoning that the page
+  // gates on role anyway and the nav "can't — it has no session". The second
+  // half is no longer true: the sidebar reads `userRole` for the Digital Ads
+  // filter, so it can and should. The page keeps its own gate — a hidden nav
+  // entry is not a permission check.
+  ...(isClient
+    ? []
+    : [
+        {
+          key: 'executive',
+          label: 'Executive',
+          icon: PresentationChartLineIcon,
+          href: '/executive',
+        } as NavItem,
+      ]),
   // Top level, not under Digital Ads: the ledger covers every channel including
   // non-digital fee lines, so filing it under Digital Ads would understate what
   // it holds. Read-only here — authoring lives in the budget hub.
@@ -329,7 +343,7 @@ function GroupNav({
         </button>
         <div className="invisible absolute left-full top-0 z-50 ml-2 translate-x-1 opacity-0 transition-all duration-150 group-hover/nav:visible group-hover/nav:translate-x-0 group-hover/nav:opacity-100">
           <div className="glass-dropdown min-w-[190px] p-1.5 shadow-lg">
-            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
+            <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
               {item.label}
             </p>
             {item.children!.map((c) => (
@@ -383,7 +397,7 @@ function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
           {child.icon && <child.icon className="h-4 w-4" />}
           {child.label}
         </span>
-        <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider">
+        <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider">
           soon
         </span>
       </div>

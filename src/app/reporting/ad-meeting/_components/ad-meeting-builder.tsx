@@ -252,7 +252,7 @@ export function AdMeetingBuilder({
                   key={k.label}
                   className="rounded-xl border border-[var(--border)] p-3"
                 >
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                     {k.label}
                   </p>
                   <p className="mt-1 text-lg font-bold tabular-nums">{k.value}</p>

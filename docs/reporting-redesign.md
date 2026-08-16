@@ -581,6 +581,23 @@ leaking.
 The route gate is separate from the nav filter on purpose: hiding a nav entry is
 not a permission check when the URL is still typeable.
 
+**Executive followed it.** It is the same category — a cross-account comparison
+of every rooftop — and was rendered in every client's nav on the reasoning that
+the page gates on role anyway and the nav "can't [gate] — it has no session".
+The second half stopped being true the moment the sidebar started reading
+`userRole` for the Digital Ads filter, so the entry is now withheld too. The
+page keeps its own gate.
+
+### Type-scale sweep
+
+Phase 0 defined a 12px floor for data and 11px for all-caps eyebrows, then
+applied it only inside the new kit. Swept the remaining fifteen `text-[10px]`
+and `text-[9px]` instances across the reporting tree to that scale.
+
+One exemption, annotated in place so a future sweep doesn't "fix" it: the
+notification count in the top bar sits inside a 14px dot and overflows above
+9px.
+
 ---
 
 ## Decisions (locked 2026-08-15)

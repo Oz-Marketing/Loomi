@@ -493,7 +493,7 @@ function ConversionsPanel({ m }: { m: Metrics }) {
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {tiles.map((t) => (
         <div key={t.label} className="rounded-xl border border-[var(--border)] p-3">
-          <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
+          <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">{t.label}</p>
           <p className="mt-1 text-lg font-bold tabular-nums">{t.value}</p>
         </div>
       ))}
@@ -530,7 +530,7 @@ function CampaignTable({
       <div className={`overflow-x-auto ${showAll && overflowing ? 'max-h-[24rem] overflow-y-auto' : ''}`}>
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-[var(--card)]">
-            <tr className="text-left text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
               <th className="py-2 pr-3">Campaign</th>
               <th className="px-3 py-2 text-right">Spend</th>
               <th className="px-3 py-2 text-right">Impr.</th>
@@ -618,7 +618,7 @@ function CampaignRowExpandable({
             ) : (
               <table className="w-full text-[11px]">
                 <thead>
-                  <tr className="text-left text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  <tr className="text-left text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                     <th className="py-1 pr-3">Ad group</th>
                     <th className="px-3 py-1">Type</th>
                     <th className="px-3 py-1 text-right">Spend</th>

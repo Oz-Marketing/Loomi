@@ -316,7 +316,7 @@ function CompareDropdown({ value, onChange }: { value: string; onChange: (v: str
           style={{ minWidth: '220px' }}
         >
           <div className="p-1.5">
-            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               Compare to
             </p>
             {Object.entries(COMPARE_LABELS).map(([val, label]) => (

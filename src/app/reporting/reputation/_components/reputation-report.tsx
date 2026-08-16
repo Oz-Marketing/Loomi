@@ -82,7 +82,7 @@ function StatusBadge({ status }: { status: string }) {
   const closed = status.startsWith('CLOSED');
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${
+      className={`rounded-full px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider ${
         closed ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'
       }`}
     >
@@ -95,7 +95,7 @@ function RatingCard({ place, label }: { place: Place; label?: string }) {
   return (
     <div className="glass-section-card rounded-2xl border border-[var(--border)] p-5">
       {label && (
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>
       )}
       <div className="flex items-start justify-between gap-3">
         <div>
@@ -295,7 +295,7 @@ function ReviewHistorySection({
 
           <div className="space-y-3">
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Average in range
               </p>
               <p className="text-xl font-bold tabular-nums">
@@ -303,7 +303,7 @@ function ReviewHistorySection({
               </p>
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Replied
               </p>
               <p className="text-xl font-bold tabular-nums">

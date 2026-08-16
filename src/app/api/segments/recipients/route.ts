@@ -9,7 +9,7 @@
 // src/lib/segments/recipients.ts for the full explanation.
 
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import {
   resolveRecipients,
@@ -24,11 +24,7 @@ import {
 const DEFAULT_LIMIT = 5000;
 
 export async function POST(req: Request) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => null);

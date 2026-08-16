@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import {
   resolveTwilioConfig,
@@ -38,7 +38,7 @@ interface ConvoMessage {
 }
 
 export async function POST(req: NextRequest, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.contacts.edit');
   if (error) return error;
 
   const { contactId } = await params;

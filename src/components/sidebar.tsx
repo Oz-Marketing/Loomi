@@ -25,7 +25,6 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
-  LifebuoyIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -38,7 +37,6 @@ import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav'
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
-import { openSupportModal } from '@/lib/ui-events';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -160,18 +158,11 @@ const adminNavItems: NavEntry[] = [
 // render; absolute items — Reporting / Ad Generator / Tools — stay global).
 const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 
-// Agency scope on a NON-settings route — the fleet-wide roll-up views.
-//
-// The platform-config destinations (sub-accounts, users, industries, …) no
-// longer live here: they moved into the Agency Settings rail, reached by the
-// cog in the top bar. What's left is the agency-level work — the roll-up
-// dashboard, the shared template library, and the media library (the Loomi
-// shared/OEM collection plus every sub-account's).
-//
-// These three are slated to be rehomed onto the Organization sub-account (see
-// docs/settings-architecture.md); until that lands they stay reachable here so
-// nothing goes dark.
-const agencyNavItems: NavEntry[] = [dashboardNav, templatesNav, mediaNav];
+// Agency scope is no longer a place. The platform-config destinations live in
+// the Agency Settings modal (the cog in the top bar), and the agency-level work
+// pages — the roll-up dashboard, the shared template library, the media library
+// — are reached through the Organization sub-account that owns them, which
+// already rolls up its children. See docs/settings-architecture.md.
 
 /**
  * Organization nav. An org both rolls up its sub-accounts AND operates as an
@@ -202,7 +193,7 @@ function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
+  const { userRole, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
   const { collapsed } = useSidebarCollapse();
 
@@ -215,14 +206,14 @@ export function Sidebar() {
 
   let navItems: NavEntry[];
   let prefix = '';
-  const isAgencyScope = isAdmin && !inSubaccountRoute;
 
-  if (isAgencyScope) {
-    navItems = agencyNavItems;
-  } else if (slug) {
+  if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;
   } else {
+    // No active sub-account resolved yet (the very first paint after login,
+    // before the account context settles). Unprefixed routes read the active
+    // account from context, so this is a safe interim.
     navItems = isClientRole ? subaccountClientNavItems : adminNavItems;
   }
 
@@ -254,11 +245,11 @@ export function Sidebar() {
     if (activeGroupKey) setOpenGroupKey(activeGroupKey);
   }, [activeGroupKey]);
 
-  const settingsHref = isClientRole
-    ? (slug ? `/subaccount/${slug}/settings` : '/settings/subaccount')
-    : isAccount && slug
-      ? `/subaccount/${slug}/settings`
-      : '/settings/subaccounts';
+  // The footer Settings link is always the SUB-ACCOUNT tier now. Platform
+  // config is the cog's modal, never a page in this shell — so this never
+  // points at the agency directories (`/settings/subaccounts`, `/settings/users`)
+  // again. `/settings` alone resolves to the first tab this scope can see.
+  const settingsHref = slug ? `/subaccount/${slug}/settings` : '/settings';
 
 
   // Settings lives in the footer (where the account switcher briefly was).
@@ -284,29 +275,10 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Help desk. Sits above Settings rather than in the nav proper —
-              it's a way OUT of the product (to a person), not a destination
-              inside it, so it belongs with the other footer utilities. Opens
-              the modal in place: you report a bug from the screen it's on. */}
-          <div className="px-2">
-            {(() => {
-              const helpButton = (
-                <button
-                  type="button"
-                  onClick={openSupportModal}
-                  className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
-                >
-                  <LifebuoyIcon className="w-5 h-5" />
-                  {!collapsed && 'Get Help'}
-                </button>
-              );
-              return collapsed ? (
-                <SidebarTooltip label="Get Help">{helpButton}</SidebarTooltip>
-              ) : (
-                helpButton
-              );
-            })()}
-          </div>
+          {/* The help desk used to sit here as "Get Help". It's a way OUT of the
+              product (to a person), not a destination inside it, so it lives in
+              the top utility bar with the other cross-app tools now — the "?"
+              beside Notifications opens the same form. */}
 
           {/* Settings / Theme Toggle */}
           <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>

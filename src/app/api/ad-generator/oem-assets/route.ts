@@ -11,7 +11,8 @@
  * don't vary by rooftop.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/api-auth';
+import { getAuthSession } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { buildOemAssetsReport } from '@/lib/ad-generator/oem-assets-report';
@@ -35,7 +36,7 @@ async function gate() {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.assets.upload');
   if (error) return error;
   return null;
 }

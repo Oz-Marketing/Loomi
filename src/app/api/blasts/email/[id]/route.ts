@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   deleteEmailBlast,
   getEmailBlast,
@@ -17,7 +17,7 @@ interface RouteParams {
  * campaign builder to hydrate the form.
  */
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.email.view', 'reporting.report.view']);
   if (error) return error;
 
   const { id } = await params;
@@ -46,7 +46,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
  * template step → htmlContent/subject/etc., schedule step → scheduledFor + status).
  */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;
@@ -122,7 +122,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
  * (queued/processing) cannot be deleted — the service throws and we 409.
  */
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;

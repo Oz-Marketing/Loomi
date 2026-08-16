@@ -256,7 +256,7 @@ export function MarketingLists({ accountKey }: { accountKey: string }) {
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium">{list.name}</span>
                       {shared && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-[var(--muted)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-[var(--muted)] px-2 py-0.5 text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
                           <LockClosedIcon className="h-3 w-3" />
                           Shared
                         </span>

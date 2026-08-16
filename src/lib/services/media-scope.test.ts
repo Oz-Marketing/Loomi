@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { checkScopeMove, describeScope, isUnrestrictedAdmin } from './media';
+import { checkAssetCopy, checkScopeMove, describeScope, isUnrestrictedAdmin } from './media';
 
 /**
  * Scope is the one media operation whose blast radius exceeds its own row: it
@@ -87,5 +87,74 @@ describe('describeScope', () => {
 
   it('falls back to the key when the dealer name is unknown', () => {
     expect(describeScope({ accountKey: 'youngHondaOgden', oem: null })).toBe('youngHondaOgden');
+  });
+});
+
+/**
+ * Copy is the sibling of a move, and it exists so one rooftop can take the
+ * asset another rooftop owns without a cross-account browsing view. Its rules
+ * key off where the copy LANDS, which is what makes it usable by a restricted
+ * admin where a move isn't.
+ */
+describe('checkAssetCopy', () => {
+  const otherAccount = { accountKey: 'youngFordOgden', oem: null, managedBy: null };
+
+  it('lets an agency admin copy one rooftop’s asset to another rooftop', () => {
+    expect(checkAssetCopy(admin, ownedAsset, { accountKey: 'youngFordOgden', oem: null }).error)
+      .toBeNull();
+  });
+
+  it('lets a rooftop take its own copy of a shared or Loomi-library asset', () => {
+    // The main reason copy exists: the shared original stays put, the rooftop
+    // gets one it can rename, re-approve or delete on its own.
+    expect(checkAssetCopy(admin, sharedAsset, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toBeNull();
+    expect(checkAssetCopy(admin, globalAsset, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toBeNull();
+  });
+
+  it('lets a restricted admin copy into an account they hold — unlike a move', () => {
+    expect(checkAssetCopy(scopedAdmin, sharedAsset, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toBeNull();
+  });
+
+  it('refuses a restricted admin copying into an account they don’t hold', () => {
+    expect(checkAssetCopy(scopedAdmin, sharedAsset, { accountKey: 'youngFordOgden', oem: null }).error)
+      .toContain('access to that sub-account');
+  });
+
+  it('refuses a restricted admin reading another account’s asset', () => {
+    expect(checkAssetCopy(scopedAdmin, otherAccount, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toContain('access to that asset');
+  });
+
+  it('holds the shared libraries to the same bar a move does', () => {
+    // Copying INTO the Loomi library or a brand publishes to every account, so
+    // it stays an unrestricted-admin decision.
+    expect(checkAssetCopy(scopedAdmin, ownedAsset, { accountKey: null, oem: 'Honda' }).error)
+      .toContain('agency admins');
+    expect(checkAssetCopy(admin, ownedAsset, { accountKey: null, oem: 'Honda' }).error).toBeNull();
+  });
+
+  it('refuses clients outright', () => {
+    expect(checkAssetCopy(client, sharedAsset, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toContain('Clients');
+  });
+
+  it('refuses managed logos and fonts, which Account settings owns', () => {
+    expect(checkAssetCopy(admin, logoAsset, { accountKey: 'youngFordOgden', oem: null }).error)
+      .toContain('Account settings');
+  });
+
+  it('refuses copying into the scope the asset already lives in', () => {
+    expect(checkAssetCopy(admin, ownedAsset, { accountKey: 'youngHondaOgden', oem: null }).error)
+      .toContain('already lives');
+    expect(checkAssetCopy(admin, sharedAsset, { accountKey: null, oem: 'Honda' }).error)
+      .toContain('already lives');
+  });
+
+  it('refuses the both-at-once scope the API rejects', () => {
+    expect(checkAssetCopy(admin, ownedAsset, { accountKey: 'youngFordOgden', oem: 'Honda' }).error)
+      .toContain('one account or to a brand');
   });
 });

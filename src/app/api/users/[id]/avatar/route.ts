@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { isS3Configured } from '@/lib/s3';
 import {
@@ -14,7 +14,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error } = await requireRole('developer');
+  const { error } = await requirePermission('agency.users.avatar');
   if (error) return error;
 
   try {
@@ -66,7 +66,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error } = await requireRole('developer');
+  const { error } = await requirePermission('agency.users.avatar');
   if (error) return error;
 
   try {

@@ -1,6 +1,7 @@
 import {
   S3Client,
   PutObjectCommand,
+  CopyObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -140,6 +141,44 @@ export async function uploadToS3(
       const aclUnsupported = code.includes('accesscontrollistnotsupported') || code.includes('acl');
       if (aclUnsupported) {
         await getClient().send(new PutObjectCommand(putBase));
+        return;
+      }
+    }
+    throw err;
+  }
+}
+
+/**
+ * Server-side copy of one object to a new key.
+ *
+ * Used when an asset is copied into another sub-account: the copy gets its own
+ * bytes rather than sharing the original's object, so deleting either one can
+ * never blank the other. S3 does the copy internally — nothing streams through
+ * this process, so the size of the file doesn't matter.
+ *
+ * ACL handling mirrors uploadToS3: ask for public-read, and retry without an
+ * ACL on backends that have ACLs disabled (bucket policy governs there).
+ */
+export async function copyS3Object(sourceKey: string, destKey: string): Promise<void> {
+  const bucket = getBucket();
+  const base = {
+    Bucket: bucket,
+    // CopySource is bucket + key, and the key has to be URI-encoded or any
+    // space or '+' in a filename resolves to a different (missing) object.
+    CopySource: `${bucket}/${sourceKey.split('/').map(encodeURIComponent).join('/')}`,
+    Key: destKey,
+  };
+
+  const aclSetting = (process.env.S3_UPLOAD_ACL || 'public-read').trim().toLowerCase();
+  const acl = aclSetting === 'public-read' ? 'public-read' : undefined;
+
+  try {
+    await getClient().send(new CopyObjectCommand({ ...base, ...(acl ? { ACL: acl } : {}) }));
+  } catch (err) {
+    if (acl && err instanceof S3ServiceException) {
+      const code = `${err.name || ''} ${err.message || ''}`.toLowerCase();
+      if (code.includes('accesscontrollistnotsupported') || code.includes('acl')) {
+        await getClient().send(new CopyObjectCommand(base));
         return;
       }
     }

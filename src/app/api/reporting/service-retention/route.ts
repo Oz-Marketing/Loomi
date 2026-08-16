@@ -25,7 +25,7 @@ import { getServiceRetention } from '@/lib/reporting/service-retention';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'service_retention', req: req });
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey');

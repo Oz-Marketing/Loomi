@@ -11,7 +11,7 @@
  * big for a query string.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   // Same gate as saving the template: only someone who can edit it can be asked
   // what editing it would do.
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
 
   const { id } = await params;

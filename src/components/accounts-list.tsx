@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
+import PrimaryButton from '@/components/primary-button';
 import { useRouter } from 'next/navigation';
 import {
   PlusIcon,
@@ -30,6 +31,16 @@ interface AccountsListProps {
   detailBasePath?: string;
   /** When set, limit the list to these account keys (e.g. an org's sub-accounts). */
   restrictKeys?: string[];
+  /**
+   * Drill into a sub-account WITHOUT navigating. Set by the Agency Settings
+   * modal, which owns the whole tier and has to keep it inside the overlay —
+   * pushing a route would drop the user onto a page behind the modal.
+   */
+  onOpenAccount?: (key: string) => void;
+  /** Same, for the account-rep link out to a user. */
+  onOpenUser?: (userId: string) => void;
+  /** Same, for the "Create a new user" hint in the rep picker. */
+  onCreateUser?: () => void;
 }
 
 const ACCOUNTS_PAGE_SIZE = 10;
@@ -67,9 +78,17 @@ export function AccountsList({
   listPath: _listPath = '/subaccounts',
   detailBasePath = '/subaccounts',
   restrictKeys,
+  onOpenAccount,
+  onOpenUser,
+  onCreateUser,
 }: AccountsListProps) {
   void _listPath;
   const router = useRouter();
+  /** Drill in — in place when the host is a modal, by route otherwise. */
+  const openAccount = (key: string) => {
+    if (onOpenAccount) onOpenAccount(key);
+    else router.push(`${detailBasePath}/${key}`);
+  };
   const { confirm } = useLoomiDialog();
   const { userRole } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
@@ -158,7 +177,7 @@ export function AccountsList({
 
       toast.success('Sub-account created!');
       resetCreate();
-      router.push(`${detailBasePath}/${newKey.trim()}`);
+      openAccount(newKey.trim());
     } catch {
       toast.error('Failed to create sub-account');
     }
@@ -277,25 +296,18 @@ export function AccountsList({
 
   if (!accounts) return <div className="text-[var(--muted-foreground)]">Loading...</div>;
 
-  const titleActionsEl = typeof document !== 'undefined' ? document.getElementById('settings-title-actions') : null;
-
   return (
     <div>
-      {/* Portal action button into the settings title bar. Hidden in a
-          restricted (org-scoped) view — a newly created account wouldn't belong
-          to the org, so it would immediately drop out of this filtered list.
-          Create + assign to an org happens from the Organizations settings. */}
-      {canManageAccounts && !restrictKeys && titleActionsEl && createPortal(
-        <button
-          onClick={() => setCreateMode('manual')}
-          className="flex items-center gap-1.5 px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
-        >
-          <PlusIcon className="w-4 h-4" /> New Sub-Account
-        </button>,
-        titleActionsEl,
-      )}
+      {/* Search left, create right, directly above the table — the same header
+          row Users and Field Blueprints use. This used to portal into the
+          settings title bar, so inside the Agency Settings modal (which has its
+          own slot id) there was no way to create a sub-account at all.
 
-      <div className="mb-4">
+          Still hidden in a restricted (org-scoped) view: a newly created
+          account wouldn't belong to the org, so it would immediately drop out
+          of this filtered list. Create + assign to an org happens from the
+          Organization's own settings. */}
+      <div className="mb-4 flex items-center justify-between gap-4">
         <div className="relative w-52">
           <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--foreground)]" />
           <input
@@ -309,11 +321,21 @@ export function AccountsList({
             className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
           />
         </div>
+        {canManageAccounts && !restrictKeys && (
+          <PrimaryButton onClick={() => setCreateMode('manual')}>
+            <PlusIcon className="w-4 h-4" />
+            Add Sub-Account
+          </PrimaryButton>
+        )}
       </div>
 
       {/* ─── Add Account Modal ─── */}
       {createMode && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-overlay-in">
+        // z-260: this list renders inside the Agency Settings modal (z-200), so
+        // anything it opens has to clear that overlay or it appears behind it —
+        // invisible, with the click seemingly doing nothing. 260 is the level
+        // the other nested dialogs (field editor, confirm) already use.
+        <div className="fixed inset-0 z-[260] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-overlay-in">
           <div className="glass-modal w-full max-w-lg mx-4">
 
             {/* ── Manual Create (simplified: Name + Industry + Brand) ── */}
@@ -390,23 +412,13 @@ export function AccountsList({
                     {repUsers.length === 0 && (
                       <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
                         No eligible users found.{' '}
-                        <Link
-                          href="/users/new"
-                          className="text-[var(--primary)] hover:underline"
-                        >
-                          Create a new user
-                        </Link>
+                        <NewUserHint onCreateUser={onCreateUser} />
                       </p>
                     )}
                     {repUsers.length > 0 && !newRepId && (
                       <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
                         Don&apos;t see the right person?{' '}
-                        <Link
-                          href="/users/new"
-                          className="text-[var(--primary)] hover:underline"
-                        >
-                          Create a new user
-                        </Link>
+                        <NewUserHint onCreateUser={onCreateUser} />
                       </p>
                     )}
                   </div>
@@ -437,7 +449,7 @@ export function AccountsList({
         <div className="text-center py-16 text-[var(--muted-foreground)]">
           <p className="text-sm">{search ? 'No sub-accounts match your search.' : 'No sub-accounts yet.'}</p>
           <p className="text-xs mt-1">
-            {search ? 'Try a different search term.' : 'Click &quot;New Sub-Account&quot; to get started.'}
+            {search ? 'Try a different search term.' : 'Click &quot;Add Sub-Account&quot; to get started.'}
           </p>
         </div>
       ) : (
@@ -479,7 +491,7 @@ export function AccountsList({
                 return (
                   <tr
                     key={key}
-                    onClick={() => router.push(`${detailBasePath}/${key}`)}
+                    onClick={() => openAccount(key)}
                     className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--muted)]/50 transition-colors cursor-pointer"
                   >
                     <td className="px-3 py-2 align-middle">
@@ -509,9 +521,12 @@ export function AccountsList({
                     </td>
                     <td className="px-3 py-2 align-middle">
                       {account.accountRep ? (
-                        <Link
-                          href={`/settings/users/${account.accountRep.id}`}
-                          onClick={(e) => e.stopPropagation()}
+                        // A button when the host drills in place (the Agency
+                        // Settings modal); a real link otherwise, so the rep is
+                        // still middle-clickable on the page.
+                        <RepLink
+                          userId={account.accountRep.id}
+                          onOpenUser={onOpenUser}
                           className="flex items-center gap-2 group"
                         >
                           <UserAvatar
@@ -529,7 +544,7 @@ export function AccountsList({
                               {account.accountRep.email}
                             </p>
                           </div>
-                        </Link>
+                        </RepLink>
                       ) : (
                         <span className="text-xs text-[var(--muted-foreground)]">—</span>
                       )}
@@ -611,5 +626,69 @@ export function AccountsList({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The account-rep cell's drill-in. Renders a link on a page (so it keeps
+ * middle-click and hover-URL) and a button inside the Agency Settings modal,
+ * where a route change would land the user behind the overlay.
+ */
+function RepLink({
+  userId,
+  onOpenUser,
+  className,
+  children,
+}: {
+  userId: string;
+  onOpenUser?: (userId: string) => void;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  if (onOpenUser) {
+    return (
+      <button
+        type="button"
+        className={className}
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenUser(userId);
+        }}
+      >
+        {children}
+      </button>
+    );
+  }
+  return (
+    <Link
+      href={`/settings/users/${userId}`}
+      onClick={(e) => e.stopPropagation()}
+      className={className}
+    >
+      {children}
+    </Link>
+  );
+}
+
+/**
+ * The rep picker's "no one suitable?" escape hatch. Inside the Agency Settings
+ * modal it drills to the new-user form in place; on a page it's a plain link.
+ */
+function NewUserHint({ onCreateUser }: { onCreateUser?: () => void }) {
+  if (onCreateUser) {
+    return (
+      <button
+        type="button"
+        onClick={onCreateUser}
+        className="text-[var(--primary)] hover:underline"
+      >
+        Create a new user
+      </button>
+    );
+  }
+  return (
+    <Link href="/users/new" className="text-[var(--primary)] hover:underline">
+      Create a new user
+    </Link>
   );
 }

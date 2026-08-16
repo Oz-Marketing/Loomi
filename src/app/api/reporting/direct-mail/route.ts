@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'direct_mail', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

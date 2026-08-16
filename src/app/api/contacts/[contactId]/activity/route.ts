@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 
 // GET /api/contacts/:id/activity?accountKey=&limit=
@@ -43,7 +43,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ contactId: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.contacts.view', 'reporting.report.view']);
   if (error) return error;
 
   const { contactId } = await params;

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requireAllPermissions } from '@/lib/permissions/require';
+import { recordCapabilityUse } from '@/lib/permissions/audit';
 import {
   getEmailBlast,
   processDueEmailBlasts,
@@ -13,7 +14,13 @@ import {
  * Intended for optional cron/manual execution of scheduled sends.
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  // Staff only — this drains the send queue. Was client-reachable; closed
+  // alongside POST /api/blasts/email. `blast.send` then narrows it from "any
+  // staff" to the people actually cleared to put mail on the wire.
+  const { session, error } = await requireAllPermissions([
+    'studio.email.edit',
+    'blast.send',
+  ]);
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));
@@ -35,6 +42,11 @@ export async function POST(req: NextRequest) {
     }
 
     const processed = await processEmailBlast(campaignId, { concurrency: 3 });
+    recordCapabilityUse(
+      { id: session!.user.id, email: session!.user.email },
+      'blast.send',
+      `Processed email blast ${campaignId}`,
+    );
     return NextResponse.json({ campaigns: [processed], processed: 1 });
   }
 
@@ -47,6 +59,14 @@ export async function POST(req: NextRequest) {
     accountKeys,
     concurrency: 3,
   });
+
+  if (campaigns.length > 0) {
+    recordCapabilityUse(
+      { id: session!.user.id, email: session!.user.email },
+      'blast.send',
+      `Drained the send queue: ${campaigns.length} due campaign(s)`,
+    );
+  }
 
   return NextResponse.json({ campaigns, processed: campaigns.length });
 }

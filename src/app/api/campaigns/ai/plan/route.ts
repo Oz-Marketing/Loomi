@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { buildAccountContextForKey } from '@/lib/campaigns/account-context';
 import { generateCampaignPlan } from '@/lib/ai/campaign-plan';
 import { createCampaign } from '@/lib/services/campaigns';
@@ -15,7 +16,7 @@ import { PHASE_2_CHANNELS } from '@/lib/campaigns/types';
  * confirms the plan.
  */
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

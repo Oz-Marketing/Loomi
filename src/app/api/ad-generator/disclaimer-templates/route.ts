@@ -11,7 +11,8 @@
  * generator simply falls back to the code-defined default templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/api-auth';
+import { getAuthSession } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
 
   // Admin: full list for the templates manager (`?all=1`).
   if (req.nextUrl.searchParams.get('all') === '1') {
-    const { error } = await requireRole('developer', 'super_admin', 'admin');
+    const { error } = await requirePermission('studio.adgen.view');
     if (error) return error;
     try {
       const rows = await prisma.adDisclaimerTemplate.findMany({
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('agency.coop.manage');
   if (error) return error;
 
   let body: {

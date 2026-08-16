@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES, ELEVATED_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import bcryptjs from 'bcryptjs';
 import crypto from 'crypto';
 import { issueAndSendUserInvite } from '@/lib/users/invitations';
 import { sendUserDeletedEmail } from '@/lib/users/deleted-email';
 import { setUserTeams, getUserTeamIds } from '@/lib/services/teams';
+import {
+  InvalidAssignmentError,
+  listCapabilities,
+  listSectorRoles,
+  pruneSectorRolesForTier,
+  setUserCapabilities,
+  setUserSectorRoles,
+} from '@/lib/permissions/assignments';
+import { sectorRoleRef } from '@/lib/permissions/registry';
+import {
+  legacyCapabilitiesFor,
+  legacySectorRolesFor,
+  legacyTierFor,
+} from '@/lib/permissions/legacy';
+import type { UserRole } from '@/lib/roles';
 
 function parseAccountKeys(raw: string): string[] {
   try {
@@ -32,7 +46,7 @@ function withAccountKeys<T extends { accountKeys: string }>(user: T): Omit<T, 'a
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.users.view');
   if (error) return error;
 
   const summary = req.nextUrl.searchParams.get('summary') === '1';
@@ -107,10 +121,13 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { error, session } = await requireRole(...ELEVATED_ROLES);
+  const { error, session } = await requirePermission('agency.users.manage');
   if (error) return error;
 
-  const { name, title, email, password, role, department, accountKeys, sendInvite } = await req.json();
+  const {
+    name, title, email, password, role, department, accountKeys, sendInvite,
+    sectorRoles, capabilities,
+  } = await req.json();
   const normalizedName = typeof name === 'string' ? name.trim() : '';
   const normalizedEmail = typeof email === 'string' ? email.trim() : '';
   const normalizedDepartment = typeof department === 'string' && department.trim() ? department.trim() : null;
@@ -166,6 +183,29 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  // Seed the new user's sector roles. The backfill is one-shot and guarded, so
+  // without this a user created afterwards would hold no roles at all and have
+  // NO access the moment the PERMISSIONS_ENFORCE_* flags flip.
+  //
+  // An explicit list from the form wins; otherwise fall back to the same coarse
+  // mapping the backfill used, which reproduces today's access for the role.
+  const requestedSectorRoles = Array.isArray(sectorRoles)
+    ? sectorRoles.map(String)
+    : legacySectorRolesFor(role as UserRole);
+  try {
+    await setUserSectorRoles(user.id, requestedSectorRoles, {
+      grantedById: session?.user?.id,
+    });
+  } catch (err) {
+    if (err instanceof InvalidAssignmentError) {
+      // The user row exists at this point; leaving it with no sector roles is
+      // safer than deleting it out from under a half-finished invite, and the
+      // 400 tells the caller exactly what to fix.
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
   let invite: {
     sent: boolean;
     expiresAt?: string;
@@ -190,9 +230,37 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Seed capabilities the same way as sector roles. The backfill is one-shot
+  // and guarded, so without this every user created afterwards would hold none
+  // — unable to send, export or see cost once enforcement is on, while an
+  // identically-roled colleague created earlier could do all three.
+  const requestedCapabilities = Array.isArray(capabilities)
+    ? capabilities.map(String)
+    : legacyCapabilitiesFor(role as UserRole);
+  try {
+    await setUserCapabilities(user.id, requestedCapabilities, {
+      actor: session?.user
+        ? { id: session.user.id, email: session.user.email }
+        : undefined,
+      reason: 'Seeded at user creation',
+    });
+  } catch (err) {
+    if (err instanceof InvalidAssignmentError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  const createdSectorRoles = (await listSectorRoles(user.id)).map((r) =>
+    sectorRoleRef(r.sector, r.role),
+  );
+  const createdCapabilities = await listCapabilities(user.id);
+
   return NextResponse.json(
     {
       ...withAccountKeys(user),
+      sectorRoles: createdSectorRoles,
+      capabilities: createdCapabilities,
       invite,
     },
     { status: 201 },
@@ -200,10 +268,11 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const { error, session } = await requireRole(...ELEVATED_ROLES);
+  const { error, session } = await requirePermission('agency.users.manage');
   if (error) return error;
 
-  const { id, name, title, email, role, department, accountKeys, password, teamIds } = await req.json();
+  const { id, name, title, email, role, department, accountKeys, password, teamIds, sectorRoles, capabilities } =
+    await req.json();
 
   if (!id) {
     return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
@@ -250,11 +319,70 @@ export async function PUT(req: NextRequest) {
   }
   const userTeamIds = await getUserTeamIds(id);
 
-  return NextResponse.json({ ...withAccountKeys(user), teamIds: userTeamIds });
+  // Sector roles are applied AFTER the role change above, so validation sees the
+  // new tier. Order matters: promoting to staff and granting Studio in the same
+  // save has to work, and demoting to client while keeping Studio must not.
+  try {
+    if (Array.isArray(sectorRoles)) {
+      await setUserSectorRoles(id, sectorRoles.map(String), {
+        grantedById: session?.user?.id,
+      });
+    } else if (data.role !== undefined) {
+      // Role changed but the caller didn't say what access should look like.
+      // Drop whatever the new tier may no longer hold rather than leaving rows
+      // that the resolver would silently ignore — a demoted client must not
+      // keep a Studio row on file.
+      await pruneSectorRolesForTier(id);
+    }
+  } catch (err) {
+    if (err instanceof InvalidAssignmentError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  // Capabilities after the sector roles, for the same reason: validation has to
+  // see the new tier, and demoting to client must clear them.
+  try {
+    if (Array.isArray(capabilities)) {
+      await setUserCapabilities(id, capabilities.map(String), {
+        actor: session?.user
+          ? { id: session.user.id, email: session.user.email }
+          : undefined,
+      });
+    } else if (data.role !== undefined && legacyTierFor(data.role as UserRole) === 'client') {
+      // Demoted to client without the caller saying anything about
+      // capabilities — revoke them all rather than leave a dealer holding
+      // `blast.send` on paper.
+      await setUserCapabilities(id, [], {
+        actor: session?.user
+          ? { id: session.user.id, email: session.user.email }
+          : undefined,
+        reason: 'Demoted to client',
+      });
+    }
+  } catch (err) {
+    if (err instanceof InvalidAssignmentError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
+
+  const userSectorRoles = (await listSectorRoles(id)).map((r) =>
+    sectorRoleRef(r.sector, r.role),
+  );
+  const userCapabilities = await listCapabilities(id);
+
+  return NextResponse.json({
+    ...withAccountKeys(user),
+    teamIds: userTeamIds,
+    sectorRoles: userSectorRoles,
+    capabilities: userCapabilities,
+  });
 }
 
 export async function DELETE(req: NextRequest) {
-  const { error, session } = await requireRole(...ELEVATED_ROLES);
+  const { error, session } = await requirePermission('agency.users.manage');
   if (error) return error;
 
   const id = req.nextUrl.searchParams.get('id');

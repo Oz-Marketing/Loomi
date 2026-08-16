@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requireAllPermissions } from '@/lib/permissions/require';
 import {
   getSmsBlast,
   scheduleSmsBlastDraft,
@@ -43,7 +43,11 @@ function parseDate(value: unknown): Date | null {
  * persists recipient rows. pg-boss fires it once scheduledFor passes.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  // Same as the email side: scheduling is an unattended send.
+  const { session, error } = await requireAllPermissions([
+    'studio.email.edit',
+    'blast.send',
+  ]);
   if (error) return error;
 
   const { id } = await params;

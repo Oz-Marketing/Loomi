@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
@@ -23,7 +23,7 @@ export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.flows.view', 'reporting.report.view']);
   if (error) return error;
 
   const { id } = await context.params;
@@ -36,7 +36,7 @@ export async function PATCH(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id } = await context.params;
@@ -100,7 +100,7 @@ export async function DELETE(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id } = await context.params;

@@ -8,18 +8,14 @@
 // `loomi.audience-sync` queue in src/worker/index.ts.
 
 import { NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { runAudienceSync } from '@/lib/segments/sync/run';
 
 type RouteContext = { params: Promise<{ syncId: string }> };
 
 export async function POST(_req: Request, { params }: RouteContext) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-  );
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const { syncId } = await params;

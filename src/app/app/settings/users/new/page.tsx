@@ -1,1 +1,1 @@
-export { default } from '@/app/users/new/page';
+export { NewUserPage as default } from '@/components/users/new-user';

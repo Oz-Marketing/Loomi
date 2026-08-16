@@ -20,5 +20,10 @@ export async function GET() {
     user: ctx.user,
     accountKeys: ctx.accountKeys,
     unrestricted: ctx.accountKeys === null,
+    // Whether the ad reports will include internal cost for this caller. Here
+    // because it's the one place to check the gate without a live Meta/Google
+    // connection — and because the front end can use it to hide cost columns
+    // rather than render empty ones.
+    canViewSpend: ctx.canViewSpend,
   });
 }

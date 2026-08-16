@@ -9,6 +9,7 @@ import { expandAccountKeysWithDescendants } from '@/lib/services/accounts';
 export type { UserRole } from '@/lib/roles';
 export { ELEVATED_ROLES, MANAGEMENT_ROLES, ALL_ROLES, roleDisplayName } from '@/lib/roles';
 import type { UserRole } from '@/lib/roles';
+import type { ScopeMode } from '@/lib/permissions/registry';
 
 declare module 'next-auth' {
   interface Session {
@@ -20,6 +21,24 @@ declare module 'next-auth' {
       avatarUrl: string | null;
       role: UserRole;
       accountKeys: string[];
+      /**
+       * Fully-qualified sector-role refs (`studio.designer`) from
+       * `UserSectorRole`. Carried on the token so `requirePermission()` doesn't
+       * hit the database on every guarded request; refreshed on the same
+       * 5-minute cycle as `role`, so a reassignment takes effect without a
+       * re-login. See docs/permissions-architecture.md.
+       */
+      sectorMode: ScopeMode;
+      /**
+       * Undefined only on a token minted before this field existed. An EMPTY
+       * ARRAY is meaningful and must survive: it means every sector role was
+       * deliberately revoked. Coercing `undefined` and `[]` together here would
+       * make "No access" in the Users screen resolve to the legacy default set
+       * — i.e. revoking all access would grant all access.
+       */
+      sectorRoles?: string[];
+      /** Sensitive capability grants, as `allow:<key>@<scope>` / `deny:...`. */
+      capabilities?: string[];
       originalUserId?: string | null;
     };
   }
@@ -32,6 +51,9 @@ declare module 'next-auth' {
     avatarUrl: string | null;
     role: UserRole;
     accountKeys: string[];
+    sectorMode: ScopeMode;
+    sectorRoles?: string[];
+    capabilities?: string[];
   }
 }
 
@@ -42,6 +64,9 @@ declare module 'next-auth/jwt' {
     avatarUrl: string | null;
     role: UserRole;
     accountKeys: string[];
+    sectorMode?: ScopeMode;
+    sectorRoles?: string[];
+    capabilities?: string[];
     defaultAccountSlug?: string | null;
     originalUserId?: string;
     _roleCheckedAt?: number;
@@ -106,6 +131,9 @@ const AUTH_USER_SELECT = {
   avatarUrl: true,
   role: true,
   accountKeys: true,
+  scopeMode: true,
+  sectorRoles: { select: { sector: true, role: true } },
+  capabilityGrants: { select: { capability: true, effect: true, scopeKey: true } },
 } as const;
 
 type AuthUserRow = {
@@ -116,7 +144,26 @@ type AuthUserRow = {
   avatarUrl: string | null;
   role: string;
   accountKeys: string;
+  scopeMode: string;
+  sectorRoles: { sector: string; role: string }[];
+  capabilityGrants: { capability: string; effect: string; scopeKey: string }[];
 };
+
+/** `studio.designer` from a {sector, role} row. */
+function toSectorRoleRefs(rows: { sector: string; role: string }[]): string[] {
+  return rows.map((r) => `${r.sector}.${r.role}`);
+}
+
+/**
+ * Capability grants flattened to `allow:<key>@<scope>` / `deny:<key>@<scope>`
+ * so the whole permission picture rides on the token as plain strings.
+ * `@` with an empty scope means everywhere.
+ */
+function toCapabilityStrings(
+  rows: { capability: string; effect: string; scopeKey: string }[],
+): string[] {
+  return rows.map((r) => `${r.effect === 'deny' ? 'deny' : 'allow'}:${r.capability}@${r.scopeKey ?? ''}`);
+}
 
 /**
  * Case-insensitive email lookup. The users API stores addresses lower-cased,
@@ -141,6 +188,9 @@ function toSessionUser(row: AuthUserRow) {
     avatarUrl: row.avatarUrl,
     role: row.role as UserRole,
     accountKeys: parseStoredAccountKeys(row.accountKeys),
+    sectorMode: (row.scopeMode === 'all' ? 'all' : 'listed') as ScopeMode,
+    sectorRoles: toSectorRoleRefs(row.sectorRoles),
+    capabilities: toCapabilityStrings(row.capabilityGrants),
   };
 }
 
@@ -224,6 +274,9 @@ export const authOptions: NextAuthOptions = {
 
         const user = await prisma.user.findUnique({
           where: { email: credentials.email },
+          // `password` on top of the shared select — this is the one place that
+          // needs the hash, and the relations feed the permission subject.
+          select: { ...AUTH_USER_SELECT, password: true },
         });
 
         if (!user) return null;
@@ -305,6 +358,9 @@ export const authOptions: NextAuthOptions = {
           token.title = seed.title ?? null;
           token.avatarUrl = seed.avatarUrl;
           token.role = seed.role;
+          token.sectorMode = seed.sectorMode ?? 'listed';
+          token.sectorRoles = seed.sectorRoles ?? [];
+          token.capabilities = seed.capabilities ?? [];
           const accountKeys = Array.isArray(seed.accountKeys) ? seed.accountKeys : [];
           token.accountKeys = accountKeys;
           if (seed.role === 'client' && accountKeys.length > 0) {
@@ -353,6 +409,11 @@ export const authOptions: NextAuthOptions = {
           token.role = imp.role;
           token.accountKeys = accountKeys;
           token.originalUserId = imp.originalUserId;
+          // Force the refresh block below to re-read for the NEW id in this
+          // same invocation. The impersonate payload carries no sector roles,
+          // so without this the session would wear the target's name and role
+          // while still holding the impersonator's permissions.
+          delete token._roleCheckedAt;
         }
 
         // Stop impersonation — revert to original user data
@@ -371,6 +432,9 @@ export const authOptions: NextAuthOptions = {
           token.role = rev.role;
           token.accountKeys = accountKeys;
           delete token.originalUserId;
+          // Same reason as above, in the other direction — reload the real
+          // user's permissions rather than keeping the impersonated ones.
+          delete token._roleCheckedAt;
         }
       }
 
@@ -383,10 +447,23 @@ export const authOptions: NextAuthOptions = {
         try {
           const freshUser = await prisma.user.findUnique({
             where: { id: token.id },
-            select: { role: true, accountKeys: true },
+            select: {
+              role: true,
+              accountKeys: true,
+              scopeMode: true,
+              sectorRoles: { select: { sector: true, role: true } },
+              capabilityGrants: {
+                select: { capability: true, effect: true, scopeKey: true },
+              },
+            },
           });
           if (freshUser) {
             token.role = freshUser.role as UserRole;
+            // Same cycle as `role`, so reassigning someone in Settings → Users
+            // takes effect within five minutes rather than at next sign-in.
+            token.sectorMode = freshUser.scopeMode === 'all' ? 'all' : 'listed';
+            token.sectorRoles = toSectorRoleRefs(freshUser.sectorRoles);
+            token.capabilities = toCapabilityStrings(freshUser.capabilityGrants);
             const freshKeys = parseStoredAccountKeys(freshUser.accountKeys);
             token.accountKeys = freshKeys;
             if (freshUser.role === 'client' && freshKeys.length > 0) {
@@ -430,6 +507,11 @@ export const authOptions: NextAuthOptions = {
       session.user.avatarUrl = token.avatarUrl ?? null;
       session.user.role = token.role;
       session.user.accountKeys = token.accountKeys;
+      session.user.sectorMode = token.sectorMode ?? 'listed';
+      // No `?? []` — see the Session type. An empty array and an absent field
+      // mean different things and the distinction has to reach the resolver.
+      session.user.sectorRoles = token.sectorRoles;
+      session.user.capabilities = token.capabilities;
       session.user.originalUserId = token.originalUserId ?? null;
       return session;
     },

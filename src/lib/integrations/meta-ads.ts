@@ -486,6 +486,9 @@ interface RawInsightRow {
   campaign_id?: string;
   campaign_name?: string;
   device_platform?: string;
+  /** Placement breakdown keys — present only when `breakdowns` requests them. */
+  publisher_platform?: string;
+  platform_position?: string;
   age?: string;
   gender?: string;
   impressions?: string;
@@ -494,6 +497,9 @@ interface RawInsightRow {
   cpc?: string;
   cpm?: string;
   spend?: string;
+  /** De-duplicated people reached, and impressions per person. Account level. */
+  reach?: string;
+  frequency?: string;
   actions?: InsightAction[];
   cost_per_action_type?: InsightAction[];
   action_values?: InsightAction[];
@@ -606,6 +612,18 @@ export interface MetaReportMetrics extends ConversionSummary {
   spend: number;
   cpm: number;
   cost_per_conversion: number;
+  /**
+   * People reached, de-duplicated, and average impressions per person.
+   *
+   * ACCOUNT LEVEL ONLY, and deliberately absent from the campaign/daily/device
+   * rows. Both are de-duplicated over the requested window, which makes them
+   * NON-ADDITIVE: the reach of two campaigns is not the sum of their reaches
+   * (the same person saw both), and a month's reach is not the sum of its days.
+   * Meta will happily return them per-breakdown; adding those numbers up is the
+   * single most common way an agency overstates how many people it reached.
+   */
+  reach: number;
+  frequency: number;
 }
 
 export interface MetaCampaignRow extends ConversionSummary {
@@ -625,6 +643,26 @@ export interface MetaDeviceRow {
   clicks: number;
   ctr: number;
   spend: number;
+}
+
+/**
+ * One publisher_platform × platform_position cell — "Instagram · Stories",
+ * "Facebook · Feed", "Audience Network · Classic".
+ *
+ * The most actionable cut Meta offers: it is what answers "should we turn off
+ * Audience Network", which until now meant leaving Loomi and opening Ads
+ * Manager.
+ */
+export interface MetaPlacementRow {
+  platform: string;
+  position: string;
+  label: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  spend: number;
+  cpm: number;
+  conversions: number;
 }
 
 export interface MetaDailyRow extends ConversionSummary {
@@ -650,6 +688,8 @@ const EMPTY_ACCOUNT_METRICS: MetaReportMetrics = {
   cpc: 0,
   spend: 0,
   cpm: 0,
+  reach: 0,
+  frequency: 0,
   conversions: 0,
   cost_per_conversion: 0,
   offline_leads: 0,
@@ -667,7 +707,7 @@ export async function getAccountMetrics(
   const rows = await metaInsights(cfg, adAccountId, {
     level: 'account',
     fields:
-      'impressions,clicks,ctr,cpc,spend,cpm,actions,cost_per_action_type,action_values',
+      'impressions,clicks,ctr,cpc,spend,cpm,reach,frequency,actions,cost_per_action_type,action_values',
     time_range: JSON.stringify({ since, until }),
   });
   const data = rows[0];
@@ -680,9 +720,60 @@ export async function getAccountMetrics(
     cpc: floatOf(data.cpc),
     spend: floatOf(data.spend),
     cpm: floatOf(data.cpm),
+    reach: intOf(data.reach),
+    frequency: floatOf(data.frequency),
     cost_per_conversion: costPerConversion(data.cost_per_action_type),
     ...summarizeConversions(data.actions, data.action_values),
   };
+}
+
+/** Human label for a Meta placement enum ("audience_network" → "Audience Network"). */
+function titleize(v: string): string {
+  return v
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+/**
+ * Placement breakdown — publisher_platform × platform_position.
+ *
+ * Meta returns a row per combination, including combinations with no delivery;
+ * those are dropped here rather than in the report, since a table of zero rows
+ * for placements the account never ran on is noise at every call site.
+ */
+export async function getPlacementPerformance(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaPlacementRow[]> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'account',
+    fields: 'impressions,clicks,ctr,spend,cpm,actions',
+    breakdowns: 'publisher_platform,platform_position',
+    time_range: JSON.stringify({ since, until }),
+  });
+
+  return rows
+    .map((data) => {
+      const platform = titleize(data.publisher_platform ?? 'unknown');
+      const position = titleize(data.platform_position ?? 'unknown');
+      return {
+        platform,
+        position,
+        label: `${platform} · ${position}`,
+        impressions: intOf(data.impressions),
+        clicks: intOf(data.clicks),
+        ctr: floatOf(data.ctr),
+        spend: floatOf(data.spend),
+        cpm: floatOf(data.cpm),
+        conversions: summarizeConversions(data.actions, undefined).conversions,
+      };
+    })
+    .filter((r) => r.impressions > 0 || r.spend > 0)
+    .sort((a, b) => b.spend - a.spend);
 }
 
 /** Per-campaign performance over [since, until]. */
@@ -808,6 +899,16 @@ interface CreativeBatchEntry {
 }
 
 /**
+ * NOT CURRENTLY CALLED. The Meta report route used to fetch this on every load
+ * and nothing ever rendered the result, so the call was removed (two Graph
+ * round-trips per report for a field no component read).
+ *
+ * Kept because the creative-performance section will want it — but note it
+ * pulls ad-level IMPRESSIONS ONLY plus a thumbnail, so that section needs the
+ * field list widened (spend, clicks, ctr, actions) before it can be built on
+ * this. See docs/reporting-redesign.md.
+ *
+
  * Ad creative thumbnails grouped by campaign id, for ads that delivered in
  * [since, until]. Best-effort and non-fatal: any failure returns {} so the
  * report still renders (Oz parity — getCampaignCreatives). Two extra ?ids=…

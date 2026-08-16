@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { getUserTeamIds } from '@/lib/services/teams';
+import { listCapabilities, listSectorRoles } from '@/lib/permissions/assignments';
+import { sectorRoleRef } from '@/lib/permissions/registry';
 
 function parseAccountKeys(raw: string): string[] {
   try {
@@ -17,7 +18,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('agency.users.view');
   if (error) return error;
 
   const { id } = await params;
@@ -43,9 +44,17 @@ export async function GET(
 
   const accountKeys = parseAccountKeys(user.accountKeys);
   const teamIds = await getUserTeamIds(id);
+  // Fully-qualified refs (`studio.designer`) rather than {sector, role} pairs —
+  // the client edits them as opaque strings and hands the same shape back.
+  const sectorRoles = (await listSectorRoles(id)).map((r) =>
+    sectorRoleRef(r.sector, r.role),
+  );
+  const capabilities = await listCapabilities(id);
   return NextResponse.json({
     ...user,
     accountKeys,
     teamIds,
+    capabilities,
+    sectorRoles,
   });
 }

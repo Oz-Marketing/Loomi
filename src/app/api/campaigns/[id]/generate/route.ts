@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   createCampaignEmailTemplate,
   getCampaignRow,
@@ -57,7 +58,7 @@ async function runPool<T>(items: T[], limit: number, worker: (item: T) => Promis
  * Server-Sent Events so the client can render a live "watch it build" UX.
  */
 export async function POST(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.campaigns.edit');
   if (error) return error;
 
   const { id } = await params;

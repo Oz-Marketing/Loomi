@@ -1,5 +1,6 @@
 import {
   BuildingStorefrontIcon,
+  ChartBarIcon,
   UsersIcon,
   UserGroupIcon,
   SwatchIcon,
@@ -252,6 +253,7 @@ export type SubaccountSectionKey =
   | 'domains'
   | 'contact-fields'
   | 'notifications'
+  | 'reports'
   | 'appearance';
 
 /**
@@ -310,6 +312,17 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
     group: 'sector',
     icon: TagIcon,
     visible: (s) => s.surface === 'studio',
+  },
+
+  // Which reports this sub-account's CLIENT users see. Reporting-only, and
+  // staff-only to reach: it needs `reporting.configure`, which no client role
+  // carries.
+  {
+    key: 'reports',
+    label: 'Reports',
+    group: 'sector',
+    icon: ChartBarIcon,
+    visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
   },
 
   // Notifications exist wherever a notification category does — studio and app,

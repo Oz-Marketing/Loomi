@@ -22,6 +22,7 @@ import type { StatusFilterValue } from '@/components/status-filter';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
 import {
   PlusIcon,
+  RectangleStackIcon,
   PlayIcon,
   PauseIcon,
   ArchiveBoxIcon,
@@ -205,10 +206,13 @@ function FlowsPageBody({
   subtitle,
   presetAccountKey,
   hideInstances = false,
+  extraCta,
 }: {
   scopeKey: string;
   subtitle: string;
   presetAccountKey: string | null;
+  /** Rendered alongside the page's own actions — the Templates switch. */
+  extraCta?: React.ReactNode;
   /** When true, drop rows that are deployed instances of a template
    *  (those have parentTemplateId set). The instances are still visible
    *  via the Adoption column on their parent template's row + via a
@@ -640,6 +644,7 @@ function FlowsPageBody({
         subtitle={subtitle}
         cta={
           <>
+            {extraCta}
             <ViewAnalyticsLink area="engagement" />
             {presetAccountKey ? (
               <AddTemplateButton
@@ -826,43 +831,60 @@ function FlowsPageBody({
   );
 }
 
-function AdminFlowsPage() {
-  return (
-    <FlowsPageBody
-      scopeKey="admin"
-      subtitle="Templates + standalone flows across all accounts"
-      presetAccountKey={null}
-      hideInstances
-    />
-  );
-}
-
-function AccountFlowsPage() {
-  const { accountKey, accountData } = useAccount();
-  const dealerName = accountData?.dealer || 'Your Sub-Account';
-
-  return (
-    <FlowsPageBody
-      scopeKey={accountKey ?? 'no-account'}
-      subtitle={`Email drip series for ${dealerName}`}
-      presetAccountKey={accountKey}
-    />
-  );
-}
-
+/**
+ * The sub-account's flows, with a switch into the shared TEMPLATE library.
+ *
+ * The template library (flows with no accountKey, which sub-accounts deploy
+ * instances from) used to be reachable only by putting the account switcher in
+ * agency scope. That scope is retired, so the library gets an explicit door
+ * instead — a switch, not a scope: nothing about the active sub-account changes
+ * when you look at it, and the button says which of the two you're in.
+ */
 export default function FlowsPage() {
-  const { isAdmin, isAccount } = useAccount();
+  const { isAccount, accountKey, accountData, userRole } = useAccount();
+  const canManageTemplates =
+    userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
+  const [showTemplates, setShowTemplates] = useState(false);
 
-  if (isAdmin) {
+  const templatesToggle = canManageTemplates ? (
+    <button
+      type="button"
+      onClick={() => setShowTemplates((v) => !v)}
+      aria-pressed={showTemplates}
+      className={`flex items-center gap-1.5 h-10 px-3 text-sm rounded-lg border transition-colors ${
+        showTemplates
+          ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+      }`}
+    >
+      <RectangleStackIcon className="w-4 h-4" />
+      {showTemplates ? 'Back to this sub-account' : 'Templates'}
+    </button>
+  ) : null;
+
+  if (showTemplates && canManageTemplates) {
     return (
       <AdminOnly>
-        <AdminFlowsPage />
+        <FlowsPageBody
+          scopeKey="templates"
+          subtitle="Flow templates every sub-account deploys from"
+          presetAccountKey={null}
+          hideInstances
+          extraCta={templatesToggle}
+        />
       </AdminOnly>
     );
   }
 
   if (isAccount) {
-    return <AccountFlowsPage />;
+    return (
+      <FlowsPageBody
+        scopeKey={accountKey ?? 'no-account'}
+        subtitle={`Email drip series for ${accountData?.dealer || 'Your Sub-Account'}`}
+        presetAccountKey={accountKey}
+        extraCta={templatesToggle}
+      />
+    );
   }
 
   return null;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   deleteSmsBlast,
   getSmsBlast,
@@ -12,7 +12,7 @@ interface RouteParams {
 
 /** GET /api/blasts/sms/[id] — fetch a single SMS campaign (incl. drafts). */
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin', 'client');
+  const { session, error } = await requirePermission(['studio.email.view', 'reporting.report.view']);
   if (error) return error;
 
   const { id } = await params;
@@ -34,7 +34,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
 /** PATCH /api/blasts/sms/[id] — merge-update a draft. */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;
@@ -99,7 +99,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
 
 /** DELETE /api/blasts/sms/[id] — hard-delete a Loomi SMS campaign. */
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;

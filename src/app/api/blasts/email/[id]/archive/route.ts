@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import {
   getEmailBlast,
   setEmailBlastArchived,
@@ -17,7 +17,7 @@ interface RouteParams {
  * un-archive instead (defaults to true).
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
 
   const { id } = await params;

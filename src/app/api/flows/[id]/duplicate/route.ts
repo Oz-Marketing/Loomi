@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { duplicateFlow, getFlow } from '@/lib/services/loomi-flows';
 
 // POST /api/flows/[id]/duplicate
@@ -24,12 +24,7 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { session, error } = await requireRole(
-    'developer',
-    'super_admin',
-    'admin',
-    'client',
-  );
+  const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
   const { id } = await context.params;

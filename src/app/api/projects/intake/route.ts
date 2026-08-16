@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as projects from '@/lib/services/projects';
 import { isBudgetChannel } from '@/lib/budget/channels';
 import { isValidPeriod } from '@/lib/services/budget';
@@ -32,7 +32,7 @@ function parseBudgetEntries(raw: unknown): BudgetEntry[] {
   return out;
 }
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.create');
   if (error) return error;
 
   const scope = getAccountScope(session!);

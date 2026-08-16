@@ -28,7 +28,7 @@ export const dynamic = 'force-dynamic';
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'leads', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

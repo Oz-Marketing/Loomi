@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as projects from '@/lib/services/projects';
 import { createCampaign } from '@/lib/services/campaigns';
 
@@ -13,7 +13,7 @@ import { createCampaign } from '@/lib/services/campaigns';
 const CAMPAIGN_KINDS = new Set(['email', 'sms', 'landing_page', 'form']);
 
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.task.edit');
   if (error) return error;
   const { id } = await params;
 

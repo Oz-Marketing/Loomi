@@ -140,15 +140,10 @@ export function ReportingTopBar({
         className="flex items-center justify-end gap-1 px-6"
         aria-label="Reporting utilities"
       >
-        <UtilityIconButton
-          title="Help & support"
-          onClick={() => {
-            window.open(
-              'mailto:support@loomilm.com?subject=Reporting%20help',
-              '_self',
-            );
-          }}
-        >
+        {/* The in-app help desk, same as Studio's. This used to be a mailto:,
+            which on a machine with no mail handler does nothing at all — the
+            button looked broken. The form files to the dev team either way. */}
+        <UtilityIconButton title="Help & support" onClick={openSupportModal}>
           <QuestionMarkCircleIcon className="h-5 w-5" />
         </UtilityIconButton>
 
@@ -165,6 +160,8 @@ export function ReportingTopBar({
           </UtilityIconButton>
           {unreadNotifications > 0 && (
             <span
+              /* 9px is deliberate and exempt from the type scale: the count
+                 sits inside a 14px dot, and anything larger overflows it. */
               className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[9px] font-bold leading-none text-white"
               aria-hidden
             >
@@ -229,7 +226,7 @@ export function ReportingTopBar({
                       {userEmail || 'No email'}
                     </p>
                     {canViewRoleBadge && (
-                      <span className="mt-1 inline-block rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--primary)]">
+                      <span className="mt-1 inline-block rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-[var(--primary)]">
                         {userRole}
                       </span>
                     )}

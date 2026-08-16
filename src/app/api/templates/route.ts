@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth, requireRole } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { requireAuth } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
@@ -128,7 +128,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('studio.templates.edit');
   if (error) return error;
 
   try {
@@ -181,7 +181,7 @@ export async function PUT(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('studio.templates.edit');
   if (error) return error;
 
   try {
@@ -258,7 +258,7 @@ async function findAvailableSlug(base: string): Promise<string> {
 }
 
 export async function DELETE(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { error } = await requirePermission('studio.templates.edit');
   if (error) return error;
 
   try {

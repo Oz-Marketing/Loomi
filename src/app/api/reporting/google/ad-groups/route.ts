@@ -8,7 +8,7 @@
  *   ?accountKey=…&campaign_id=123&start_date=…&end_date=…
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { requireReportingAccess } from '../../_lib/guard';
+import { requireReportingAccess, stripInternalCost } from '../../_lib/guard';
 import { canAccessAccount } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { GoogleAdsError, getGoogleCustomer, getAdGroupPerformance } from '@/lib/integrations/google-ads';
@@ -27,7 +27,7 @@ function monthStartIso(): string {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'google', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;
@@ -55,7 +55,10 @@ export async function GET(req: NextRequest) {
     const margin = account?.googleAdsMargin ?? 0;
     const { cfg, customerId } = await getGoogleCustomer(accountKey);
     const adGroups = await getAdGroupPerformance(cfg, customerId, campaignId, startDate, endDate);
-    return NextResponse.json({ adGroups: adGroups.map((a) => applyGoogleMargins(a, margin)) });
+    const payload = { adGroups: adGroups.map((a) => applyGoogleMargins(a, margin)) };
+    return NextResponse.json(
+      ctx.canViewSpend ? payload : stripInternalCost(payload),
+    );
   } catch (err) {
     if (err instanceof GoogleAdsError) {
       const status = err.code === 'api_error' ? 502 : 400;

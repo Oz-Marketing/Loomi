@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { requireAuth, requireRole, forbidden } from '@/lib/api-auth';
+import { requireAuth, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import * as listService from '@/lib/services/contact-lists';
@@ -38,7 +39,7 @@ export async function GET(_req: Request, ctx: RouteContext) {
 }
 
 export async function PATCH(req: Request, ctx: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const { id } = await ctx.params;
@@ -98,7 +99,7 @@ export async function PATCH(req: Request, ctx: RouteContext) {
 }
 
 export async function DELETE(_req: Request, ctx: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  const { session, error } = await requirePermission('studio.segments.edit');
   if (error) return error;
 
   const { id } = await ctx.params;

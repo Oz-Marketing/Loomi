@@ -20,8 +20,6 @@ import { prisma } from '@/lib/prisma';
 import {
   Ga4Error,
   getGa4Config,
-  resolveGa4Property,
-  resolveGa4Platform,
   getTrafficOverview,
   getTrafficSources,
   getTopPages,
@@ -30,6 +28,7 @@ import {
   getSourceMedium,
   getVdpViews,
 } from '@/lib/integrations/ga4';
+import { resolveGa4Property, resolveGa4Platform } from '@/lib/integrations/account-mapping';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,7 +43,7 @@ function monthStartIso(): string {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'websites', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;
@@ -68,7 +67,7 @@ export async function GET(req: NextRequest) {
         'not_configured',
       );
     }
-    const propertyId = resolveGa4Property(accountKey);
+    const propertyId = await resolveGa4Property(accountKey);
     if (!propertyId) {
       throw new Ga4Error('No GA4 property is mapped to this account yet.', 'no_property');
     }
@@ -85,7 +84,7 @@ export async function GET(req: NextRequest) {
     ]);
 
     // Breakdown sections — non-fatal (render the rest if one fails).
-    const platform = resolveGa4Platform(accountKey);
+    const platform = await resolveGa4Platform(accountKey);
     const [sources, topPages, devices, sourceMedium, vdp] = await Promise.all([
       getTrafficSources(cfg, propertyId, startDate, endDate).catch(() => []),
       getTopPages(cfg, propertyId, startDate, endDate, 10).catch(() => []),

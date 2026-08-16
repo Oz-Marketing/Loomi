@@ -121,7 +121,9 @@ export function CoopPackEditor({
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[200] flex items-start justify-center overflow-y-auto bg-black/60 p-4" onClick={() => !saving && onClose()}>
+    // z-260: opened from the Co-op Guidelines tab, which lives inside the
+    // Agency Settings modal (z-200) — at 200 this would sit behind it.
+    <div className="fixed inset-0 z-[260] flex items-start justify-center overflow-y-auto bg-black/60 p-4" onClick={() => !saving && onClose()}>
       <div
         className="my-8 w-full max-w-3xl rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-6 shadow-2xl backdrop-blur-xl"
         onClick={(e) => e.stopPropagation()}

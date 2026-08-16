@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { AccountsList } from '@/components/accounts-list';
+import { SubAccountDetailPage } from '@/components/subaccount-detail';
+import { UserDetail } from '@/components/users/user-detail';
+import { NewUser } from '@/components/users/new-user';
 import { UsersTab } from '@/components/settings/users-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
@@ -33,11 +36,31 @@ import {
  * by it are told explicitly that they're in agency scope (`agencyScope` on
  * UsersTab, no `restrictKeys` on the sub-account list) — the settings here are
  * fleet-wide regardless of which sub-account you happen to be sitting in.
+ *
+ * Drill-ins stay inside the overlay. Opening a sub-account or a user used to
+ * push a route, which closed the modal in all but name: the record appeared on
+ * a page behind it, in the app shell this tier deliberately doesn't live in.
+ * They render here instead, over the tab they came from, and their back arrows
+ * return to the list.
  */
+
+/** What's open on top of the active tab, if anything. */
+type Drill =
+  | { kind: 'subaccount'; key: string }
+  | { kind: 'user'; id: string }
+  | { kind: 'new-user' };
+
 export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
   const groups = useAgencySettingsNav();
   const firstKey = groups[0]?.items[0]?.key;
   const [active, setActive] = useState<SettingsTabKey | undefined>(firstKey);
+  const [drill, setDrill] = useState<Drill | null>(null);
+
+  /** Switching tabs always lands on the list, never a stale drill-in. */
+  const selectTab = (key: SettingsTabKey) => {
+    setDrill(null);
+    setActive(key);
+  };
 
   // Settle on the first available tab once the registry resolves (it depends on
   // role + loaded accounts, so the first render can legitimately be empty).
@@ -97,7 +120,7 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
                 <button
                   key={item.key}
                   type="button"
-                  onClick={() => setActive(item.key)}
+                  onClick={() => selectTab(item.key)}
                   className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
                     item.key === active
                       ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
@@ -159,17 +182,48 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            {active === 'subaccounts' && (
+            {/* Drill-ins render over the tab they came from, so the tier keeps
+                its rail and its close button and the app shell behind is never
+                navigated. */}
+            {drill?.kind === 'subaccount' && (
+              <SubAccountDetailPage
+                basePath="/settings/subaccounts"
+                accountKeyProp={drill.key}
+                onBack={() => setDrill(null)}
+              />
+            )}
+            {drill?.kind === 'user' && (
+              <UserDetail userId={drill.id} onBack={() => setDrill(null)} />
+            )}
+            {drill?.kind === 'new-user' && (
+              // Agency Settings lists the agency's own people, so a new one
+              // starts as an admin — created as a Client it would save and
+              // immediately disappear from the roster it was added to.
+              <NewUser
+                defaultRole="admin"
+                onCancel={() => setDrill(null)}
+                onCreated={(userId) => setDrill({ kind: 'user', id: userId })}
+              />
+            )}
+
+            {!drill && active === 'subaccounts' && (
               // No restrictKeys: agency settings span the whole fleet even when
               // the surrounding page is scoped to one org or sub-account.
               <AccountsList
                 listPath="/settings/subaccounts"
                 detailBasePath="/settings/subaccounts"
                 restrictKeys={undefined}
+                onOpenAccount={(key) => setDrill({ kind: 'subaccount', key })}
+                onOpenUser={(id) => setDrill({ kind: 'user', id })}
+                onCreateUser={() => setDrill({ kind: 'new-user' })}
               />
             )}
-            {active === 'users' && (
-              <UsersTab agencyScope actionSlotId="agency-settings-title-actions" />
+            {!drill && active === 'users' && (
+              <UsersTab
+                agencyScope
+                onOpenUser={(id) => setDrill({ kind: 'user', id })}
+                onCreateUser={() => setDrill({ kind: 'new-user' })}
+              />
             )}
             {active === 'teams' && <TeamsTab />}
             {active === 'contact-field-blueprints' && <CustomFieldBlueprintsTab />}

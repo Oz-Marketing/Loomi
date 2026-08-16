@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
 
 /**
@@ -13,7 +13,7 @@ import * as budget from '@/lib/services/budget';
  * to a dedicated budget-admin role open, and it's a one-line change here.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.budget.view');
   if (error) return error;
 
   const scope = getAccountScope(session!);
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.budget.edit');
   if (error) return error;
 
   const scope = getAccountScope(session!);

@@ -12,7 +12,8 @@
  * safe, not the transport.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, canAccessAccount, forbidden, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { launchToMeta } from '@/lib/ad-generator/automation/launch-meta';
@@ -24,7 +25,7 @@ export const maxDuration = 300;
 export async function POST(req: NextRequest) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   // Publishing spends money. Admin-gated, and the launch records who asked.
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.launch');
   if (error) return error;
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

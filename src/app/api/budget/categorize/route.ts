@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
-import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { getAccountScope, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { isBudgetLineType } from '@/lib/budget/channels';
 import * as budget from '@/lib/services/budget';
 
@@ -14,7 +14,7 @@ import * as budget from '@/lib/services/budget';
  * alone, which nobody sorts one row at a time.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.budget.view');
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { session, error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requirePermission('projects.budget.edit');
   if (error) return error;
 
   const body = await req.json().catch(() => ({}));

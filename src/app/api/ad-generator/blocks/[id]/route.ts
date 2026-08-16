@@ -6,7 +6,8 @@
  * only be edited/deleted by someone who can access that account.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -28,7 +29,7 @@ function blockKeys(block: { accountKey: string | null; accountKeys: string | nul
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
   const session = await getAuthSession();
   const { id } = await params;
@@ -85,7 +86,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
   const session = await getAuthSession();
   const { id } = await params;

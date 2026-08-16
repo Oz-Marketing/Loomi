@@ -24,6 +24,7 @@ import {
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
+import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
@@ -94,6 +95,7 @@ type DetailTab =
   | 'integrations'
   | 'users'
   | 'notifications'
+  | 'reports'
   | 'appearance';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
@@ -158,15 +160,27 @@ interface SubAccountDetailPageProps {
   settingsMode?: boolean;
   /** Account key to use (for settings mode, where there's no :key route param) */
   accountKeyProp?: string;
+  /**
+   * Rendered inside the Agency Settings modal rather than on a route. The
+   * account comes from `accountKeyProp` instead of the URL, and every exit —
+   * the back arrow, a delete — calls `onBack` instead of navigating, which
+   * would leave the user on a page behind the overlay.
+   */
+  onBack?: () => void;
 }
 
-export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }: SubAccountDetailPageProps) {
+export function SubAccountDetailPage({
+  basePath,
+  settingsMode,
+  accountKeyProp,
+  onBack,
+}: SubAccountDetailPageProps) {
   const params = useParams();
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
-  const key = settingsMode ? (accountKeyProp || '') : (params.key as string);
+  const key = settingsMode || accountKeyProp ? (accountKeyProp || '') : (params.key as string);
   const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
@@ -175,6 +189,14 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const settingsSections = useSubaccountSections();
   // Which integration card is open in the Integrations tab (null = no modal).
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
+  /**
+   * A provider the Reports tab asked us to open. Held here rather than in the
+   * cards because the request crosses tabs: the button lives under Reports and
+   * the modal under Integrations, so we switch tab first and hand the provider
+   * down.
+   */
+  const [pendingIntegration, setPendingIntegration] = useState<string | null>(null);
+
   const [savingIntegration, setSavingIntegration] = useState(false);
   // Close the integration modal on Escape.
   useEffect(() => {
@@ -598,7 +620,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       const res = await fetch(`/api/accounts?key=${encodeURIComponent(key)}`, { method: 'DELETE' });
       if (res.ok) {
         await refreshAccountList();
-        router.push(basePath);
+        if (onBack) onBack();
+        else router.push(basePath);
       } else {
         toast.error('Failed to delete');
       }
@@ -689,11 +712,19 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     const notFoundEl = (
       <div className="text-center py-16">
         <p className="text-[var(--muted-foreground)]">Sub-account not found</p>
-        {!settingsMode && (
+        {!settingsMode && (onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline"
+          >
+            Back to Sub-Accounts
+          </button>
+        ) : (
           <Link href={basePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
             Back to Sub-Accounts
           </Link>
-        )}
+        ))}
       </div>
     );
     return settingsMode ? notFoundEl : <AdminOnly>{notFoundEl}</AdminOnly>;
@@ -725,6 +756,20 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     } else {
       setActiveTab(tabKey);
     }
+  };
+
+  /**
+   * Jump from the Reports tab to the integration that report needs.
+   *
+   * Goes through `handleTabClick` rather than `setActiveTab`: in settings mode
+   * the active tab is synced from the URL, so setting state alone gets undone
+   * on the next sync and the click appears to do nothing.
+   */
+  const openIntegration = (provider: string) => {
+    handleTabClick('integrations');
+    // Meta's modal is owned here; the rest belong to ReportingIntegrationCards.
+    if (provider === 'facebook') setActiveIntegration('facebook');
+    else setPendingIntegration(provider);
   };
 
   const content = (
@@ -809,12 +854,23 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
           </div>
         ) : (
           <div className="page-sticky-header flex items-center gap-3 mb-6">
-            <Link
-              href={backHref}
-              className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-            >
-              <ArrowLeftIcon className="w-4 h-4" />
-            </Link>
+            {onBack ? (
+              <button
+                type="button"
+                onClick={onBack}
+                aria-label="Back to Sub-Accounts"
+                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+              </button>
+            ) : (
+              <Link
+                href={backHref}
+                className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+              </Link>
+            )}
             <AccountAvatar
               name={dealer || key}
               accountKey={key}
@@ -1416,7 +1472,13 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             </button>
 
             {key && <CrmIntegrationCards accountKey={key} />}
-            {key && <ReportingIntegrationCards accountKey={key} />}
+            {key && (
+              <ReportingIntegrationCards
+                accountKey={key}
+                openProvider={pendingIntegration}
+                onOpenProviderHandled={() => setPendingIntegration(null)}
+              />
+            )}
           </div>
         )}
 
@@ -1588,6 +1650,13 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             surface. Admin-level blueprints live at /settings under the
             top-level Field Blueprints tab. */}
         {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
+
+        {/* ════════════ REPORTS TAB (settings mode only) ════════════
+            Which reports this sub-account's CLIENT users see. Narrowing only —
+            staff always see everything their role allows. */}
+        {settingsMode && activeTab === 'reports' && (
+          <ReportAccessTab accountKey={key} onIntegrate={openIntegration} />
+        )}
 
         {/* ════════════ NOTIFICATIONS TAB (settings mode only) ════════════
             Personal delivery preferences, filtered to the categories that

@@ -22,7 +22,7 @@ import { useTheme } from '@/contexts/theme-context';
 import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { DevImpersonate } from '@/components/dev-impersonate';
-import { AI_ASSIST_OPEN_EVENT, openSupportModal } from '@/lib/ui-events';
+import { openSupportModal } from '@/lib/ui-events';
 import { ChangelogPanel } from '@/components/changelog-panel';
 import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
@@ -181,12 +181,11 @@ export function TopUtilityBar() {
           <kbd className="hidden sm:inline text-[10px] rounded border border-[var(--border)] px-1.5 py-0.5">&#8984;K</kbd>
         </button>
 
-        <UtilityIconButton
-          title="Help"
-          onClick={() => {
-            window.dispatchEvent(new Event(AI_ASSIST_OPEN_EVENT));
-          }}
-        >
+        {/* The help desk. This is the one door to it now — the sidebar's
+            "Get Help" footer button is gone, so the form opens from the same
+            utility bar as every other cross-app tool. The AI assistant keeps
+            its own floating bubble. */}
+        <UtilityIconButton title="Help &amp; support" onClick={openSupportModal}>
           <QuestionMarkCircleIcon className="w-5 h-5" />
         </UtilityIconButton>
 

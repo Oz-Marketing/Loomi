@@ -83,7 +83,7 @@ function historicalCounts(campaigns: EmailBlast[]): EmailCounts {
 }
 
 export async function GET(req: NextRequest) {
-  const { ctx, error } = await requireReportingAccess();
+  const { ctx, error } = await requireReportingAccess({ report: 'engagement', req: req });
   if (error) return error;
 
   const sp = req.nextUrl.searchParams;

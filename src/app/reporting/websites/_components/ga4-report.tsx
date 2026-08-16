@@ -13,14 +13,16 @@ import {
   UsersIcon,
   UserPlusIcon,
   EyeIcon,
-  ArrowTrendingDownIcon,
   ClockIcon,
+  ArrowTrendingDownIcon,
   GlobeAltIcon,
   DevicePhoneMobileIcon,
   TruckIcon,
   FunnelIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
+  LinkSlashIcon,
+  CheckBadgeIcon,
 } from '@heroicons/react/24/outline';
 import {
   fetcher,
@@ -34,6 +36,8 @@ import {
   LoadingState,
   DataTable,
 } from '../../ads/_components/shared';
+import { connectTarget } from '../../_components/connect-targets';
+import type { ReportLens } from '../../_components/lens';
 import { Ga4TrendChart, Ga4ChannelDonut } from './ga4-charts';
 
 interface Overview {
@@ -43,6 +47,9 @@ interface Overview {
   pageViews: number;
   bounceRate: number;
   avgSessionDuration: number;
+  /** GA4's 2024 rename of "conversions" — form fills, calls, VDP milestones. */
+  keyEvents: number;
+  keyEventRate: number;
 }
 interface TrendPoint {
   date: string;
@@ -53,6 +60,7 @@ interface SourceRow {
   channel: string;
   sessions: number;
   users: number;
+  keyEvents: number;
 }
 interface PageRow {
   title: string;
@@ -109,11 +117,13 @@ export function Ga4Report({
   from,
   to,
   isDark,
+  lens,
 }: {
   accountKey: string;
   from: string;
   to: string;
   isDark: boolean;
+  lens: ReportLens;
 }) {
   const { data, error, isLoading } = useSWR<Ga4Data, Error & { code?: string }>(
     `/api/reporting/ga4?accountKey=${encodeURIComponent(accountKey)}&start_date=${from}&end_date=${to}`,
@@ -122,17 +132,29 @@ export function Ga4Report({
 
   if (isLoading) return <LoadingState />;
   if (error) {
-    const body =
-      error.code === 'no_property'
-        ? 'No GA4 property is mapped to this account yet. Map it on the server, then refresh.'
-        : error.code === 'not_configured'
-          ? "Google Analytics isn't configured on the server yet."
-          : error.message;
+    // An unmapped account is a SETUP state, not a failure: an agency user can
+    // fix it in two clicks and a client should not be shown a red panel about
+    // our configuration. `not_configured` stays an error — that one is a
+    // missing server credential, with no per-account fix to link to.
+    if (error.code === 'no_property') {
+      return (
+        <EmptyState
+          icon={LinkSlashIcon}
+          title="Google Analytics not connected"
+          body="No GA4 property is linked to this account yet, so there are no website numbers to show."
+          connect={connectTarget('ga4', accountKey)}
+        />
+      );
+    }
     return (
       <EmptyState
         icon={ExclamationTriangleIcon}
         title="Couldn't load website analytics"
-        body={body}
+        body={
+          error.code === 'not_configured'
+            ? "Google Analytics isn't configured on the server yet."
+            : error.message
+        }
         tone="error"
       />
     );
@@ -140,15 +162,40 @@ export function Ga4Report({
   if (!data) return null;
 
   const o = data.overview;
+  const team = lens === 'team';
 
   return (
     <div className="mt-8 space-y-8">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
-        <Kpi icon={CursorArrowRaysIcon} label="Sessions" value={num(o.sessions)} tone="primary" />
-        <Kpi icon={UsersIcon} label="Users" value={num(o.totalUsers)} tone="sky" />
-        <Kpi icon={UserPlusIcon} label="New users" value={num(o.newUsers)} tone="emerald" />
-        <Kpi icon={EyeIcon} label="Page views" value={num(o.pageViews)} tone="violet" />
-        <Kpi icon={ArrowTrendingDownIcon} label="Bounce rate" value={pctText(o.bounceRate * 100)} tone="amber" />
+      {/* Four across, not six: with key events added there are seven headline
+          metrics, and a six-wide grid strands the seventh alone on its own row.
+          4 + 3 also gives each tile enough width that a two-word label
+          ("Bounce rate", "Avg session") stops truncating. */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        <Kpi
+          icon={CheckBadgeIcon}
+          label="Key events"
+          value={num(o.keyEvents)}
+          secondary={
+            o.keyEvents > 0
+              ? `${pctText(o.keyEventRate * 100)} of sessions`
+              : 'none configured in GA4'
+          }
+          tone="primary"
+        />
+        <Kpi icon={CursorArrowRaysIcon} label="Sessions" value={num(o.sessions)} tone="sky" />
+        <Kpi icon={UsersIcon} label="Users" value={num(o.totalUsers)} tone="emerald" />
+        <Kpi icon={UserPlusIcon} label="New users" value={num(o.newUsers)} tone="violet" />
+        <Kpi icon={EyeIcon} label="Page views" value={num(o.pageViews)} tone="amber" />
+        {/* GA4 renamed this metric's replacement `engagementRate` and treats
+            bounce as its inverse, but bounce rate is still what a dealer asks
+            for by name — so it stays. Swapping to engaged sessions is a
+            deliberate, separate change (Tier 2), not a silent one. */}
+        <Kpi
+          icon={ArrowTrendingDownIcon}
+          label="Bounce rate"
+          value={pctText(o.bounceRate * 100)}
+          tone="zinc"
+        />
         <Kpi icon={ClockIcon} label="Avg session" value={duration(o.avgSessionDuration)} tone="zinc" />
       </div>
 
@@ -161,9 +208,16 @@ export function Ga4Report({
       </Section>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Section title="Channels" subtitle="by sessions" icon={GlobeAltIcon}>
+        <Section title="Channels" subtitle="sessions & key events" icon={GlobeAltIcon}>
           {data.sources.length ? (
-            <Ga4ChannelDonut items={data.sources.map((s) => ({ label: s.channel, value: s.sessions }))} isDark={isDark} />
+            <>
+              <Ga4ChannelDonut items={data.sources.map((s) => ({ label: s.channel, value: s.sessions }))} isDark={isDark} />
+              <DataTable
+                head={['Channel', 'Sessions', 'Users', 'Key events']}
+                rows={data.sources.map((s) => [s.channel, num(s.sessions), num(s.users), num(s.keyEvents)])}
+                maxRows={6}
+              />
+            </>
           ) : (
             <Muted>No channel data for this range.</Muted>
           )}
@@ -210,6 +264,11 @@ export function Ga4Report({
         )}
       </Section>
 
+      {/* TEAM ONLY. Channels above already answer "where did traffic come
+          from" for a client. This is the reconciliation cut — where (not set),
+          self-referrals and bot traffic surface, and where GA4 gets tied back
+          to the ad platforms. It is a debugging tool, not a result. */}
+      {team && (
       <Section title="Source / medium" subtitle="top 25 by sessions" icon={FunnelIcon}>
         {data.sourceMedium.length ? (
           <DataTable
@@ -228,8 +287,11 @@ export function Ga4Report({
           <Muted>No source/medium data for this range.</Muted>
         )}
       </Section>
+      )}
 
-      <p className="text-[11px] text-[var(--muted-foreground)]">GA4 property {data.propertyId}</p>
+      {team && (
+        <p className="text-[11px] text-[var(--muted-foreground)]">GA4 property {data.propertyId}</p>
+      )}
     </div>
   );
 }

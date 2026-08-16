@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requireAllPermissions } from '@/lib/permissions/require';
 import {
   getEmailBlast,
   scheduleEmailBlastDraft,
@@ -44,7 +44,12 @@ function parseDate(value: unknown): Date | null {
  * recipient rows. pg-boss fires it once scheduledFor passes.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  // Scheduling IS sending — pg-boss fires it unattended once the time passes,
+  // so this needs the same capability as an immediate send.
+  const { session, error } = await requireAllPermissions([
+    'studio.email.edit',
+    'blast.send',
+  ]);
   if (error) return error;
 
   const { id } = await params;

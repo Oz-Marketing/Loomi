@@ -303,7 +303,7 @@ Each phase ships independently and is safe to stop after.
 | 1 | Add the two tables + `scopeMode`, the assignment data layer, and the coarse backfill (see below) | None — old checks still authoritative, and nothing reads the new rows. | **Done** |
 | 2 | Sector-role assignment UI in the Users tab, so roles can be set by hand. Assign roles at user-creation time. | None — assignments recorded, not yet enforced. | **Done** |
 | 3 | Migrate the 251 call sites to permission keys, then flip enforcement one sector at a time behind `PERMISSIONS_ENFORCE_*`, Projects first. | Enforcement begins. | **Migration complete** (252/252, zero `requireRole` left). Flags still all off. |
-| 4 | Sensitive capability grants + per-report allowlists + audit log | Blast/PII/finance locked down. | **Capabilities + audit done.** Per-report allowlists still to do. |
+| 4 | Sensitive capability grants + per-report allowlists + audit log | Blast/PII/finance locked down. | **Done.** Capability flag still off. |
 
 ### The access delta, and why it is checked in code
 
@@ -560,8 +560,18 @@ two are checked in that order:
 Staff bypass the allowlist entirely: it describes what a dealer is shown, not
 what an account manager may look at.
 
-A missing row means the registry's `defaultForClients`, not "off" — so adding a
-report doesn't require writing a row for every account first. And
+**The allowlist is opt-OUT.** Every client-eligible report defaults to visible,
+so deploying it changes nothing; it does something only once someone turns a
+report off for a specific sub-account.
+
+An earlier draft defaulted Call Tracking, Billboards and Direct Mail ROI to
+*hidden*, on the theory that most dealers don't buy them. That would have
+silently removed three reports from every live client the day this shipped —
+a narrowing nobody asked for, and not one anyone would trace back to a
+permissions release. A test now pins the no-op default.
+
+A missing row therefore means the registry's `defaultForClients`, not "off", so
+adding a report doesn't require writing a row for every account first. And
 `CLIENT_ELIGIBLE_REPORTS` only contains reports gated by `reporting.report.view`,
 so no allowlist row can ever surface Budget or Executive however it's set. A test
 pins that.
@@ -571,10 +581,38 @@ permission, a default-off report 403s on the allowlist with a *different*
 message, an explicit row turns either direction on or off, and staff see all of
 it regardless.
 
+### Editing it
+
+**Reporting → sub-account → Reports**, behind `reporting.configure`. Budget and
+Executive never appear in the list, so the panel cannot be used to expose them,
+and a client hitting the endpoint gets a 403 naming the permission.
+
+Saving writes an explicit row for *every* eligible report, including the ones
+left at their default — storing only the differences would mean a later change
+to `defaultForClients` silently re-enabled something a dealer had switched off.
+Only actual changes are audit-logged.
+
+### The nav filters itself
+
+`GET /api/reporting/my-reports` returns what the caller can open on an account,
+so the sidebar doesn't advertise doors that won't open — and doesn't
+reimplement the permission and allowlist rules in the browser, where they would
+drift. It isn't a security boundary; each report route runs the same check.
+
+Two traps, both now covered by tests:
+
+- **The nav's ad-platform key is not the report key.** `/ads/meta` is the report
+  called `ads`; `/ads/blasts` is `engagement`. Slicing the platform off the href
+  and using it as a report key hid Meta Ads from every client, and the first
+  version of the mapping test missed it because that branch bypassed the map.
+- **An unmapped destination is treated as not gated.** A link that 403s is a
+  better failure than a report that silently vanishes because someone added a
+  route and forgot the map. A test fails CI if a Digital Ads platform has no
+  entry. `/ads/ad-templates` is deliberately ungated — it has no registry entry
+  and is visible today.
+
 ### Still to do
 
-- The allowlist has **no UI yet** — rows are set directly in the database. The
-  sub-account settings screen is the natural home.
 - The end-to-end cost strip could not be exercised locally: the ad reports need
   Meta/Google credentials this machine doesn't have. `stripInternalCost` is unit
   tested and `canViewSpend` was verified false for a client and true for staff,

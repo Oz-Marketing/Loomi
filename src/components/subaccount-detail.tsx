@@ -24,6 +24,7 @@ import {
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
+import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
@@ -94,6 +95,7 @@ type DetailTab =
   | 'integrations'
   | 'users'
   | 'notifications'
+  | 'reports'
   | 'appearance';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
@@ -1620,6 +1622,13 @@ export function SubAccountDetailPage({
             surface. Admin-level blueprints live at /settings under the
             top-level Field Blueprints tab. */}
         {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
+
+        {/* ════════════ REPORTS TAB (settings mode only) ════════════
+            Which reports this sub-account's CLIENT users see. Narrowing only —
+            staff always see everything their role allows. */}
+        {settingsMode && activeTab === 'reports' && (
+          <ReportAccessTab accountKey={key} />
+        )}
 
         {/* ════════════ NOTIFICATIONS TAB (settings mode only) ════════════
             Personal delivery preferences, filtered to the categories that

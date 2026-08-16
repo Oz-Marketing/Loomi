@@ -55,15 +55,20 @@ describe('report registry', () => {
 
 describe('resolveClientReports', () => {
   it('falls back to the registry default when there is no row', () => {
+    // Asserted against the registry rather than a hard-coded expectation, so
+    // this keeps testing the fallback itself even if a default ever changes.
     const resolved = resolveClientReports([]);
-    // Meta Ads is on by default; Call Tracking is not.
-    expect(resolved.has('ads')).toBe(true);
-    expect(resolved.has('call_tracking')).toBe(false);
+    for (const report of CLIENT_ELIGIBLE_REPORTS) {
+      expect(resolved.has(report.key), report.key).toBe(report.defaultForClients);
+    }
   });
 
-  it('lets an explicit row switch a default-off report on', () => {
-    const resolved = resolveClientReports([{ reportKey: 'call_tracking', enabled: true }]);
-    expect(resolved.has('call_tracking')).toBe(true);
+  it('lets an explicit row override the default in both directions', () => {
+    expect(
+      resolveClientReports([{ reportKey: 'call_tracking', enabled: true }]).has(
+        'call_tracking',
+      ),
+    ).toBe(true);
   });
 
   it('lets an explicit row switch a default-on report off', () => {
@@ -84,5 +89,29 @@ describe('resolveClientReports', () => {
   it('ignores a row for a report key that no longer exists', () => {
     const resolved = resolveClientReports([{ reportKey: 'retired_report', enabled: true }]);
     expect([...resolved]).not.toContain('retired_report');
+  });
+});
+
+describe('deploying the allowlist changes nothing', () => {
+  /**
+   * The allowlist is opt-OUT. An account with no stored rows must resolve to
+   * exactly what its clients can see today, or shipping this quietly removes
+   * reports from live dealers — and "Call Tracking vanished" is not a symptom
+   * anyone would trace back to a permissions release.
+   */
+  it('shows every client-eligible report when no rows are stored', () => {
+    const resolved = resolveClientReports([]);
+    for (const report of CLIENT_ELIGIBLE_REPORTS) {
+      expect(resolved.has(report.key), `${report.key} must default to visible`).toBe(true);
+    }
+    expect(resolved.size).toBe(CLIENT_ELIGIBLE_REPORTS.length);
+  });
+
+  it('still lets an explicit row turn one off', () => {
+    const resolved = resolveClientReports([
+      { reportKey: 'call_tracking', enabled: false },
+    ]);
+    expect(resolved.has('call_tracking')).toBe(false);
+    expect(resolved.has('ads')).toBe(true);
   });
 });

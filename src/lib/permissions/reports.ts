@@ -50,8 +50,13 @@ export type ReportDefinition = {
   /**
    * Whether a client sees it when the account has no explicit allowlist row.
    *
-   * `false` here is not a permission check — it's the sensible default for a
-   * report most dealers don't buy. An explicit row can still switch it on.
+   * TRUE for every client-eligible report, on purpose. Clients can see all of
+   * them today, so anything else would make deploying this change quietly
+   * remove reports from live dealers — a narrowing nobody asked for and nobody
+   * would attribute to a permissions release.
+   *
+   * The allowlist is opt-OUT: it does nothing until someone turns something off
+   * for a specific sub-account.
    */
   defaultForClients: boolean;
 };
@@ -72,10 +77,12 @@ export const REPORTS: ReportDefinition[] = [
   { key: 'service_retention', label: 'Service Retention', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'heatmap', label: 'Customer Heatmap', permission: 'reporting.report.view', defaultForClients: true },
 
-  // Bought by some dealers, not most — off unless the account says otherwise.
-  { key: 'call_tracking', label: 'Call Tracking', permission: 'reporting.report.view', defaultForClients: false },
-  { key: 'billboards', label: 'Billboards', permission: 'reporting.report.view', defaultForClients: false },
-  { key: 'direct_mail', label: 'Direct Mail ROI', permission: 'reporting.report.view', defaultForClients: false },
+  // Bought by some dealers, not most — the obvious ones to switch off per
+  // account. Still default ON: they're visible today, and this release must not
+  // be what takes them away.
+  { key: 'call_tracking', label: 'Call Tracking', permission: 'reporting.report.view', defaultForClients: true },
+  { key: 'billboards', label: 'Billboards', permission: 'reporting.report.view', defaultForClients: true },
+  { key: 'direct_mail', label: 'Direct Mail ROI', permission: 'reporting.report.view', defaultForClients: true },
 
   // Internal. The permission already excludes clients — `defaultForClients:
   // false` is belt-and-braces so an allowlist row can't accidentally expose one.

@@ -120,10 +120,27 @@ export interface IngestContactsOptions {
   accountKey: string;
   /**
    * Batch-level default source (e.g. "oz-reports"). Applied to any row
-   * that doesn't carry its own `source`.
+   * that doesn't carry its own `source` — UNLESS it names the pipeline rather
+   * than a marketing source; see `isPipelineSource`.
    */
   source?: string;
   contacts: IngestContactInput[];
+}
+
+/**
+ * Is this "source" the name of an ingest pipeline rather than a marketing
+ * source a dealer would recognise?
+ *
+ * The bridge labels each batch by feed — `oz-reports`, `oz-reports:automotive`,
+ * `oz-reports:leads`. Those describe how a row reached Loomi, not where the
+ * customer came from, and they must never reach `Contact.source`.
+ *
+ * A prefix match rather than an exact list, so a new feed suffix is covered the
+ * day it appears instead of the day someone notices it in a client's report. If
+ * a second bridge is ever added, add its namespace here.
+ */
+export function isPipelineSource(value: string | null | undefined): boolean {
+  return /^oz-reports(:|$)/i.test((value ?? '').trim());
 }
 
 const MAX_ISSUES_RETURNED = 50;
@@ -198,7 +215,19 @@ function normalise(
     }
   }
 
-  const source = coerceString(input.source) ?? defaultSource ?? null;
+  // Deliberately NOT `?? defaultSource` unconditionally. The bridge sends a
+  // batch label naming the feed ("oz-reports:automotive"), and rows from the
+  // automotive feed carry no per-contact source, so every one of them inherited
+  // it. `Contact.source` is a MARKETING source — it is what the Lead
+  // Performance report groups by — so the pipeline's own name was rendering to
+  // clients as the single biggest lead source, above CDK and Dealer Website.
+  //
+  // Provenance is not lost: `IngestRun.source` records the batch label, and its
+  // schema comment already calls that the reliable record of which feed a run
+  // came from. Leaving this null is the honest answer — those contacts have no
+  // known marketing source, and the report folds null into "Unknown source".
+  const batchDefault = isPipelineSource(defaultSource) ? null : defaultSource;
+  const source = coerceString(input.source) ?? batchDefault ?? null;
 
   let dnd: { email?: boolean; sms?: boolean } | null = null;
   if (input.dnd && typeof input.dnd === 'object') {

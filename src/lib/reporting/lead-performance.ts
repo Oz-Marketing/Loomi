@@ -47,6 +47,7 @@
  * is kept for reference and testing but is not what the report uses.
  */
 import { prisma } from '@/lib/prisma';
+import { isPipelineSource } from '@/lib/contacts/ingest';
 
 export interface LeadMonthRow {
   period: string;
@@ -168,17 +169,68 @@ export function foldMonths(rows: LeadMonthRow[]): LeadMonth[] {
     .sort((a, b) => a.period.localeCompare(b.period));
 }
 
+/**
+ * Canonicalise a CRM lead category.
+ *
+ * Two naming conventions arrive from the CRMs and were never reconciled, so the
+ * Lead Categories chart has been splitting single categories in two:
+ *
+ *     INTERNET 1,839  +  Internet 1,133   -> Internet is really ~2,972
+ *     WALK_IN  1,130  +  Walk-in     207
+ *     PHONE_UP   641  +  Phone       215
+ *
+ * Casing alone will not merge the last two — PHONE_UP and Phone differ by more
+ * than case — so pairs that genuinely disagree are mapped explicitly and
+ * everything else falls through to a generic tidy-up. An unrecognised category
+ * is still shown, just title-cased, never dropped.
+ */
+export function normalizeLeadCategory(raw: string): string {
+  const key = raw.trim().toLowerCase().replace(/[_\s-]+/g, ' ');
+  const CANONICAL: Record<string, string> = {
+    internet: 'Internet',
+    'walk in': 'Walk-in',
+    'phone up': 'Phone',
+    phone: 'Phone',
+    service: 'Service',
+    campaign: 'Campaign',
+    oem: 'OEM',
+    referral: 'Referral',
+    'internal referral': 'Internal referral',
+    previouscustomer: 'Previous customer',
+    'previous customer': 'Previous customer',
+    websitechat: 'Website chat',
+    'website chat': 'Website chat',
+    wholesale: 'Wholesale',
+    other: 'Other',
+  };
+  return CANONICAL[key] ?? key.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Marks a row whose label is the lead CATEGORY because no marketing source was
+ * recorded. Kept visible so "Service (category)" is never mistaken for a source
+ * the way "AutoTrader.com" is — they are different kinds of answer.
+ */
+const CATEGORY_SUFFIX = ' (category)';
+
 export function foldBreakdown(
   rows: { label: string | null; leads: number }[],
   unknownLabel = 'Unknown',
 ): LeadBreakdown[] {
-  const total = rows.reduce((n, r) => n + (Number(r.leads) || 0), 0);
-  return rows
-    .map((r) => ({
-      label: r.label?.trim() || unknownLabel,
-      leads: Number(r.leads) || 0,
-      share: total > 0 ? (Number(r.leads) || 0) / total : 0,
-    }))
+  // MERGES by final label. SQL has already grouped, so this used to be a plain
+  // map — but callers now rewrite labels before folding (normalising
+  // "INTERNET" and "Internet" onto one bucket, substituting a category for a
+  // missing source), so two input rows can land on the same label. Emitting
+  // both would list a category twice, each with its own share.
+  const merged = new Map<string, number>();
+  for (const r of rows) {
+    const label = r.label?.trim() || unknownLabel;
+    merged.set(label, (merged.get(label) ?? 0) + (Number(r.leads) || 0));
+  }
+
+  const total = [...merged.values()].reduce((n, v) => n + v, 0);
+  return [...merged.entries()]
+    .map(([label, leads]) => ({ label, leads, share: total > 0 ? leads / total : 0 }))
     .sort((a, b) => b.leads - a.leads || a.label.localeCompare(b.label));
 }
 
@@ -260,31 +312,69 @@ async function breakdown(
 ): Promise<LeadBreakdown[]> {
   const { start, endExclusive } = periodBounds(period, throughDay);
 
-  // `source` is a real column; category lives in the customFields blob the
-  // bridge writes. Both are nullable, and null is a real answer — folded into
-  // "Unknown" rather than dropped, so the breakdown sums to the headline.
-  const rows =
-    column === 'source'
-      ? await prisma.$queryRaw<{ label: string | null; leads: number }[]>`
-          SELECT "source" AS label, count(*)::int AS leads
-          FROM "Contact"
-          WHERE "accountKey" = ${accountKey}
-            AND "tags" @> ${LEAD_TAG}::jsonb
-            AND "dateAdded" >= ${start}
-            AND "dateAdded" <  ${endExclusive}
-          GROUP BY 1
-        `
-      : await prisma.$queryRaw<{ label: string | null; leads: number }[]>`
-          SELECT "customFields"->>'lead_category' AS label, count(*)::int AS leads
-          FROM "Contact"
-          WHERE "accountKey" = ${accountKey}
-            AND "tags" @> ${LEAD_TAG}::jsonb
-            AND "dateAdded" >= ${start}
-            AND "dateAdded" <  ${endExclusive}
-          GROUP BY 1
-        `;
+  if (column === 'category') {
+    const rows = await prisma.$queryRaw<{ label: string | null; leads: number }[]>`
+      SELECT "customFields"->>'lead_category' AS label, count(*)::int AS leads
+      FROM "Contact"
+      WHERE "accountKey" = ${accountKey}
+        AND "tags" @> ${LEAD_TAG}::jsonb
+        AND "dateAdded" >= ${start}
+        AND "dateAdded" <  ${endExclusive}
+      GROUP BY 1
+    `;
+    return foldBreakdown(
+      rows.map((r) => ({ ...r, label: r.label ? normalizeLeadCategory(r.label) : null })),
+      'Uncategorised',
+    );
+  }
 
-  return foldBreakdown(rows, column === 'source' ? 'Unknown source' : 'Uncategorised');
+  // ── SOURCE ────────────────────────────────────────────────────────────────
+  // `Contact.source` is the CRM's marketing source — "AutoTrader.com", "CDK",
+  // "Facebook" — but only where the leads feed sent one. Rows that arrived on
+  // the DMS feeds inherited the bridge's BATCH LABEL instead
+  // ("oz-reports:automotive"), which was rendering to clients as their single
+  // biggest lead source, ahead of CDK and Dealer Website.
+  //
+  // Those leads all carry a lead_category — verified in production, 2,527 of
+  // 2,527 — so the category stands in rather than throwing the row into
+  // "Unknown". It is suffixed: a category is a weaker claim than a source, and
+  // "Service (category)" must not read like "AutoTrader.com".
+  //
+  // Real sources pass through VERBATIM. They are the CRM's own words and the
+  // dealer recognises them; tidying or bucketing them would only obscure.
+  //
+  // Fixed HERE rather than by clearing the column: those labels sit on ~255k of
+  // ~265k contacts, only ~2.5k of which are leads, and nothing links a Contact
+  // back to its IngestRun — so clearing would permanently destroy the only
+  // per-contact record of which feed each row came from, to fix a chart that
+  // reads 1% of them.
+  //
+  // The source/category split is decided in TS, not SQL, so `isPipelineSource`
+  // stays the single definition shared with the ingest that stopped writing
+  // these. A second copy of the pattern in SQL would be free to drift.
+  const rows = await prisma.$queryRaw<
+    { source: string | null; category: string | null; leads: number }[]
+  >`
+    SELECT "source", "customFields"->>'lead_category' AS category, count(*)::int AS leads
+    FROM "Contact"
+    WHERE "accountKey" = ${accountKey}
+      AND "tags" @> ${LEAD_TAG}::jsonb
+      AND "dateAdded" >= ${start}
+      AND "dateAdded" <  ${endExclusive}
+    GROUP BY 1, 2
+  `;
+
+  return foldBreakdown(
+    rows.map(({ source, category, leads }) => {
+      const usable = source?.trim() && !isPipelineSource(source);
+      if (usable) return { label: source, leads };
+      return {
+        label: category ? normalizeLeadCategory(category) + CATEGORY_SUFFIX : null,
+        leads,
+      };
+    }),
+    'Unknown source',
+  );
 }
 
 /**

@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
-  daysInMonth,
   clampDay,
-  parsePeriod,
-  periodLabel,
-  shiftPeriod,
-  pctChange,
-  proratePartial,
-  foldMonths,
+  daysInMonth,
   foldBreakdown,
+  foldMonths,
+  normalizeLeadCategory,
+  parsePeriod,
+  pctChange,
+  periodLabel,
+  proratePartial,
+  shiftPeriod,
 } from './lead-performance';
 
 // The port here is the MATH, not the data access. ODT had monthly aggregates
@@ -146,8 +147,12 @@ describe('foldBreakdown', () => {
       ],
       'Unknown source',
     );
+    // Was asserting 2 — "grouped by the DB, labelled here" — which contradicted
+    // this test's own name and rendered "Unknown source" twice in the chart,
+    // each with its own share. foldBreakdown merges by final label now.
     const unknown = out.filter((r) => r.label === 'Unknown source');
-    expect(unknown).toHaveLength(2); // grouped by the DB, labelled here
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0].leads).toBe(15);
     expect(out.reduce((n, r) => n + r.leads, 0)).toBe(100);
     expect(out.reduce((n, r) => n + r.share, 0)).toBeCloseTo(1);
   });
@@ -163,5 +168,57 @@ describe('foldBreakdown', () => {
   it('returns zero shares rather than NaN when there are no leads', () => {
     const out = foldBreakdown([{ label: 'Website', leads: 0 }]);
     expect(out[0].share).toBe(0);
+  });
+});
+
+describe('normalizeLeadCategory', () => {
+  // The CRMs send two conventions, so the Lead Categories chart was splitting
+  // one category across two rows: INTERNET 1,839 + Internet 1,133.
+  it('merges the two CRM conventions onto one label', () => {
+    expect(normalizeLeadCategory('INTERNET')).toBe(normalizeLeadCategory('Internet'));
+    expect(normalizeLeadCategory('WALK_IN')).toBe(normalizeLeadCategory('Walk-in'));
+    // Differs by more than case, so casing alone would not have merged it.
+    expect(normalizeLeadCategory('PHONE_UP')).toBe(normalizeLeadCategory('Phone'));
+  });
+
+  it('uses the readable form', () => {
+    expect(normalizeLeadCategory('WALK_IN')).toBe('Walk-in');
+    expect(normalizeLeadCategory('PHONE_UP')).toBe('Phone');
+    expect(normalizeLeadCategory('oem')).toBe('OEM');
+  });
+
+  it('keeps an unrecognised category rather than dropping it', () => {
+    expect(normalizeLeadCategory('SOME_NEW_THING')).toBe('Some New Thing');
+  });
+});
+
+describe('foldBreakdown merging', () => {
+  it('combines rows that normalise onto the same label', () => {
+    const out = foldBreakdown(
+      [
+        { label: 'Internet', leads: 30 },
+        { label: 'Internet', leads: 20 },
+        { label: 'AutoTrader.com', leads: 50 },
+      ],
+      'Unknown',
+    );
+    expect(out).toHaveLength(2);
+    const internet = out.find((r) => r.label === 'Internet')!;
+    expect(internet.leads).toBe(50);
+    // Shares are computed after merging, so they still sum to 1.
+    expect(out.reduce((n, r) => n + r.share, 0)).toBeCloseTo(1);
+  });
+
+  it('folds nulls and blanks into one unknown bucket', () => {
+    const out = foldBreakdown(
+      [
+        { label: null, leads: 5 },
+        { label: '   ', leads: 3 },
+        { label: 'CDK', leads: 2 },
+      ],
+      'Unknown source',
+    );
+    expect(out.find((r) => r.label === 'Unknown source')!.leads).toBe(8);
+    expect(out).toHaveLength(2);
   });
 });

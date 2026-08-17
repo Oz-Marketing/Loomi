@@ -28,6 +28,11 @@
  * This turns a silent runtime 500 into a loud build failure. It does not
  * prevent the bug; it guarantees we never ship it again.
  *
+ * Wired into BOTH `build` and `build:assets`. That is not belt-and-braces — CI
+ * runs `build:assets` (see .github/workflows/deploy*.yml) and never runs
+ * `build`, so gating only the latter left this inert on the one path that
+ * actually ships. Whichever script a future workflow picks, the check runs.
+ *
  *   npx tsx scripts/check-client-manifests.ts
  */
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';

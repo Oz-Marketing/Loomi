@@ -63,3 +63,51 @@ export function placeConfident(args: {
     !args.hasCloseRunnerUp
   );
 }
+
+/**
+ * Split one CSV line into cells, honouring quotes and doubled-quote escapes.
+ *
+ * Hand-rolled because the regex it replaces was silently wrong. It matched
+ * /("([^"]|"")*"|[^,]*)/g and kept every other result, which assumes real cells
+ * and zero-width matches alternate perfectly. A single EMPTY cell breaks that
+ * assumption and shifts every field after it:
+ *
+ *     "key,,12345,,"  ->  ["key", "", "", ""]      // the id disappeared
+ *
+ * The importer then found no property id and skipped the row, reporting
+ * "0 account(s) updated" for a file that looked correct. A partly-filled export
+ * is the NORMAL case here — you fill in what you know and leave the rest — so
+ * empty cells have to survive the round trip.
+ */
+export function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cell = '';
+  let quoted = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"') {
+        // "" inside a quoted cell is a literal quote.
+        if (line[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ',') {
+      cells.push(cell);
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell);
+
+  return cells.map((c) => c.trim());
+}

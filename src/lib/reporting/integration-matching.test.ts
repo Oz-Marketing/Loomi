@@ -4,7 +4,7 @@
  * neighbour, so these tests are mostly about REFUSING to be confident.
  */
 import { describe, it, expect } from 'vitest';
-import { normalize, similarity, ga4Confident, placeConfident } from './integration-matching';
+import { ga4Confident, normalize, parseCsvLine, placeConfident, similarity } from './integration-matching';
 
 describe('normalize', () => {
   it('drops punctuation and the words every dealership shares', () => {
@@ -82,5 +82,49 @@ describe('placeConfident', () => {
 
   it('refuses a weak name match even with everything else agreeing', () => {
     expect(placeConfident({ ...ok, nameScore: 0.5 })).toBe(false);
+  });
+});
+
+describe('parseCsvLine', () => {
+  // The bug: the previous regex parser dropped the property id whenever an
+  // earlier cell was empty, and the import reported "0 updated" for a file
+  // that looked right.
+  it('keeps empty cells in position', () => {
+    expect(parseCsvLine('youngToyota,,358669326,,')).toEqual([
+      'youngToyota',
+      '',
+      '358669326',
+      '',
+      '',
+    ]);
+  });
+
+  it('handles a fully populated row', () => {
+    expect(parseCsvLine('key,Young Toyota,358669326,ChIJabc,ChIJxyz')).toEqual([
+      'key',
+      'Young Toyota',
+      '358669326',
+      'ChIJabc',
+      'ChIJxyz',
+    ]);
+  });
+
+  it('respects commas inside quotes', () => {
+    // Dealer names really do contain commas — "Young Chevrolet, Layton".
+    expect(parseCsvLine('key,"Young Chevrolet, Layton",123,,')).toEqual([
+      'key',
+      'Young Chevrolet, Layton',
+      '123',
+      '',
+      '',
+    ]);
+  });
+
+  it('unescapes doubled quotes', () => {
+    expect(parseCsvLine('key,"The ""Big"" Lot",123,,')[1]).toBe('The "Big" Lot');
+  });
+
+  it('returns empty cells for an empty row rather than throwing', () => {
+    expect(parseCsvLine('k,,,,')).toEqual(['k', '', '', '', '']);
   });
 });

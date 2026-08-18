@@ -209,10 +209,35 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
   // `minDaysRemaining` is still honoured when passed explicitly, so the inspector
   // can be used to ask the "what if" question deliberately.
   const runWindow = input.minDaysRemaining == null ? await accountRunWindow(input.accountKey, now) : undefined;
+
+  // The trims on the lot for this vehicle, for the same reason the window is
+  // shared: the generator refuses a programme whose trim nobody stocks, so an
+  // inspector that ignored trim would once again explain a decision production
+  // didn't make.
+  const stockedTrims = (
+    await prisma.inventoryVehicle
+      .findMany({
+        where: {
+          accountKey: input.accountKey,
+          condition: 'new',
+          soldAt: null,
+          model: { equals: model, mode: 'insensitive' },
+          ...(make ? { make: { equals: make, mode: 'insensitive' } } : {}),
+          ...(year ? { year } : {}),
+        },
+        select: { trim: true },
+      })
+      .catch(() => [])
+  ).map((u) => u.trim);
+
   const selection = selectOffer(feed.incentives, {
     priority: input.priority,
     runWindow,
     minDaysRemaining: input.minDaysRemaining,
+    // Omitted when nothing is on the lot: the inspector is often used on a
+    // vehicle the dealer hasn't stocked yet, and an empty list would be read as
+    // "no trim qualifies" rather than "nothing to compare against".
+    ...(stockedTrims.length ? { stockedTrims } : {}),
     now,
   });
   steps.push({

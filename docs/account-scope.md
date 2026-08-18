@@ -64,6 +64,67 @@ This replaces the earlier reasoning, which excluded all-accounts from Studio
 *wholesale* because Contacts could not aggregate meaningfully. That was the right
 instinct applied at the wrong granularity: the problem was Contacts, not Studio.
 
+## The second axis: a group as an entity vs. a group as a parent
+
+Everything above answers *which accounts am I looking at*. There is a second,
+independent question, and conflating the two wastes time:
+
+> When I select a group, do I mean the group ITSELF, or the group and everything
+> under it?
+
+That question exists because of a deliberate schema decision. From `Account`:
+
+> A group like Young Automotive Group is BOTH a marketing entity (it sends its
+> own email/SMS/ads) and a parent that rolls up rooftops. Modelling the group as
+> its own Account with children captures both, so there's no "org mode" that has
+> to borrow a child account to do its own work.
+
+There is no house/primary child holding YAG's own data — YAG's contacts live on
+the YAG row. So the group row is genuinely ambiguous, and something has to
+disambiguate it. Today that is the **Roll up / Just this** control on the
+selected group in the account switcher, which sets `isRollup`.
+
+**The all-accounts work does not remove the need for this.** They are different
+axes: all-accounts widens past any one client, and this one narrows within one.
+Do not read the two as redundant — the obvious-looking simplification here is
+wrong, and this section exists because it nearly got made.
+
+### The Contacts filter already expresses it
+
+`ContactsAccountFilter` (`src/components/contacts/contacts-toolbar.tsx`) is fed
+`accountOptions` derived from `scopedAccountKeys`, and `descendantsOf` starts at
+the root key — so the GROUP ITSELF is in that list alongside its children:
+
+| Selection | Means |
+| --- | --- |
+| nothing selected | group + children — the roll-up |
+| the group alone | the group as an entity — "Just this" |
+| a child | that rooftop |
+| any subset | something a two-state toggle cannot express |
+
+So on Contacts the switcher toggle is redundant, and the dropdown is strictly
+more capable.
+
+### Why it is still not safe to just delete the toggle
+
+`isRollup` is consumed by **22 files** — 17 Reporting pages, Projects calendar
+and tasks, and the three Contacts pages. Reporting branches on it to decide
+whether to render a roll-up or ask for a single account. Removing the control
+would leave every one of those with no way to reach a group's own numbers.
+
+Replacing the toggle therefore means lifting a per-page account filter into a
+shared control and adopting it on those pages — not deleting a button. Worth
+doing, probably; cheap, no.
+
+### Label collision to fix regardless
+
+The in-page filter says **"All accounts"** meaning *all accounts in the current
+scope*. The switcher now says **"All accounts"** meaning *every account the
+agency manages, across unrelated clients*. Since Playbooks put the switcher
+option on Studio, both can be on screen at once, meaning different things.
+Rename the in-page one — "All in group", "All rooftops" — whatever happens to
+the toggle.
+
 ## It can split inside one tool
 
 Campaigns is the clear case:
@@ -115,3 +176,12 @@ all-accounts case and is already bounded by the same filter.
 | Campaign list | all-accounts | candidate, not built |
 | Templates / Flows / Assets browsing | all-accounts | candidate, not built |
 | Contacts, audiences, reporting | group only | deliberate, not a gap |
+
+Second axis (group as entity vs. parent):
+
+| Piece | State |
+| --- | --- |
+| `Roll up` / `Just this` in the switcher | shipped; sets `isRollup`, read by 22 files |
+| Contacts account filter | shipped; already expresses self / roll-up / subsets |
+| A shared filter for Reporting + Projects | not built — the prerequisite for retiring the toggle |
+| Renaming the in-page "All accounts" label | not done — collides with the switcher's |

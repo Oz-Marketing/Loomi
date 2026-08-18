@@ -61,6 +61,16 @@ jobs:
         run: npm run build:assets
         env:
           DATABASE_URL: postgresql://build:build@localhost:5432/build
+          # NEXT_PUBLIC_* is inlined by `next build`, which runs HERE on the
+          # runner -- the droplet only receives the finished .next tarball. So
+          # a feature flag set in the droplet's shared/.env.local would have no
+          # effect at all; it has to be present for this step.
+          #
+          # Sourced from an environment-scoped variable so the flag can be
+          # flipped without a commit, and so production (deploy.yml, a separate
+          # workflow with its own environment) can never inherit it. Unset
+          # renders as empty, which is off -- flags are opt-in by default.
+          NEXT_PUBLIC_ENABLE_PLAYBOOKS: ${{ vars.ENABLE_PLAYBOOKS }}
 
       - name: Package .next (exclude the local webpack cache)
         run: tar -czf "next-${{ github.sha }}.tar.gz" --exclude='.next/cache' .next

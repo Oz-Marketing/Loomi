@@ -15,7 +15,6 @@ import { useAccount } from '@/contexts/account-context';
 import PrimaryButton from '@/components/primary-button';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
 import { TemplateLibraryPanel } from '@/components/campaigns/template-library-panel';
-import { TemplatePreviewModal } from '@/components/campaigns/template-preview-modal';
 import { SelectedTemplatePanel } from '@/components/campaigns/selected-template-panel';
 
 interface PageProps {
@@ -94,7 +93,6 @@ export default function MultiMessageStepPage({ params }: PageProps) {
   const smsFileInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   // Email template picker state (embedded in the Email tab)
-  const [previewDesign, setPreviewDesign] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +198,10 @@ export default function MultiMessageStepPage({ params }: PageProps) {
 
   async function applyTemplate(design: string) {
     if (!emailDraft) return;
+    // Without the preview modal in the way, two quick clicks in the library
+    // fire two applies — each compiling and PATCHing — and the second can
+    // land after the first, attaching a template the user did not pick last.
+    if (applying) return;
     setApplying(true);
     try {
       const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(design)}&format=raw`);
@@ -234,7 +236,6 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         setEmailDraft(updated);
         setSubject(updated.subject);
       }
-      setPreviewDesign(null);
       // Jump into the editor with multi=1 so navigation from the editor
       // goes back to /campaigns/multi/[id]/...
       router.push(
@@ -302,8 +303,13 @@ export default function MultiMessageStepPage({ params }: PageProps) {
   }
 
   async function handleChangeTemplate() {
+    // No confirm() here. It is a native modal, which is SUPPRESSED in an
+    // embedded or sandboxed view (Loomi's own preview pane, an in-app
+    // browser) — it returns false there, so the button looked dead rather
+    // than cancelled. The action is also cheap to undo: it detaches the
+    // template from this blast, it does not delete the template, and the
+    // picker opens immediately so re-selecting is one click.
     if (!emailDraft) return;
-    if (!confirm('Clear the current template and pick a different one?')) return;
     try {
       const updated = await patchEmail({ htmlContent: '' });
       if (updated) setEmailDraft(updated);
@@ -520,7 +526,12 @@ export default function MultiMessageStepPage({ params }: PageProps) {
                 onChangeTemplate={handleChangeTemplate}
               />
             ) : (
-              <TemplateLibraryPanel onSelect={setPreviewDesign} onCreateNew={handleCreateNew} />
+            // Selecting a design applies it and goes STRAIGHT to the editor,
+            // with no preview-and-confirm step in between. You are going to
+            // edit this template regardless — that is the whole point of
+            // picking one for a blast — so previewing first was a step that
+            // only ever delayed the edit.
+              <TemplateLibraryPanel onSelect={applyTemplate} onCreateNew={handleCreateNew} />
             )}
           </div>
         )}
@@ -626,15 +637,6 @@ export default function MultiMessageStepPage({ params }: PageProps) {
           </div>
         )}
       </div>
-
-      {previewDesign && (
-        <TemplatePreviewModal
-          design={previewDesign}
-          onClose={() => !applying && setPreviewDesign(null)}
-          onUse={() => applyTemplate(previewDesign)}
-          applying={applying}
-        />
-      )}
 
       <div className="fixed bottom-0 left-0 right-0 bg-[var(--card)]/80 backdrop-blur-md border-t border-[var(--border)] z-40">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">

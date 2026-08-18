@@ -114,10 +114,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // (The template editor at /templates/editor uses its own chrome via the
   // existing isTemplateEditor branch.)
   const builderProbe = normalizedPath.replace(/^\/subaccount\/[^/]+/, '');
+  //
+  // NOTE the path segment: these were `/messaging/campaigns/...` until the
+  // Email/Text "Campaigns" → "Blasts" rename, which moved the routes and left
+  // these patterns matching nothing — so the builder silently fell back inside
+  // the app shell. Renaming a route means grepping for its path here.
   const isCampaignBuilder =
-    /^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
+    /^\/messaging\/blasts\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/blasts\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/blasts\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
 
   // Flow builder owns its own chrome (its own top bar lives in
   // FlowBuilder.tsx) so we hide the sidebar + TopUtilityBar entirely.

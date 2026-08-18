@@ -39,10 +39,16 @@ question that spans a car dealer and a law firm without embarrassment. You are
 looking at your own work, not a client's data.
 
 **Views about A CLIENT'S DATA — group only, never all-accounts.**
-Contacts, audiences, campaign recipients, reporting. Merging unrelated
+Contacts, audiences, campaign recipients. Merging unrelated
 businesses here is meaningless at best and a data-handling problem at worst. The
 roll-up unit is the GROUP, which already does exactly this: YAG rolls up its
 rooftops and gives you the full roster across them.
+
+Reporting sits across the line and is worth calling out: it now offers
+all-accounts, and the reports carrying a roll-up config render one. The rest
+still ask for a single account. So "does this surface offer the scope" and "can
+this particular view aggregate" are separate questions there — see REPORTS
+WITHOUT A ROLL-UP.
 
 ### The test
 
@@ -172,10 +178,11 @@ all-accounts case and is already bounded by the same filter.
 | Page | Scope | State |
 | --- | --- | --- |
 | Projects (App surface) | all-accounts | shipped |
-| Playbooks audit | all-accounts + per-account | in progress |
+| Reporting | all-accounts | shipped; reports gate on `isRollup` |
+| Playbooks audit | all-accounts + per-account | shipped |
 | Campaign list | all-accounts | candidate, not built |
 | Templates / Flows / Assets browsing | all-accounts | candidate, not built |
-| Contacts, audiences, reporting | group only | deliberate, not a gap |
+| Contacts, audiences, lists, segments | group only | deliberate, not a gap |
 
 Second axis (group as entity vs. parent):
 
@@ -184,4 +191,4 @@ Second axis (group as entity vs. parent):
 | `Roll up` / `Just this` in the switcher | shipped; sets `isRollup`, read by 22 files |
 | Contacts account filter | shipped; already expresses self / roll-up / subsets |
 | A shared filter for Reporting + Projects | not built — the prerequisite for retiring the toggle |
-| Renaming the in-page "All accounts" label | not done — collides with the switcher's |
+| Renaming the in-page "All accounts" label | done — reads `All N accounts`, so the count distinguishes it from the switcher's |

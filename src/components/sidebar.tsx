@@ -13,6 +13,7 @@ import {
   Squares2X2Icon,
   UserGroupIcon,
   PhotoIcon,
+  BookOpenIcon,
   MegaphoneIcon,
   SunIcon,
   MoonIcon,
@@ -26,6 +27,7 @@ import {
   RectangleStackIcon,
   PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
+import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -99,6 +101,17 @@ const adGeneratorNav: NavItem = {
   icon: MegaphoneIcon,
   absolute: true,
 };
+// Playbooks — the coverage audit and the agency-wide creative library
+// (docs/playbooks.md). Sits under Templates: a playbook is a named bundle OF
+// templates (an ad design plus an email shell), so it reads as the next step
+// up from the library rather than a separate tool. Global, like Ad Generator —
+// it spans every account rather than scoping to the active one.
+const playbooksNav: NavItem = {
+  href: '/playbooks',
+  label: 'Playbooks',
+  icon: BookOpenIcon,
+  absolute: true,
+};
 // Media library — re-added below Ad Generator.
 const mediaNav: NavItem = { href: '/media', label: 'Assets', icon: PhotoIcon };
 // Flows is now a leaf nav item — analytics moved to /reporting/engagement.
@@ -145,6 +158,9 @@ const adminNavItems: NavEntry[] = [
   dashboardNav,
   campaignBuilderNav,
   templatesNav,
+  // Hidden until the env flag is on. A developer can still reach /playbooks
+  // directly; the server gate, not this list, is what grants access.
+  ...(PLAYBOOKS_ENABLED ? [playbooksNav] : []),
   { divider: true },
   contactsNav,
   emailSmsNav,

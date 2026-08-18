@@ -267,6 +267,33 @@ whole-bundle re-apply throws away deliberate overrides the person wasn't looking
 at. Resetting the ad template also clears the size selection, because sizes
 belong to a design and ids picked against another template render nothing.
 
+### Which surface, and why
+
+Playbooks lives on **Studio**, not the App/Projects surface where Phase 0 was
+first built. Three things put it there:
+
+- Both routes guard on `agency.subaccounts.view` / `agency.platform.configure`.
+  The permissions already called this agency work while the screen sat in the
+  Projects rail.
+- A creative playbook bundles an ad design and an email template — both Studio
+  artifacts — and the thing that SELECTS one is the Ad Generator's Config tab,
+  which is Studio.
+- App and Studio are different hosts, so the old split meant crossing domains to
+  author a bundle you then used on the other side.
+
+The audit is the weaker half of that argument: its checks straddle both surfaces
+(the Meta and Google pacers are App-host). Splitting the two halves across hosts
+would be worse than keeping them together where the authoring belongs, so both
+moved.
+
+Playbooks is also the first page to take the all-accounts scope outside the App
+surface. Which roll-up a page should offer — and why that is a property of the
+page rather than its surface — is written up in `docs/account-scope.md`.
+
+The move inverts `fixHref`: on Studio, `surface: 'studio'` fixes are same-host
+links and `surface: 'app'` ones cross via `getAppUrl`. Left as it was, every fix
+link would have pointed at the wrong host.
+
 ### Where it lives
 
 | Piece | File |
@@ -274,7 +301,7 @@ belong to a design and ids picked against another template render nothing.
 | Pure resolution — parse, hash, diff, reset | `src/lib/playbooks/creative.ts` |
 | The only prisma module | `src/lib/playbooks/library.ts` |
 | Library CRUD + template options | `src/app/api/playbooks/library/` |
-| Authoring UI (Playbooks → Library) | `src/app/app/playbooks/_components/playbook-library.tsx` |
+| Authoring UI (Playbooks → Library) | `src/app/playbooks/_components/playbook-library.tsx` |
 | Selection + override badges | the automation **Config** tab |
 
 Authoring is agency-wide and deliberately NOT in an account's settings: a

@@ -13,6 +13,7 @@ import {
   pushCampaignDailyBudget,
 } from '@/lib/integrations/google-ads';
 import { writeAudit } from '@/lib/meta-ads-audit';
+import { isSharedBudget } from '@/lib/ad-pacer/google-pacer-calc';
 
 interface PushBudgetBody {
   adId?: string;
@@ -74,6 +75,8 @@ export async function POST(
       budgetType: true,
       googleCampaignId: true,
       googleBudgetResourceName: true,
+      googleBudgetReferenceCount: true,
+      pacerReserved: true,
     },
   });
   if (!ad) {
@@ -91,15 +94,44 @@ export async function POST(
       { status: 400 },
     );
   }
+  // The SAME structural skips the batched push applies (google-pacing-card §8),
+  // enforced here too because the budget-report addendum §2.4 made this the path
+  // a hand-typed daily takes. Several campaigns pointing at one budget resource
+  // means per-campaign daily control does not exist: writing this campaign's
+  // number onto a shared budget would silently change campaigns nobody touched,
+  // and a typed number must not be able to do what the batch deliberately will
+  // not.
+  if (isSharedBudget(ad.googleBudgetReferenceCount)) {
+    return NextResponse.json(
+      {
+        error:
+          'This campaign shares its budget with others in Google, so its daily can’t be set on its own. Change it in Google Ads.',
+        code: 'shared_budget',
+      },
+      { status: 400 },
+    );
+  }
+  // A reserve is budget committed to a campaign that cannot spend yet — it is
+  // out of every pacing figure by design, so a daily for it is a rate to push at
+  // a campaign that is not meant to be running.
+  if (ad.pacerReserved === true) {
+    return NextResponse.json(
+      { error: 'This campaign is reserved — un-reserve it before setting a daily budget.', code: 'reserved' },
+      { status: 400 },
+    );
+  }
 
   try {
     const { cfg, customerId } = await getGoogleCustomer(accountKey);
     await pushCampaignDailyBudget(cfg, customerId, ad.googleBudgetResourceName, amount);
 
-    // Keep our copy in lockstep with what Google now holds.
+    // Keep our copy in lockstep with what Google now holds. `googleDailyPushedAt`
+    // is stamped for the same reason the batched push stamps it: the card's
+    // settling indicator reads it, and Google re-paces over 24–48 hours, so a
+    // row whose numbers still describe the old rate has to be able to say so.
     await prisma.metaAdsPacerAd.update({
       where: { id: ad.id },
-      data: { pacerDailyBudget: amount.toFixed(2) },
+      data: { pacerDailyBudget: amount.toFixed(2), googleDailyPushedAt: new Date() },
     });
 
     await writeAudit([
@@ -108,7 +140,11 @@ export async function POST(
         planId: plan.id,
         period,
         platform: 'google',
+        adId: ad.id,
+        adName: ad.name,
         action: 'budget_push',
+        field: 'pacerDailyBudget',
+        toValue: amount.toFixed(2),
         authorUserId: session.user?.id ?? null,
         summary: `Pushed daily budget $${amount.toFixed(2)} to Google for "${ad.name}"`,
       },

@@ -56,7 +56,8 @@ import {
   StatusBattery,
 } from '@/app/app/tools/_shared';
 import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
-import { GooglePacingCard } from './GooglePacingCard';
+import { GooglePacingCard, type AccountPaceSummary } from './GooglePacingCard';
+import { ACCOUNT_PACE_LABELS, PACE_COLORS } from './google-pacing-theme';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax', 'Demand Gen'] as const;
@@ -139,6 +140,10 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
+  /** The pace verdict the Pacing card computes, rendered up in the scope row.
+   *  Null whenever that card is not mounted, which is what keeps a verdict from
+   *  outliving the tab that produced it. */
+  const [pace, setPace] = useState<AccountPaceSummary | null>(null);
   // Basic (default) vs Detailed plan view — Detailed adds the Design +
   // Approvals columns and the matching editor sections. Same sticky
   // preference as Meta's planner, so the choice follows the user.
@@ -648,7 +653,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
 
       {/* Scope row — sub-account avatar + name + status battery, mirroring
           Meta. Keeps the tool name in the header and the account identity here. */}
-      <div className="mb-6 flex items-center gap-3 min-w-0">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0">
         {/* No box, and the logo runs at its own aspect. A dealer wordmark is
             wide; squeezing it into a 56px square with a 15% inset rendered it a
             few pixels tall and unreadable. `auto` fixes the height and lets the
@@ -669,6 +675,35 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           </span>
           {plan && plan.ads.length > 0 && <StatusBattery ads={plan.ads} />}
         </div>
+      </div>
+
+        {/* The account's pace verdict, beside the account it is about. It used
+            to lead a stats strip lower down, where the one sentence a rep
+            repeats to a client sat below the fold of its own card. The Pacing
+            tab computes it and hands it up (see GooglePacingCard's
+            onPaceSummary) so there is exactly one derivation of it. */}
+        {/* The VERDICT alone. Spent MTD stood beside it here and was the odd one
+            out: a dollar figure keeping company with a one-word judgment, while
+            its four peers — expected, left to spend, daily needed, days left —
+            sat together in cards below. It reads with them. */}
+        {tab === 'pacing' && pace && (
+          <div className="flex-shrink-0 text-right">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              {pace.scope ? 'Campaign pace' : 'Account pace'}
+            </div>
+            <div
+              className="text-2xl font-bold leading-tight tracking-tight"
+              style={{ color: PACE_COLORS[pace.status] }}
+            >
+              {ACCOUNT_PACE_LABELS[pace.status]}
+            </div>
+            <div className="text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              {pace.ratio != null
+                ? `${Math.round(pace.ratio * 100)}% of expected`
+                : 'no settled days'}
+            </div>
+          </div>
+        )}
       </div>
 
       {!connected && (
@@ -777,6 +812,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         <div className="mt-1">
           {plan && (
             <GooglePacingCard
+              onPaceSummary={setPace}
               accountKey={accountKey}
               period={period}
               plan={plan}

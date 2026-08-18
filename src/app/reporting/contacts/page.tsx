@@ -88,10 +88,10 @@ export default function ReportingContactsPage() {
 
   const subtitle = useMemo(() => {
     if (keysToFetch.length === 0) {
-      return 'Pick a sub-account or organization in the sidebar to see contact reporting.';
+      return 'Pick an account or group in the sidebar to see contact reporting.';
     }
     if (isGroup) {
-      return `Organization roll-up across ${keysToFetch.length} sub-account${keysToFetch.length === 1 ? '' : 's'} — ${totalCount.toLocaleString()} unique contacts.`;
+      return `Group roll-up across ${keysToFetch.length} account${keysToFetch.length === 1 ? '' : 's'} — ${totalCount.toLocaleString()} unique contacts.`;
     }
     return `Contact growth, lifecycle, and engagement — ${totalCount.toLocaleString()} total.`;
     // keysToFetch.length + isGroup + totalCount drive the copy.

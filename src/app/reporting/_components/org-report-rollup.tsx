@@ -130,8 +130,8 @@ export function OrgReportRollup({
     return (
       <EmptyState
         icon={LinkSlashIcon}
-        title={`No sub-accounts connected to ${config.label}`}
-        body={`None of this organization's ${rows.length} sub-accounts have ${config.label} connected for this window. Connect a sub-account's integration to see roll-up performance.`}
+        title={`No accounts connected to ${config.label}`}
+        body={`None of this group's ${rows.length} accounts have ${config.label} connected for this window. Connect an account's integration to see roll-up performance.`}
       />
     );
   }
@@ -141,14 +141,14 @@ export function OrgReportRollup({
       <EmptyState
         icon={InboxStackIcon}
         title="No delivery in this window"
-        body={`${config.label} is connected for ${connected.length} sub-account${connected.length === 1 ? '' : 's'}, but nothing ran in the selected range. Widen the date range to find active flights.`}
+        body={`${config.label} is connected for ${connected.length} account${connected.length === 1 ? '' : 's'}, but nothing ran in the selected range. Widen the date range to find active flights.`}
       />
     );
   }
 
   const kpiMetrics = config.metrics.slice(0, 6);
 
-  const tableHead = ['Sub-Account', ...config.metrics.map((m) => m.label)];
+  const tableHead = ['Account', ...config.metrics.map((m) => m.label)];
   const tableRows: (string | number)[][] = [...rows]
     .sort((a, b) => {
       // Connected + active rooftops first, by the first sum metric desc.
@@ -172,10 +172,10 @@ export function OrgReportRollup({
     <div className="space-y-8">
       <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
         <BuildingOffice2Icon className="h-4 w-4 text-[var(--primary)]" />
-        <span className="font-medium text-[var(--foreground)]">Organization roll-up</span>
+        <span className="font-medium text-[var(--foreground)]">Group roll-up</span>
         <span>·</span>
         <span>
-          {connected.length} of {rows.length} sub-account{rows.length === 1 ? '' : 's'} reporting {config.label}
+          {connected.length} of {rows.length} account{rows.length === 1 ? '' : 's'} reporting {config.label}
         </span>
         {notConnected.length > 0 && <span>· {notConnected.length} not connected</span>}
         {errored.length > 0 && <span className="text-amber-500">· {errored.length} errored</span>}
@@ -194,7 +194,7 @@ export function OrgReportRollup({
         ))}
       </div>
 
-      <Section title="By sub-account" icon={BuildingOffice2Icon} subtitle={`${connected.length} reporting`}>
+      <Section title="By account" icon={BuildingOffice2Icon} subtitle={`${connected.length} reporting`}>
         <DataTable head={tableHead} rows={tableRows} maxRows={12} />
         {notConnected.length > 0 && (
           <Muted>

@@ -48,7 +48,7 @@ export default function ReportingReputationPage() {
         <EmptyState
           icon={StarIcon}
           title="Pick an account"
-          body="Choose a sub-account or organization from the top bar to see Google reputation."
+          body="Choose an account or group from the top bar to see Google reputation."
         />
       ) : (
         <ReputationReport accountKey={accountKey} />

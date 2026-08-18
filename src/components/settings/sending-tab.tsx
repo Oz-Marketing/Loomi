@@ -303,7 +303,7 @@ export function SendingTab({ accountKey }: SendingTabProps) {
               )}
             </div>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Optional — when set, this sub-account&apos;s campaigns send through SendGrid. Leave blank
+              Optional — when set, this account&apos;s campaigns send through SendGrid. Leave blank
               to fall back to the global SMTP transport.
             </p>
           </div>

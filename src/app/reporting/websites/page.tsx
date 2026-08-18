@@ -84,7 +84,7 @@ export default function ReportingWebsitesPage() {
         <EmptyState
           icon={ChartBarIcon}
           title="Pick an account"
-          body="Choose a sub-account or organization from the top bar to see website analytics."
+          body="Choose an account or group from the top bar to see website analytics."
         />
       ) : (
         <Ga4Report accountKey={accountKey} from={from} to={to} isDark={isDark} lens={lensState.lens} />

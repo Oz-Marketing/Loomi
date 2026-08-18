@@ -667,7 +667,7 @@ export async function publishFlow(id: string): Promise<FlowSummary> {
       {
         nodeId: null,
         message:
-          'A template can’t be published directly — deploy it to a sub-account first, then publish there.',
+          'A template can’t be published directly — deploy it to an account first, then publish there.',
         severity: 'error',
       },
     ]);
@@ -754,9 +754,9 @@ export async function publishFlow(id: string): Promise<FlowSummary> {
       } else if (list.accountKey !== flow.accountKey) {
         issues.push({
           nodeId: node.id,
-          message: `List "${list.name}" belongs to a different sub-account.`,
+          message: `List "${list.name}" belongs to a different account.`,
           severity: 'error',
-          fix: 'Open the step and pick a list that belongs to this sub-account. Flows deployed from a template need their list re-picked per sub-account.',
+          fix: 'Open the step and pick a list that belongs to this account. Flows deployed from a template need their list re-picked per account.',
         });
       }
     }
@@ -950,7 +950,7 @@ export async function deployFlowToAccounts(
   if (!source) throw new Error('Source flow not found');
   if (source.accountKey) {
     throw new Error(
-      'Only template flows (no accountKey) can be deployed to sub-accounts.',
+      'Only template flows (no accountKey) can be deployed to accounts.',
     );
   }
 
@@ -2404,7 +2404,7 @@ async function executeListMembershipNode(
     await recordStepFailure(
       enrollment.id,
       node.id,
-      `list "${list.name}" belongs to a different sub-account`,
+      `list "${list.name}" belongs to a different account`,
     );
     return;
   }
@@ -2732,7 +2732,7 @@ async function executeEmailNode(
     await recordStepFailure(
       enrollment.id,
       node.id,
-      'No SendGrid key or sender email configured for this sub-account',
+      'No SendGrid key or sender email configured for this account',
     );
     return;
   }
@@ -3683,7 +3683,7 @@ async function executeSmsNode(
     await recordStepFailure(
       enrollment.id,
       node.id,
-      'No Twilio credentials configured for this sub-account',
+      'No Twilio credentials configured for this account',
     );
     return;
   }

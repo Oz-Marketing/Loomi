@@ -133,6 +133,77 @@ export function statusReasonText(reason: string): string {
   );
 }
 
+/**
+ * The same reasons as SHORT LABELS, for the collapsed row's status line
+ * (budget-report addendum §2.1). The sentence forms above are written to be read
+ * inside a paragraph in the delivery panel ("… because it is limited by its
+ * budget"); on a row they have to fit beside a campaign name, so they are the
+ * noun phrase instead: "Limited by budget".
+ */
+const REASON_LABEL: Record<string, string> = {
+  CAMPAIGN_REMOVED: 'Removed',
+  CAMPAIGN_PAUSED: 'Campaign paused',
+  CAMPAIGN_PENDING: 'Not started',
+  CAMPAIGN_ENDED: 'Ended',
+  CAMPAIGN_DRAFT: 'Draft',
+  BUDGET_CONSTRAINED: 'Limited by budget',
+  BUDGET_MISCONFIGURED: 'Budget misconfigured',
+  SEARCH_VOLUME_LIMITED: 'Low search volume',
+  AD_GROUPS_PAUSED: 'Ad groups paused',
+  NO_AD_GROUPS: 'No ad groups',
+  ADS_PAUSED: 'Ads paused',
+  NO_ADS: 'No ads',
+  HAS_ADS_DISAPPROVED: 'Ads disapproved',
+  HAS_ADS_LIMITED_BY_POLICY: 'Ads limited by policy',
+  MOST_ADS_UNDER_REVIEW: 'Ads under review',
+  BID_STRATEGY_MISCONFIGURED: 'Bid strategy misconfigured',
+  BID_STRATEGY_LIMITED: 'Bid strategy limiting',
+  BID_STRATEGY_LEARNING: 'Bid strategy learning',
+  LOW_QUALITY: 'Low quality score',
+};
+
+/** One reason enum as a short row label. Unknown enums humanize rather than
+ *  disappear — an unexplained reason still says where to look in Google. */
+export function statusReasonLabel(reason: string): string {
+  const known = REASON_LABEL[reason];
+  if (known) return known;
+  const words = reason.toLowerCase().replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Google's own word for whether the campaign is switched on — the first thing
+ * on the row's status line (addendum §2.1). Reads `campaign.primary_status`,
+ * falling back to the effective status for rows synced before primary status
+ * was stored.
+ *
+ * ELIGIBLE / LIMITED / LEARNING all collapse to "Enabled": they are all a
+ * running campaign, and WHY it is limited or learning is the reason that
+ * follows. Null when there is nothing synced to report.
+ */
+export function platformStatusWord(ad: PacerAd): string | null {
+  const raw = (ad.googlePrimaryStatus ?? ad.googleEffectiveStatus ?? '').toUpperCase();
+  switch (raw) {
+    case 'ELIGIBLE':
+    case 'LIMITED':
+    case 'LEARNING':
+    case 'ENABLED':
+      return 'Enabled';
+    case 'PAUSED':
+      return 'Paused';
+    case 'REMOVED':
+      return 'Removed';
+    case 'ENDED':
+      return 'Ended';
+    case 'PENDING':
+      return 'Not started';
+    case 'NOT_ELIGIBLE':
+      return 'Not eligible';
+    default:
+      return null;
+  }
+}
+
 export type StatusMismatch =
   /** Loomi is pacing this as live; Google says it cannot serve. The expensive
    *  one — every recommended daily on this row is a number for a campaign that

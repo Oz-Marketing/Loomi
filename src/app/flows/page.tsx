@@ -858,7 +858,7 @@ export default function FlowsPage() {
       }`}
     >
       <RectangleStackIcon className="w-4 h-4" />
-      {showTemplates ? 'Back to this sub-account' : 'Templates'}
+      {showTemplates ? 'Back to this account' : 'Templates'}
     </button>
   ) : null;
 
@@ -867,7 +867,7 @@ export default function FlowsPage() {
       <AdminOnly>
         <FlowsPageBody
           scopeKey="templates"
-          subtitle="Flow templates every sub-account deploys from"
+          subtitle="Flow templates every account deploys from"
           presetAccountKey={null}
           hideInstances
           extraCta={templatesToggle}
@@ -880,7 +880,7 @@ export default function FlowsPage() {
     return (
       <FlowsPageBody
         scopeKey={accountKey ?? 'no-account'}
-        subtitle={`Email drip series for ${accountData?.dealer || 'Your Sub-Account'}`}
+        subtitle={`Email drip series for ${accountData?.dealer || 'Your Account'}`}
         presetAccountKey={accountKey}
         extraCta={templatesToggle}
       />

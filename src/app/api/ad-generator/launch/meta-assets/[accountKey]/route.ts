@@ -53,7 +53,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ acc
     return NextResponse.json({
       confirmed: account,
       assets: { pages: [], instagramAccounts: [], pixels: [], errors: {} },
-      blocked: 'This sub-account has no Meta ad account set, so there is nothing to list yet.',
+      blocked: 'This account has no Meta ad account set, so there is nothing to list yet.',
     });
   }
   if (!isMetaConfigured()) {

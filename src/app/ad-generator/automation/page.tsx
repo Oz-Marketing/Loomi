@@ -235,7 +235,7 @@ export default function AutomationDryRunPage() {
 
   const run = useCallback(async () => {
     if (!accountKey) {
-      toast.error('Pick a sub-account first');
+      toast.error('Pick an account first');
       return;
     }
     if (!model.trim()) {
@@ -315,7 +315,7 @@ export default function AutomationDryRunPage() {
         </Link>
         <h1 className="mb-1 text-lg font-semibold text-[var(--foreground)]">Automatic ads</h1>
         <p className="mb-6 max-w-2xl text-xs text-[var(--muted-foreground)]">
-          Manufacturer offers for {accountData?.dealer || 'this sub-account'} are turned into ads for
+          Manufacturer offers for {accountData?.dealer || 'this account'} are turned into ads for
           you each month.
         </p>
         <ClientTemplateCard accountKey={accountKey} accountData={accountData} />
@@ -341,7 +341,7 @@ export default function AutomationDryRunPage() {
               PUBLISHES — generated ads land as drafts for a person to approve. */}
           {tab === 'dryrun'
             ? 'Walks the full autonomous chain for one vehicle and reports every step. Nothing is saved — no ad is created, no render is uploaded, no offer state is recorded.'
-            : 'Watches this sub-account’s inventory and OEM offers, and builds draft ads from them. Nothing publishes on its own — every generated ad waits for a person.'}
+            : 'Watches this account’s inventory and OEM offers, and builds draft ads from them. Nothing publishes on its own — every generated ad waits for a person.'}
         </p>
         </div>
         <AutomationSwitch automation={automation} />
@@ -370,7 +370,7 @@ export default function AutomationDryRunPage() {
           unmounted) so a trace survives a detour to the other tabs. Its fields are
           throwaway diagnostic parameters — nothing here is ever saved — so they're
           exempt from the unsaved-changes guard, or typing a model here would leave
-          every later sub-account switch claiming there were edits to lose. */}
+          every later account switch claiming there were edits to lose. */}
       <div
         data-unsaved-ignore="true"
         className={tab === 'dryrun' ? 'grid gap-6 lg:grid-cols-[340px_1fr]' : 'hidden'}
@@ -470,7 +470,7 @@ export default function AutomationDryRunPage() {
           </button>
           {!accountKey && (
             <p className="mt-2 text-center text-[11px] text-[var(--muted-foreground)]">
-              Pick a sub-account to run against.
+              Pick an account to run against.
             </p>
           )}
         </section>

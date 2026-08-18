@@ -90,7 +90,7 @@ export function ClientTemplateCard({
   if (!accountKey) {
     return (
       <p className="text-sm text-[var(--muted-foreground)]">
-        Choose a sub-account in the top bar to set its ad design.
+        Choose an account in the top bar to set its ad design.
       </p>
     );
   }
@@ -118,7 +118,7 @@ export function ClientTemplateCard({
           state, and one someone should be told about rather than discover. */}
       {!enabled && !loading && (
         <p className="mb-4 rounded-lg bg-[var(--muted)]/50 px-3 py-2 text-[11px] text-[var(--muted-foreground)]">
-          Automatic ads aren&apos;t switched on for this sub-account yet. You can still choose a
+          Automatic ads aren&apos;t switched on for this account yet. You can still choose a
           design — your Oz contact turns it on.
         </p>
       )}

@@ -169,7 +169,7 @@ function buildQuickLinks(prefix: string): QuickLink[] {
       tone: 'rose',
     },
     {
-      href: '/tools/meta/ad-planner', // Tools are global (no sub-account prefix today)
+      href: '/tools/meta/ad-planner', // Tools are global (no account prefix today)
       label: 'Ad Planner',
       description: 'Plan Meta ad spend by funnel stage and audience.',
       icon: MegaphoneIcon,

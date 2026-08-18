@@ -185,7 +185,7 @@ export function BlastList({
             {/* Header row */}
             <div className="flex items-center gap-4 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <span className="flex-1">Name</span>
-              <span className="w-28">Sub-Account</span>
+              <span className="w-28">Account</span>
               <span className="w-20 text-center">Status</span>
               {tab === 'workflows' && <span className="w-24 text-right">Updated</span>}
             </div>

@@ -73,7 +73,7 @@ export function CrmOverviewCard({
       {/* Account table */}
       <div className="glass-card rounded-xl overflow-hidden">
         <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 px-3 py-2 border-b border-[var(--border)] text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
-          <span>Sub-Account</span>
+          <span>Account</span>
           <span className="text-right">Contacts</span>
           <span className="w-6" />
         </div>

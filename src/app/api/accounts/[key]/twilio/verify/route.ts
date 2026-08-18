@@ -44,7 +44,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
     if (!row?.twilioAccountSid || !row?.twilioAuthToken) {
       return NextResponse.json(
-        { ok: false, error: 'No Twilio credentials configured for this sub-account.' },
+        { ok: false, error: 'No Twilio credentials configured for this account.' },
         { status: 400 },
       );
     }

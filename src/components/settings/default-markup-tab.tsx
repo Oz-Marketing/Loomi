@@ -88,7 +88,7 @@ export function DefaultMarkupTab() {
               budget into the amount that should hit the ad platform
               (<strong>actual spend = client budget × markup</strong>). It applies
               to every account that doesn&apos;t set its own{' '}
-              <strong>Pacer Markup Rate</strong> in its sub-account settings.
+              <strong>Pacer Markup Rate</strong> in its account settings.
             </p>
           </div>
           <div className="flex items-center gap-3">

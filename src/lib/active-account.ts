@@ -12,7 +12,8 @@
  *
  * Value is one of:
  *   - an account key            → account mode
- *   - ADMIN_VALUE (`__admin__`) → Admin mode
+ *   - ADMIN_VALUE (`__admin__`) → Admin mode (unresolved, pre-default)
+ *   - ALL_VALUE (`__all__`)     → the all-accounts overview scope
  *   - `org:<id>`                → LEGACY organization selection; ignored
  *
  * Client read/write live here. Server reads the cookie directly via
@@ -22,6 +23,15 @@
 
 export const ACTIVE_ACCOUNT_COOKIE = 'loomi-active-account';
 export const ADMIN_VALUE = '__admin__';
+/**
+ * The all-accounts overview scope — a DELIBERATE choice, unlike ADMIN_VALUE
+ * which is only the unresolved state before a default account is opened. Kept
+ * as its own value precisely so the two cannot be confused: the context resolves
+ * `admin` into a real account on sight, and would do the same to this one if
+ * they shared a value, bouncing anyone who picked the overview straight back out
+ * of it.
+ */
+export const ALL_VALUE = '__all__';
 /**
  * Prefix marking a LEGACY organization selection. Organizations were replaced
  * by the Account hierarchy; this stays only so a stale cookie in someone's

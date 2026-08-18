@@ -238,7 +238,7 @@ export async function POST(req: NextRequest) {
         })) as AutomationConfigRow | null;
         if (!config) {
           return NextResponse.json(
-            { error: 'Save the automation config for this sub-account first' },
+            { error: 'Save the automation config for this account first' },
             { status: 400 },
           );
         }
@@ -280,7 +280,7 @@ export async function POST(req: NextRequest) {
         })) as GenerateConfigRow | null;
         if (!config) {
           return NextResponse.json(
-            { error: 'Save the automation config for this sub-account first' },
+            { error: 'Save the automation config for this account first' },
             { status: 400 },
           );
         }

@@ -73,7 +73,7 @@ export default function ReportingCallTrackingPage() {
         <EmptyState
           icon={PhoneIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its tracked calls."
+          body="Choose a single account from the top bar to see its tracked calls."
         />
       ) : (
         <CallTrackingReport

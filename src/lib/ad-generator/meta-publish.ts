@@ -63,14 +63,14 @@ export interface Blocker {
 export function publishBlockers(input: PublishInputs): Blocker[] {
   const out: Blocker[] = [];
   if (!input.adAccountId?.trim()) {
-    out.push({ field: 'metaAdAccountId', reason: 'This sub-account has no Meta ad account set.' });
+    out.push({ field: 'metaAdAccountId', reason: 'This account has no Meta ad account set.' });
   }
   if (!input.pageId?.trim()) {
     // The hard one. A Meta ad creative cannot exist without a Page.
     out.push({
       field: 'metaPageId',
       reason:
-        'No Facebook Page is confirmed for this sub-account. A Meta ad creative cannot be created without one — confirm the Page first.',
+        'No Facebook Page is confirmed for this account. A Meta ad creative cannot be created without one — confirm the Page first.',
     });
   }
   if (!input.destinationUrl?.trim()) {

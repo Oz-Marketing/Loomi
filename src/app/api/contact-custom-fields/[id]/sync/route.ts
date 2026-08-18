@@ -26,7 +26,7 @@ export async function POST(
   });
   if (!row || !row.accountKey) {
     return NextResponse.json(
-      { error: 'Not a sub-account-owned field' },
+      { error: 'Not an account-owned field' },
       { status: 400 },
     );
   }

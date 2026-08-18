@@ -284,7 +284,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
 
     if (accountKeysToFetch.length === 0) {
       setContacts([]);
-      setFetchError('Select at least one sub-account to load contacts.');
+      setFetchError('Select at least one account to load contacts.');
       setLoading(false);
       return;
     }
@@ -354,7 +354,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
     } else if (failures.length === accountKeysToFetch.length) {
       setFetchError(failures[0]);
     } else {
-      setFetchError(`${failures.length} sub-account fetches failed. Showing partial results.`);
+      setFetchError(`${failures.length} account fetches failed. Showing partial results.`);
     }
     setLoading(false);
   }, [accountKeysToFetch, accountMap]);
@@ -396,8 +396,8 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
               disabled={filters.accountFilters.length !== 1}
               title={
                 filters.accountFilters.length === 1
-                  ? 'Add a single contact to this sub-account'
-                  : 'Filter to a single sub-account to enable'
+                  ? 'Add a single contact to this account'
+                  : 'Filter to a single account to enable'
               }
               className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >

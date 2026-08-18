@@ -128,7 +128,7 @@ async function resolveAutomationTemplate(
     doc: JSON.parse(row.doc) as TemplateDoc,
     id: row.id,
     name: row.name,
-    how: row.accountKey ? 'newest published template for this sub-account' : 'newest published global template',
+    how: row.accountKey ? 'newest published template for this account' : 'newest published global template',
   };
 }
 
@@ -159,7 +159,7 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
     where: { key: input.accountKey },
     select: { key: true, dealer: true, oem: true, postalCode: true, branding: true, logos: true },
   });
-  if (!account) return fail(steps, 'account', 'Sub-account', `No sub-account "${input.accountKey}".`);
+  if (!account) return fail(steps, 'account', 'Account', `No account "${input.accountKey}".`);
 
   const make = (input.make || account.oem || '').trim();
   const model = input.model.trim();
@@ -168,13 +168,13 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
 
   steps.push({
     id: 'account',
-    label: 'Sub-account',
+    label: 'Account',
     status: 'ok',
     ms: 0,
     summary: `${account.dealer} — ${make || 'no OEM set'}${zip ? ` · ${zip}` : ''}`,
     detail: { key: account.key, dealer: account.dealer, make, zip, year, model },
   });
-  if (!make) return fail(steps, 'account', 'Sub-account', 'No make: set the sub-account OEM or pass one explicitly.');
+  if (!make) return fail(steps, 'account', 'Account', 'No make: set the account OEM or pass one explicitly.');
 
   // ── 2. Offers ──
   if (!marketcheckConfigured()) {
@@ -267,7 +267,7 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
   const tpl = await step(steps, 'template', 'Template', async () => {
     const t = await resolveAutomationTemplate(input.accountKey, input.templateId);
     if (!t) {
-      return { status: 'failed' as const, summary: 'No published template in scope for this sub-account.' };
+      return { status: 'failed' as const, summary: 'No published template in scope for this account.' };
     }
     return {
       status: 'ok' as const,

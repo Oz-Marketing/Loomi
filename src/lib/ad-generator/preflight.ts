@@ -367,7 +367,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       field: 'brandColor',
       label: 'Brand colour',
       message:
-        'This design is brand-colour driven but the sub-account has no brand colour set — it will render in Loomi’s default indigo, not the dealer’s colour.',
+        'This design is brand-colour driven but the account has no brand colour set — it will render in Loomi’s default indigo, not the dealer’s colour.',
     });
   }
 

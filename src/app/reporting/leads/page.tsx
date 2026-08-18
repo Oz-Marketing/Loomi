@@ -101,7 +101,7 @@ export default function ReportingLeadsPage() {
         <EmptyState
           icon={UserPlusIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its lead performance."
+          body="Choose a single account from the top bar to see its lead performance."
         />
       ) : (
         <LeadPerformanceReport accountKey={accountKey} period={period} isDark={isDark} />

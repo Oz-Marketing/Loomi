@@ -400,7 +400,7 @@ export function FlowsTable({
                     dir={sortDir}
                     onSort={handleSort}
                   />
-                  {/* Status — admin view only. Sub-account view
+                  {/* Status — admin view only. Account view
                       drops it since the publish toggle already
                       communicates active vs paused/draft. */}
                   {showAccountColumn && (
@@ -421,7 +421,7 @@ export function FlowsTable({
                       Publish
                     </th>
                   )}
-                  {/* Active Enrolled — sub-account view only. Helps
+                  {/* Active Enrolled — account view only. Helps
                       the user see at a glance how many contacts are
                       flowing through each instance right now. */}
                   {!showAccountColumn && (
@@ -743,11 +743,11 @@ function FlowRow({
           </span>
           {/* Inline "Template" chip in the admin view so admins can
               tell templates apart at a glance — replaces what used
-              to live in the Sub-Account column. */}
+              to live in the Account column. */}
           {showAccountColumn && isTemplate && (
             <span
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/15 text-violet-300 flex-shrink-0"
-              title="No sub-account — this is a template flow. Open it to deploy to one or more sub-accounts."
+              title="No account — this is a template flow. Open it to deploy to one or more accounts."
             >
               <Squares2X2Icon className="w-3 h-3" />
               Template
@@ -766,7 +766,7 @@ function FlowRow({
       )}
       {/* Publish column — hidden in admin view (templates deploy,
           they don't publish; standalone flows live in their own
-          sub-account where this column does show). */}
+          account where this column does show). */}
       {!showAccountColumn && (
         <td className="px-3 py-2">
           {onToggleStatus && (
@@ -798,7 +798,7 @@ function FlowRow({
           )}
         </td>
       )}
-      {/* Active Enrolled — sub-account view only. Shows the live
+      {/* Active Enrolled — account view only. Shows the live
           count returned by the listFlows service. */}
       {!showAccountColumn && (
         <td className="px-3 py-2 text-right tabular-nums">
@@ -953,7 +953,7 @@ function FlowRowActionsMenu({
               {onClone && (
                 <MenuItem
                   icon={DocumentDuplicateIcon}
-                  label="Clone to sub-account…"
+                  label="Clone to account…"
                   onClick={() => fire(onClone)}
                 />
               )}

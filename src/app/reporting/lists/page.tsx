@@ -38,7 +38,7 @@ export default function ReportingListsPage() {
         <EmptyState
           icon={FunnelIcon}
           title="Pick an account"
-          body="Lists are built from one store's contacts and its own custom fields, so choose a single sub-account from the top bar."
+          body="Lists are built from one store's contacts and its own custom fields, so choose a single account from the top bar."
         />
       ) : (
         <MarketingLists accountKey={accountKey} />

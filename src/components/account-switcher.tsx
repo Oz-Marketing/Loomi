@@ -1,15 +1,21 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter, usePathname } from 'next/navigation';
 import {
+  ChevronRightIcon,
   ChevronUpDownIcon,
+  BuildingStorefrontIcon,
   MagnifyingGlassIcon,
   CheckIcon,
   CogIcon,
 } from '@heroicons/react/24/outline';
-import { useAccount, type AccountData } from '@/contexts/account-context';
+import {
+  allAccountsSurface,
+  useAccount,
+  type AccountData,
+} from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
@@ -169,9 +175,16 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Agency scope was once a selectable entry here ("Agency Settings"). It isn't
-  // a place any more — platform config is the cog's modal — so this switcher
-  // lists sub-accounts and nothing else. `mode: 'admin'` survives only as the
-  // brief pre-resolution state before the context settles on an account.
+  // a place any more — platform config is the cog's modal. What IS still a
+  // place is the all-accounts overview: the cross-account roll-up the pacer and
+  // the reporting views render when nothing is selected. It went missing when
+  // agency scope was retired, because that entry was the only door to it.
+  //
+  // Projects only — see ALL_ACCOUNTS_SURFACES for why Reporting is excluded
+  // despite having a roll-up of its own.
+  const [offersAllAccounts, setOffersAllAccounts] = useState(false);
+  useEffect(() => setOffersAllAccounts(allAccountsSurface()), [pathname]);
+  const inAllAccounts = account.mode === 'all';
   const currentKey = account.mode === 'account' ? account.accountKey : null;
   const currentAccount = currentKey ? accounts[currentKey] : null;
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
@@ -318,34 +331,79 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     .filter((entry): entry is readonly [string, AccountData] => Boolean(entry))
     .filter(([, accountData]) => inActiveOrg(accountData));
 
+  /**
+   * The hierarchy the flat list was throwing away. `parentAccountKey` already
+   * records that twenty rooftops belong to Young Automotive Group while PJ Corp
+   * and Burton Family Law belong to nobody — rendering that as one flat array
+   * buried the unrelated clients among the rooftops.
+   *
+   * ORPHANS RENDER AT TOP LEVEL. A user scoped to a single rooftop can see the
+   * child without seeing its parent, so "has a parentAccountKey" is not the same
+   * as "its parent is in this list" — keying off the former alone would drop
+   * those accounts out of the switcher entirely.
+   */
+  const { roots, childrenOf } = useMemo<{
+    roots: [string, AccountData][];
+    childrenOf: Record<string, [string, AccountData][]>;
+  }>(() => {
+    const childrenOf: Record<string, [string, AccountData][]> = {};
+    const roots: [string, AccountData][] = [];
+    const byName = (a: [string, AccountData], b: [string, AccountData]) =>
+      (a[1].dealer || a[0]).localeCompare(b[1].dealer || b[0]);
+    for (const entry of Object.entries(accounts)) {
+      const parent = entry[1].parentAccountKey;
+      if (parent && accounts[parent]) (childrenOf[parent] ??= []).push(entry);
+      else roots.push(entry);
+    }
+    roots.sort(byName);
+    for (const list of Object.values(childrenOf)) list.sort(byName);
+    return { roots, childrenOf };
+  }, [accounts]);
+
+  // Which groups are open. A group starts closed unless the active account is
+  // inside it — landing on Young Chevrolet with its group collapsed would leave
+  // the switcher showing no trace of what is selected.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const parent = currentKey ? accounts[currentKey]?.parentAccountKey : null;
+    if (parent) setExpandedGroups((prev) => (prev.has(parent) ? prev : new Set(prev).add(parent)));
+  }, [currentKey, accounts]);
+
   const getAccountAddress = (accountData: AccountData) => resolveAccountCityStateLabel(accountData);
-  const renderAccountOption = (key: string, accountData: AccountData, itemKey: string = key) => {
+  const renderAccountOption = (
+    key: string,
+    accountData: AccountData,
+    itemKey: string = key,
+    opts: { nested?: boolean; expandable?: boolean } = {},
+  ) => {
     const selected = currentKey === key;
+    const kids = childrenOf[key] ?? [];
+    const expanded = expandedGroups.has(key);
 
     return (
-      <button
+      <div
         key={itemKey}
+        className={`space-y-0.5 ${opts.nested ? 'ml-3 border-l border-[var(--border)] pl-2' : ''}`}
+      >
+      <div className="flex items-center">
+      <button
         onClick={() => handleSelect(key)}
-        className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
+        className={`flex-1 min-w-0 flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg text-left transition-colors ${
           selected ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]'
         }`}
       >
-        <AccountSwitcherAvatar account={accountData} accountKey={key} />
+        <AccountSwitcherAvatar
+          account={accountData}
+          accountKey={key}
+          isGroup={childCounts[key] > 0}
+        />
         <div className="flex-1 min-w-0">
-          <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
-            <span className="truncate">{accountData.dealer || key}</span>
-            {/* Organizations sit in the same list as plain sub-accounts now
-                that org mode is gone, so without this badge there's no way to
-                tell that selecting this account rolls up 40 others. */}
-            {childCounts[key] > 0 && (
-              <span className="flex-shrink-0 rounded-full border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-                Organization
-              </span>
-            )}
+          <p className="truncate text-xs font-medium text-[var(--foreground)]">
+            {accountData.dealer || key}
           </p>
           {childCounts[key] > 0 ? (
             <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
-              {childCounts[key]} sub-account{childCounts[key] === 1 ? '' : 's'}
+              {childCounts[key]} account{childCounts[key] === 1 ? '' : 's'}
               {getAccountAddress(accountData) ? ` · ${getAccountAddress(accountData)}` : ''}
             </p>
           ) : (
@@ -358,6 +416,38 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
         </div>
         {selected && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />}
       </button>
+      {/* The disclosure is its OWN control, not part of the row: opening a group
+          to look at its rooftops must not switch you into the group. It sits on
+          the right so every account name starts at the same left edge — a
+          chevron in the leading position indented the groups relative to the
+          plain accounts, which read as the hierarchy being one level off. */}
+      {opts.expandable && kids.length > 0 && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpandedGroups((prev) => {
+              const next = new Set(prev);
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              return next;
+            });
+          }}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} ${accountData.dealer || key}`}
+          className="flex-shrink-0 ml-0.5 p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+        >
+          <ChevronRightIcon
+            className={`w-3 h-3 transition-transform ${expanded ? 'rotate-90' : ''}`}
+          />
+        </button>
+      )}
+      </div>
+      {opts.expandable && expanded &&
+        kids.map(([childKey, childData]) =>
+          renderAccountOption(childKey, childData, `child-${childKey}`, { nested: true }),
+        )}
+      </div>
     );
   };
 
@@ -365,7 +455,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   if (userRole === 'client') {
     if (compact) {
       // Compact client view: just the avatar, centered, no dropdown.
-      const label = currentAccount?.dealer || currentKey || 'Your Sub-Account';
+      const label = currentAccount?.dealer || currentKey || 'Your Account';
       return (
         <SidebarTooltip label={label}>
           <div className="flex items-center justify-center w-full" aria-label={label}>
@@ -387,7 +477,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
         )}
         <div className="flex-1 min-w-0">
           <p className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">
-            {currentAccount?.dealer || currentKey || 'Your Sub-Account'}
+            {currentAccount?.dealer || currentKey || 'Your Account'}
           </p>
           {currentAccount && getAccountAddress(currentAccount) && (
             <p className="text-[10px] text-[var(--sidebar-muted-foreground)] truncate leading-tight">
@@ -399,12 +489,25 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     );
   }
 
-  const triggerAvatar = currentAccount ? (
-    <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
+  // All-accounts gets the same glyph as its dropdown entry. The empty tile is
+  // the "nothing resolved yet" state, and showing it for a scope the user
+  // deliberately chose reads as a broken avatar rather than as a scope.
+  const triggerAvatar = inAllAccounts ? (
+    <span className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] border border-[var(--sidebar-border)] flex items-center justify-center flex-shrink-0">
+      <BuildingStorefrontIcon className="w-4 h-4 text-[var(--sidebar-muted-foreground)]" />
+    </span>
+  ) : currentAccount ? (
+    <AccountSwitcherAvatar
+      account={currentAccount}
+      accountKey={currentKey}
+      isGroup={currentKey ? childCounts[currentKey] > 0 : false}
+    />
   ) : (
     <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
   );
-  const triggerLabel = currentAccount?.dealer || currentKey || 'Select sub-account';
+  const triggerLabel = inAllAccounts
+    ? 'All accounts'
+    : currentAccount?.dealer || currentKey || 'Select account';
 
   return (
     <>
@@ -448,11 +551,14 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={dropdownRef}
-          className="fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
+          // Wider than the trigger it hangs off: nested rooftops spend horizontal
+          // space on the indent and the disclosure, and at the old width a group
+          // name plus its badge truncated to "Demo Acco…".
+          className="fixed z-[200] w-96 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
           style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         >
           {/* Search — universal filter for BOTH the organizations and
-              sub-account lists, so it scales to many orgs. Placed high so it's
+              account lists, so it scales to many orgs. Placed high so it's
               the first thing you reach when the lists are long. */}
           <div className="p-1.5 border-b border-[var(--border)]">
             <div className="relative">
@@ -462,7 +568,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search sub-accounts..."
+                placeholder="Search accounts..."
                 className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
               />
             </div>
@@ -470,43 +576,88 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
 
           {/* Scope tier — Organizations are a top-level scope, so they're
               always visible and one-click (selecting one enters roll-up mode
-              across its sub-accounts; switching orgs is just clicking another).
+              across its accounts; switching orgs is just clicking another).
               Filtered by the search above and bounded so many orgs scroll in
-              place rather than burying the sub-account list. Hidden while a
+              place rather than burying the account list. Hidden while a
               search matches no orgs. */}
           {/* Organizations are no longer a separate scope. A group (Young
               Automotive Group) is an Account with rooftops beneath it, so it
-              appears in the sub-account list below like any other account —
+              appears in the account list below like any other account —
               selecting it gives the normal account nav plus a roll-up across
               its children. */}
+
+          {/* All accounts — a SCOPE, so it sits above the lists rather than
+              inside them: picking it is not picking an account, it is
+              stepping back to see every one of them at once. Hidden while
+              searching (the search filters accounts, and a scope is not a
+              search result) and on surfaces with no cross-account view. */}
+          {offersAllAccounts && !search && (
+            <div className="p-2 border-b border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setSearch('');
+                  confirmNavigation(() => {
+                    setAccount({ mode: 'all' });
+                    onSwitch?.();
+                  });
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2.5 rounded-lg hover:bg-[var(--muted)] transition-colors text-left"
+              >
+                <span className="w-7 h-7 rounded-md bg-[var(--muted)] border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+                  <BuildingStorefrontIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-[var(--foreground)] truncate">
+                    All accounts
+                  </p>
+                  <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
+                    Every account in one view
+                  </p>
+                </div>
+                {inAllAccounts && (
+                  <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Recently viewed — quick shortcuts under the search; hidden while
               searching so the results below read cleanly. Small matched label. */}
           {!search && recentAccounts.length > 0 && (
-            <div className="p-1 border-b border-[var(--border)]">
-              <p className="px-2.5 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            <div className="p-2 border-b border-[var(--border)]">
+              <p className="px-2.5 pt-0.5 pb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 Recently viewed
               </p>
               {recentAccounts.map(([key, accountData]) => renderAccountOption(key, accountData, `recent-${key}`))}
             </div>
           )}
 
-          {/* Sub-accounts — scoped to the active org (never a mixed pool),
+          {/* Accounts — scoped to the active org (never a mixed pool),
               filtered by search. Label matches "Recently viewed" and names the
               org when scoped so the shorter list is self-explanatory. */}
-          <div className="p-1">
-            <p className="px-2.5 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              Sub-accounts
+          <div className="p-2">
+            <p className="px-2.5 pt-0.5 pb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              Accounts
             </p>
-            <div className="max-h-[280px] overflow-y-auto">
+            <div className="max-h-[320px] space-y-0.5 overflow-y-auto pr-0.5">
               {!accountsLoaded ? (
                 <p className="text-xs text-[var(--muted-foreground)] text-center py-4">Loading...</p>
               ) : filteredAccounts.length === 0 ? (
                 <p className="text-xs text-[var(--muted-foreground)] text-center py-4">
-                  {search ? 'No sub-accounts match your search' : 'No sub-accounts available'}
+                  {search ? 'No accounts match your search' : 'No accounts available'}
                 </p>
-              ) : (
+              ) : search ? (
+                // SEARCHING FLATTENS. A search has to reach a rooftop whose
+                // group is collapsed, so results are the flat match list —
+                // hiding a match inside a closed group is the one behavior that
+                // would make the search look broken.
                 filteredAccounts.map(([key, accountData]) => renderAccountOption(key, accountData))
+              ) : (
+                roots.map(([key, accountData]) =>
+                  renderAccountOption(key, accountData, key, { expandable: true }),
+                )
               )}
             </div>
           </div>
@@ -534,7 +685,18 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   );
 }
 
-function AccountSwitcherAvatar({ account, accountKey }: { account: AccountData; accountKey: string | null }) {
+function AccountSwitcherAvatar({
+  account,
+  accountKey,
+  isGroup = false,
+}: {
+  account: AccountData;
+  accountKey: string | null;
+  /** Owns sub-accounts — badged on the avatar rather than named in a pill. */
+  isGroup?: boolean;
+}) {
+  // The badge itself lives on AccountAvatar, so a group is recognisable
+  // wherever its logo is drawn rather than only inside this picker.
   return (
     <AccountAvatar
       name={account.dealer}
@@ -542,6 +704,7 @@ function AccountSwitcherAvatar({ account, accountKey }: { account: AccountData; 
       storefrontImage={account.storefrontImage}
       logos={account.logos}
       size={28}
+      isGroup={isGroup}
       className="w-7 h-7 rounded-md object-cover flex-shrink-0 border border-[var(--border)]"
     />
   );

@@ -68,7 +68,7 @@ export default function ReportingAcquisitionPage() {
         <EmptyState
           icon={ChartBarIcon}
           title="Pick an account"
-          body="Choose a sub-account from the top bar to see what its leads and units cost."
+          body="Choose an account from the top bar to see what its leads and units cost."
         />
       ) : (
         <AcquisitionReport

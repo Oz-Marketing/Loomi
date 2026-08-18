@@ -327,7 +327,7 @@ export function ReportAccessTab({
   return (
     <div className="max-w-3xl">
       <p className="mb-4 text-xs text-[var(--muted-foreground)]">
-        Which reports this sub-account&apos;s <strong className="font-semibold">client
+        Which reports this account&apos;s <strong className="font-semibold">client
         users</strong> see in their sidebar. Agency staff always see every report
         their role allows, whatever is set here. Budget and Executive are never
         client-visible and don&apos;t appear below.
@@ -382,7 +382,7 @@ export function ReportAccessTab({
             {brokenOn.map((r) => r.label).join(', ')}{' '}
             {brokenOn.length === 1 ? 'is' : 'are'} switched on but{' '}
             {brokenOn.length === 1 ? 'has' : 'have'} no data source connected for
-            this sub-account. Clients will see the page with nothing in it.
+            this account. Clients will see the page with nothing in it.
           </p>
         </div>
       )}
@@ -391,7 +391,7 @@ export function ReportAccessTab({
         <div className="mb-4 flex items-start gap-2 rounded-lg border border-dashed border-[var(--border)] px-3 py-2.5">
           <EyeSlashIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
           <p className="text-xs text-[var(--muted-foreground)]">
-            Client users on this sub-account will see no reports at all — their
+            Client users on this account will see no reports at all — their
             Reporting sidebar will be empty.
           </p>
         </div>
@@ -456,7 +456,7 @@ export function ReportAccessTab({
                           <SourceBadge source={row.source} enabled={isOn} />
                           {row.isDefault && (
                             <span
-                              title={`No setting saved for this sub-account, so it follows the platform default (${
+                              title={`No setting saved for this account, so it follows the platform default (${
                                 row.defaultForClients ? 'shown' : 'hidden'
                               }). Saving writes an explicit choice.`}
                               className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]"

@@ -24,22 +24,21 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowPathIcon,
   ArrowsRightLeftIcon,
   ViewColumnsIcon,
-  NoSymbolIcon,
   ClockIcon,
   ArrowSmallDownIcon,
   ArrowSmallUpIcon,
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
   BoltIcon,
+  PencilSquareIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
+  EllipsisVerticalIcon,
   ExclamationTriangleIcon,
-  Squares2X2Icon,
-  TableCellsIcon,
   LockClosedIcon,
   LockOpenIcon,
   MinusSmallIcon,
@@ -57,6 +56,8 @@ import {
   convertMode,
   moneyEq,
   planMove,
+  projectAtTypedDaily,
+  type TypedDailyProjection,
   PUSH_DRIFT_FRACTION,
   PUSH_DRIFT_MIN_DOLLARS,
   resolveClock,
@@ -67,6 +68,7 @@ import {
   type AllocatorLine,
   type AllocatorView,
   type BalanceMode,
+  type PaceStatus,
   type MoveMethod,
   type MoveSource,
 } from '@/lib/ad-pacer/google-allocator';
@@ -80,12 +82,13 @@ import {
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
-import { COL, GoogleCampaignCard } from './GoogleCampaignCard';
 import { capDelivery, isFutileRaise } from '@/lib/ad-pacer/google-metrics';
 import {
-  adStatusTone,
   normalizeAdStatus,
+  parseStatusReasons,
+  platformStatusWord,
   statusMismatch,
+  statusReasonLabel,
   statusReasonText,
   type StatusMismatch,
 } from '@/lib/ad-pacer/platform-status';
@@ -144,6 +147,26 @@ export interface GooglePacingCardProps {
   /** Search / sync / Add Plan, rendered directly above the table so the controls
    *  sit with the rows they act on rather than above the whole card. */
   tableActions?: React.ReactNode;
+  /**
+   * The account pace verdict, published up to the shell so it can sit beside the
+   * account name rather than inside this card.
+   *
+   * A callback rather than the shell computing it: the verdict is a property of
+   * the ALLOCATOR VIEW — filtered subset, reserved lines excluded, the data edge
+   * and all — and a second derivation up there would be a second answer to the
+   * same question the moment a label filter or a reserve changed one of them.
+   * One computation, rendered in two places.
+   */
+  onPaceSummary?: (summary: AccountPaceSummary | null) => void;
+}
+
+/** What the shell needs to render the verdict — no presentation, so the card and
+ *  the header cannot disagree about the numbers behind it. */
+export interface AccountPaceSummary {
+  status: PaceStatus;
+  ratio: number | null;
+  /** Null unless a label filter is active — the verdict is then about the slice. */
+  scope: string | null;
 }
 
 export function GooglePacingCard({
@@ -161,6 +184,7 @@ export function GooglePacingCard({
   onSyncFromGoogle,
   syncing = false,
   tableActions,
+  onPaceSummary,
 }: GooglePacingCardProps) {
   const readOnly = frozen;
   const [mode, setMode] = useState<AllocationMode>(plan.allocationMode ?? 'pct');
@@ -192,28 +216,19 @@ export function GooglePacingCard({
     changes: ApplyChange[];
     mode: 'single' | 'all';
   } | null>(null);
-  const [spendOpen, setSpendOpen] = useState(false);
-  // Table (dense, comparative) vs cards (one campaign at a time, Meta's shape).
-  const [layout, setLayout] = useState<'table' | 'cards'>('table');
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   // Which rows have their delivery panel open (§1). A SET, not a single id:
   // choosing who gives budget and who gets it is a comparison, and the modal
   // this replaced could only ever show one campaign while hiding the table
   // behind it. Opening a row never closes another — the user decides what stays
-  // open. Kept separate from `expandedIds` (the cards layout's planning body)
-  // so the two panels don't fight over one toggle.
+  // open.
   const [deliveryIds, setDeliveryIds] = useState<Set<string>>(new Set());
-  const toggleSet =
-    (setter: typeof setExpandedIds) =>
-    (id: string) =>
-      setter((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      });
-  const toggleExpanded = toggleSet(setExpandedIds);
-  const toggleDelivery = toggleSet(setDeliveryIds);
+  const toggleDelivery = (id: string) =>
+    setDeliveryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Undo holds whole ad sets — every mutation here is a multi-row rewrite
   // (balance, move, a mode switch), so a field-level undo would be a lie.
   const [undoStack, setUndoStack] = useState<PacerAd[][]>([]);
@@ -253,9 +268,21 @@ export function GooglePacingCard({
         clock,
         activeLabel,
         eventBudgets,
+        markup,
       }),
-    [ads, mode, payable, clock, activeLabel, eventBudgets],
+    [ads, mode, payable, clock, activeLabel, eventBudgets, markup],
   );
+
+  // Hand the verdict to the shell, and take it back down when this card unmounts
+  // so a stale "Overspending" cannot outlive the tab that computed it.
+  useEffect(() => {
+    onPaceSummary?.({
+      status: view.totals.paceStatus,
+      ratio: view.totals.paceRatio,
+      scope: view.activeLabel,
+    });
+  }, [view.totals.paceStatus, view.totals.paceRatio, view.activeLabel, onPaceSummary]);
+  useEffect(() => () => onPaceSummary?.(null), [onPaceSummary]);
 
   const allLabels = useMemo(() => collectLabels(ads), [ads]);
   // The sidebar/search filter narrows what's DRAWN; the allocator's own label
@@ -403,9 +430,54 @@ export function GooglePacingCard({
 
   // §14 — stage one campaign for confirmation. Never pushes directly: no write
   // to a live account happens without the concrete change stated first.
-  const requestApply = useCallback((change: ApplyChange) => {
-    setPendingApply({ changes: [change], mode: 'single' });
-  }, []);
+  /**
+   * Persist a field WITHOUT pushing an undo frame. Undo restores whole ad sets,
+   * and every entry on its stack is a plan change someone made here. A daily
+   * budget that Google has already accepted is not one of those: undoing it
+   * would rewrite our copy to a rate the platform is no longer running, which is
+   * worse than the drift it would be trying to fix.
+   */
+  const syncAd = useCallback(
+    (id: string, patch: Partial<PacerAd>) => {
+      onPersist({ ads: ads.map((ad) => (ad.id === id ? { ...ad, ...patch } : ad)) });
+    },
+    [ads, onPersist],
+  );
+
+  /**
+   * §2.4 — write ONE typed daily budget to Google, from the row's edit box.
+   *
+   * Routes through the guarded single-campaign push, which re-checks the row
+   * server-side: unlinked, total-budget and shared-budget campaigns are refused
+   * there whoever asks, so a hand-typed number cannot do what the batch push
+   * deliberately will not. On success our copy is brought into lockstep with
+   * what Google now holds, which is what keeps the footer's live total and the
+   * drift check honest between syncs.
+   */
+  const pushTypedDaily = useCallback(
+    async (adId: string, amount: number): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const res = await fetch(
+          `/api/google-ads-pacer/${encodeURIComponent(accountKey)}/push-budget?period=${period}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ adId, dailyBudget: amount }),
+          },
+        );
+        const json = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) return { ok: false, error: json?.error ?? 'Google rejected the change' };
+        syncAd(adId, {
+          pacerDailyBudget: amount.toFixed(2),
+          googleDailyPushedAt: new Date().toISOString(),
+        });
+        return { ok: true };
+      } catch {
+        return { ok: false, error: 'Could not reach Google' };
+      }
+    },
+    [accountKey, period, syncAd],
+  );
 
   // §14 — the demoted apply-all. Same drift gate the server applies to a batch,
   // recomputed here only to SHOW the list before committing; the server rebuilds
@@ -483,119 +555,162 @@ export function GooglePacingCard({
   const carryoverNote =
     (num(plan.baseCarryover) ?? 0) + (num(plan.addedCarryover) ?? 0);
 
+  // The campaigns the account daily is actually spread across. `dailyControllable`
+  // already excludes reserved lines and total-budget campaigns, which is exactly
+  // the set the number is summed over — deriving the count any other way is how a
+  // "$340/day across 9 campaigns" ends up describing eight.
+  const dailyLineCount = view.visible.filter((l) => l.dailyControllable).length;
+
+  // §1.2 — the allocation health badge and the fourth stat beneath it are ONE
+  // decision rendered twice (a word and a number), so they are computed once.
+  // The comparison is allocated vs the denominator the view is measured against:
+  // the payable unfiltered, the event budget inside a label.
+  const allocHealth = view.totals.fullyAllocated
+    ? {
+        badge: 'Full',
+        color: COLORS.success,
+        statLabel: 'Unallocated',
+        statAmount: 0,
+        statSub: 'nothing left to place',
+        tooltip: `The plan places exactly ${fmt(view.totals.denominator)} — every dollar of ${denominatorNoun(view)} is on a campaign.`,
+      }
+    : view.totals.unallocated < 0
+      ? {
+          badge: 'Over',
+          color: COLORS.error,
+          statLabel: 'Over',
+          statAmount: -view.totals.unallocated,
+          statSub: `more than ${denominatorNoun(view)}`,
+          tooltip: `The campaign targets add up to ${fmt(view.totals.allocated)}, which is ${fmt(-view.totals.unallocated)} more than the ${fmt(view.totals.denominator)} there is to place. Balance, or trim a line.`,
+        }
+      : {
+          badge: 'Under',
+          color: COLORS.warn,
+          statLabel: 'Unallocated',
+          statAmount: view.totals.unallocated,
+          statSub: 'not on any campaign',
+          tooltip: `${fmt(view.totals.unallocated)} of ${denominatorNoun(view)} is not on a campaign yet. Until it is, the recommended dailies below add up to less than the month's rate.`,
+        };
+
   return (
     <div>
-      {/* ── Headline stats ──
-          One card per number, above the allocation bar. These are the figures a
-          rep reads first and quotes to a client, so they get their own surfaces
-          rather than being crammed into a header row. MetricBox is Loomi's
-          passive-stat primitive (same one the pacer cards use), so they match the
-          rest of the tool. Filtered views swap the account's budget/payable for
-          the denominator the slice is actually measured against (§9). */}
-      <div
-        className={`mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 ${
-          view.activeLabel ? 'lg:grid-cols-4' : 'lg:grid-cols-5'
-        }`}
-      >
-        {view.activeLabel ? (
-          <StatCard
-            label={view.denominatorKind === 'eventBudget' ? 'Event Budget' : 'Campaign Total'}
-            value={fmt(view.totals.denominator)}
-            tooltip={
-              view.denominatorKind === 'eventBudget'
-                ? 'The budget you intended for this label. The tagged allocation is checked against it.'
-                : 'No event budget set for this label, so the tagged campaigns are checked against their own total.'
-            }
-          />
-        ) : (
-          <>
-            <StatCard
-              label="Total Budget"
-              value={fmt(totalBudget)}
-              sub="client gross"
-              tooltip="The client's budget for the month, before the markup. Set it on the Planner tab."
-            />
-            <StatCard
-              label="Actual Spend"
-              value={fmt(payable)}
-              sub={`× ${(markup * 100).toFixed(1)}% markup`}
-              color={carryoverNote !== 0 ? COLORS.warn : undefined}
-              tooltip={`Client budget × ${(markup * 100).toFixed(1)}% markup — the spend that actually reaches Google, and the denominator every allocation is measured against.${
-                carryoverNote !== 0
-                  ? ` This month also carries a ${money2(carryoverNote)} reconciliation carryover, which is NOT included — apply it to the budget number if you want it paced.`
-                  : ''
-              }`}
-            />
-          </>
-        )}
-        <StatCard
-          label="Spent MTD"
-          value={fmt(view.totals.spent)}
-          sub={clock.dataEdgeIso ? `through ${fmtDate(clock.dataEdgeIso)}` : 'no settled days'}
-          color={COLORS.daily}
-          tooltip="Delivered so far this month, from Google. Served cost, not billed."
-        />
-        <StatCard
-          label="Expected MTD"
-          value={fmt(view.totals.expected)}
-          sub="at an even pace"
-          tooltip="What should have been spent by now, at an even pace across each campaign's own flight days."
-        />
-        <StatCard
-          label={view.activeLabel ? 'Campaign Pace' : 'Account Pace'}
-          value={PACE_LABELS[view.totals.paceStatus]}
-          sub={
-            view.totals.paceRatio != null
-              ? `${Math.round(view.totals.paceRatio * 100)}% of expected`
-              : undefined
-          }
-          color={PACE_COLORS[view.totals.paceStatus]}
-          tooltip={
-            view.totals.paceRatio != null
-              ? `Spent is ${Math.round(view.totals.paceRatio * 100)}% of expected. On track is within 12% either way — Google can spend up to 2× the daily on a busy day, so a tighter band would flip on any busy Saturday.`
-              : 'No settled days yet.'
-          }
-        />
-      </div>
-
-      {/* ── Allocation bar ── */}
-      <div className="glass-section-card rounded-xl px-5 py-4 mb-4">
+      {/* ── §1.2 Allocation module ──
+          Mirrors Meta's budget bar: a health badge that answers the question in
+          one word, the four numbers the badge is computed from, the bar, and a
+          legend tying every color back to a campaign. */}
+      <div className="glass-section-card mb-4 rounded-xl px-5 py-4">
         <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
-            {view.activeLabel ?? 'Account'} Allocation
+            {view.activeLabel ?? 'Account'} allocation
           </span>
-          {/* Expands the two numbers that drive the day's work. */}
-          <button
-            type="button"
-            onClick={() => setSpendOpen((o) => !o)}
-            aria-expanded={spendOpen}
-            className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-          >
-            {spendOpen ? 'Hide' : 'Spend to date'}
-            <ChevronDownIcon
-              className={`h-3.5 w-3.5 transition-transform ${spendOpen ? 'rotate-180' : ''}`}
-            />
-          </button>
+          <AllocationHealthBadge view={view} />
+        </div>
+
+        {/* The quartet the badge is computed from. Borderless — boxes here would
+            restate the old five-card header inside the module it replaced. */}
+        <div
+          className="mb-4 grid grid-cols-2 gap-y-3 sm:grid-cols-4"
+        >
+          {view.activeLabel ? (
+            <>
+              {/* A label view asks the same question the account view does —
+                  is the money placed — so it gets the same four numbers, with
+                  the client figure typed in rather than read off the Planner.
+                  The entry lives HERE, in the module that checks it, instead of
+                  in a bar of its own between the toolbar and the table: the
+                  number it is compared against is two inches away. */}
+              <BudgetTargetStat
+                label={view.activeLabel}
+                gross={view.budgetTarget?.gross ?? null}
+                readOnly={readOnly}
+                onChange={(amount) => {
+                  const next = { ...eventBudgets };
+                  if (amount == null || amount <= 0) delete next[view.activeLabel as string];
+                  else next[view.activeLabel as string] = amount;
+                  setEventBudgets(next);
+                  onPersist({ eventBudgets: next });
+                }}
+              />
+              <PaceStat
+                grow
+                label={view.budgetTarget ? 'Actual spend' : 'Campaign total'}
+                value={fmt(view.totals.denominator)}
+                sub={
+                  view.budgetTarget
+                    ? markup > 0
+                      ? `after ${((1 - markup) * 100).toFixed(1)}% margin`
+                      : 'markup not set'
+                    : 'no target set'
+                }
+              />
+            </>
+          ) : (
+            <>
+              <PaceStat
+                grow
+                label="Client budget"
+                value={fmt(totalBudget)}
+                sub="gross"
+              />
+              {/* "× 77.0% markup" said the factor, not the fact. 0.77 is the
+                  gross→spend RETENTION factor for a 23%-margin account (see
+                  lib/ad-pacer/markup) — nobody calls that a 77% markup, and 77
+                  is the complement of the number the desk actually quotes. The
+                  sub's job is to explain the gap to Client Budget directly
+                  above it, and what closes that gap is the margin. */}
+              <PaceStat
+                grow
+                label="Actual spend"
+                value={fmt(payable)}
+                sub={markup > 0 ? `after ${((1 - markup) * 100).toFixed(1)}% margin` : 'markup not set'}
+                color={carryoverNote !== 0 ? COLORS.warn : undefined}
+                tooltip={`${fmt(totalBudget)} client budget less the ${((1 - markup) * 100).toFixed(1)}% agency margin — the spend that actually reaches Google, and the denominator every allocation is measured against.${
+                  carryoverNote !== 0
+                    ? ` This month also carries a ${money2(carryoverNote)} reconciliation carryover, which is NOT included — apply it to the budget number if you want it paced.`
+                    : ''
+                }`}
+              />
+            </>
+          )}
+          <PaceStat
+            label="Allocated"
+            value={fmt(view.totals.allocated)}
+            sub={`across ${view.visible.length} campaign${view.visible.length === 1 ? '' : 's'}`}
+          />
+          <PaceStat
+            grow
+            label={allocHealth.statLabel}
+            value={fmt(allocHealth.statAmount)}
+            color={allocHealth.color}
+            sub={allocHealth.statSub}
+            tooltip={allocHealth.tooltip}
+          />
         </div>
 
         {/* Segmented allocation bar — one segment per campaign, matching the
             Base/Added bar's chrome so the two read as the same instrument. */}
-        <div className="mb-2 flex h-2.5 overflow-hidden rounded-full bg-[var(--muted)]">
+        <div className="mb-1.5 flex h-2.5 overflow-hidden rounded-full bg-[var(--muted)]">
           {view.visible
             .filter((l) => l.target > 0)
             .map((l) => (
               <Tooltip
                 key={l.id}
                 className="h-full transition-[width] duration-500"
-                label={`${l.name}: ${fmt(l.target)} (${l.percentOfPayable.toFixed(1)}% of actual spend)${l.locked ? ' · locked' : ''}`}
+                label={`${l.name}: ${fmt(l.target)} (${l.percentOfPayable.toFixed(1)}% of actual spend)${
+                  l.reserved ? ' · reserved — holds allocation, sits out of pacing' : ''
+                }${l.locked ? ' · locked' : ''}`}
                 style={{
                   width: `${(l.target / meterBasis) * 100}%`,
                   background: campaignColor(l.colorIndex),
-                  // A locked carve-out is hatched so it reads as protected in
-                  // the bar, not only in the row.
-                  backgroundImage: l.locked
-                    ? 'repeating-linear-gradient(45deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px)'
-                    : undefined,
+                  // §1.2 — a reserve holds allocation but sits OUT of pacing, so
+                  // it cannot look like the segments beside it. Bold stripes in
+                  // the page background; a lock keeps the finer white hatch, so
+                  // the two protections stay tellable apart at a glance.
+                  backgroundImage: l.reserved
+                    ? 'repeating-linear-gradient(45deg, var(--background) 0 4px, transparent 4px 8px)'
+                    : l.locked
+                      ? 'repeating-linear-gradient(45deg, rgba(255,255,255,.35) 0 3px, transparent 3px 6px)'
+                      : undefined,
                   borderRight: '1px solid var(--background)',
                 }}
               />
@@ -611,26 +726,12 @@ export function GooglePacingCard({
             />
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="text-xs text-[var(--muted-foreground)]">
-            Allocated{' '}
-            <span className="font-bold" style={{ color: allocColor }}>
-              {fmt(view.totals.allocated)}
-            </span>{' '}
-            of {fmt(view.totals.denominator)} {denominatorNoun(view)}
-          </div>
-          {!view.totals.fullyAllocated && (
-            <div className="text-xs font-bold" style={{ color: allocColor }}>
-              {view.totals.unallocated > 0
-                ? `${fmt(view.totals.unallocated)} unallocated`
-                : `${fmt(-view.totals.unallocated)} over`}
-            </div>
-          )}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
           {view.totals.lockedTarget > 0 && (
-            <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-              <LockClosedIcon className="h-3 w-3" />
-              {fmt(view.totals.lockedTarget)} locked
-            </div>
+              <span className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+                <LockClosedIcon className="h-3 w-3" />
+                {fmt(view.totals.lockedTarget)} locked
+              </span>
           )}
           {/* §12 — the reserve is inside the allocation but outside every pacing
               figure, so the account's expected-MTD and daily-needed are lower
@@ -638,68 +739,106 @@ export function GooglePacingCard({
               leaving someone to reconcile the gap themselves. */}
           {view.totals.reservedTarget > 0 && (
             <Tooltip label="Committed to campaigns that cannot spend yet. Counted in the allocation and the payable check, and excluded from Expected MTD, the account pace, the daily needed and the push.">
-              <div
-                className="flex cursor-help items-center gap-1.5 text-xs"
+              <span
+                className="flex cursor-help items-center gap-1.5 text-[11px]"
                 style={{ color: COLORS.lifetime }}
               >
                 <ArchiveBoxIcon className="h-3 w-3" />
                 {fmt(view.totals.reservedTarget)} reserved
-              </div>
+              </span>
             </Tooltip>
           )}
-          <div className="ml-auto text-xs text-[var(--muted-foreground)]">
-            {fmt(Math.max(0, view.totals.denominator - view.totals.spent))} left to spend ·{' '}
-            <span className="font-bold text-[var(--foreground)]">
-              {fmt(view.totals.accountDaily)}/day
-            </span>{' '}
-            across campaigns
-          </div>
+          {/* The percent the bar is actually drawing: 100% when the plan totals
+              the denominator, 108.5% when it is over it. */}
+            <span
+            className="text-sm font-bold tabular-nums"
+            style={{ color: allocColor }}
+          >
+            {view.totals.denominator > 0
+              ? `${((view.totals.allocated / view.totals.denominator) * 100).toFixed(1)}%`
+              : '—'}
+          </span>
         </div>
 
-        {/* The two numbers the day's work actually turns on, at a size you can
-            read across a desk. Collapsed by default so the panel stays a bar. */}
-        {spendOpen && (
-          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Left to spend
-              </div>
-              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
-                {fmt(Math.max(0, view.totals.denominator - view.totals.spent))}
-              </div>
-              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
-                {fmt(view.totals.denominator)} {denominatorNoun(view)} − {fmt(view.totals.spent)} spent
-              </div>
-            </div>
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Daily budget needed
-              </div>
-              <div
-                className="mt-1 text-3xl font-bold tabular-nums leading-tight"
-                style={{ color: 'var(--primary)' }}
-              >
-                {fmt(view.totals.accountDaily)}
-                <span className="text-base font-semibold text-[var(--muted-foreground)]">/day</span>
-              </div>
-              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
-                Across {view.visible.filter((l) => l.dailyControllable).length} campaign
-                {view.visible.filter((l) => l.dailyControllable).length === 1 ? '' : 's'}
-              </div>
-            </div>
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Days left
-              </div>
-              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
-                {Math.max(0, clock.daysInMonth - clock.dataEdgeDay)}
-              </div>
-              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
-                of {clock.daysInMonth} — counted from the data edge, whole days
-              </div>
-            </div>
+        {/* Legend — the one thing that makes the bar readable: which color is
+            which campaign, and what each one holds. */}
+        {view.visible.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 border-t border-[var(--border)] pt-3">
+            {view.visible.map((l) => (
+              <span key={l.id} className="flex items-center gap-1.5 text-[11px]">
+                <span
+                  className="h-2 w-2 flex-shrink-0 rounded-sm"
+                  style={{ background: campaignColor(l.colorIndex) }}
+                />
+                <span className="max-w-[14rem] truncate text-[var(--foreground)]">{l.name}</span>
+                <span className="tabular-nums text-[var(--muted-foreground)]">
+                  {fmt(l.target)}
+                </span>
+                {l.reserved ? (
+                  <span className="tabular-nums" style={{ color: COLORS.lifetime }}>
+                    reserved
+                  </span>
+                ) : (
+                  <span className="tabular-nums text-[var(--muted-foreground)]">
+                    {l.percentOfPayable.toFixed(1)}%
+                  </span>
+                )}
+              </span>
+            ))}
           </div>
         )}
+      </div>
+
+      {/* ── §1.1 The month's pacing numbers ──
+          Below the allocation module, not above it, and in the module's own
+          chrome. The order is the order of the question: allocation is what the
+          plan INTENDS, pacing is how it is going against that, so the numbers
+          that grade the plan cannot sit above the plan they grade.
+
+          The verdict itself is not here — it moved up beside the account name
+          (the shell renders it from `onPaceSummary`), because it is a statement
+          about the account and belongs with the account's identity. */}
+      <div className="mb-4">
+        <div className="mb-2 flex flex-wrap items-center gap-2.5">
+          <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
+            {view.activeLabel ? `${view.activeLabel} pacing` : 'Total account pacing'}
+          </span>
+        </div>
+        {/* One card per number, on the allocation module's own surface
+            (glass-section-card) rather than a chrome of their own — the two
+            sections have to read as the same instrument, and a second card
+            style directly beneath the first is what made the old header look
+            like two unrelated strips. */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          <PaceCard
+            label="Spent MTD"
+            value={fmt(view.totals.spent)}
+            sub={clock.dataEdgeIso ? `through ${fmtDate(clock.dataEdgeIso)}` : 'no settled days'}
+            color={COLORS.daily}
+          />
+          <PaceCard
+            label="Expected MTD"
+            value={fmt(view.totals.expected)}
+            sub="at an even pace"
+          />
+          <PaceCard
+            label="Left to spend"
+            value={fmt(Math.max(0, view.totals.denominator - view.totals.spent))}
+            sub={`${fmt(view.totals.denominator)} − ${fmt(view.totals.spent)}`}
+          />
+          {/* The one number the desk acts on, so it carries the accent color. */}
+          <PaceCard
+            label="Daily needed"
+            value={`${fmt(view.totals.accountDaily)}/day`}
+            sub={`across ${dailyLineCount} campaign${dailyLineCount === 1 ? '' : 's'}`}
+            color="var(--primary)"
+          />
+          <PaceCard
+            label="Days left"
+            value={String(Math.max(0, clock.daysInMonth - clock.dataEdgeDay))}
+            sub={`of ${clock.daysInMonth}`}
+          />
+        </div>
       </div>
 
       {/* ── Header: what you're looking at (left) and when (right), then the
@@ -714,7 +853,7 @@ export function GooglePacingCard({
         </span>
         <div className="text-right">
           <div className="flex items-center justify-end gap-2">
-            <span className="text-base font-bold tracking-tight text-[var(--foreground)]">
+            <span className="text-lg font-bold tracking-tight text-[var(--foreground)]">
               {clock.todayDay != null
                 ? `Day ${clock.todayDay} of ${clock.daysInMonth}`
                 : `${clock.daysInMonth}-day month`}
@@ -787,7 +926,6 @@ export function GooglePacingCard({
               )}
             </button>
           </Tooltip>
-          <Tooltip label="Shift budget between campaigns without changing the account total.">
             <button
               type="button"
               onClick={() => {
@@ -800,7 +938,6 @@ export function GooglePacingCard({
               <ArrowsRightLeftIcon className="h-4 w-4" />
               Move budget
             </button>
-          </Tooltip>
           <button
             type="button"
             onClick={undo}
@@ -812,30 +949,6 @@ export function GooglePacingCard({
           </button>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
-            {(
-              [
-                ['table', 'Table', TableCellsIcon],
-                ['cards', 'Cards', Squares2X2Icon],
-              ] as const
-            ).map(([value, label, Icon]) => (
-              <Tooltip key={value} label={`${label} view`}>
-                <button
-                  type="button"
-                  onClick={() => setLayout(value)}
-                  aria-pressed={layout === value}
-                  aria-label={`${label} view`}
-                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
-                    layout === value
-                      ? 'bg-[var(--primary)] text-white'
-                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
-                >
-                  <Icon className="h-4 w-4" />
-                </button>
-              </Tooltip>
-            ))}
-          </div>
           <LabelFilterBar
             ads={ads}
             activeLabel={activeLabel}
@@ -846,119 +959,18 @@ export function GooglePacingCard({
         </div>
       </div>
 
-      {/* Event budget check — only meaningful inside a label view (§9). */}
-      {view.activeLabel && (
-        <EventBudgetBar
-          label={view.activeLabel}
-          value={view.eventBudget}
-          allocated={view.totals.allocated}
-          matched={view.totals.fullyAllocated}
-          readOnly={readOnly}
-          onChange={(amount) => {
-            const next = { ...eventBudgets };
-            if (amount == null || amount <= 0) delete next[view.activeLabel as string];
-            else next[view.activeLabel as string] = amount;
-            setEventBudgets(next);
-            onPersist({ eventBudgets: next });
-          }}
-        />
-      )}
 
-      {layout === 'cards' ? (
-        /* Card view — same AllocatorLine as the table, so the two can never
-           disagree; only the layout differs. */
-        <div>
-          {rows.map((line) => (
-            <GoogleCampaignCard
-              key={line.id}
-              line={line}
-              ad={adsById.get(line.id)}
-              mode={mode}
-              payable={payable}
-              daysInMonth={clock.daysInMonth}
-              allLabels={allLabels}
-              readOnly={readOnly}
-              expanded={expandedIds.has(line.id)}
-              onToggleExpanded={() => toggleExpanded(line.id)}
-              onInput={(value) => applyInputs(new Map([[line.id, value]]))}
-              onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
-              onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
-              deliveryOpen={deliveryIds.has(line.id)}
-              onToggleDelivery={() => toggleDelivery(line.id)}
-              onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
-              delivery={
-                deliveryIds.has(line.id) ? (
-                  <GoogleDeliveryExpander
-                    accountKey={accountKey}
-                    period={period}
-                    line={line}
-                    ad={adsById.get(line.id)}
-                    daysInMonth={clock.daysInMonth}
-                    readOnly={readOnly}
-                    onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
-                    onSyncFromGoogle={googleConnected ? onSyncFromGoogle : undefined}
-                    syncing={syncing}
-                  />
-                ) : null
-              }
-            />
-          ))}
-          {rows.length === 0 && (
-            <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-10 text-center text-sm text-[var(--muted-foreground)]">
-              No campaigns match this view.
-            </div>
-          )}
-          {/* Totals, on the SAME column widths as every header line above so the
-              list reads as a table. */}
-          <div className="glass-section-card mt-2 flex items-center gap-3 rounded-xl px-4 py-3">
-            <span className="min-w-0 flex-1 pl-[1.625rem] text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              {view.activeLabel ? 'Campaign total' : 'Account total'}
-            </span>
-            <div className={`${COL.allocation} flex-shrink-0 text-right`}>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Allocation
-              </div>
-              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-                {mode === 'pct'
-                  ? `${view.visible.reduce((sum, l) => sum + l.input, 0).toFixed(1)}%`
-                  : fmt(view.totals.allocated)}
-              </div>
-            </div>
-            <div className={`${COL.spent} hidden flex-shrink-0 text-right sm:block`}>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Spent MTD
-              </div>
-              <div className="text-sm font-bold tabular-nums" style={{ color: COLORS.daily }}>
-                {fmt(view.totals.spent)}
-              </div>
-            </div>
-            <div className={`${COL.daily} hidden flex-shrink-0 text-right sm:block`}>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Current Daily
-              </div>
-              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-                {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
-              </div>
-            </div>
-            <div className={`${COL.pace} flex-shrink-0 text-right`}>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                New Daily
-              </div>
-              <div className="text-sm font-bold tabular-nums" style={{ color: 'var(--primary)' }}>
-                {fmt(view.totals.accountDaily)}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="glass-table">
+      <div className="glass-table">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1040px]">
               <thead className="sticky top-0 z-10">
                 <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
-                  <th className="w-10 px-2 py-2" />
+                  {/* §2.3 — the row-expander affordance. The whole row is the
+                      click target now, so this is the sign that it is, not the
+                      only way in. */}
+                  <th className="w-8 px-2 py-2" />
                   <Th align="left">Campaign</Th>
-                  <Th className="w-[170px]">
+                  <Th className="w-[150px]">
                     <span className="inline-flex items-center gap-1.5">
                       Allocation
                       {/* The unit belongs to this column — it shows the current
@@ -982,20 +994,19 @@ export function GooglePacingCard({
                       </Tooltip>
                     </span>
                   </Th>
-                  <Th>Target Spend</Th>
                   <Th>Spent MTD</Th>
                   <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
                     Expected MTD
                   </Th>
                   <Th align="left">Pace</Th>
-                  <Th tooltip="The average daily budget this campaign currently has in Google. The New Daily Budget beside it is what it should be — the gap is what a push would change.">
-                    Current Daily
+                  <Th tooltip="The average daily budget this campaign currently has in Google — edit it here to set a different one. The recommended daily beside it is what the target math wants; the gap is what a push would change.">
+                    Daily Budget
                   </Th>
                   <Th
                     hero
                     tooltip="(Monthly target − spent) ÷ remaining flight days. Set this as the campaign's daily budget in Google today to land on target."
                   >
-                    New Daily Budget
+                    Recommended
                   </Th>
                 </tr>
               </thead>
@@ -1029,13 +1040,13 @@ export function GooglePacingCard({
                     onToggleCompare={() => toggleCompare(line.id)}
                     pushing={pushing}
                     googleConnected={googleConnected}
-                    onApply={requestApply}
+                    onPushDaily={pushTypedDaily}
                   />
                 ))}
                 {rows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={8}
                       className="px-3 py-10 text-center text-sm text-[var(--muted-foreground)]"
                     >
                       No campaigns match this view.
@@ -1046,16 +1057,53 @@ export function GooglePacingCard({
               <tfoot>
                 <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
                   <td />
-                  <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  <td className="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-[var(--foreground)]">
                     {view.activeLabel ? 'Campaign total' : 'Account total'}
                   </td>
-                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                    {mode === 'pct'
-                      ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
-                      : fmt(view.totals.allocated)}
-                  </td>
-                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                    {fmt(view.totals.allocated)}
+                  {/* §5 put an integrity badge here, on the allocation total,
+                      because what it checks is a property of THIS column. The
+                      allocation module above now answers the same question
+                      three ways over — a health badge, the unallocated dollars,
+                      and the percent — so a fourth restatement only stacked up
+                      the summary line. The claim it carried lives on this
+                      total's tooltip instead, where it is one hover from the
+                      number it is about. */}
+                  <td className="px-3 py-3 text-right">
+                    <Tooltip
+                      label={
+                        view.totals.fullyAllocated
+                          ? `Fully allocated: the plan totals ${denominatorNoun(view)} exactly, so the recommended daily total beside it is what Google Ads Manager should show after applying.`
+                          : `Under-allocated: ${fmt(Math.abs(view.totals.unallocated))} of ${denominatorNoun(view)} is ${view.totals.unallocated > 0 ? 'not placed on a campaign' : 'over-placed'}. Balance it, or the account daily total will not match Google Ads Manager after applying.`
+                      }
+                      className="w-full cursor-help"
+                    >
+                      {/* ONE child. The tooltip wrapper is an inline-flex, so
+                          two siblings here lay out side by side instead of
+                          stacking — which is what put the percent and the
+                          dollars on the same line. */}
+                      <div className="flex w-full items-start justify-end gap-1.5 text-right">
+                        <div>
+                          <div
+                            className="text-sm font-bold tabular-nums"
+                            style={{
+                              color: view.totals.fullyAllocated ? undefined : COLORS.error,
+                            }}
+                          >
+                            {mode === 'pct'
+                              ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
+                              : fmt(view.totals.allocated)}
+                          </div>
+                        <div className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                          {mode === 'pct'
+                            ? fmt(view.totals.allocated)
+                            : `of ${fmt(view.totals.denominator)}`}
+                        </div>
+                        </div>
+                        {/* Stands in for the rows' budget menu so the figures
+                            share a right edge. Inert and hidden from readers. */}
+                        <span aria-hidden className="h-6 w-6 flex-shrink-0" />
+                      </div>
+                    </Tooltip>
                   </td>
                   <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
                     {fmt(view.totals.spent)}
@@ -1065,54 +1113,53 @@ export function GooglePacingCard({
                   </td>
                   <td />
                   <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
-                    {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
+                    {fmt(liveAccountDaily)}
                   </td>
+                  {/* §5 — the plan total, and one stacked delta for the gap to
+                      what Google holds. The live figure itself is NOT restated
+                      here: the cell immediately to the left already totals that
+                      exact number, and printing it twice is what made this cell
+                      read as three competing numbers. */}
                   <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
-                    <span
+                    {/* Same tight stack as the allocation total: the figure,
+                        then its sub-line flush beneath it. Block children, so
+                        nothing depends on an inline tooltip wrapper breaking
+                        the line for it. */}
+                    <div
                       className="text-sm font-bold tabular-nums"
-                      style={{ color: 'var(--primary)' }}
+                      // §5 — an under-allocated plan understates this total,
+                      // because the money that is not on a campaign has no
+                      // daily. Dimmed in that state only; a fully allocated plan
+                      // is just a clean number and needs no badge to say so.
+                      style={{
+                        color: 'var(--primary)',
+                        opacity: view.totals.unallocated > 0.005 ? 0.55 : 1,
+                      }}
                     >
                       {fmt(view.totals.accountDaily)}
-                    </span>
-                    {/* §14 — what is actually set in Google right now, beside
-                        what the plan wants. The recommended total is a property
-                        of targets and spend, so it does NOT move when you apply;
-                        only this one does. A gap is the honest picture of an
-                        account where some campaigns cannot absorb what even-pace
-                        math wants to give them — and it points at what to solve
-                        with a move, which is why it is surfaced rather than
-                        quietly reconciled. */}
-                    <LiveDailyTotal
-                      recommended={view.totals.accountDaily}
-                      live={liveAccountDaily}
-                      unapplied={applyAllChanges.length}
-                    />
-                    <Tooltip
-                      label={
-                        view.totals.fullyAllocated
-                          ? 'The plan totals the denominator, so this daily total is what Google Ads Manager should show after applying.'
-                          : 'The plan does not total the denominator — balance it before applying, or the account daily total will not match.'
-                      }
-                    >
-                      <span
-                        className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                        style={{
-                          background: view.totals.fullyAllocated
-                            ? 'rgba(34,197,94,0.16)'
-                            : 'rgba(239,68,68,0.16)',
-                          color: view.totals.fullyAllocated ? COLORS.success : COLORS.error,
-                        }}
-                      >
-                        {view.totals.fullyAllocated ? 'Matches' : 'Off'}
-                      </span>
-                    </Tooltip>
+                    </div>
+                    <div className="text-[10px] tabular-nums">
+                      <LiveDailyTotal
+                        recommended={view.totals.accountDaily}
+                        live={liveAccountDaily}
+                        unapplied={applyAllChanges.length}
+                      />
+                    </div>
+                    {view.totals.unallocated > 0.005 && (
+                      <div className="text-[10px] text-[var(--muted-foreground)]">
+                        <Tooltip
+                          label={`${fmt(view.totals.unallocated)} of ${denominatorNoun(view)} is not on a campaign, so no daily was computed for it. This total is the rate for the money that IS placed.`}
+                        >
+                          <span className="cursor-help">plan incomplete</span>
+                        </Tooltip>
+                      </div>
+                    )}
                   </td>
                 </tr>
               </tfoot>
             </table>
           </div>
-        </div>
-      )}
+      </div>
 
       {pendingApply != null && (
         <GoogleApplyConfirmModal
@@ -1173,15 +1220,22 @@ export function GooglePacingCard({
 function denominatorNoun(view: AllocatorView): string {
   return view.denominatorKind === 'payable'
     ? 'actual spend'
-    : view.denominatorKind === 'eventBudget'
-      ? 'event budget'
+    : view.denominatorKind === 'budgetTarget'
+      ? 'the budget target'
       : 'campaign total';
 }
 
-/** Headline stat. Same surface as the allocation container below it
- *  (glass-section-card) so the strip and the bar read as one panel split into
- *  parts, rather than two different kinds of card stacked. */
-function StatCard({
+/**
+ * One label-plus-number stat (§1.1/§1.2). Borderless by design: the header this
+ * replaced put five of these in five identical cards, which gave a pace reading
+ * and a budget figure the same visual weight and made the strip read as a
+ * dashboard of equals rather than one verdict with its workings beside it. The
+ * thin left rule is the only separator — enough to group, not enough to box.
+ */
+/** A pacing number as a card, on the allocation module's surface. Same content
+ *  as PaceStat — the difference is only whether the number sits inside the
+ *  module (borderless, divided by a rule) or beside it (its own card). */
+function PaceCard({
   label,
   value,
   sub,
@@ -1195,25 +1249,118 @@ function StatCard({
   tooltip?: string;
 }) {
   const body = (
-    <div className="glass-section-card w-full rounded-xl px-4 py-3.5">
-      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+    <div className="glass-section-card h-full w-full rounded-xl px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         {label}
       </div>
       <div
-        className="mt-1 text-2xl font-bold tabular-nums leading-tight"
+        className="mt-0.5 text-lg font-bold tabular-nums leading-tight"
         style={{ color: color ?? 'var(--foreground)' }}
       >
         {value}
       </div>
-      {sub && <div className="mt-1 text-[11px] text-[var(--muted-foreground)]">{sub}</div>}
+      {sub && (
+        <div className="mt-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">{sub}</div>
+      )}
     </div>
   );
   return tooltip ? (
-    <Tooltip label={tooltip} className="w-full">
+    <Tooltip label={tooltip} className="w-full cursor-help">
       {body}
     </Tooltip>
   ) : (
     body
+  );
+}
+
+function PaceStat({
+  label,
+  value,
+  sub,
+  color,
+  tooltip,
+  grow = false,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  color?: string;
+  tooltip?: string;
+  /** Fill the cell rather than sitting at its own natural size. The allocation
+   *  quartet uses this: four numbers packed left under a full-width bar left a
+   *  third of the module empty and made the quartet read as a caption rather
+   *  than as the bar's own figures. Their container is a GRID — flex sizes each
+   *  column around its content, so the widest number pushed the last two stats
+   *  into the right-hand corner instead of spacing them evenly. */
+  grow?: boolean;
+}) {
+  // The thin left rule is the only separator — enough to group, not enough to
+  // box. It sits on the OUTER element so it lands between siblings, and the
+  // leading one is dropped: a divider before the first stat has nothing on its
+  // other side to divide it from.
+  const outer = `border-l border-[var(--border)] pl-5 first:border-l-0 first:pl-0${
+    grow ? ' min-w-0' : ''
+  }`;
+  const body = (
+    <>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+        {label}
+      </div>
+      <div
+        className="text-lg font-bold tabular-nums leading-tight"
+        style={{ color: color ?? 'var(--foreground)' }}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="text-[10px] tabular-nums text-[var(--muted-foreground)]">{sub}</div>
+      )}
+    </>
+  );
+  return tooltip ? (
+    <Tooltip label={tooltip} className={`${outer} cursor-help`}>
+      <div className="w-full">{body}</div>
+    </Tooltip>
+  ) : (
+    <div className={outer}>{body}</div>
+  );
+}
+
+/**
+ * §1.2 — allocation health in one word, leading the module the way the pace
+ * verdict leads the strip above it.
+ *
+ * Three states, one question: does the plan place exactly the money there is to
+ * place? "Fully allocated" is the healthy one — it used to read "Zeroed", which
+ * described the arithmetic (the remainder is zero) rather than the state anyone
+ * cares about, and sounded like something had been wiped.
+ */
+function AllocationHealthBadge({ view }: { view: AllocatorView }) {
+  // ONE WORD. It carried the dollar figure too ("Over by $400.01"), which is the
+  // same number the quartet prints immediately below it — the badge is the
+  // verdict, the stat under it is the amount.
+  const health = view.totals.fullyAllocated
+    ? { text: 'Full', color: COLORS.success }
+    : view.totals.unallocated < 0
+      ? { text: 'Over', color: COLORS.error }
+      : { text: 'Under', color: COLORS.warn };
+  return (
+    <Tooltip
+      label={
+        view.totals.fullyAllocated
+          ? `Every dollar of ${denominatorNoun(view)} is on a campaign, so the recommended dailies below add up to the month's rate.`
+          : view.totals.unallocated < 0
+            ? `The campaign targets add up to more than ${denominatorNoun(view)}. Balance, or trim a line.`
+            : `Some of ${denominatorNoun(view)} is not on a campaign yet, so the plan is incomplete and the recommended total understates the month.`
+      }
+    >
+      <span
+        className="cursor-help rounded-md px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+        style={{ background: `${health.color}1f`, color: health.color }}
+      >
+        {health.text}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -1250,45 +1397,52 @@ function Th({
 }
 
 /**
- * §9 the label's intended budget. Optional — when set, the tagged allocation is
- * checked against it, which is how added sales dollars get confirmed as fully
- * placed rather than absorbed into regular budget. Never the account denominator.
+ * §9 the label's BUDGET TARGET — the client budget for this push — as the first
+ * card of the allocation module.
+ *
+ * Typed in CLIENT-GROSS dollars, which is the figure the push was actually sold
+ * at and the only one anyone has to hand. The card beside it derives the spend
+ * that reaches Google, and that derived figure is what the tagged allocation is
+ * checked against. It used to take the number raw and compare it straight to
+ * the allocation, so anyone entering the gross figure — the natural thing to
+ * reach for — saw a shortfall exactly the size of the agency margin, against
+ * money that was never going to reach Google at all.
+ *
+ * Optional. Without one the tagged campaigns are checked against their own
+ * total, which makes them trivially fully allocated and says nothing.
  */
-function EventBudgetBar({
+function BudgetTargetStat({
   label,
-  value,
-  allocated,
-  matched,
+  gross,
   readOnly,
   onChange,
 }: {
   label: string;
-  value: number | null;
-  allocated: number;
-  matched: boolean;
+  gross: number | null;
   readOnly: boolean;
   onChange: (amount: number | null) => void;
 }) {
-  const [draft, setDraft] = useState(value != null ? value.toFixed(2) : '');
+  const [draft, setDraft] = useState(gross != null ? gross.toFixed(2) : '');
   useEffect(() => {
-    setDraft(value != null ? value.toFixed(2) : '');
-  }, [value]);
+    setDraft(gross != null ? gross.toFixed(2) : '');
+  }, [gross]);
+
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5">
+    <div className="border-l border-[var(--border)] pl-5 first:border-l-0 first:pl-0">
       <Tooltip
-        label={`The budget you intended for “${label}” — e.g. the added sales-event dollars. The tagged allocation is checked against it. This never changes the account's actual spend figure.`}
+        label={`The client budget for “${label}” — e.g. what the sales event was sold at. Enter it gross, the same way it was quoted; the card takes the agency margin off and checks the tagged campaigns against what actually reaches Google. This never changes the account's own budget or actual spend.`}
       >
         <span className="cursor-help text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Event budget
+          Budget target
         </span>
       </Tooltip>
       <div className="relative">
-        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
+        <span className="pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 text-lg font-bold text-[var(--muted-foreground)]">
           $
         </span>
         <input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
           onBlur={() => {
             const parsed = Number(draft);
             onChange(draft.trim() === '' || !Number.isFinite(parsed) ? null : parsed);
@@ -1296,35 +1450,30 @@ function EventBudgetBar({
           onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
           disabled={readOnly}
           inputMode="decimal"
-          placeholder="optional"
-          aria-label={`Event budget for ${label}`}
-          className="w-32 rounded-lg border border-[var(--border)] bg-[var(--input)] py-1.5 pl-6 pr-2.5 text-sm tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60"
+          placeholder="0.00"
+          aria-label={`Budget target for ${label}`}
+          // Borderless until focused, like the planner's cells — a filled input
+          // here would be the only boxed thing in a row of plain figures.
+          className="w-full rounded-md bg-transparent pl-3.5 text-lg font-bold tabular-nums leading-tight text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]/50 hover:bg-[var(--muted)]/60 focus:bg-[var(--input)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-60"
         />
       </div>
-      {value != null && value > 0 && (
-        <span
-          className="text-[11px] font-medium"
-          style={{ color: matched ? COLORS.success : COLORS.warn }}
-        >
-          {matched
-            ? `✓ ${fmt(allocated)} allocated — matches`
-            : allocated < value
-              ? `${fmt(value - allocated)} of the event money is not allocated to these campaigns yet`
-              : `${fmt(allocated - value)} more than the event budget is allocated here`}
-        </span>
-      )}
+      <div className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
+        {gross != null ? 'client gross' : 'set one to check this label'}
+      </div>
     </div>
   );
 }
 
 /**
- * What Google reports for this campaign right now (§13), as a dot beside the
- * name — and, when it contradicts the team's own Ad Status, a loud one.
+ * A contradiction between the team's Ad Status and what Google reports (§13).
  *
- * The mismatch is the point of the pill. A row Loomi is pacing as live that
- * Google has paused is the expensive silent failure: the recommended daily, the
- * account total and the push all keep treating it as a running campaign, and
- * nothing on the card would otherwise say the money is not moving.
+ * §2.1 retired the plain status DOT this used to render beside the name: it sat
+ * next to the allocation color swatch and read as a second identity color rather
+ * than a status, and the row now says the platform status in words underneath
+ * the name instead. What is left is the case that is not a status at all but an
+ * error — a row Loomi is pacing as live that Google has paused is the expensive
+ * silent failure, because the recommended daily, the account total and the push
+ * all keep treating it as a running campaign — and that stays a loud badge.
  */
 function PlatformStatusPill({
   ad,
@@ -1333,45 +1482,25 @@ function PlatformStatusPill({
   ad: PacerAd | undefined;
   mismatch: StatusMismatch;
 }) {
-  if (!ad) return null;
+  if (!ad || !mismatch) return null;
   const status = normalizeAdStatus(ad);
-  // Not linked is said elsewhere on the row; a second badge for it is noise.
-  if (status === 'Not linked' || status === 'Unknown') return null;
-  const tone = adStatusTone(status);
-  const color =
-    tone === 'good'
-      ? COLORS.success
-      : tone === 'warn'
-        ? COLORS.warn
-        : tone === 'bad'
-          ? COLORS.error
-          : 'var(--muted-foreground)';
-  const why = mismatch?.reasons.length
+  const why = mismatch.reasons.length
     ? ` Google says ${mismatch.reasons.map(statusReasonText).join(', ')}.`
     : '';
-  const label = mismatch
-    ? mismatch.kind === 'not_serving'
+  const label =
+    mismatch.kind === 'not_serving'
       ? `Loomi is pacing this as ${ad.adStatus.toLowerCase()}, but Google reports it ${status.toLowerCase()} — it is not serving.${why} Its recommended daily is a number for a campaign that is not running, and pushing it will change nothing.`
-      : `Loomi has this as ${ad.adStatus.toLowerCase()}, but Google reports it ${status.toLowerCase()} — it is spending on a line the plan is not pacing.${why}`
-    : `Google reports this campaign ${status.toLowerCase()}.${why} Platform status, read-only — it never changes the Ad Status the team sets.`;
+      : `Loomi has this as ${ad.adStatus.toLowerCase()}, but Google reports it ${status.toLowerCase()} — it is spending on a line the plan is not pacing.${why}`;
 
   return (
     <Tooltip label={label}>
-      {mismatch ? (
-        <span
-          className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-          style={{ background: `${COLORS.error}1f`, color: COLORS.error }}
-        >
-          <ExclamationTriangleIcon className="h-3 w-3" />
-          {mismatch.kind === 'not_serving' ? `Not serving · ${status}` : `Live in Google`}
-        </span>
-      ) : (
-        <span
-          className="inline-flex h-2 w-2 flex-shrink-0 rounded-full"
-          style={{ background: color }}
-          aria-label={`Google status: ${status}`}
-        />
-      )}
+      <span
+        className="inline-flex cursor-help items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+        style={{ background: `${COLORS.error}1f`, color: COLORS.error }}
+      >
+        <ExclamationTriangleIcon className="h-3 w-3" />
+        {mismatch.kind === 'not_serving' ? `Not serving · ${status}` : 'Live in Google'}
+      </span>
     </Tooltip>
   );
 }
@@ -1391,6 +1520,187 @@ function Tag({ color, label, tooltip }: { color: string; label: string; tooltip:
     </Tooltip>
   );
 }
+
+/**
+ * The row's two protections — Lock and Reserve — behind one three-dot control.
+ *
+ * They were a stacked pair of icon buttons in the leftmost column: two unlabeled
+ * glyphs per row, twelve rows deep, neither of which anyone can name on sight
+ * (a padlock and an archive box, meaning "Balance and Move leave this alone" and
+ * "this money cannot be spent yet"). Behind a menu they get their real names and
+ * a sentence each, and the column collapses to one target.
+ *
+ * PORTALLED, and it has to be: the table sits in an `overflow-x-auto` wrapper,
+ * and an element that scrolls on one axis clips the other too, so a normally
+ * positioned panel is cut off at the row's own bottom edge. It is positioned
+ * from the trigger's client rect and rendered into the body.
+ */
+function RowActionsMenu({
+  line,
+  readOnly,
+  onToggleLock,
+  onToggleReserved,
+}: {
+  line: AllocatorLine;
+  readOnly: boolean;
+  onToggleLock: () => void;
+  onToggleReserved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  const place = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = 244;
+    // Flip above when there is no room below, so the last rows of a long table
+    // do not open a menu into the viewport's floor.
+    const below = window.innerHeight - rect.bottom;
+    setPos({
+      top: below < 150 ? Math.max(8, rect.top - 150) : rect.bottom + 6,
+      left: Math.min(rect.left, window.innerWidth - width - 8),
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    place();
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || triggerRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    // Re-place rather than follow: the table scrolls sideways under the menu,
+    // and a panel left behind at stale coordinates points at the wrong row.
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [open, place]);
+
+  const items = [
+    {
+      key: 'lock',
+      Icon: line.locked ? LockClosedIcon : LockOpenIcon,
+      title: line.locked ? 'Unlock budget' : 'Lock budget',
+      sub: line.locked
+        ? 'Let Balance, Move and the allocation box change this target again.'
+        : 'A fixed carve-out: Balance, Move and the allocation box all leave it alone. Changes no numbers.',
+      on: line.locked,
+      run: onToggleLock,
+    },
+    {
+      key: 'reserved',
+      Icon: ArchiveBoxIcon,
+      title: line.reserved ? 'Un-reserve budget' : 'Reserve budget',
+      sub: line.reserved
+        ? 'Put it back into Expected MTD, the account pace, the recommended daily and the push.'
+        : 'For budget committed to a campaign that cannot spend yet. It stays in the allocation and leaves every pacing figure.',
+      on: line.reserved,
+      run: onToggleReserved,
+    },
+  ];
+
+  return (
+    <>
+      <Tooltip label={`Budget protections for ${line.name} — lock and reserve.`}>
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          disabled={readOnly}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label={`Budget options for ${line.name}`}
+          // Lit only while the menu is OPEN. It used to stay lit for a locked or
+          // reserved line, which made a control look permanently pressed when
+          // nothing was pressed — and both states are already said twice over,
+          // by the row's tint and by the glyph beside the allocation.
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+            open
+              ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10 text-[var(--foreground)]'
+              : 'border-transparent text-[var(--muted-foreground)] hover:border-[var(--border)] hover:text-[var(--foreground)]'
+          }`}
+        >
+          <EllipsisVerticalIcon className="h-4 w-4" />
+        </button>
+      </Tooltip>
+      {open && pos && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuRef}
+              role="menu"
+              className="glass-dropdown fixed z-[200] w-[244px] p-1"
+              style={{ top: pos.top, left: pos.left }}
+            >
+              {items.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={item.on}
+                  onClick={() => {
+                    item.run();
+                    setOpen(false);
+                  }}
+                  className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--muted)]"
+                >
+                  <item.Icon
+                    className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                    style={{ color: item.on ? COLORS.lifetime : 'var(--muted-foreground)' }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-xs font-semibold text-[var(--foreground)]">
+                      {item.title}
+                    </span>
+                    <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">
+                      {item.sub}
+                    </span>
+                  </span>
+                  {item.on && (
+                    <span className="text-[11px] leading-none text-[var(--primary)]">✓</span>
+                  )}
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+/** The sentence behind the pace badge. Says what the badge means and what it
+ *  does NOT, since a single ratio invites over-reading. */
+function paceHelp(line: AllocatorLine): string {
+  if (line.paceRatio == null) {
+    return 'No settled days in this campaign\u2019s flight yet, so there is nothing to compare against.';
+  }
+  const pct = Math.round(line.paceRatio * 100);
+  const base = `Spent ${fmt(line.spentMTD)} against ${fmt(line.expectedToDate)} expected by now — ${pct}% of pace, ${line.paceDelta >= 0 ? 'ahead by' : 'behind by'} ${fmt(Math.abs(line.paceDelta))}. Expected is the target spread evenly across this campaign's own ${line.flight.total} flight days, not the month's.`;
+  const band =
+    ' On Track is within 12% either way: Google can spend up to 2× the daily on a busy day, so a tighter band would flip on any busy Saturday.';
+  const caveat =
+    line.paceStatus === 'under'
+      ? ' Behind can mean two different things — open the row to see whether it is spending its full daily budget or cannot spend at all.'
+      : '';
+  return base + band + caveat;
+}
+
+/** Stop a control inside the row from also toggling the row (§2.3). Every
+ *  interactive thing on a collapsed row needs this now that the row itself is
+ *  the click target — a lock that also opened the delivery panel would make both
+ *  actions feel accidental. */
+const stopRowToggle = (e: React.MouseEvent) => e.stopPropagation();
 
 function Row({
   line,
@@ -1417,7 +1727,7 @@ function Row({
   onToggleCompare,
   pushing,
   googleConnected,
-  onApply,
+  onPushDaily,
 }: {
   line: AllocatorLine;
   ad: PacerAd | undefined;
@@ -1443,159 +1753,121 @@ function Row({
   compareSelected: boolean;
   compareDisabled: boolean;
   onToggleCompare: () => void;
-  /** §14 per-campaign apply. `pushing` disables every control during a write. */
+  /** §2.4 — write a typed daily to Google. `pushing` disables the batch path. */
   pushing: boolean;
   googleConnected: boolean;
-  onApply: (change: ApplyChange) => void;
+  onPushDaily: (adId: string, amount: number) => Promise<{ ok: boolean; error?: string }>;
 }) {
+  // §2.4/§2.5 — the daily budget being TYPED in the edit box, with the
+  // projection computed from it, lifted to the row because two things outside
+  // the box read them: the recommended arrow beside it, and the money line in
+  // the open delivery panel. The PROJECTION travels, not just the number, so the
+  // box and the panel cannot render two different landings for one keystroke.
+  // Null whenever nobody is typing, which puts both back on the daily that is
+  // actually set.
+  const [typedDaily, setTypedDaily] = useState<TypedDailyEdit | null>(null);
+
+  /**
+   * §2.5 — what this campaign has actually been delivering per day, as the row
+   * can know it.
+   *
+   * NOT the delivery panel's recent-pace window, and it cannot be: the series on
+   * the pacer payload is a rolling EIGHT-DAY slice pinned to today (see
+   * fetchPeriodPlan), so a campaign whose sync is a few days behind carries no
+   * points at all here, and a run rate computed from it would be null exactly
+   * when the desk is looking at a stale account. The flight-to-date average is
+   * always available, needs no request, and is the same basis Expected MTD uses,
+   * so the two figures on the row agree with each other.
+   *
+   * Null below two elapsed days: with one day of delivery a single busy morning
+   * would set the projection for the rest of the month, and a projection with
+   * nothing behind it is worse than none.
+   */
+  const deliveryAvgDaily =
+    line.flight.elapsed >= 2 && line.spentMTD > 0 ? line.spentMTD / line.flight.elapsed : null;
+
   // §13 — does the team's Ad Status contradict what Google reports? Display
   // only; it never rewrites either side.
   const mismatch = ad ? statusMismatch(ad) : null;
-
-  // §8 — is this campaign genuinely filling its cap? Never the flag alone: on a
-  // Search line it needs real lost impression share behind it, and on a PMax line
-  // (no impression share) the recent bars have to actually sit at the cap.
-  const atCap = capDelivery({
-    budgetConstrained: line.budgetLimited,
-    channelType: line.channelType,
-    budgetLostIsRaw: ad?.googleSearchBudgetLostIs ?? null,
-    series: ad?.dailySpend,
-    cap: line.currentDaily,
-    dataEdgeIso,
-  });
-  // §14 — is the recommendation a raise this campaign cannot act on? Reuses the
-  // SAME cap read as the tag above, so the row cannot flag a futile raise while
-  // simultaneously badging the campaign as delivering to its cap.
-  const futileRaise = isFutileRaise({
-    currentDaily: line.currentDaily,
-    recommendedDaily: line.recommendedDaily,
-    delivery: atCap,
-  });
-
-  // The tooltip has to bridge DELIVERY and PACE, or the tag reads as a
-  // contradiction next to an "underspending" badge on the same row. At cap and
-  // behind on the month is not a conflict — it is the whole diagnosis: the cap
-  // is what's holding it back.
-  const cappedTooltip =
-    (atCap.basis === 'budget_lost_is'
-      ? `Genuinely budget-limited: Google reports ${Math.round((atCap.budgetLostIs ?? 0) * 100)}% of impressions lost to budget, so there is demand it is turning away. `
-      : `Its recent daily spend is sitting at the ${fmt(line.currentDaily)} cap, so it is filling the budget it has. `) +
-    (line.paceStatus === 'under'
-      ? 'It is still behind for the month because the cap is set low — a higher daily is what catches it up.'
-      : line.paceStatus === 'over'
-        ? 'It is also ahead of target for the month, so more budget is not the need here.'
-        : 'It is on pace for the month.');
-
-  // The recommended daily read against the even pace: up means it has to catch
-  // up, down means it has to ease off. Purely directional — the number is the
-  // instruction.
-  const trend =
-    line.currentDaily <= 0
-      ? 'flat'
-      : line.recommendedDaily > line.currentDaily * 1.02
-        ? 'up'
-        : line.recommendedDaily < line.currentDaily * 0.98
-          ? 'down'
-          : 'flat';
+  // §2.1 — the platform's own words, as a quiet line under the name. The dot
+  // this replaced sat beside the allocation color swatch and read as a second
+  // identity color rather than a status.
+  const statusWord = ad ? platformStatusWord(ad) : null;
+  const statusReasons = parseStatusReasons(ad?.googlePrimaryStatusReasons);
 
   return (
     <>
+    {/* §2.3 — the WHOLE row opens the delivery panel. It used to open only from
+        the pace text, which made the one surface that answers "can this campaign
+        absorb more money" a thing you had to know was there. Every control
+        inside stops propagation, so operating one never also toggles the row. */}
     <tr
-      className={`border-b border-[var(--border)] transition-colors hover:bg-[var(--muted)]/30 ${
-        line.locked ? 'bg-[var(--muted)]/20' : ''
-      }`}
+      onClick={onToggleDelivery}
+      className="cursor-pointer border-b border-[var(--border)] transition-colors hover:bg-[var(--muted)]/30"
+      // A protected line is tinted and carries a colored edge, so both states
+      // are legible straight down the table. They used to be a pair of small
+      // glyphs in the control column, which is the one place a scanning eye
+      // never goes — and after the lock/reserve controls moved into a menu
+      // there was nothing left on the row to show them at all.
+      style={
+        line.reserved
+          ? { background: `${COLORS.lifetime}14`, boxShadow: `inset 3px 0 0 ${COLORS.lifetime}` }
+          : line.locked
+            ? {
+                background: 'var(--muted)',
+                boxShadow: 'inset 3px 0 0 var(--muted-foreground)',
+              }
+            : undefined
+      }
     >
-      <td className="px-2 py-2.5 align-middle">
+      {/* §10 Compare selection. It sits in its own column rather than beside the
+          campaign name: the name cell carries the identity swatch, the channel
+          type and any structural tags, and a checkbox in front of all that read
+          as part of the name. The row-expander chevron that used to be here is
+          gone — the whole row opens the panel (§2.3), so the chevron was a
+          second way in taking a column to say so. */}
+      <td className="px-2 py-2.5 align-middle" onClick={stopRowToggle}>
         <Tooltip
           label={
-            line.locked
-              ? 'Locked — protected from Balance and from Move. Unlock to let them touch it.'
-              : 'Lock this budget — a fixed carve-out Balance and Move leave alone. Locking changes no numbers.'
+            compareSelected
+              ? `Remove ${line.name} from the comparison.`
+              : compareDisabled
+                ? 'Compare holds four campaigns — untick one to swap it out.'
+                : `Add ${line.name} to the comparison.`
           }
         >
-          <button
-            type="button"
-            onClick={onToggleLock}
-            disabled={readOnly}
-            aria-pressed={line.locked}
-            aria-label={line.locked ? `Unlock ${line.name}` : `Lock ${line.name}`}
-            className={`inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              line.locked
-                ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10 text-[var(--foreground)]'
-                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--foreground)]/30 hover:text-[var(--foreground)]'
-            }`}
-          >
-            {line.locked ? (
-              <LockClosedIcon className="h-3 w-3" />
-            ) : (
-              <LockOpenIcon className="h-3 w-3" />
-            )}
-          </button>
-        </Tooltip>
-        {/* §12 Reserved, next to the lock: the two controls that answer "how may
-            this budget be touched". Deliberately a manual toggle and nothing
-            else — nothing infers it, because auto-dropping a campaign out of
-            pacing off a missing daily would eventually misfire on a merely
-            paused live campaign. */}
-        <Tooltip
-          label={
-            line.reserved
-              ? `Reserved — ${line.name} is out of Expected MTD, the account pace, the recommended daily and the push, but its target still counts toward the allocation. Un-reserve it when the campaign launches.`
-              : `Reserve ${line.name} — for budget committed to a campaign that cannot spend yet (not built, or not linked to Google). It stays in the allocation and leaves every pacing figure, so the account read stops counting money that was never going to be spent this month.`
-          }
-        >
-          <button
-            type="button"
-            onClick={onToggleReserved}
-            disabled={readOnly}
-            aria-pressed={line.reserved}
-            aria-label={line.reserved ? `Un-reserve ${line.name}` : `Reserve ${line.name}`}
-            className={`mt-1 inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              line.reserved
-                ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10'
-                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--foreground)]/30 hover:text-[var(--foreground)]'
-            }`}
-            style={line.reserved ? { color: COLORS.lifetime } : undefined}
-          >
-            <ArchiveBoxIcon className="h-3 w-3" />
-          </button>
+          <input
+            type="checkbox"
+            checked={compareSelected}
+            disabled={compareDisabled && !compareSelected}
+            onChange={onToggleCompare}
+            aria-label={`Compare ${line.name}`}
+            className="loomi-checkbox h-3.5 w-3.5 flex-shrink-0 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40"
+          />
         </Tooltip>
       </td>
 
       <td className="px-3 py-2.5 text-left align-middle">
         <div className="flex flex-wrap items-center gap-2">
-          {/* §10 selection. It sits with the campaign's identity rather than in
-              the control column, which answers a different question ("how may
-              this budget be touched"). Disabled past four with the reason, so a
-              dead checkbox never reads as a broken one. */}
-          <Tooltip
-            label={
-              compareSelected
-                ? `Remove ${line.name} from the comparison.`
-                : compareDisabled
-                  ? 'Compare holds four campaigns — untick one to swap it out.'
-                  : `Add ${line.name} to the comparison.`
-            }
-          >
-            <input
-              type="checkbox"
-              checked={compareSelected}
-              disabled={compareDisabled && !compareSelected}
-              onChange={onToggleCompare}
-              aria-label={`Compare ${line.name}`}
-              className="h-3.5 w-3.5 flex-shrink-0 cursor-pointer rounded border-[var(--border)] accent-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-40"
-            />
-          </Tooltip>
           <span
             className="h-2 w-2 flex-shrink-0 rounded-sm"
             style={{ background: campaignColor(line.colorIndex) }}
           />
           <span className="text-sm font-semibold text-[var(--foreground)]">{line.name}</span>
-          {/* §13 — what Google actually reports for this campaign, on the
-              COLLAPSED row so status is legible across every line without
-              opening anything. Read-only platform truth: it never touches the
-              team's own Ad Status. */}
-          <PlatformStatusPill ad={ad} mismatch={mismatch} />
+          {/* §2.1 — the channel type sits with the NAME, because it is part of
+              what the campaign is (a Search line reads differently from a PMax
+              one). It used to live under the name, where the platform status now
+              goes. */}
+          {line.channelType && (
+            <span className="whitespace-nowrap text-[11px] text-[var(--muted-foreground)]">
+              {line.channelType}
+            </span>
+          )}
+          {/* §2.1 — the plain status moved to text below; the MISMATCH stays a
+              badge. A row Loomi paces as live that Google is not serving is an
+              error to catch, not a status to note, and quiet text is exactly how
+              it would be missed. */}
+          {ad && mismatch && <PlatformStatusPill ad={ad} mismatch={mismatch} />}
           {!line.flight.fullMonth && (
             <Tooltip label="This campaign's flight window inside the month — it paces against these days, not the whole month.">
               <span className="whitespace-nowrap text-[10px] tabular-nums text-[var(--muted-foreground)]">
@@ -1603,6 +1875,17 @@ function Row({
               </span>
             </Tooltip>
           )}
+          {/* What survives here is budget STRUCTURE — how this campaign's daily
+              can be controlled at all. Google's primary status never reports any
+              of it, so nothing else on the row says it.
+
+              "Capped · headroom" and "Ads disapproved" were removed: §2.1 gave
+              the row a status line fed by Google's own primary_status_reasons,
+              which already says "Limited by budget" and "Ads disapproved" in the
+              same place, in Google's words. Two labels for one fact, one of them
+              a shouty uppercase derivation of the other, is how the name column
+              turned into a wall. The delivery panel still carries the full
+              reasoning behind the cap read. */}
           {line.pacingType === 'Total' && (
             <Tag
               color={COLORS.lifetime}
@@ -1621,71 +1904,63 @@ function Row({
             <Tag
               color={COLORS.warn}
               label="Ad schedule"
-              tooltip="Runs on an ad schedule (restricted days/dayparts). Google concentrates the monthly cap into its active days, so calendar-day pacing reads it slightly low."
+              tooltip="Runs on an ad schedule (restricted days/dayparts). Google concentrates the monthly budget into its active days, so calendar-day pacing reads it slightly low."
             />
-          )}
-          {line.disapproved && (
-            <Tag
-              color={COLORS.error}
-              label="Ads disapproved"
-              tooltip="At least one ad is disapproved — the budget is sized right but the ads can't serve. Fix the disapprovals; raising the budget won't help."
-            />
-          )}
-          {atCap.atCap && (
-            <Tag color={COLORS.success} label="Capped · headroom" tooltip={cappedTooltip} />
           )}
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-          {line.channelType && (
-            <span className="text-[11px] text-[var(--muted-foreground)]">{line.channelType}</span>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+          {/* §2.1 — Google's own reading of the campaign: switched on or off
+              first, then why, if it says why. */}
+          {statusWord && (
+            <Tooltip
+              label={`What Google reports for this campaign right now. Platform truth, read-only — it never changes the Ad Status the team sets.`}
+            >
+              <span className="cursor-help whitespace-nowrap text-[11px] text-[var(--muted-foreground)]">
+                <span className="font-semibold text-[var(--foreground)]">{statusWord}</span>
+                {statusReasons.length > 0 && (
+                  <> · {statusReasons.map(statusReasonLabel).join(' · ')}</>
+                )}
+              </span>
+            </Tooltip>
           )}
-          <LabelChips
-            tags={ad?.pacerTags}
-            allLabels={allLabels}
+          <span onClick={stopRowToggle}>
+            <LabelChips
+              tags={ad?.pacerTags}
+              allLabels={allLabels}
+              readOnly={readOnly}
+              onChange={onTagsChange}
+            />
+          </span>
+        </div>
+      </td>
+
+      {/* §3.1 — one cell, both units. The Target Spend column beside this one
+          showed the same dollars twice in dollar mode, and in percent mode
+          showed a percent and its own resolved dollars in two places. The active
+          unit is the editable figure; the other rides underneath so the plan
+          stays legible without switching the whole card. */}
+      <td className="px-3 py-2.5 text-right align-middle" onClick={stopRowToggle}>
+        {/* The budget menu sits with the number it governs. Lock and Reserve are
+            both statements about THIS allocation — may it move, may it be paced —
+            and in their own column at the far left of the row they were two
+            columns away from the figure they act on. */}
+        <div className="flex items-center justify-end gap-1.5">
+          <AllocationCell
+            line={line}
+            mode={mode}
+            payable={payable}
             readOnly={readOnly}
-            onChange={onTagsChange}
+            onInput={onInput}
+          />
+          <RowActionsMenu
+            line={line}
+            readOnly={readOnly}
+            onToggleLock={onToggleLock}
+            onToggleReserved={onToggleReserved}
           />
         </div>
       </td>
 
-      <td className="px-3 py-2.5 text-right align-middle">
-        <div className="inline-flex items-center justify-end gap-1.5">
-          {/* Borderless until hovered or focused, like the planner's cells — a
-              column of filled inputs reads as a form, not as a table of numbers. */}
-          <span className="w-[86px]">
-            <InlineMoneyCell
-              value={formatInput(line.input, mode)}
-              ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
-              disabled={readOnly}
-              display={
-                <span className="block text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                  {mode === 'pct'
-                    ? `${Number(line.input.toFixed(2))}%`
-                    : money2(line.input)}
-                </span>
-              }
-              onCommit={(next) => {
-                const parsed = Number(next);
-                if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
-                if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
-              }}
-            />
-          </span>
-          {mode === 'amt' && (
-            // §3 companion readout: in dollar mode each line still shows its
-            // share of actual spend, so the plan stays legible without switching.
-            <Tooltip label="Share of the month's actual spend">
-              <span className="w-9 text-left text-[10px] tabular-nums text-[var(--muted-foreground)]">
-                {payable > 0 ? `${line.percentOfPayable.toFixed(1)}%` : '—'}
-              </span>
-            </Tooltip>
-          )}
-        </div>
-      </td>
-
-      <td className="px-3 py-2.5 text-right align-middle text-sm font-semibold tabular-nums">
-        {fmt(line.target)}
-      </td>
       <td className="px-3 py-2.5 text-right align-middle text-sm tabular-nums text-[var(--muted-foreground)]">
         {fmt(line.spentMTD)}
       </td>
@@ -1693,112 +1968,72 @@ function Row({
         {fmt(line.expectedToDate)}
       </td>
 
+      {/* §2.2 — a filled pill, and display only. It stopped being the control
+          that opens the delivery panel when the whole row became one. */}
       <td className="px-3 py-2.5 text-left align-middle">
-        <div className="flex items-center gap-1.5">
-          {line.reserved ? (
-            /* §12 — a reserve is not underspending, it is money set aside for a
-               campaign that cannot spend yet. Showing "0% of pace" here is a
-               false alarm about a campaign doing exactly what was intended. */
-            <Tooltip label="Reserved — budget committed to a campaign that cannot spend yet. It counts toward the account allocation but is out of Expected MTD, the account pace, the recommended daily and the push. Un-reserve it when the campaign launches; it will then pace its full target over the days that are left.">
-              <span
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                style={{ background: `${COLORS.lifetime}1f`, color: COLORS.lifetime }}
-              >
-                <ArchiveBoxIcon className="h-3 w-3" />
-                Reserved
-              </span>
-            </Tooltip>
-          ) : (
-          <Tooltip
-            label={
-              deliveryOpen
-                ? 'Hide delivery detail'
-                : 'Show delivery detail — is it spending its full daily, and can it absorb more? Open as many rows as you like.'
-            }
-          >
-            <button
-              type="button"
-              onClick={onToggleDelivery}
-              aria-expanded={deliveryOpen}
-              className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)] transition-opacity hover:opacity-70"
+        {line.reserved ? (
+          /* §12 — a reserve is not underspending, it is money set aside for a
+             campaign that cannot spend yet. Showing "0% of pace" here is a
+             false alarm about a campaign doing exactly what was intended. */
+          <Tooltip label="Reserved — budget committed to a campaign that cannot spend yet. It counts toward the account allocation but is out of Expected MTD, the account pace, the recommended daily and the push. Un-reserve it when the campaign launches; it will then pace its full target over the days that are left.">
+            <span
+              className="inline-flex cursor-help items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+              style={{ background: `${COLORS.lifetime}1f`, color: COLORS.lifetime }}
             >
-              <span style={{ color: PACE_COLORS[line.paceStatus] }}>
+              <ArchiveBoxIcon className="h-3 w-3" />
+              Reserved
+            </span>
+          </Tooltip>
+        ) : (
+          <>
+            <Tooltip label={paceHelp(line)}>
+              <span
+                className="inline-block cursor-help whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold"
+                style={{
+                  background: `${PACE_COLORS[line.paceStatus]}1f`,
+                  color: PACE_COLORS[line.paceStatus],
+                }}
+              >
                 {PACE_LABELS[line.paceStatus]}
               </span>
-              {deliveryOpen ? (
-                <ChevronDownIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
-              ) : (
-                <ChevronRightIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
-              )}
-            </button>
-          </Tooltip>
-          )}
-        </div>
-        {!line.reserved && line.expectedToDate > 0 && (
-          <div className="mt-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">
-            {line.paceRatio != null && `${Math.round(line.paceRatio * 100)}% · `}
-            <span style={{ color: line.paceDelta >= 0 ? COLORS.warn : COLORS.lifetime }}>
-              {line.paceDelta >= 0 ? '+' : '−'}
-              {fmt(Math.abs(line.paceDelta))}
-            </span>{' '}
-            vs expected
-          </div>
+            </Tooltip>
+            {line.expectedToDate > 0 && (
+              <div className="mt-0.5 whitespace-nowrap text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                {line.paceRatio != null && `${Math.round(line.paceRatio * 100)}% · `}
+                <span style={{ color: line.paceDelta >= 0 ? COLORS.warn : COLORS.lifetime }}>
+                  {line.paceDelta >= 0 ? '+' : '−'}
+                  {fmt(Math.abs(line.paceDelta))}
+                </span>{' '}
+                vs expected
+              </div>
+            )}
+          </>
         )}
       </td>
 
-      <td className="px-3 py-2.5 text-right align-middle text-sm tabular-nums text-[var(--muted-foreground)]">
-        {line.currentDaily > 0 ? (
-          fmt(line.currentDaily)
-        ) : (
-          <Tooltip label="No daily budget synced from Google yet — import or sync this campaign.">
-            <span>—</span>
-          </Tooltip>
-        )}
+      {/* §2.4 — the daily budget, editable. The pencil sits beside the CURRENT
+          daily because that is the value the box changes. */}
+      <td className="px-3 py-2.5 text-right align-middle" onClick={stopRowToggle}>
+        <DailyBudgetCell
+          line={line}
+          ad={ad}
+          dataEdgeIso={dataEdgeIso}
+          readOnly={readOnly}
+          pushing={pushing}
+          googleConnected={googleConnected}
+          onPushDaily={onPushDaily}
+          deliveryAvgDaily={deliveryAvgDaily}
+          daysInMonth={daysInMonth}
+          remainingCalendarDays={
+            daysInMonth - (dataEdgeIso ? Number(dataEdgeIso.slice(8, 10)) : 0)
+          }
+          onTypedDailyChange={setTypedDaily}
+        />
       </td>
 
       <td className="bg-[var(--muted)]/40 px-3 py-2.5 text-right align-middle">
         {line.dailyControllable ? (
-          <div className="flex items-center justify-end gap-1">
-            {/* §14 — the PRIMARY apply control: one campaign, one deliberate
-                action, right beside the number it writes. Apply-all still
-                exists in the toolbar but is deliberately not the thumb-target,
-                because this team looks before it acts and a one-click push of
-                every drifted campaign is the riskier default. */}
-            <ApplyButton
-              line={line}
-              ad={ad}
-              futile={futileRaise}
-              pushing={pushing}
-              disabled={readOnly || !googleConnected}
-              onApply={onApply}
-            />
-            <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-              {fmt(line.recommendedDaily)}
-            </span>
-            {trend !== 'flat' && (
-              <Tooltip
-                label={
-                  trend === 'up'
-                    ? 'Higher than the daily currently set in Google — raise it to land on target.'
-                    : 'Lower than the daily currently set in Google — ease it off to land on target.'
-                }
-              >
-                {trend === 'up' ? (
-                  <ArrowSmallUpIcon
-                    className="h-3.5 w-3.5 stroke-[2.5]"
-                    style={{ color: COLORS.lifetime }}
-                    aria-label="above even pace"
-                  />
-                ) : (
-                  <ArrowSmallDownIcon
-                    className="h-3.5 w-3.5 stroke-[2.5]"
-                    style={{ color: COLORS.warn }}
-                    aria-label="below even pace"
-                  />
-                )}
-              </Tooltip>
-            )}
-          </div>
+          <RecommendedDaily line={line} typedDaily={typedDaily?.daily ?? null} />
         ) : (
           <Tooltip label="Google paces a total budget to its own end date — there's no daily rate to set.">
             <span className="text-xs text-[var(--muted-foreground)]">—</span>
@@ -1812,7 +2047,7 @@ function Row({
         ones above and below it. */}
     {deliveryOpen && (
       <tr className="border-b border-[var(--border)]">
-        <td colSpan={9} className="p-0">
+        <td colSpan={8} className="p-0">
           <GoogleDeliveryExpander
             accountKey={accountKey}
             period={period}
@@ -1820,6 +2055,8 @@ function Row({
             ad={ad}
             daysInMonth={daysInMonth}
             readOnly={readOnly}
+            typedDaily={typedDaily?.daily ?? null}
+            typedProjection={typedDaily?.projection ?? null}
             onFlightChange={onFlightChange}
             onSyncFromGoogle={onSyncFromGoogle}
             syncing={syncing}
@@ -1828,6 +2065,475 @@ function Row({
       </tr>
     )}
     </>
+  );
+}
+
+/**
+ * §3.1 — the allocation cell, both units at once.
+ *
+ * This replaced two columns that were saying one thing. In dollar mode the
+ * Allocation input and the Target Spend column printed the same dollars twice;
+ * in percent mode they printed a percent and, one column over, the dollars that
+ * percent already resolved to. Neither pairing told anyone anything the other
+ * did not. Now the ACTIVE unit is the editable figure and the other rides
+ * underneath in muted text, so both are always readable and only one is
+ * typeable — the unit toggle in the header picks which.
+ */
+function AllocationCell({
+  line,
+  mode,
+  payable,
+  readOnly,
+  onInput,
+}: {
+  line: AllocatorLine;
+  mode: AllocationMode;
+  payable: number;
+  readOnly: boolean;
+  onInput: (value: number) => void;
+}) {
+  // §3.2 — a lock is supposed to mean the target does not move for anyone. It
+  // already stopped Balance and Move; the manual input was the hole, disabled by
+  // `readOnly` alone, so a locked line could still be retyped by hand. Locking
+  // now closes that too.
+  const disabled = readOnly || line.locked;
+  const dollars = money2(line.target);
+  const percent = payable > 0 ? `${line.percentOfPayable.toFixed(1)}% of budget` : '—';
+
+  return (
+    <div className="inline-flex flex-col items-end">
+      <span className="inline-flex items-center gap-1">
+        {line.locked && (
+          <Tooltip label="Locked — Balance, Move and this box all leave the target where it is. Unlock it from the control beside the campaign name.">
+            <LockClosedIcon className="h-3 w-3 flex-shrink-0 cursor-help text-[var(--muted-foreground)]" />
+          </Tooltip>
+        )}
+        {/* Sized to the UNIT, not to the widest thing either unit could hold.
+            A flat 86px fits "$1,694.00", but the card is in percent mode by
+            default, where "13%" is half that — and because the figure is
+            right-aligned inside the box, all the slack lands between the lock
+            glyph and the number it is about. The glyph ended up further from its
+            own value than from the next column. */}
+        <span className={mode === 'pct' ? 'w-[54px]' : 'w-[84px]'}>
+          <InlineMoneyCell
+            value={formatInput(line.input, mode)}
+            ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
+            disabled={disabled}
+            display={
+              <span className="block text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                {mode === 'pct' ? `${Number(line.input.toFixed(2))}%` : dollars}
+              </span>
+            }
+            onCommit={(next) => {
+              const parsed = Number(next);
+              if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
+              if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
+            }}
+          />
+        </span>
+      </span>
+      {/* The other unit — always shown, never editable. */}
+      <Tooltip
+        label={
+          mode === 'pct'
+            ? 'The dollars this percent resolves to against the month’s actual spend. This is the figure the pace math uses.'
+            : 'This amount as a share of the month’s actual spend.'
+        }
+      >
+        <span className="cursor-help text-[var(--muted-foreground)]">
+          {mode === 'pct' ? dollars : percent}
+        </span>
+      </Tooltip>
+    </div>
+  );
+}
+
+/**
+ * §2.4/§2.5 — the current daily, with the pencil that edits it.
+ *
+ * The lightning "apply recommended" control this replaced could only ever write
+ * one number. The desk's actual move is often a different one — meet the
+ * recommendation halfway, hold a campaign that cannot absorb the raise, step a
+ * budget up rather than jump it — and none of those were expressible without
+ * leaving for Google Ads. The box is the Meta pacer's, mechanics and all, with
+ * Google's projection rules (§2.5) instead of Meta's.
+ */
+/** What the row publishes upward while a daily budget is being typed: the value
+ *  AND the projection computed from it, so every surface that reads it renders
+ *  the same landing rather than recomputing one of its own. */
+interface TypedDailyEdit {
+  daily: number;
+  projection: TypedDailyProjection;
+}
+
+function DailyBudgetCell({
+  line,
+  ad,
+  dataEdgeIso,
+  readOnly,
+  pushing,
+  googleConnected,
+  onPushDaily,
+  deliveryAvgDaily,
+  daysInMonth,
+  remainingCalendarDays,
+  onTypedDailyChange,
+}: {
+  line: AllocatorLine;
+  ad: PacerAd | undefined;
+  dataEdgeIso: string | null;
+  readOnly: boolean;
+  pushing: boolean;
+  googleConnected: boolean;
+  onPushDaily: (adId: string, amount: number) => Promise<{ ok: boolean; error?: string }>;
+  /** Flight-to-date delivery, or null when there is too little of it (§2.5). */
+  deliveryAvgDaily: number | null;
+  /** Month context for the billing ceiling's weighted average — a rate set today
+   *  only buys the days that are left, not a whole 30.4-day month. */
+  daysInMonth: number;
+  /** Calendar days left in the MONTH at the data edge — what Google's monthly
+   *  limit counts. Never the flight's remaining days. */
+  remainingCalendarDays: number;
+  onTypedDailyChange: (value: TypedDailyEdit | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  // Opens populated with the CURRENT daily, never the recommended one (§2.4) —
+  // the box edits the current value, and pre-filling the recommendation would
+  // make "Cancel" the only way to not accept it.
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const typed = Number(draft);
+  const typedValid = draft.trim() !== '' && Number.isFinite(typed) && typed > 0;
+  const changed = typedValid && !moneyEq(typed, line.currentDaily);
+
+  const projection = useMemo(
+    () =>
+      projectAtTypedDaily({
+        spentMTD: line.spentMTD,
+        recentAvgDaily: deliveryAvgDaily,
+        typedDaily: typedValid ? typed : line.currentDaily,
+        remainingDays: line.flight.remaining,
+        currentDaily: line.currentDaily,
+        remainingCalendarDays,
+      }),
+    [
+      line.spentMTD,
+      line.currentDaily,
+      line.flight.remaining,
+      deliveryAvgDaily,
+      remainingCalendarDays,
+      daysInMonth,
+      typed,
+      typedValid,
+    ],
+  );
+
+  // Publish the typed value and its projection up, so the recommended arrow
+  // beside this cell — and the money line in the open delivery panel — follow
+  // the number being typed rather than the daily that is still set (§2.4, §2.5).
+  useEffect(() => {
+    onTypedDailyChange(editing && typedValid ? { daily: typed, projection } : null);
+  }, [editing, typedValid, typed, projection, onTypedDailyChange]);
+  useEffect(() => () => onTypedDailyChange(null), [onTypedDailyChange]);
+
+  // Is the value being typed a raise this campaign cannot act on? The same cap
+  // read the row's "Capped · headroom" tag uses, so the box and the tag can
+  // never contradict each other about whether the budget is the constraint.
+  // Kept from the lightning control this box replaced: the warning was the one
+  // thing that control did which a free-text field would otherwise lose.
+  const futileRaise =
+    typedValid &&
+    isFutileRaise({
+      currentDaily: line.currentDaily,
+      recommendedDaily: typed,
+      delivery: capDelivery({
+        budgetConstrained: line.budgetLimited,
+        channelType: line.channelType,
+        budgetLostIsRaw: ad?.googleSearchBudgetLostIs ?? null,
+        series: ad?.dailySpend,
+        cap: line.currentDaily,
+        dataEdgeIso,
+      }),
+    });
+
+  const eligibility = applyEligibility(line, ad?.googleBudgetResourceName ?? null);
+  const blocked = !eligibility.ok && eligibility.reason ? eligibility.reason : null;
+  const pushedAt = ad?.googleDailyPushedAt ? new Date(ad.googleDailyPushedAt) : null;
+  // Google re-paces over 24–48h, so a push inside that window is still settling
+  // and the numbers on this row still describe the OLD rate.
+  const settling =
+    pushedAt != null && Date.now() - pushedAt.getTime() < GOOGLE_SETTLING_HOURS * 3600 * 1000;
+
+  const begin = () => {
+    setDraft(line.currentDaily > 0 ? line.currentDaily.toFixed(2) : '');
+    setMsg(null);
+    setEditing(true);
+  };
+  const cancel = () => {
+    // Discards the entry without writing (§2.4) — the daily in Google is
+    // untouched either way, so this only clears the box.
+    setDraft('');
+    setMsg(null);
+    setEditing(false);
+  };
+  const push = async () => {
+    if (!typedValid || busy) return;
+    setBusy(true);
+    setMsg(null);
+    const result = await onPushDaily(line.id, Number(typed.toFixed(2)));
+    setBusy(false);
+    setMsg(
+      result.ok
+        ? { ok: true, text: `Pushed ${fmt(typed)}/day to Google` }
+        : { ok: false, text: result.error ?? 'Could not push to Google' },
+    );
+  };
+
+  if (!line.dailyControllable) {
+    return (
+      <Tooltip label="Google paces a total budget to its own end date — there's no daily rate to set.">
+        <span className="text-xs text-[var(--muted-foreground)]">—</span>
+      </Tooltip>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <div className="flex items-center justify-end gap-1.5">
+        <span className="text-sm tabular-nums text-[var(--foreground)]">
+          {line.currentDaily > 0 ? (
+            fmt(line.currentDaily)
+          ) : (
+            <Tooltip label="No daily budget synced from Google yet — import or sync this campaign.">
+              <span className="text-[var(--muted-foreground)]">—</span>
+            </Tooltip>
+          )}
+        </span>
+        {settling && (
+          <Tooltip
+            label={`Applied ${fmtRelativeHours(pushedAt as Date)}. Google re-paces over 24–48 hours, so today's spend still reflects the old rate — you can change it again, but the numbers have not caught up yet.`}
+          >
+            <ClockIcon className="h-3 w-3" style={{ color: COLORS.daily }} />
+          </Tooltip>
+        )}
+        <Tooltip
+          label={
+            blocked
+              ? applyBlockedReason(blocked)
+              : !googleConnected
+                ? 'Connect Google Ads to change daily budgets from here.'
+                : 'Edit daily budget'
+          }
+        >
+          <button
+            type="button"
+            onClick={begin}
+            disabled={readOnly || pushing || !googleConnected || blocked != null}
+            aria-label={`Edit daily budget for ${line.name}`}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <PencilSquareIcon className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ml-auto w-[210px] space-y-1.5 text-left">
+      <div className="relative">
+        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
+          $
+        </span>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.replace(/[^0-9.]/g, ''))}
+          autoFocus
+          inputMode="decimal"
+          placeholder="0.00"
+          aria-label={`Daily budget for ${line.name}`}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] py-1.5 pl-6 pr-10 text-sm tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none"
+        />
+        <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-[var(--muted-foreground)]">
+          /day
+        </span>
+      </div>
+
+      {/* §2.5 — the live projection, INSIDE the box so it is readable whether or
+          not the row is expanded.
+
+          It STATES ITS REASONING. The readout was two bare figures — "Projected
+          $355.70 of $372.34 / billing ceiling $273.60" — and neither said where
+          it came from, so a projection that refused to climb when the budget was
+          raised read as a stuck number rather than as the finding it is. Each
+          line now names what is binding it. */}
+      <div className="space-y-1.5 rounded-lg bg-[var(--muted)]/50 px-2.5 py-2">
+        <div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] text-[var(--muted-foreground)]">Monthly projection</span>
+            <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+              {fmt(projection.projected)}
+            </span>
+          </div>
+          <div className="text-[10px] leading-tight text-[var(--muted-foreground)]">
+            {projection.boundBy === 'delivery' ? (
+              <>
+                unchanged — {fmt(typedValid ? typed : line.currentDaily)} is above the{' '}
+                {fmt(deliveryAvgDaily ?? 0)}/day it is currently delivering, so raising will not
+                lift spend
+              </>
+            ) : projection.boundBy === 'ceiling' ? (
+              <>held at the billing ceiling — Google will not bill past it this month</>
+            ) : deliveryAvgDaily == null ? (
+              <>
+                {fmt(line.spentMTD)} spent + {fmt(typedValid ? typed : line.currentDaily)}/day ×{' '}
+                {line.flight.remaining}d — a ceiling, not a forecast: too little delivery yet to
+                state a run rate
+              </>
+            ) : (
+              <>
+                {fmt(line.spentMTD)} spent + {fmt(typedValid ? typed : line.currentDaily)}/day ×{' '}
+                {line.flight.remaining}d left — the budget is what caps it at this rate
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-baseline justify-between gap-2 border-t border-[var(--border)] pt-1.5">
+          <Tooltip label={`The most Google can charge this campaign for the month. Untouched, a daily budget limits the month to itself × 30.4. Change it mid-month and Google re-bases: what is already spent, plus the new daily × the ${remainingCalendarDays} calendar day${remainingCalendarDays === 1 ? '' : 's'} left. It is NOT the new daily × 30.4 — that would price a rate set today as though it had run all month.`}>
+            <span className="cursor-help text-[10px] text-[var(--muted-foreground)]">
+              Billing ceiling
+            </span>
+          </Tooltip>
+          <span className="text-[11px] font-semibold tabular-nums text-[var(--foreground)]">
+            {moneyEq(projection.billingCeiling, projection.billingCeilingBefore) ? (
+              fmt(projection.billingCeiling)
+            ) : (
+              <>
+                <span className="font-normal text-[var(--muted-foreground)]">
+                  {fmt(projection.billingCeilingBefore)}
+                </span>{' '}
+                → {fmt(projection.billingCeiling)}
+              </>
+            )}
+          </span>
+        </div>
+      </div>
+
+      {futileRaise && changed && (
+        <div className="text-[10px] leading-tight" style={{ color: COLORS.warn }}>
+          It is not spending the daily it already has, so this raise is unlikely to move spend —
+          this is budget worth moving instead.
+        </div>
+      )}
+
+      {/* Appears the moment the typed value differs from what is set — nothing
+          is written until it is pressed. */}
+      {changed && (
+        <button
+          type="button"
+          onClick={push}
+          disabled={busy || pushing || readOnly}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-[11px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {busy ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <BoltIcon className="h-3 w-3" />}
+          {busy ? 'Pushing…' : 'Push to Google'}
+        </button>
+      )}
+
+      <div className="flex items-center justify-end gap-4 text-[11px]">
+        <button
+          type="button"
+          onClick={cancel}
+          disabled={busy}
+          className="text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(false);
+            setMsg(null);
+          }}
+          disabled={busy}
+          className="font-semibold text-[var(--primary)] transition-opacity hover:opacity-80 disabled:opacity-50"
+        >
+          Done
+        </button>
+      </div>
+      {msg && (
+        <div
+          className="text-[10px] leading-tight"
+          style={{ color: msg.ok ? COLORS.success : COLORS.error }}
+        >
+          {msg.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * §2.4 — the recommended daily, with its arrow on the RIGHT of the number.
+ *
+ * The arrow describes the gap to the recommendation. At rest that is the
+ * recommendation against the daily currently set; while someone is typing a new
+ * daily it re-references live to what they are typing, so it always answers "is
+ * the number I am about to set above or below the recommendation" and flips as
+ * the typed value crosses it.
+ */
+function RecommendedDaily({
+  line,
+  typedDaily,
+}: {
+  line: AllocatorLine;
+  typedDaily: number | null;
+}) {
+  const against = typedDaily ?? line.currentDaily;
+  const live = typedDaily != null;
+  const trend =
+    against <= 0
+      ? 'flat'
+      : line.recommendedDaily > against * 1.02
+        ? 'up'
+        : line.recommendedDaily < against * 0.98
+          ? 'down'
+          : 'flat';
+  return (
+    <div className="flex items-center justify-end gap-1">
+      <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+        {fmt(line.recommendedDaily)}
+      </span>
+      {trend !== 'flat' && (
+        <Tooltip
+          label={
+            trend === 'up'
+              ? live
+                ? `Higher than the ${fmt(against)} you are typing — this campaign needs more than that to land on target.`
+                : 'Higher than the daily currently set in Google — raise it to land on target.'
+              : live
+                ? `Lower than the ${fmt(against)} you are typing — that would put this campaign ahead of target.`
+                : 'Lower than the daily currently set in Google — ease it off to land on target.'
+          }
+        >
+          {trend === 'up' ? (
+            <ArrowSmallUpIcon
+              className="h-3.5 w-3.5 stroke-[2.5]"
+              style={{ color: COLORS.lifetime }}
+              aria-label="above the daily it is measured against"
+            />
+          ) : (
+            <ArrowSmallDownIcon
+              className="h-3.5 w-3.5 stroke-[2.5]"
+              style={{ color: COLORS.warn }}
+              aria-label="below the daily it is measured against"
+            />
+          )}
+        </Tooltip>
+      )}
+    </div>
   );
 }
 
@@ -1917,31 +2623,11 @@ function BalanceButton({
 // ── §8 move / distribute panel ──
 
 /**
- * Hold a typed amount at or below the movable cap (§9). The cap is the ONE hard
- * limit in the Move tool, so it is enforced at the keystroke rather than as a
- * validation message after the fact — a number that cannot be committed should
- * not be typeable.
- *
- * Partial input ("", "12.") passes through untouched; clamping mid-keystroke
- * would fight the person typing.
- */
-/**
- * The per-campaign apply control (§14).
- *
- * Three states, and the disabled one is the point: a campaign that cannot be
- * pushed says WHY on the control itself. A dead button with no explanation reads
- * as broken, and the reason here is usually the actual next action — "shared
- * budget, set it in Google" tells you where to go. Reserved campaigns get no
- * control at all rather than a disabled one: there is nothing to push and never
- * will be while the line is reserved, so an inert button would only invite the
- * question.
- */
-/**
- * Plan total vs live total (§14). Two numbers that answer different questions:
- * what the plan wants set, and what is set. They match when everything is
- * applied and nothing has drifted; otherwise the gap IS the state of the
- * account, and a partial apply becomes visible and actionable instead of a
- * silent discrepancy.
+ * Plan total vs live total (§14, reworked by addendum §5). Two numbers that
+ * answer different questions: what the plan wants set, and what is set. They
+ * match when everything is applied and nothing has drifted; otherwise the gap IS
+ * the state of the account, and a partial apply becomes visible and actionable
+ * instead of a silent discrepancy.
  *
  * A healthy end state frequently is NOT "all applied" — you apply the working
  * raises and the cuts, leave the demand-limited underspenders alone, and move
@@ -1957,6 +2643,10 @@ function LiveDailyTotal({
   unapplied: number;
 }) {
   const inSync = moneyEq(recommended, live);
+  // The gap, stated from the PLAN's point of view — this sits under the plan
+  // total, so "$56 under live" says what the number above it is, not what the
+  // other column is. §5: the live dollar figure itself is deliberately absent;
+  // the cell to the left already prints it.
   const delta = live - recommended;
   return (
     <Tooltip
@@ -1967,98 +2657,18 @@ function LiveDailyTotal({
               unapplied > 0
                 ? `${unapplied} campaign${unapplied === 1 ? '' : 's'} past the drift threshold ${unapplied === 1 ? 'is' : 'are'} un-applied.`
                 : 'The difference is in campaigns below the drift threshold.'
-            } Applying never changes the plan total — only the live one moves.`
+            } Applying never changes the plan total — only the live one moves. A gap is a readout, not an error: applying the working raises and cuts and leaving demand-limited underspenders alone is a normal end state.`
       }
     >
-      <span className="mt-0.5 block cursor-help text-[10px] tabular-nums text-[var(--muted-foreground)]">
+      <span className="cursor-help text-[10px] tabular-nums text-[var(--muted-foreground)]">
         {inSync ? (
           <span style={{ color: COLORS.success }}>in sync</span>
         ) : (
-          <>
-            live {fmt(live)}
-            <span className="ml-1" style={{ color: delta > 0 ? COLORS.warn : COLORS.daily }}>
-              ({delta > 0 ? '+' : '−'}
-              {fmt(Math.abs(delta))})
-            </span>
-          </>
+          <span style={{ color: delta > 0 ? COLORS.warn : COLORS.daily }}>
+            {fmt(Math.abs(delta))} {delta > 0 ? 'under' : 'over'} live
+          </span>
         )}
       </span>
-    </Tooltip>
-  );
-}
-
-function ApplyButton({
-  line,
-  ad,
-  futile,
-  pushing,
-  disabled,
-  onApply,
-}: {
-  line: AllocatorLine;
-  ad: PacerAd | undefined;
-  futile: boolean;
-  pushing: boolean;
-  disabled: boolean;
-  onApply: (change: ApplyChange) => void;
-}) {
-  const eligibility = applyEligibility(line, ad?.googleBudgetResourceName ?? null);
-  // §12 — reserved lines are out of pacing entirely; no control, not a dead one.
-  if (eligibility.reason === 'reserved') return null;
-
-  const pushedAt = ad?.googleDailyPushedAt ? new Date(ad.googleDailyPushedAt) : null;
-  // Google re-paces over 24–48h, so a push inside that window is still settling
-  // and the numbers on this row still describe the OLD rate.
-  const settling =
-    pushedAt != null && Date.now() - pushedAt.getTime() < GOOGLE_SETTLING_HOURS * 3600 * 1000;
-  const matches = moneyEq(line.recommendedDaily, line.currentDaily);
-
-  if (!eligibility.ok && eligibility.reason) {
-    return (
-      <Tooltip label={applyBlockedReason(eligibility.reason)}>
-        <span
-          aria-label={`Cannot apply ${line.name}: ${applyBlockedReason(eligibility.reason)}`}
-          className="inline-flex h-6 w-6 cursor-not-allowed items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted-foreground)] opacity-40"
-        >
-          <NoSymbolIcon className="h-3 w-3" />
-        </span>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Tooltip
-      label={
-        matches
-          ? `${line.name} is already set to ${fmt(line.recommendedDaily)}/day in Google. Applying again would rewrite the same rate.`
-          : settling
-            ? `Applied ${fmtRelativeHours(pushedAt as Date)}. Google re-paces over 24–48 hours, so today's spend still reflects the old rate — you can push again, but the numbers have not caught up yet.`
-            : futile
-              ? `Set ${line.name} to ${fmt(line.recommendedDaily)}/day in Google. Note: it is not spending the daily it already has, so the raise is unlikely to move spend — this is budget worth moving instead.`
-              : `Set ${line.name} to ${fmt(line.recommendedDaily)}/day in Google. You will confirm the change first.`
-      }
-    >
-      <button
-        type="button"
-        disabled={disabled || pushing}
-        onClick={() =>
-          onApply({
-            id: line.id,
-            name: line.name,
-            currentDaily: line.currentDaily,
-            newDaily: line.recommendedDaily,
-            futile,
-          })
-        }
-        aria-label={`Apply ${fmt(line.recommendedDaily)} daily budget to ${line.name}`}
-        className="inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-        style={{
-          borderColor: settling ? COLORS.daily : 'var(--border)',
-          color: matches ? 'var(--muted-foreground)' : settling ? COLORS.daily : 'var(--primary)',
-        }}
-      >
-        {settling ? <ClockIcon className="h-3 w-3" /> : <BoltIcon className="h-3 w-3" />}
-      </button>
     </Tooltip>
   );
 }
@@ -2072,6 +2682,15 @@ function fmtRelativeHours(at: Date): string {
   return hours < 48 ? 'yesterday' : `${Math.floor(hours / 24)} days ago`;
 }
 
+/**
+ * Hold a typed amount at or below the movable cap (§9). The cap is the ONE hard
+ * limit in the Move tool, so it is enforced at the keystroke rather than as a
+ * validation message after the fact — a number that cannot be committed should
+ * not be typeable.
+ *
+ * Partial input ("", "12.") passes through untouched; clamping mid-keystroke
+ * would fight the person typing.
+ */
 function capAmount(raw: string, cap: number): string {
   const n = Number(raw);
   if (raw.trim() === '' || !Number.isFinite(n)) return raw;

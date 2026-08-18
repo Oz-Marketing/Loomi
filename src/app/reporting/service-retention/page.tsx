@@ -40,7 +40,7 @@ export default function ReportingServiceRetentionPage() {
         <EmptyState
           icon={ArrowPathIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its retention cohorts."
+          body="Choose a single account from the top bar to see its retention cohorts."
         />
       ) : (
         <ServiceRetentionReport accountKey={accountKey} isDark={isDark} />

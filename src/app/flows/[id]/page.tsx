@@ -619,7 +619,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
                 {!flow.accountKey && (
                   <span
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/15 text-violet-300"
-                    title="Template flows have no sub-account. Deploy them to one or more sub-accounts to start enrolling contacts."
+                    title="Template flows have no account. Deploy them to one or more accounts to start enrolling contacts."
                   >
                     <Squares2X2Icon className="w-3 h-3" />
                     Template
@@ -636,7 +636,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
 
           <div className="flex items-center gap-3 flex-wrap justify-end">
             {/* Templates can't be "published" the same way — they need
-                to be deployed to a sub-account first. Hide the publish
+                to be deployed to an account first. Hide the publish
                 toggle on templates to keep the affordance unambiguous. */}
             {flow.accountKey && (
               <div className="flex items-center gap-2">
@@ -659,7 +659,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
                 className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
               >
                 <ArrowUpTrayIcon className="w-4 h-4" />
-                Deploy to Sub-Accounts
+                Deploy to Accounts
               </button>
             )}
             <Link
@@ -733,7 +733,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
             </p>
             <p className="text-xs text-[var(--muted-foreground)] mt-1">
               Open one of the deployments listed on the Overview tab to see who
-              went through that sub-account&rsquo;s copy.
+              went through that account&rsquo;s copy.
             </p>
           </div>
         ) : (
@@ -751,7 +751,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
         <>
       {/* Instance banner: "Deployed from template X". Shown on any
           flow that has a parentTemplate, regardless of role. The link
-          back to the template works for sub-account users too because
+          back to the template works for account users too because
           getFlow doesn't scope-check flows with no accountKey. */}
       {flow.parentTemplate && (
         <div className="glass-card rounded-xl p-3 flex items-center gap-3">
@@ -875,7 +875,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
             icon={Squares2X2Icon}
             value={flow.instances.length.toLocaleString()}
             label="Total deployments"
-            sub={flow.instances.length === 0 ? 'Not deployed yet' : 'Sub-accounts'}
+            sub={flow.instances.length === 0 ? 'Not deployed yet' : 'Accounts'}
             color="text-violet-400"
             bgColor="bg-violet-500/15"
           />
@@ -1055,7 +1055,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
       </div>
 
       {/* Deployments section — templates only. Per-instance rows with
-          sub-account, status, sync state, enrollments, and a per-row
+          account, status, sync state, enrollments, and a per-row
           Update button when the instance is out of date. */}
       {isTemplate && (
         <div className="glass-card rounded-xl overflow-hidden">
@@ -1066,8 +1066,8 @@ function FlowOverview({ flowId }: { flowId: string }) {
               </h3>
               <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
                 {flow.instances.length === 0
-                  ? 'No sub-accounts have this template yet.'
-                  : `${flow.instances.length} sub-account${flow.instances.length === 1 ? '' : 's'}${outOfDateCount > 0 ? ` · ${outOfDateCount} out of date` : ' · all in sync'}`}
+                  ? 'No accounts have this template yet.'
+                  : `${flow.instances.length} account${flow.instances.length === 1 ? '' : 's'}${outOfDateCount > 0 ? ` · ${outOfDateCount} out of date` : ' · all in sync'}`}
               </p>
             </div>
             {isAdmin && (
@@ -1089,15 +1089,15 @@ function FlowOverview({ flowId }: { flowId: string }) {
                 This template hasn't been deployed yet
               </p>
               <p className="text-xs text-[var(--muted-foreground)] mt-1">
-                Click <span className="font-semibold">Deploy to Sub-Accounts</span> in
-                the header to create an instance under one or more sub-accounts.
+                Click <span className="font-semibold">Deploy to Accounts</span> in
+                the header to create an instance under one or more accounts.
               </p>
             </div>
           ) : (
             <div className="divide-y divide-[var(--border)]">
               {/* Column header */}
               <div className="grid grid-cols-[1fr_100px_140px_100px_auto] gap-3 px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                <span>Sub-Account</span>
+                <span>Account</span>
                 <span>Status</span>
                 <span>Last synced</span>
                 <span className="text-right">Active</span>

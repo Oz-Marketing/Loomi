@@ -11,6 +11,9 @@ import {
   applyEligibility,
   planMove,
   projectAtDaily,
+  monthlyLimitAfterChange,
+  monthlyLimitFlat,
+  projectAtTypedDaily,
   recentPace,
   resolveClock,
   resolveFlight,
@@ -345,6 +348,19 @@ describe('buildAllocatorLine — pacing math (§5)', () => {
     expect(l.input).toBeCloseTo(10, 1);
   });
 
+  // The cent drift (budget-report addendum §6). The inferred percent is what
+  // the dollar target gets REBUILT from, so rounding it to two decimals moved
+  // money: a line at $1,694.00 is 14.4874…% of this payable, was stored as
+  // 14.49%, and 14.49% of payable is not $1,694.00 any more. Every fixed
+  // allocation wandered a few cents on refresh, and a clean amount typed on the
+  // Planner (which stores a null percent) arrived on the Pacer light.
+  it('rebuilds the EXACT dollars from a percent it had to infer', () => {
+    for (const dollars of ['1694.00', '352.97', '0.01', '2499.99']) {
+      const l = buildAllocatorLine(mk({ allocation: dollars, allocationPercent: null }), 0, ctx);
+      expect(l.target).toBe(Number(dollars));
+    }
+  });
+
   it('a Total-budget campaign is not daily-controllable', () => {
     const l = buildAllocatorLine(
       mk({ googleBudgetPeriod: 'CUSTOM_PERIOD', budgetType: 'Lifetime', allocation: '500' }),
@@ -423,6 +439,21 @@ describe('convertMode (§3, AC 2)', () => {
     // Each output depends only on its own input — b's dollars are 17% of payable
     // regardless of what happened to a.
     expect(rows[1].input).toBeCloseTo(PAYABLE * 0.17, 2);
+  });
+
+  // The round trip above is checked to a tenth of a dollar; this one is checked
+  // to the CENT, which is what the desk actually sees drift. A fixed amount that
+  // survives amt → pct → amt only if the percent is carried at full precision
+  // (budget-report addendum §6).
+  it('a dollar round trip lands back on the exact cents', () => {
+    const start = [
+      { id: 'a', input: 1694 },
+      { id: 'b', input: 352.97 },
+      { id: 'c', input: 41.13 },
+    ];
+    const toPct = convertMode(start, 'amt', 'pct', PAYABLE);
+    const backToAmt = convertMode(toPct, 'pct', 'amt', PAYABLE);
+    backToAmt.forEach((row, i) => expect(row.input).toBe(start[i].input));
   });
 
   it('holds at zero instead of dividing by a zero payable', () => {
@@ -890,7 +921,7 @@ describe('buildAllocatorView — totals, meter, filter (§9, AC 1 & 10)', () => 
     expect(filtered.totals.accountDaily).toBeCloseTo((600 - 314) / 24, 6);
   });
 
-  it('checks a filtered subset against its event budget when one is set (AC 10)', () => {
+  it('checks a filtered subset against its budget target when one is set (AC 10)', () => {
     const filtered = buildAllocatorView({
       ads,
       mode: 'pct',
@@ -899,14 +930,47 @@ describe('buildAllocatorView — totals, meter, filter (§9, AC 1 & 10)', () => 
       activeLabel: 'Summer Sales Event',
       eventBudgets: { 'Summer Sales Event': 800 },
     });
-    expect(filtered.denominatorKind).toBe('eventBudget');
+    expect(filtered.denominatorKind).toBe('budgetTarget');
     expect(filtered.totals.denominator).toBe(800);
     // $600 allocated against $800 intended — 200 of the event money is unplaced.
     expect(filtered.totals.unallocated).toBeCloseTo(200, 2);
     expect(filtered.totals.fullyAllocated).toBe(false);
   });
 
-  it('falls back to the subset\'s own total when no event budget is set', () => {
+  // The target is CLIENT-GROSS; the allocations it is compared against are spend
+  // dollars. Comparing the two directly showed a shortfall exactly the size of
+  // the agency margin, against money that never reaches Google.
+  it('takes the margin off a budget target before comparing it', () => {
+    const filtered = buildAllocatorView({
+      ads,
+      mode: 'pct',
+      payable: 1000,
+      clock: CLOCK,
+      activeLabel: 'Summer Sales Event',
+      eventBudgets: { 'Summer Sales Event': 800 },
+      markup: 0.77,
+    });
+    expect(filtered.budgetTarget).toEqual({ gross: 800, spend: 616 });
+    expect(filtered.totals.denominator).toBe(616);
+    // $600 of spend allocated against $616 of spend — $16 short, not $200.
+    expect(filtered.totals.unallocated).toBeCloseTo(16, 2);
+  });
+
+  it('exposes the gross target beside the spend it resolves to', () => {
+    const filtered = buildAllocatorView({
+      ads,
+      mode: 'pct',
+      payable: 1000,
+      clock: CLOCK,
+      activeLabel: 'Summer Sales Event',
+      eventBudgets: { 'Summer Sales Event': 1000 },
+      markup: 0.85,
+    });
+    expect(filtered.budgetTarget?.gross).toBe(1000);
+    expect(filtered.budgetTarget?.spend).toBe(850);
+  });
+
+  it('falls back to the subset\'s own total when no budget target is set', () => {
     const filtered = buildAllocatorView({
       ads,
       mode: 'pct',
@@ -915,10 +979,11 @@ describe('buildAllocatorView — totals, meter, filter (§9, AC 1 & 10)', () => 
       activeLabel: 'Branding',
     });
     expect(filtered.denominatorKind).toBe('subsetTotal');
+    expect(filtered.budgetTarget).toBeNull();
     expect(filtered.totals.fullyAllocated).toBe(true);
   });
 
-  it('matches an event budget case-insensitively', () => {
+  it('matches a budget target case-insensitively', () => {
     const filtered = buildAllocatorView({
       ads,
       mode: 'pct',
@@ -1313,5 +1378,197 @@ describe('Reserved (§12)', () => {
     // land in the days that are left.
     const launched = buildAllocatorLine(ad({ allocation: '1000', pacerActual: '0' }), 0, ctx);
     expect(launched.recommendedDaily).toBeCloseTo(1000 / launched.flight.remaining, 6);
+  });
+});
+
+describe('projectAtTypedDaily — the live edit-box projection (addendum §2.5)', () => {
+  // A campaign that has been delivering $60/day with $500 spent and 10 days left.
+  const base = { spentMTD: 500, recentAvgDaily: 60, remainingDays: 10 };
+
+  it('holds at recent delivery when the typed daily is raised above it', () => {
+    const at60 = projectAtTypedDaily({ ...base, typedDaily: 60 });
+    const at200 = projectAtTypedDaily({ ...base, typedDaily: 200 });
+    // The whole point: a campaign filling $60/day will not fill $200/day just
+    // because the budget says it may. Raising the budget moves the CEILING.
+    expect(at200.projected).toBe(at60.projected);
+    expect(at200.projected).toBeCloseTo(500 + 60 * 10, 2);
+    expect(at200.boundBy).toBe('delivery');
+    expect(at200.billingCeiling).toBeGreaterThan(at60.billingCeiling);
+  });
+
+  it('drops when the typed daily is cut below what it is delivering', () => {
+    const r = projectAtTypedDaily({
+      ...base,
+      typedDaily: 20,
+      currentDaily: 60,
+      remainingCalendarDays: 10,
+    });
+    expect(r.projected).toBeCloseTo(500 + 20 * 10, 2);
+    expect(r.boundBy).toBe('budget');
+  });
+
+  it('is the straight-line figure when there is no run rate to hold it under', () => {
+    const r = projectAtTypedDaily({ ...base, recentAvgDaily: null, typedDaily: 75 });
+    expect(r.projected).toBeCloseTo(500 + 75 * 10, 2);
+    expect(r.boundBy).toBe('budget');
+  });
+
+  // ── Google's monthly spending limit ──
+  //
+  // Reproduced straight from Google Ads Help. Getting this wrong is not a
+  // rounding matter: it decides whether the box tells someone a cut is safe.
+
+  it('reproduces Google\'s own worked example for a mid-month change', () => {
+    // November (30 days). $5/day from the 1st = a $152.00 limit. On the 24th,
+    // $103 is spent and the daily goes to $10; seven calendar days remain.
+    expect(monthlyLimitFlat(5)).toBeCloseTo(152, 2);
+    expect(
+      monthlyLimitAfterChange({ spentToDate: 103, newDaily: 10, remainingCalendarDays: 7 }),
+    ).toBeCloseTo(173, 2);
+  });
+
+  it('is NOT the new daily × 30.4, and not a weighted average either', () => {
+    const google = monthlyLimitAfterChange({
+      spentToDate: 103,
+      newDaily: 10,
+      remainingCalendarDays: 7,
+    });
+    // The two shapes this was written as before, both wrong.
+    expect(google).not.toBeCloseTo(10 * 30.4, 1);
+    expect(google).not.toBeCloseTo(((5 * 23 + 10 * 7) / 30) * 30.4, 1);
+  });
+
+  it('states the limit as the daily × 30.4 while nothing has changed', () => {
+    expect(projectAtTypedDaily({ ...base, typedDaily: 100 }).billingCeilingBefore).toBeCloseTo(
+      3040,
+      2,
+    );
+  });
+
+  it('re-bases the limit on spend already booked when the daily is cut', () => {
+    // 16 of 31 days ran at $12.50/day for $220.70; $9/day is set for the last
+    // 15. $9 × 30.4 = $273.60 would claim a limit BELOW what August can still
+    // legitimately bill — the 16 days that already happened do not un-spend.
+    const r = projectAtTypedDaily({
+      spentMTD: 220.7,
+      recentAvgDaily: 13.79,
+      typedDaily: 9,
+      remainingDays: 15,
+      currentDaily: 12.5,
+      remainingCalendarDays: 15,
+    });
+    expect(r.billingCeiling).toBeCloseTo(220.7 + 9 * 15, 2);
+    expect(r.billingCeiling).toBeGreaterThan(9 * 30.4);
+    expect(r.billingCeilingBefore).toBeCloseTo(12.5 * 30.4, 2);
+  });
+
+  it('never projects above its own stated limit', () => {
+    // The contradiction this cap exists to remove: a projection printed on one
+    // line of the edit box and a smaller ceiling printed on the next.
+    const r = projectAtTypedDaily({
+      spentMTD: 220.7,
+      recentAvgDaily: 13.79,
+      typedDaily: 9,
+      remainingDays: 15,
+      currentDaily: 12.5,
+      remainingCalendarDays: 15,
+    });
+    expect(r.projected).toBeLessThanOrEqual(r.billingCeiling + 0.01);
+  });
+
+  it('leaves the limit alone when the typed rate is the one already set', () => {
+    // Opening the box and touching nothing is not a budget change, so it must
+    // not re-base the month's limit.
+    const r = projectAtTypedDaily({
+      spentMTD: 220.7,
+      recentAvgDaily: 13.79,
+      typedDaily: 12.5,
+      remainingDays: 15,
+      currentDaily: 12.5,
+      remainingCalendarDays: 15,
+    });
+    expect(r.billingCeiling).toBe(r.billingCeilingBefore);
+    expect(r.billingCeiling).toBeCloseTo(12.5 * 30.4, 2);
+  });
+
+  it('never states a limit below what the month has already billed', () => {
+    // $9/day cannot have billed $220.70 in 16 days, so the daily on file is
+    // stale. The limit still cannot be $273.60 < ... well below the spend.
+    const r = projectAtTypedDaily({
+      spentMTD: 900,
+      recentAvgDaily: 56,
+      typedDaily: 9,
+      remainingDays: 15,
+      currentDaily: 9,
+      remainingCalendarDays: 15,
+    });
+    expect(r.billingCeilingBefore).toBeCloseTo(900, 2);
+  });
+
+  it('lets the limit bind when the flight ends before the month does', () => {
+    // Five flight days left but fifteen calendar days in the month: Google's
+    // limit is computed over the month, so it sits well clear and the flight is
+    // what actually stops the spend.
+    const r = projectAtTypedDaily({
+      spentMTD: 220.7,
+      recentAvgDaily: 200,
+      typedDaily: 200,
+      remainingDays: 5,
+      currentDaily: 12.5,
+      remainingCalendarDays: 15,
+    });
+    expect(r.projected).toBeCloseTo(220.7 + 200 * 5, 2);
+    expect(r.boundBy).not.toBe('ceiling');
+  });
+
+  it('treats a finished flight as spent-to-date, not a negative run-out', () => {
+    const r = projectAtTypedDaily({ ...base, remainingDays: 0, typedDaily: 100 });
+    expect(r.projected).toBeCloseTo(500, 2);
+  });
+
+  it('floors a negative typed value instead of projecting backwards', () => {
+    const r = projectAtTypedDaily({ ...base, typedDaily: -50 });
+    expect(r.projected).toBeCloseTo(500, 2);
+    // The rate floors to zero, but the limit is still the money already spent —
+    // a month cannot un-bill what it has billed.
+    expect(r.billingCeiling).toBeCloseTo(500, 2);
+  });
+});
+
+describe("Google's monthly spending limit", () => {
+  it('is daily × 30.4 for a rate that has run all month', () => {
+    expect(monthlyLimitFlat(40)).toBeCloseTo(40 * 30.4, 2);
+  });
+
+  it('counts the days remaining INCLUSIVE of the day the change is made', () => {
+    // Google's example changes on Nov 24 of a 30-day month and calls that seven
+    // remaining days, not six.
+    expect(
+      monthlyLimitAfterChange({ spentToDate: 103, newDaily: 10, remainingCalendarDays: 7 }),
+    ).toBeCloseTo(173, 2);
+  });
+
+  it('is the spend already booked once no days remain — a change buys nothing', () => {
+    expect(
+      monthlyLimitAfterChange({ spentToDate: 480, newDaily: 500, remainingCalendarDays: 0 }),
+    ).toBeCloseTo(480, 2);
+  });
+
+  it('never lands below the spend already booked, however deep the cut', () => {
+    // The failure mode of newDaily × 30.4: cut a daily to $1 on the 28th and it
+    // claims a $30.40 limit on a month that has already billed $900.
+    const limit = monthlyLimitAfterChange({
+      spentToDate: 900,
+      newDaily: 1,
+      remainingCalendarDays: 3,
+    });
+    expect(limit).toBeGreaterThanOrEqual(900);
+    expect(limit).toBeCloseTo(903, 2);
+  });
+
+  it('floors negative inputs instead of crediting them', () => {
+    expect(
+      monthlyLimitAfterChange({ spentToDate: -50, newDaily: -10, remainingCalendarDays: -3 }),
+    ).toBe(0);
   });
 });

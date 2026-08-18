@@ -217,7 +217,7 @@ export function selectOffer(
         key,
         rank: null,
         rejected: 'type_not_eligible',
-        reason: `${inc.type} offers are not enabled for this sub-account.`,
+        reason: `${inc.type} offers are not enabled for this account.`,
       };
     }
     if (!hasUsableNumbers(inc)) {

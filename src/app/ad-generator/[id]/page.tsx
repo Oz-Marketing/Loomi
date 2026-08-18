@@ -836,7 +836,7 @@ export default function AdGeneratorPage() {
         {/* Form */}
         <div className="space-y-6">
 
-          {/* Trimming the form is a per-sub-account preference, not a per-ad one,
+          {/* Trimming the form is a per-account preference, not a per-ad one,
               so it sits above the fields rather than inside any single card. */}
           {accountKey && (
             <div className="flex justify-end">

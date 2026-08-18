@@ -50,7 +50,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     });
     if (!row?.sendgridApiKey) {
       return NextResponse.json(
-        { ok: false, error: 'No SendGrid API key configured for this sub-account.' },
+        { ok: false, error: 'No SendGrid API key configured for this account.' },
         { status: 400 },
       );
     }

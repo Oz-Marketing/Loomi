@@ -77,7 +77,7 @@ function parseAudienceDefinition(filters: string): FilterDefinition | null {
 
 function normalizeTemplateRecord(record: EmailTemplateApiRecord): EmailTemplateOption {
   const accountKey = String(record.accountKey || record.account?.key || '').trim();
-  const accountLabel = String(record.account?.dealer || accountKey || 'Sub-Account').trim();
+  const accountLabel = String(record.account?.dealer || accountKey || 'Account').trim();
   const name = String(record.name || record.template?.title || 'Untitled template').trim();
   const templateSlug = String(record.template?.slug || '').trim();
 

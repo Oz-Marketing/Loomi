@@ -43,7 +43,7 @@ export default function ReportingBillboardsPage() {
         <EmptyState
           icon={MapPinIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its boards. Boards shared from a parent account appear alongside the sub-account's own."
+          body="Choose a single account from the top bar to see its boards. Boards shared from a parent account appear alongside the account's own."
         />
       ) : (
         <BillboardReport accountKey={accountKey} isDark={isDark} />

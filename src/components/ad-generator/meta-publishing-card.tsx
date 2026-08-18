@@ -190,7 +190,7 @@ export function MetaPublishingCard({ accountKey }: { accountKey: string }) {
             {confirmed?.metaPageId && <CheckCircleIcon className="h-4 w-4 text-emerald-500" />}
           </div>
           <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-            Which Page this sub-account&apos;s ads are published from. Required to launch to Meta from
+            Which Page this account&apos;s ads are published from. Required to launch to Meta from
             Loomi — a Meta ad creative can&apos;t be created without a Page.
           </p>
         </div>

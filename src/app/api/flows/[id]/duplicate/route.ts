@@ -52,13 +52,13 @@ export async function POST(
   if (session!.user.role === 'client') {
     if (!sourceIsTemplate) {
       return NextResponse.json(
-        { error: 'Only templates can be added to a sub-account.' },
+        { error: 'Only templates can be added to an account.' },
         { status: 403 },
       );
     }
     if (!targetAccountKey) {
       return NextResponse.json(
-        { error: 'accountKey is required for sub-account template adoption.' },
+        { error: 'accountKey is required for account template adoption.' },
         { status: 400 },
       );
     }

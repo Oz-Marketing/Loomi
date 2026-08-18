@@ -651,7 +651,7 @@ export function checkAssetCopy(
   target: ScopeTarget,
 ): ScopeMoveCheck {
   if (isConsumerRole(session.user.role)) {
-    return { error: 'Clients can’t copy assets between sub-accounts.' };
+    return { error: 'Clients can’t copy assets between accounts.' };
   }
 
   // Same reason a move refuses: these rows mirror Account settings, and the
@@ -676,7 +676,7 @@ export function checkAssetCopy(
       return { error: 'Only agency admins can copy an asset into a shared library.' };
     }
   } else if (!canAccessAsset(session, target.accountKey)) {
-    return { error: 'You don’t have access to that sub-account.' };
+    return { error: 'You don’t have access to that account.' };
   }
 
   // Copying an asset into its own scope makes a second identical row in the
@@ -690,6 +690,6 @@ export function checkAssetCopy(
 
 export function describeScope(target: ScopeTarget, dealerName?: string): string {
   if (target.accountKey) return dealerName || target.accountKey;
-  if (target.oem) return `every ${target.oem} sub-account`;
+  if (target.oem) return `every ${target.oem} account`;
   return 'the Loomi library (every account)';
 }

@@ -279,7 +279,7 @@ export function FormsTable({
                   />
                   {showAccountColumn && (
                     <SortHeader
-                      label="Sub-Account"
+                      label="Account"
                       sortKey="dealer"
                       currentKey={sortKey}
                       dir={sortDir}

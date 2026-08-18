@@ -64,7 +64,7 @@ export function SalesTrendPage() {
         <EmptyState
           icon={TruckIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its sales trend."
+          body="Choose a single account from the top bar to see its sales trend."
         />
       ) : (
         <SalesTrendReport accountKey={accountKey} from={from} to={to} isDark={isDark} />

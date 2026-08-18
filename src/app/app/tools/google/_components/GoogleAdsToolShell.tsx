@@ -651,7 +651,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         }
       />
 
-      {/* Scope row — sub-account avatar + name + status battery, mirroring
+      {/* Scope row — account avatar + name + status battery, mirroring
           Meta. Keeps the tool name in the header and the account identity here. */}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-x-6 gap-y-3 min-w-0">
       <div className="flex items-center gap-3 min-w-0">
@@ -1008,7 +1008,7 @@ function Header({
   return (
     <div className="page-sticky-header mb-8">
       <div className="flex items-center justify-between gap-4">
-        {/* Left: tool name (sub-account identity sits in the scope row below). */}
+        {/* Left: tool name (account identity sits in the scope row below). */}
         <div className="flex min-w-0 items-center gap-3">
           <GoogleAdsBrandIcon className="h-8 w-8 flex-shrink-0" />
           <div className="min-w-0">

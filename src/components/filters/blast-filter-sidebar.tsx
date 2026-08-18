@@ -259,14 +259,14 @@ function AccountSection({
     <section className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
-          Sub-Account
+          Account
         </p>
         <span className="text-[10px] text-[var(--sidebar-muted-foreground)] tabular-nums">
           {values.length > 0 ? `${values.length} selected` : `${options.length} total`}
         </span>
       </div>
 
-      {/* Pills row: "All Sub-Accounts" + selected pills with hover X */}
+      {/* Pills row: "All Accounts" + selected pills with hover X */}
       <div className="flex flex-wrap gap-1.5">
         <button
           type="button"
@@ -275,7 +275,7 @@ function AccountSection({
             values.length === 0 ? PILL_ACTIVE_CLASS : PILL_INACTIVE_CLASS
           }`}
         >
-          All Sub-Accounts
+          All Accounts
         </button>
         {selectedAccounts.map((account) => (
           <button
@@ -306,7 +306,7 @@ function AccountSection({
             type="text"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter sub-accounts..."
+            placeholder="Filter accounts..."
             className="w-full h-8 rounded-lg border border-[var(--sidebar-border-soft)] bg-[var(--sidebar-input)]/60 pl-8 pr-2 text-[11px] text-[var(--sidebar-foreground)] placeholder:text-[var(--sidebar-muted-foreground)] focus:outline-none focus:border-[var(--primary)]/60 focus:ring-1 focus:ring-[var(--primary)]/30"
           />
         </div>
@@ -347,7 +347,7 @@ function AccountSection({
           })}
           {filteredAccounts.length === 0 && (
             <p className="px-1 py-2 text-[11px] text-[var(--sidebar-muted-foreground)]">
-              No matching sub-accounts.
+              No matching accounts.
             </p>
           )}
         </div>

@@ -394,7 +394,7 @@ export function CustomFieldEditorModal({
 
                 <Field
                   label="Industry tag (optional)"
-                  hint="Lets you bulk-apply &ldquo;all Automotive blueprints&rdquo; to every Automotive sub-account."
+                  hint="Lets you bulk-apply &ldquo;all Automotive blueprints&rdquo; to every Automotive account."
                 >
                   <select
                     value={industryTag}

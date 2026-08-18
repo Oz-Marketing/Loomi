@@ -532,7 +532,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               title={
                 canSave
                   ? undefined
-                  : 'Org-wide segments can only be saved by a developer or super admin. Switch to a sub-account to build one there.'
+                  : 'Org-wide segments can only be saved by a developer or super admin. Switch to an account to build one there.'
               }
               className="px-4 h-9 inline-flex items-center gap-1.5 text-sm rounded-lg bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -1216,7 +1216,7 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
           {status === 'loading' && 'Resolving…'}
           {status === 'empty-filter' && 'Add a condition to see who matches'}
           {status === 'org-wide' &&
-            'Switch to a sub-account to preview — segment size differs per account'}
+            'Switch to an account to preview — segment size differs per account'}
           {status === 'error' && (
             <span className="text-amber-500">{preview.error}</span>
           )}

@@ -120,11 +120,11 @@ export function CustomFieldBlueprintsTab() {
   async function handleDelete(bp: BlueprintRow) {
     const adoptionText =
       bp.adoption.total > 0
-        ? ` ${bp.adoption.total} sub-account(s) currently use this blueprint — their instances will become standalone fields (existing values preserved).`
+        ? ` ${bp.adoption.total} account(s) currently use this blueprint — their instances will become standalone fields (existing values preserved).`
         : '';
     const ok = await confirm({
       title: `Delete blueprint "${bp.label}"?`,
-      message: `Deleting a blueprint doesn't remove deployed instances on sub-accounts; it just breaks the lineage.${adoptionText}`,
+      message: `Deleting a blueprint doesn't remove deployed instances on accounts; it just breaks the lineage.${adoptionText}`,
       confirmLabel: 'Delete',
       destructive: true,
     });
@@ -144,7 +144,7 @@ export function CustomFieldBlueprintsTab() {
   async function handleApplyIndustry(industryTag: string) {
     const ok = await confirm({
       title: `Apply all ${industryTag} blueprints?`,
-      message: `Deploy every ${industryTag}-tagged blueprint to every sub-account whose Industry is "${industryTag}". Already-deployed pairs are skipped.`,
+      message: `Deploy every ${industryTag}-tagged blueprint to every account whose Industry is "${industryTag}". Already-deployed pairs are skipped.`,
       confirmLabel: 'Apply',
     });
     if (!ok) return;
@@ -162,7 +162,7 @@ export function CustomFieldBlueprintsTab() {
     };
     if (res.ok) {
       toast.success(
-        `Deployed ${data.deployed ?? 0} field(s) across ${data.accountCount ?? 0} sub-account(s). Skipped ${data.skipped ?? 0} already-deployed.`,
+        `Deployed ${data.deployed ?? 0} field(s) across ${data.accountCount ?? 0} account(s). Skipped ${data.skipped ?? 0} already-deployed.`,
       );
       await load();
     } else {
@@ -174,7 +174,7 @@ export function CustomFieldBlueprintsTab() {
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-xs text-[var(--muted-foreground)] max-w-2xl">
-          Blueprints are reusable custom field definitions managed at the admin level. Tag them with an industry (e.g. <span className="font-mono">Automotive</span>) and use <span className="text-[var(--foreground)] font-medium">Apply industry</span> to push every blueprint to every matching sub-account in one click. Updates to a blueprint surface as a sync prompt on every deployed instance.
+          Blueprints are reusable custom field definitions managed at the admin level. Tag them with an industry (e.g. <span className="font-mono">Automotive</span>) and use <span className="text-[var(--foreground)] font-medium">Apply industry</span> to push every blueprint to every matching account in one click. Updates to a blueprint surface as a sync prompt on every deployed instance.
         </p>
         <PrimaryButton
           onClick={() => {
@@ -197,7 +197,7 @@ export function CustomFieldBlueprintsTab() {
             No blueprints yet
           </p>
           <p className="text-xs text-[var(--muted-foreground)]">
-            Create your first blueprint to make a custom field available across sub-accounts.
+            Create your first blueprint to make a custom field available across accounts.
           </p>
         </div>
       ) : (
@@ -221,7 +221,7 @@ export function CustomFieldBlueprintsTab() {
                       {tag !== 'Other' && (
                         <>
                           {' · '}
-                          {matchingAccountCount} matching sub-account
+                          {matchingAccountCount} matching account
                           {matchingAccountCount === 1 ? '' : 's'}
                         </>
                       )}
@@ -231,7 +231,7 @@ export function CustomFieldBlueprintsTab() {
                     <button
                       onClick={() => handleApplyIndustry(tag)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg border border-[var(--border)] hover:bg-[var(--accent)] text-[var(--foreground)]"
-                      title="Deploy every blueprint in this industry to every matching sub-account"
+                      title="Deploy every blueprint in this industry to every matching account"
                     >
                       <BoltIcon className="w-3.5 h-3.5" />
                       Apply industry
@@ -277,7 +277,7 @@ export function CustomFieldBlueprintsTab() {
                           </span>
                           <span className="text-[var(--muted-foreground)]">
                             {' '}
-                            sub-account{bp.adoption.total === 1 ? '' : 's'}
+                            account{bp.adoption.total === 1 ? '' : 's'}
                           </span>
                           {bp.adoption.stale > 0 && (
                             <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-500">
@@ -290,7 +290,7 @@ export function CustomFieldBlueprintsTab() {
                             <button
                               onClick={() => setDeployOpen(bp)}
                               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] border border-[var(--border)] hover:bg-[var(--accent)] text-[var(--foreground)]"
-                              title="Deploy to sub-accounts"
+                              title="Deploy to accounts"
                             >
                               <PaperAirplaneIcon className="w-3 h-3" />
                               Deploy
@@ -410,7 +410,7 @@ function DeployModal({
       };
       if (res.ok) {
         toast.success(
-          `Deployed to ${data.deployed ?? 0} sub-account(s)${
+          `Deployed to ${data.deployed ?? 0} account(s)${
             data.skipped ? ` (${data.skipped} already had it)` : ''
           }`,
         );
@@ -448,7 +448,7 @@ function DeployModal({
               Deploy "{blueprint.label}"
             </h2>
             <p className="text-xs text-[var(--muted-foreground)]">
-              Pick sub-accounts to deploy this blueprint to. Already-deployed sub-accounts are skipped.
+              Pick accounts to deploy this blueprint to. Already-deployed accounts are skipped.
             </p>
           </div>
           <button
@@ -462,7 +462,7 @@ function DeployModal({
         <div className="px-6 py-3 border-b border-[var(--border)]">
           <input
             type="text"
-            placeholder="Filter sub-accounts…"
+            placeholder="Filter accounts…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] focus:outline-none focus:border-[var(--primary)]"
@@ -494,7 +494,7 @@ function DeployModal({
         <div className="flex-1 overflow-y-auto px-6 py-3">
           {filtered.length === 0 ? (
             <div className="text-center text-sm text-[var(--muted-foreground)] py-8">
-              No sub-accounts match.
+              No accounts match.
             </div>
           ) : (
             <ul className="divide-y divide-[var(--border)]">
@@ -557,7 +557,7 @@ function DeployModal({
           >
             {deploying
               ? 'Deploying…'
-              : `Deploy to ${selected.size} sub-account${selected.size === 1 ? '' : 's'}`}
+              : `Deploy to ${selected.size} account${selected.size === 1 ? '' : 's'}`}
           </PrimaryButton>
         </div>
       </div>

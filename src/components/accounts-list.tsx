@@ -90,7 +90,7 @@ export function AccountsList({
     else router.push(`${detailBasePath}/${key}`);
   };
   const { confirm } = useLoomiDialog();
-  const { userRole, refreshAccounts } = useAccount();
+  const { userRole, refreshAccounts, childCounts } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
   const [accounts, setAccounts] = useState<Record<string, AccountData> | null>(null);
   /** Key currently being deleted — disables its row button and shows a spinner. */
@@ -177,11 +177,11 @@ export function AccountsList({
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || 'Failed to create'); setCreating(false); return; }
 
-      toast.success('Sub-account created!');
+      toast.success('Account created!');
       resetCreate();
       openAccount(newKey.trim());
     } catch {
-      toast.error('Failed to create sub-account');
+      toast.error('Failed to create account');
     }
     setCreating(false);
   };
@@ -196,8 +196,8 @@ export function AccountsList({
 
     const label = accounts?.[key]?.dealer || key;
     const confirmed = await confirm({
-      title: 'Delete Sub-account',
-      message: `Delete sub-account "${label}"? This cannot be undone.`,
+      title: 'Delete Account',
+      message: `Delete account "${label}"? This cannot be undone.`,
       confirmLabel: 'Delete',
       destructive: true,
     });
@@ -326,7 +326,7 @@ export function AccountsList({
       {/* Search left, create right, directly above the table — the same header
           row Users and Field Blueprints use. This used to portal into the
           settings title bar, so inside the Agency Settings modal (which has its
-          own slot id) there was no way to create a sub-account at all.
+          own slot id) there was no way to create an account at all.
 
           Still hidden in a restricted (org-scoped) view: a newly created
           account wouldn't belong to the org, so it would immediately drop out
@@ -342,14 +342,14 @@ export function AccountsList({
               setSearch(e.target.value);
               setPage(1);
             }}
-            placeholder="Search sub-accounts..."
+            placeholder="Search accounts..."
             className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
           />
         </div>
         {canManageAccounts && !restrictKeys && (
           <PrimaryButton onClick={() => setCreateMode('manual')}>
             <PlusIcon className="w-4 h-4" />
-            Add Sub-Account
+            Add Account
           </PrimaryButton>
         )}
       </div>
@@ -367,7 +367,7 @@ export function AccountsList({
             {createMode === 'manual' && (
               <div className="p-6">
                 <div className="flex items-center gap-3 mb-6">
-                  <h3 className="text-lg font-semibold flex-1">Create Sub-Account</h3>
+                  <h3 className="text-lg font-semibold flex-1">Create Account</h3>
                   <button onClick={resetCreate} className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
                     <XMarkIcon className="w-5 h-5" />
                   </button>
@@ -375,7 +375,7 @@ export function AccountsList({
 
                 <div className="space-y-3">
                   <div>
-                    <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Sub-Account Name *</label>
+                    <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Account Name *</label>
                     <input
                       type="text"
                       value={newDealer}
@@ -459,7 +459,7 @@ export function AccountsList({
                     disabled={!newKey.trim() || !newDealer.trim() || creating}
                     className="flex-1 px-4 py-2.5 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
                   >
-                    {creating ? 'Creating...' : 'Create Sub-Account'}
+                    {creating ? 'Creating...' : 'Create Account'}
                   </button>
                 </div>
               </div>
@@ -472,9 +472,9 @@ export function AccountsList({
       {/* ─── Account Table ─── */}
       {sortedEntries.length === 0 ? (
         <div className="text-center py-16 text-[var(--muted-foreground)]">
-          <p className="text-sm">{search ? 'No sub-accounts match your search.' : 'No sub-accounts yet.'}</p>
+          <p className="text-sm">{search ? 'No accounts match your search.' : 'No accounts yet.'}</p>
           <p className="text-xs mt-1">
-            {search ? 'Try a different search term.' : 'Click &quot;Add Sub-Account&quot; to get started.'}
+            {search ? 'Try a different search term.' : 'Click &quot;Add Account&quot; to get started.'}
           </p>
         </div>
       ) : (
@@ -485,7 +485,7 @@ export function AccountsList({
                 <th className="w-12 px-3 py-2"></th>
                 <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                   <button type="button" onClick={() => toggleSort('dealer')} className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors">
-                    Sub-Account Name
+                    Account Name
                     <span className="text-[10px]">{sortIndicator('dealer')}</span>
                   </button>
                 </th>
@@ -527,6 +527,7 @@ export function AccountsList({
                           storefrontImage={account.storefrontImage}
                           logos={account.logos}
                           size={36}
+                          isGroup={childCounts[key] > 0}
                           className="w-9 h-9 rounded-md object-cover flex-shrink-0 border border-[var(--border)]"
                         />
                       </div>
@@ -582,7 +583,7 @@ export function AccountsList({
                             disabled={deletingKey !== null}
                             aria-busy={deletingKey === key}
                             className="p-1.5 rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-[var(--muted-foreground)]"
-                            title={deletingKey === key ? 'Deleting…' : 'Delete sub-account'}
+                            title={deletingKey === key ? 'Deleting…' : 'Delete account'}
                           >
                             {deletingKey === key ? (
                               <span className="block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />

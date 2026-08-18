@@ -124,7 +124,7 @@ export function TeamsManager({
   return (
     <div>
       {/* Create sits above the table, right-aligned — the same header row Users
-          and Sub-Accounts use. Teams has nothing to search yet, so the row is
+          and Accounts use. Teams has nothing to search yet, so the row is
           just the button. It used to portal into the settings title bar, which
           left it missing entirely inside the Agency Settings modal. */}
       <div className="mb-4 flex items-center justify-end gap-4">

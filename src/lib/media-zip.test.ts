@@ -45,7 +45,7 @@ describe('compressionFor', () => {
 });
 
 describe('uniqueName', () => {
-  it('keeps two sub-accounts’ logo.png apart', () => {
+  it('keeps two accounts’ logo.png apart', () => {
     const used = new Set<string>();
     expect(uniqueName(used, 'logo.png')).toBe('logo.png');
     expect(uniqueName(used, 'logo.png')).toBe('logo (2).png');

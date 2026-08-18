@@ -31,7 +31,7 @@ export async function POST(
 
   if (existing.accountKey) {
     return NextResponse.json(
-      { error: 'Only template flows (no sub-account) can be deployed.' },
+      { error: 'Only template flows (no account) can be deployed.' },
       { status: 400 },
     );
   }
@@ -75,7 +75,7 @@ export async function POST(
       {
         error:
           duplicates.length === accountKeys.length
-            ? 'All selected sub-accounts already have an instance. Use Update from template to re-sync.'
+            ? 'All selected accounts already have an instance. Use Update from template to re-sync.'
             : `Already deployed to: ${duplicates.join(', ')}. Use Update from template to re-sync those, or pick different accounts.`,
         duplicates,
       },

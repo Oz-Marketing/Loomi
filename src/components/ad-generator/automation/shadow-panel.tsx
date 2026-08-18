@@ -363,7 +363,7 @@ export function ShadowPanel({
   if (!accountKey) {
     return (
       <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
-        <p className="text-sm text-[var(--muted-foreground)]">Pick a sub-account to see its automation.</p>
+        <p className="text-sm text-[var(--muted-foreground)]">Pick an account to see its automation.</p>
       </div>
     );
   }
@@ -520,7 +520,7 @@ export function ShadowPanel({
                   help={
                     <>
                       <p>Which market to look offers up in. Manufacturer incentives are regional — the same model carries different money in different areas.</p>
-                      <p>Use the dealership&apos;s own ZIP. Left blank, the sub-account&apos;s postal code is used.</p>
+                      <p>Use the dealership&apos;s own ZIP. Left blank, the account&apos;s postal code is used.</p>
                     </>
                   }
                 >

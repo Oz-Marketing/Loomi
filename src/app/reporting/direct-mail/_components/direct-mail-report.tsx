@@ -126,7 +126,7 @@ export function DirectMailReport({
       <EmptyState
         icon={EnvelopeIcon}
         title="No campaigns in this range"
-        body="Nothing has been recorded for this account. Campaign matchbacks are computed on the Oz Reports host and pushed across — a sub-account with no mail in this window won't have any."
+        body="Nothing has been recorded for this account. Campaign matchbacks are computed on the Oz Reports host and pushed across — an account with no mail in this window won't have any."
       />
     );
   }

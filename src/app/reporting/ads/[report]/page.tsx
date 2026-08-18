@@ -113,7 +113,7 @@ export default function DigitalAdsReportPage() {
           <EmptyState
             icon={ChartBarIcon}
             title="Pick an account"
-            body="Choose a sub-account or organization from the top bar to see performance."
+            body="Choose an account or group from the top bar to see performance."
           />
         ) : (
           <Report

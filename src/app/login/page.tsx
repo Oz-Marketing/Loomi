@@ -74,7 +74,7 @@ const HIGHLIGHTS = [
   {
     icon: ChartBarSquareIcon,
     title: 'Reporting that rolls up',
-    body: 'Every sub-account, one scope switch away — spend, pacing, and performance.',
+    body: 'Every account, one scope switch away — spend, pacing, and performance.',
   },
   {
     icon: BoltIcon,

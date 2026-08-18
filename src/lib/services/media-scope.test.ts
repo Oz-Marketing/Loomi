@@ -79,7 +79,7 @@ describe('checkScopeMove', () => {
 
 describe('describeScope', () => {
   it('names the destination in words a person would use', () => {
-    expect(describeScope({ accountKey: null, oem: 'Honda' })).toBe('every Honda sub-account');
+    expect(describeScope({ accountKey: null, oem: 'Honda' })).toBe('every Honda account');
     expect(describeScope({ accountKey: null, oem: null })).toContain('every account');
     expect(describeScope({ accountKey: 'youngHondaOgden', oem: null }, 'Young Honda Ogden'))
       .toBe('Young Honda Ogden');
@@ -120,7 +120,7 @@ describe('checkAssetCopy', () => {
 
   it('refuses a restricted admin copying into an account they don’t hold', () => {
     expect(checkAssetCopy(scopedAdmin, sharedAsset, { accountKey: 'youngFordOgden', oem: null }).error)
-      .toContain('access to that sub-account');
+      .toContain('access to that account');
   });
 
   it('refuses a restricted admin reading another account’s asset', () => {

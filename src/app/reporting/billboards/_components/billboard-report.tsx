@@ -244,7 +244,7 @@ export function BillboardReport({
           <div className="mt-3">
             <Muted>
               Boards marked &ldquo;shared&rdquo; belong to a parent account and run across more than
-              one sub-account, so their traffic and cost are not this sub-account&rsquo;s alone.
+              one account, so their traffic and cost are not this account&rsquo;s alone.
             </Muted>
           </div>
         )}

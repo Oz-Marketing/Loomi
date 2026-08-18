@@ -317,7 +317,7 @@ export function FlowsAnalyticsBody({
                       </th>
                       {showAccountColumn && (
                         <th className="text-left px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                          Sub-Account
+                          Account
                         </th>
                       )}
                       <th className="text-right px-3 py-2 text-[10px] font-medium text-[var(--muted-foreground)] uppercase tracking-wider">

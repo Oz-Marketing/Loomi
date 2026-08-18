@@ -91,7 +91,7 @@ describe('settings registry', () => {
     );
   });
 
-  it('keeps agency-only platform config out of a sub-account', () => {
+  it('keeps agency-only platform config out of an account', () => {
     const keys = keysOf(SUBACCOUNT_ADMIN);
     for (const agencyOnly of [
       'subaccounts',
@@ -151,7 +151,7 @@ const sectionKeys = (surface: 'studio' | 'reporting' | 'app') =>
     (s) => s.key,
   );
 
-describe('sub-account settings sections', () => {
+describe('account settings sections', () => {
   it('offers the same core sections in every sector', () => {
     for (const surface of ['studio', 'reporting', 'app'] as const) {
       for (const key of CORE) {

@@ -119,7 +119,7 @@ export function FieldPrefsModal({
           <div>
             <h2 className="text-sm font-semibold text-[var(--foreground)]">Form fields</h2>
             <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-              Which fields this sub-account fills in on {templateName}. Hiding one doesn&apos;t change
+              Which fields this account fills in on {templateName}. Hiding one doesn&apos;t change
               any ad you&apos;ve already made.
             </p>
           </div>

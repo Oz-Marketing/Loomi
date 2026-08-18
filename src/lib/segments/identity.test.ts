@@ -174,7 +174,7 @@ describe('hashContactIdentifiers', () => {
 });
 
 describe('identityDedupeKey', () => {
-  it('collapses the same person across sub-accounts', () => {
+  it('collapses the same person across accounts', () => {
     // One customer, three rooftops, three Contact rows — but one person
     // as far as the ad platform is concerned.
     const a = hashContactIdentifiers({ email: 'Sam@Example.com', phone: '2125550123' });

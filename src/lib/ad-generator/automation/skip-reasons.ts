@@ -41,7 +41,7 @@ export const SKIP_REASON: Record<SkipReason, { label: string; fix: string }> = {
   },
   no_template: {
     label: 'No template',
-    fix: 'Map a published template in Settings, and check it is in scope for this sub-account.',
+    fix: 'Map a published template in Settings, and check it is in scope for this account.',
   },
   no_vehicle_imagery: {
     label: 'No vehicle image',

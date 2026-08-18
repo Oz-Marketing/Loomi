@@ -421,7 +421,7 @@ export function SubAccountDetailPage({
         }
       } catch {
         if (cancelled) return;
-        toast.error('Sub-account not found');
+        toast.error('Account not found');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -610,7 +610,7 @@ export function SubAccountDetailPage({
   // ── Delete ──
   async function handleDelete() {
     const deleteConfirmed = await confirm({
-      title: 'Delete Sub-account',
+      title: 'Delete Account',
       message: `Delete "${dealer || key}"? This cannot be undone.`,
       confirmLabel: 'Delete',
       destructive: true,
@@ -715,18 +715,18 @@ export function SubAccountDetailPage({
   if (!account) {
     const notFoundEl = (
       <div className="text-center py-16">
-        <p className="text-[var(--muted-foreground)]">Sub-account not found</p>
+        <p className="text-[var(--muted-foreground)]">Account not found</p>
         {!settingsMode && (onBack ? (
           <button
             type="button"
             onClick={onBack}
             className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline"
           >
-            Back to Sub-Accounts
+            Back to Accounts
           </button>
         ) : (
           <Link href={basePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
-            Back to Sub-Accounts
+            Back to Accounts
           </Link>
         ))}
       </div>
@@ -828,14 +828,14 @@ export function SubAccountDetailPage({
                         type="button"
                         onClick={() => setIsEditingDealerName(true)}
                         className="flex-shrink-0 rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] group-hover:opacity-100"
-                        title="Edit sub-account name"
+                        title="Edit account name"
                       >
                         <PencilSquareIcon className="w-4 h-4" />
                       </button>
                     )}
                   </div>
                   <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
-                    Manage settings and configuration for this sub-account
+                    Manage settings and configuration for this account
                   </p>
                 </div>
               </div>
@@ -862,7 +862,7 @@ export function SubAccountDetailPage({
               <button
                 type="button"
                 onClick={onBack}
-                aria-label="Back to Sub-Accounts"
+                aria-label="Back to Accounts"
                 className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
               >
                 <ArrowLeftIcon className="w-4 h-4" />
@@ -912,7 +912,7 @@ export function SubAccountDetailPage({
                   type="button"
                   onClick={() => setIsEditingDealerName((prev) => !prev)}
                   className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                  title="Edit sub-account name"
+                  title="Edit account name"
                 >
                   <PencilSquareIcon className="w-4 h-4" />
                 </button>
@@ -1069,17 +1069,17 @@ export function SubAccountDetailPage({
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <label className="text-xs font-medium text-[var(--muted-foreground)]">
-                      Organization
+                      Group
                     </label>
-                    <HelpTip title="Organization">
+                    <HelpTip title="Group">
                       <p>
                         The account this one belongs to. Its contacts roll up to that account, and
                         it inherits that account&rsquo;s brand kit and templates.
                       </p>
                       <p>
-                        There is no separate promote step — an account becomes an Organization the
+                        There is no separate promote step — an account becomes a group the
                         moment another account points at it here. To dissolve one, set this field
-                        back to <strong>None</strong> on each of its sub-accounts.
+                        back to <strong>None</strong> on each of its accounts.
                       </p>
                     </HelpTip>
                   </div>
@@ -1095,7 +1095,7 @@ export function SubAccountDetailPage({
                   </select>
                   {ownSubAccountCount > 0 && (
                     <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
-                      This account is itself an Organization — {ownSubAccountCount} sub-account
+                      This account is itself a group — {ownSubAccountCount} account
                       {ownSubAccountCount === 1 ? '' : 's'} roll{ownSubAccountCount === 1 ? 's' : ''} up to it.
                     </p>
                   )}
@@ -1104,7 +1104,7 @@ export function SubAccountDetailPage({
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
                     <label className="text-xs font-medium text-[var(--muted-foreground)]">
-                      Sub-Account Rep
+                      Account Rep
                     </label>
                     <span className="relative inline-flex items-center group">
                       <QuestionMarkCircleIcon className="w-4 h-4 text-[var(--muted-foreground)]/80 hover:text-[var(--foreground)] transition-colors cursor-help" />
@@ -1203,7 +1203,7 @@ export function SubAccountDetailPage({
               <h3 className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-3">Danger Zone</h3>
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between p-4 border border-red-500/20 rounded-xl">
                 <div>
-                  <p className="text-sm font-medium">Delete this sub-account</p>
+                  <p className="text-sm font-medium">Delete this account</p>
                   <p className="text-xs text-[var(--muted-foreground)]">
                     Permanently remove {dealer || key} and all associated data.
                   </p>
@@ -1212,7 +1212,7 @@ export function SubAccountDetailPage({
                   onClick={handleDelete}
                   className="px-4 py-2 bg-red-500/10 text-red-400 border border-red-500/30 rounded-lg text-sm font-medium hover:bg-red-500/20 transition-colors flex-shrink-0"
                 >
-                  Delete Sub-Account
+                  Delete Account
                 </button>
               </div>
             </section>
@@ -1257,7 +1257,7 @@ export function SubAccountDetailPage({
             <section className={sectionCardClass}>
               <h3 className={sectionHeadingClass}>Brand Colors</h3>
               <p className="text-[11px] text-[var(--muted-foreground)] mb-4 -mt-2">
-                Set reusable color values for this sub-account. These are available as custom value fallbacks in previews.
+                Set reusable color values for this account. These are available as custom value fallbacks in previews.
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {([
@@ -1649,14 +1649,14 @@ export function SubAccountDetailPage({
         {settingsMode && activeTab === 'users' && <UsersTab />}
 
         {/* ════════════ CUSTOM FIELDS TAB (settings mode only) ════════════
-            Sub-account-scoped — declares contact custom fields that the
+            Account-scoped — declares contact custom fields that the
             filter engine, CSV importer, and contact detail page all
             surface. Admin-level blueprints live at /settings under the
             top-level Field Blueprints tab. */}
         {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
 
         {/* ════════════ REPORTS TAB (settings mode only) ════════════
-            Which reports this sub-account's CLIENT users see. Narrowing only —
+            Which reports this account's CLIENT users see. Narrowing only —
             staff always see everything their role allows. */}
         {settingsMode && activeTab === 'reports' && (
           <ReportAccessTab accountKey={key} onIntegrate={openIntegration} />

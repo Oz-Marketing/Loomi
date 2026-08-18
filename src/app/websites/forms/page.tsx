@@ -183,7 +183,7 @@ export default function FormsPage() {
     <AdminOnly>
       <FormsPageHeader
         accountKey={accountKey}
-        disabledReason="Select a sub-account before creating a form."
+        disabledReason="Select an account before creating a form."
       />
 
       {/* Unified toolbar — only renders when there's something to view.

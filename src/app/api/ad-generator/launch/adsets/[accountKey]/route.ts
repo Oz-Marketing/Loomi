@@ -32,7 +32,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ acc
     .findUnique({ where: { key: accountKey }, select: { metaAdAccountId: true } })
     .catch(() => null);
   if (!account?.metaAdAccountId) {
-    return NextResponse.json({ adSets: [], blocked: 'This sub-account has no Meta ad account set.' });
+    return NextResponse.json({ adSets: [], blocked: 'This account has no Meta ad account set.' });
   }
   const cfg = getMetaConfig();
   if (!cfg) {

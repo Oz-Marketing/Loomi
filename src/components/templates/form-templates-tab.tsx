@@ -174,7 +174,7 @@ export function FormTemplatesTab({
   const actionsFor = (form: FormSummary): TemplateCardAction[] => [
     { key: 'edit', label: 'Edit template', icon: PencilSquareIcon, run: () => editForm(form) },
     ...(canDeploy
-      ? [{ key: 'deploy', label: 'Deploy to sub-account', icon: ArrowUpTrayIcon, run: () => setDeployTarget(form) }]
+      ? [{ key: 'deploy', label: 'Deploy to account', icon: ArrowUpTrayIcon, run: () => setDeployTarget(form) }]
       : []),
     form.status === 'published'
       ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => void patchForm(form.id, { status: 'draft' }) }

@@ -11,7 +11,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { PageHeader } from '@/components/page-header';
 import { HelpTip } from '@/components/ui/help-tip';
-import { getStudioUrl } from '@/lib/cross-site';
+import { getAppUrl } from '@/lib/cross-site';
 import type {
   AccountCoverage,
   AuditPayload,
@@ -60,8 +60,14 @@ const SEVERITY_LABEL: Record<CheckSeverity, string> = {
 /** Resolve a check's fix link, which may point at the other host. */
 function fixHref(fix: NonNullable<CheckResult['fix']>, account: { accountKey: string; slug: string }) {
   const path = fix.path.replace('{key}', account.accountKey).replace('{slug}', account.slug);
-  // getStudioUrl returns null during SSR; the anchor renders unlinked until hydration.
-  return fix.surface === 'studio' ? getStudioUrl(path) : path;
+  // This page lives on STUDIO, so studio fixes are same-host links and it's the
+  // App ones (the pacer, the budget hub) that have to cross. Inverted when the
+  // page moved off the App surface — left as it was, every link would have
+  // pointed at the wrong host.
+  //
+  // getAppUrl returns null during SSR; the anchor renders unlinked until
+  // hydration, which is the same behaviour getStudioUrl had here before.
+  return fix.surface === 'app' ? getAppUrl(path) : path;
 }
 
 export function PlaybookAudit() {

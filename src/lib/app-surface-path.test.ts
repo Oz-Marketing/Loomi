@@ -8,13 +8,13 @@ import { appSurfacePrefix, normalizeAppPath, appHref } from './app-surface-path'
  */
 describe('appSurfacePrefix', () => {
   it('is empty behind the proxy, where paths are already bare', () => {
-    for (const p of ['/projects', '/playbooks', '/tools/meta', '/settings']) {
+    for (const p of ['/projects', '/projects/tasks', '/tools/meta', '/settings']) {
       expect(appSurfacePrefix(p)).toBe('');
     }
   });
 
   it('is /app on the un-proxied path', () => {
-    for (const p of ['/app', '/app/projects', '/app/playbooks', '/app/tools/meta']) {
+    for (const p of ['/app', '/app/projects', '/app/projects/tasks', '/app/tools/meta']) {
       expect(appSurfacePrefix(p)).toBe('/app');
     }
   });
@@ -31,7 +31,7 @@ describe('appSurfacePrefix', () => {
 describe('normalizeAppPath', () => {
   it('strips the prefix so nav items can be declared bare', () => {
     expect(normalizeAppPath('/app/projects/tasks')).toBe('/projects/tasks');
-    expect(normalizeAppPath('/app/playbooks')).toBe('/playbooks');
+    expect(normalizeAppPath('/app/tools/meta')).toBe('/tools/meta');
   });
 
   it('leaves an already-bare path alone', () => {
@@ -47,13 +47,13 @@ describe('normalizeAppPath', () => {
 describe('appHref', () => {
   it('round-trips: an href built from a path normalizes back to itself', () => {
     for (const current of ['/projects', '/app/projects']) {
-      const href = appHref(current, '/playbooks');
-      expect(normalizeAppPath(href)).toBe('/playbooks');
+      const href = appHref(current, '/projects/budget');
+      expect(normalizeAppPath(href)).toBe('/projects/budget');
     }
   });
 
   it('emits the form matching the current URL', () => {
-    expect(appHref('/projects', '/playbooks')).toBe('/playbooks');
-    expect(appHref('/app/projects', '/playbooks')).toBe('/app/playbooks');
+    expect(appHref('/projects', '/projects/budget')).toBe('/projects/budget');
+    expect(appHref('/app/projects', '/projects/budget')).toBe('/app/projects/budget');
   });
 });

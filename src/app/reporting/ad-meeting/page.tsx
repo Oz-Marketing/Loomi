@@ -33,7 +33,7 @@ import {
 import { AdMeetingBuilder } from './_components/ad-meeting-builder';
 
 export default function ReportingAdMeetingPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { data: session, status } = useSession();
 
   const role = session?.user?.role as UserRole | undefined;
@@ -51,7 +51,7 @@ export default function ReportingAdMeetingPage() {
         icon={PresentationChartLineIcon}
         title="Ad meeting"
         subtitle={`Every channel for one account, assembled into a single reviewable document — ${
-          accountKey && !isGroup ? dealer : 'select an account'
+          accountKey && !isRollup ? dealer : 'select an account'
         }.`}
       />
 
@@ -76,7 +76,7 @@ export default function ReportingAdMeetingPage() {
           title="Staff only"
           body="The meeting document is prepared by your account team. Ask them for the latest one — every report it draws from is available to you individually in the sidebar."
         />
-      ) : isGroup || !accountKey ? (
+      ) : isRollup || !accountKey ? (
         <EmptyState
           icon={PresentationChartLineIcon}
           title="Pick an account"

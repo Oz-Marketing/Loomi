@@ -29,7 +29,7 @@ import {
 import { SalesTrendReport } from './sales-trend-report';
 
 export function SalesTrendPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -37,7 +37,7 @@ export function SalesTrendPage() {
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const { from, to } = resolveBounds(rangeKey, customRange);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -60,7 +60,7 @@ export function SalesTrendPage() {
         />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={TruckIcon}
           title="Pick an account"

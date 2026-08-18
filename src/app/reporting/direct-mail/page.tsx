@@ -27,13 +27,13 @@ import {
 import { DirectMailReport } from './_components/direct-mail-report';
 
 export default function ReportingDirectMailPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
 
   const [rangeKey, setRangeKey] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const { from, to } = resolveBounds(rangeKey, customRange);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -56,7 +56,7 @@ export default function ReportingDirectMailPage() {
         />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={EnvelopeIcon}
           title="Pick an account"

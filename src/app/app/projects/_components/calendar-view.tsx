@@ -29,11 +29,11 @@ export function CalendarView() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
-  const { accountKey: globalAccountKey, isAdmin, isGroup, scopedAccountKeys } = useAccount();
+  const { accountKey: globalAccountKey, isAdmin, isRollup, scopedAccountKeys } = useAccount();
 
   // Same roll-up rule as the Tasks board: an Organization spans its rooftops
   // (agency scope, which used to be the only cross-account view, is gone).
-  const rollsUp = isAdmin || isGroup;
+  const rollsUp = isAdmin || isRollup;
   const serverAccount = rollsUp ? '' : globalAccountKey ?? '';
   const swrKey = `/api/projects/tasks${serverAccount ? `?accountKey=${encodeURIComponent(serverAccount)}` : ''}`;
   const { data, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
@@ -45,10 +45,10 @@ export function CalendarView() {
   // empty list means "no filter" to the client-side matcher.
   const filterAccountKeys = useMemo(() => {
     if (!rollsUp) return [];
-    if (!isGroup) return accountKeys;
+    if (!isRollup) return accountKeys;
     const subtree = scopedAccountKeys ?? [];
     return accountKeys.length > 0 ? accountKeys.filter((k) => subtree.includes(k)) : subtree;
-  }, [rollsUp, isGroup, accountKeys, scopedAccountKeys]);
+  }, [rollsUp, isRollup, accountKeys, scopedAccountKeys]);
 
   const filters: TaskFilters = useMemo(
     () => ({

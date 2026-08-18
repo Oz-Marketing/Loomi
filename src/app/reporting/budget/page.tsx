@@ -51,13 +51,13 @@ function YearPicker({ value, onChange }: { value: number; onChange: (y: number) 
 }
 
 export default function ReportingBudgetPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
   const [year, setYear] = useState(() => new Date().getFullYear());
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -71,7 +71,7 @@ export default function ReportingBudgetPage() {
         <YearPicker value={year} onChange={setYear} />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={BanknotesIcon}
           title="Pick an account"

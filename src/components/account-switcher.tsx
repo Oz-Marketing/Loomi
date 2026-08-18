@@ -5,11 +5,16 @@ import { createPortal } from 'react-dom';
 import { useRouter, usePathname } from 'next/navigation';
 import {
   ChevronUpDownIcon,
+  BuildingOffice2Icon,
   MagnifyingGlassIcon,
   CheckIcon,
   CogIcon,
 } from '@heroicons/react/24/outline';
-import { useAccount, type AccountData } from '@/contexts/account-context';
+import {
+  allAccountsSurface,
+  useAccount,
+  type AccountData,
+} from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
@@ -169,9 +174,16 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const searchRef = useRef<HTMLInputElement>(null);
 
   // Agency scope was once a selectable entry here ("Agency Settings"). It isn't
-  // a place any more — platform config is the cog's modal — so this switcher
-  // lists sub-accounts and nothing else. `mode: 'admin'` survives only as the
-  // brief pre-resolution state before the context settles on an account.
+  // a place any more — platform config is the cog's modal. What IS still a
+  // place is the all-accounts overview: the cross-account roll-up the pacer and
+  // the reporting views render when nothing is selected. It went missing when
+  // agency scope was retired, because that entry was the only door to it.
+  //
+  // Projects only — see ALL_ACCOUNTS_SURFACES for why Reporting is excluded
+  // despite having a roll-up of its own.
+  const [offersAllAccounts, setOffersAllAccounts] = useState(false);
+  useEffect(() => setOffersAllAccounts(allAccountsSurface()), [pathname]);
+  const inAllAccounts = account.mode === 'all';
   const currentKey = account.mode === 'account' ? account.accountKey : null;
   const currentAccount = currentKey ? accounts[currentKey] : null;
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
@@ -399,12 +411,21 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     );
   }
 
-  const triggerAvatar = currentAccount ? (
+  // All-accounts gets the same glyph as its dropdown entry. The empty tile is
+  // the "nothing resolved yet" state, and showing it for a scope the user
+  // deliberately chose reads as a broken avatar rather than as a scope.
+  const triggerAvatar = inAllAccounts ? (
+    <span className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] border border-[var(--sidebar-border)] flex items-center justify-center flex-shrink-0">
+      <BuildingOffice2Icon className="w-4 h-4 text-[var(--sidebar-muted-foreground)]" />
+    </span>
+  ) : currentAccount ? (
     <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
   ) : (
     <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
   );
-  const triggerLabel = currentAccount?.dealer || currentKey || 'Select sub-account';
+  const triggerLabel = inAllAccounts
+    ? 'All sub-accounts'
+    : currentAccount?.dealer || currentKey || 'Select sub-account';
 
   return (
     <>
@@ -479,6 +500,43 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
               appears in the sub-account list below like any other account —
               selecting it gives the normal account nav plus a roll-up across
               its children. */}
+
+          {/* All sub-accounts — a SCOPE, so it sits above the lists rather than
+              inside them: picking it is not picking a sub-account, it is
+              stepping back to see every one of them at once. Hidden while
+              searching (the search filters sub-accounts, and a scope is not a
+              search result) and on surfaces with no cross-account view. */}
+          {offersAllAccounts && !search && (
+            <div className="p-1 border-b border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setSearch('');
+                  confirmNavigation(() => {
+                    setAccount({ mode: 'all' });
+                    onSwitch?.();
+                  });
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[var(--muted)] transition-colors text-left"
+              >
+                <span className="w-7 h-7 rounded-md bg-[var(--muted)] border border-[var(--border)] flex items-center justify-center flex-shrink-0">
+                  <BuildingOffice2Icon className="w-4 h-4 text-[var(--muted-foreground)]" />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-[var(--foreground)] truncate">
+                    All sub-accounts
+                  </p>
+                  <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
+                    Every account in one view
+                  </p>
+                </div>
+                {inAllAccounts && (
+                  <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />
+                )}
+              </button>
+            </div>
+          )}
 
           {/* Recently viewed — quick shortcuts under the search; hidden while
               searching so the results below read cleanly. Small matched label. */}

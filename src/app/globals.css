@@ -254,6 +254,38 @@ select[class*="bg-[var(--background)]"] {
   background-color: var(--card) !important;
 }
 
+/* Checkbox.
+   The user-agent default paints an UNCHECKED box in system white, which on the
+   dark theme is a bright chip sitting in a dark table — the loudest thing in a
+   row that is mostly numbers, for a control almost nobody uses. `accent-color`
+   does not help: it only tints the checked state. So the box is drawn here:
+   the app's own input fill and border when empty, the accent plus a tick when
+   checked. A background-image tick rather than a pseudo-element, because ::after
+   on a replaced input is not dependable across browsers. */
+.loomi-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--input);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.loomi-checkbox:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+.loomi-checkbox:checked {
+  background-color: var(--primary);
+  border-color: var(--primary);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-6'/%3E%3C/svg%3E");
+}
+.loomi-checkbox:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
 /* Offer-type pills.
    The selected pill's label reads from `--offer-pill-ink`, which each pill sets
    to its own hue via an arbitrary property in `client-form/fields.tsx`

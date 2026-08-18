@@ -8,6 +8,11 @@ showed whether the account as a whole was allocated correctly.
 
 Meta's pacing card is unchanged apart from the shared label/filter layer (§6).
 
+**Addendum:** `google-pacing-card-budget-report.md` covers the budget report on
+the delivery panel, the editable daily budget with its live projection, the
+reworked account header, and the allocation precision fix. Where the two
+disagree on wording or layout, the addendum is the later decision.
+
 ## The shape of it
 
 ```

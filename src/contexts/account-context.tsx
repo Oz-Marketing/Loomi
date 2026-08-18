@@ -4,8 +4,10 @@ import { createContext, useContext, useState, useEffect, useCallback, useMemo, R
 import { useSession } from 'next-auth/react';
 import type { UserRole } from '@/lib/auth';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
+import { getCurrentSurface } from '@/lib/cross-site';
 import {
   ADMIN_VALUE,
+  ALL_VALUE,
   readActiveAccountCookie,
   writeActiveAccountCookie,
   parseOrgValue,
@@ -119,7 +121,35 @@ export interface AccountData {
  */
 export type AccountType =
   | { mode: 'admin' }
+  /**
+   * The ALL-ACCOUNTS overview — a scope the user deliberately picked, which is
+   * what separates it from `admin` above. `accountKey` is null in both, so every
+   * cross-account view keys off the same null check it always did; the
+   * difference is only that this one is never auto-resolved away.
+   *
+   * PROJECTS ONLY. Studio's tools are per-sub-account, so "no account" is not a
+   * view any of them have. Reporting is the interesting exclusion: its Dashboard
+   * does aggregate across `scopedAccountKeys`, but every individual report gates
+   * its roll-up on `isGroup` — which means "an account that has children" and is
+   * false when nothing is selected — so Contacts, Ads, Websites and Reputation
+   * would render "pick a sub-account" instead of aggregating. Offering the scope
+   * there would advertise a roll-up that four reports out of five do not do.
+   * Widening those gates is its own piece of work.
+   *
+   * The effect below returns any other surface to a real account rather than
+   * leaving its pages with nothing selected.
+   */
+  | { mode: 'all' }
   | { mode: 'account'; accountKey: string };
+
+/** Surfaces where the all-accounts scope is offered and allowed to persist. */
+export const ALL_ACCOUNTS_SURFACES = ['app'] as const;
+
+/** Is the all-accounts scope available where we are right now? */
+export function allAccountsSurface(): boolean {
+  const surface = getCurrentSurface();
+  return surface != null && (ALL_ACCOUNTS_SURFACES as readonly string[]).includes(surface);
+}
 
 /**
  * Where a user with no stored selection should land.
@@ -158,6 +188,8 @@ interface AccountContextValue {
   /** User has full (all-account) access — drives font roll-up, etc. */
   isUnrestricted: boolean;
   isAccount: boolean;
+  /** The deliberate all-accounts overview scope (Reporting / Projects only). */
+  isAllAccounts: boolean;
   accountKey: string | null;
   accountData: AccountData | null;
   accounts: Record<string, AccountData>;
@@ -282,7 +314,15 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         // Ignore it and fall through to the role default rather than stranding
         // the user in a scope that no longer exists.
         const cookieOrgId = parseOrgValue(cookieVal);
-        if (cookieVal && cookieVal !== ADMIN_VALUE && !cookieOrgId) {
+        // The all-accounts scope, restored only where it is offered — landing
+        // on a Studio route with this cookie set should open an account, not
+        // strand every per-account page with nothing selected.
+        if (cookieVal === ALL_VALUE && userRole !== 'client' && allAccountsSurface()) {
+          setAccountState({ mode: 'all' });
+          setInitialized(true);
+          return;
+        }
+        if (cookieVal && cookieVal !== ADMIN_VALUE && cookieVal !== ALL_VALUE && !cookieOrgId) {
           const restricted =
             (userRole === 'client' && userAccountKeys.length > 0) ||
             (userRole === 'admin' && userAccountKeys.length > 0);
@@ -349,7 +389,11 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     // Persist so the selection survives reloads and stays in sync across the
     // studio / app / reporting surfaces (shared parent-domain cookie).
     writeActiveAccountCookie(
-      newAccount.mode === 'admin' ? ADMIN_VALUE : newAccount.accountKey,
+      newAccount.mode === 'admin'
+        ? ADMIN_VALUE
+        : newAccount.mode === 'all'
+          ? ALL_VALUE
+          : newAccount.accountKey,
     );
   };
 
@@ -363,6 +407,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   }, [filterAccountsForCurrentUser]);
 
   const isAdmin = account.mode === 'admin';
+  const isAllAccounts = account.mode === 'all';
   const isAccount = account.mode === 'account';
   const accountKey = account.mode === 'account' ? account.accountKey : null;
   const accountData = accountKey ? accounts[accountKey] || null : null;
@@ -440,7 +485,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   // slug, and racing it would swap the account out from under the page.
   useEffect(() => {
     if (!initialized || !accountsLoaded) return;
-    if (account.mode !== 'admin') return;
+    // `admin` is always resolved away — it is the unresolved state, never a
+    // destination. `all` is a real choice, so it only gets resolved on the
+    // surfaces that do not offer it (Studio), where a null account would leave
+    // per-sub-account pages with nothing to render.
+    if (account.mode === 'all' && allAccountsSurface()) return;
+    if (account.mode === 'account') return;
     if (
       typeof window !== 'undefined' &&
       (window.location.pathname.startsWith('/subaccount/') ||
@@ -467,6 +517,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         isAdmin,
         isUnrestricted,
         isAccount,
+        isAllAccounts,
         accountKey,
         accountData,
         accounts,

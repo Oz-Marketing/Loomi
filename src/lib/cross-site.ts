@@ -154,5 +154,10 @@ export function getCurrentSurface(): 'studio' | 'reporting' | 'app' | null {
   // the studio surface never serves a /reporting path, so this is dev-only.)
   const path = window.location.pathname;
   if (path === '/reporting' || path.startsWith('/reporting/')) return 'reporting';
+  // Same dev-only fallback for Projects. Prod matches app.* by host above, but
+  // locally every surface shares one host, so without this a /app route reads
+  // as studio — and anything gated on the surface (the switcher's all-accounts
+  // scope) silently behaves like the wrong surface in dev only.
+  if (path === '/app' || path.startsWith('/app/')) return 'app';
   return 'studio';
 }

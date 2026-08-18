@@ -12,7 +12,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
+import { roleGrants } from '@/lib/permissions/client';
 import { Select } from '@/components/select';
 import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { DISCLAIMER_SLUGS } from '@/lib/ad-generator/disclaimer';
@@ -94,7 +96,21 @@ function TokenTextArea({
 
 export default function DisclaimerTemplatesPage() {
   const { userRole, account, accountData } = useAccount();
-  const isAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
+  const { data: session } = useSession();
+  // Legacy tier buckets OR the sector role that is actually supposed to own
+  // this: `studio.lead` (and `studio.producer`) hold `studio.templates.edit` in
+  // the matrix, but this page only ever asked the legacy `role` string — so a
+  // Studio Lead was shown "not authorized" for a page their role grants.
+  //
+  // Widened, not replaced: the legacy check stays until Studio enforcement is
+  // switched on, so nobody currently in loses access. The server is still the
+  // authority — see permissions/client.ts on why a UI gate cannot ask the
+  // enforcement-aware helper.
+  const isAdmin =
+    userRole === 'developer' ||
+    userRole === 'super_admin' ||
+    userRole === 'admin' ||
+    roleGrants(session?.user, 'studio.templates.edit');
   // When viewing a specific subaccount, scope to that account's OEM (plus global
   // templates); admin sees every make.
   const scopedOem = account.mode === 'account' ? (accountData?.oem || accountData?.oems?.[0] || '').trim() : '';

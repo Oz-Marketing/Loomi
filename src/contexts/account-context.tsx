@@ -129,23 +129,22 @@ export type AccountType =
    * cross-account view keys off the same null check it always did; the
    * difference is only that this one is never auto-resolved away.
    *
-   * PROJECTS ONLY. Studio's tools are per-sub-account, so "no account" is not a
-   * view any of them have. Reporting is the interesting exclusion: its Dashboard
-   * does aggregate across `scopedAccountKeys`, but every individual report gates
-   * its roll-up on `isGroup` — which means "an account that has children" and is
-   * false when nothing is selected — so Contacts, Ads, Websites and Reputation
-   * would render "pick a sub-account" instead of aggregating. Offering the scope
-   * there would advertise a roll-up that four reports out of five do not do.
-   * Widening those gates is its own piece of work.
+   * Projects and Reporting. Not Studio — its tools are per-account, so "no
+   * account" is not a view any of them have, and the effect below returns a
+   * Studio route to a real account rather than leaving its pages empty.
    *
-   * The effect below returns any other surface to a real account rather than
-   * leaving its pages with nothing selected.
+   * Reporting was excluded until its reports could actually aggregate: they
+   * gated roll-up on `isGroup`, which is false when nothing is selected, so the
+   * scope advertised a roll-up most reports did not do. They now gate on
+   * `isRollup` ("does this scope span more than one account"), and the reports
+   * with a roll-up config render one. The rest still ask for a single account —
+   * see REPORTS WITHOUT A ROLL-UP in docs, they need per-report aggregation.
    */
   | { mode: 'all' }
   | { mode: 'account'; accountKey: string };
 
 /** Surfaces where the all-accounts scope is offered and allowed to persist. */
-export const ALL_ACCOUNTS_SURFACES = ['app'] as const;
+export const ALL_ACCOUNTS_SURFACES = ['app', 'reporting'] as const;
 
 /** Is the all-accounts scope available where we are right now? */
 export function allAccountsSurface(): boolean {
@@ -505,10 +504,22 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const isSelfScoped =
     account.mode === 'account' && !!account.accountKey && selfScopedKeys.has(account.accountKey);
-  // The question a rendering decision should ask. A group standing alone spans
-  // one account, so it renders like any leaf — which is what makes its own
-  // reports reachable.
-  const isRollup = isGroup && !isSelfScoped;
+  /**
+   * The question a rendering decision should ask, stated literally: does this
+   * scope cover more than one account?
+   *
+   * Defined off `scopedAccountKeys` rather than off `isGroup` so every scope
+   * answers it correctly with no special cases — a leaf is one, a group rolled
+   * up is many, a group standing alone is one (which is what makes its own
+   * reports reachable), and the all-accounts overview is many. Deriving it from
+   * `isGroup` instead left all-accounts reading as "single account", so a
+   * roll-up-capable page rendered for an account it did not have.
+   *
+   * Gated on `initialized` because the pre-resolution `admin` state fans out to
+   * every account, and a page must not flash a roll-up on the way to a single
+   * sub-account.
+   */
+  const isRollup = initialized && scopedAccountKeys.length > 1;
 
   const setRollup = useCallback(
     (rollup: boolean) => {

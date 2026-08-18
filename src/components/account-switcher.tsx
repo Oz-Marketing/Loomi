@@ -182,8 +182,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   // the reporting views render when nothing is selected. It went missing when
   // agency scope was retired, because that entry was the only door to it.
   //
-  // Projects only — see ALL_ACCOUNTS_SURFACES for why Reporting is excluded
-  // despite having a roll-up of its own.
+  // Projects and Reporting — see ALL_ACCOUNTS_SURFACES.
   const [offersAllAccounts, setOffersAllAccounts] = useState(false);
   useEffect(() => setOffersAllAccounts(allAccountsSurface()), [pathname]);
   const inAllAccounts = account.mode === 'all';

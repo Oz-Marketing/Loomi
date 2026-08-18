@@ -71,6 +71,10 @@ export default function ReportingBudgetPage() {
         <YearPicker value={year} onChange={setYear} />
       </div>
 
+      {/* Deliberately NOT rolled up. `BUDGET_ROLLUP` is `supportsDates: false`,
+          so the roll-up would never receive the year this page's picker selects
+          — it would report some other year under the year you chose. Wiring it
+          means teaching the config to carry a year first. */}
       {isRollup || !accountKey ? (
         <EmptyState
           icon={BanknotesIcon}

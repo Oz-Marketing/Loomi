@@ -72,7 +72,7 @@ export function CustomFieldsTab() {
     const ok = await confirm({
       title: `Delete "${field.label}"?`,
       message: field.parentBlueprintId
-        ? 'This field was deployed from a blueprint. Deleting it only removes the declaration on this sub-account — the blueprint is unaffected. Existing values on contacts are preserved.'
+        ? 'This field was deployed from a blueprint. Deleting it only removes the declaration on this account — the blueprint is unaffected. Existing values on contacts are preserved.'
         : 'Existing values on contacts are preserved, but the field stops appearing in the filter builder and contact UI.',
       confirmLabel: 'Delete',
       destructive: true,
@@ -108,7 +108,7 @@ export function CustomFieldsTab() {
     return (
       <div className="text-center py-16">
         <p className="text-[var(--muted-foreground)] text-sm">
-          Select a sub-account to manage its custom fields.
+          Select an account to manage its custom fields.
         </p>
       </div>
     );

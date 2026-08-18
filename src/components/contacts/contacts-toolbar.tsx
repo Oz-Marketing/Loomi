@@ -138,10 +138,10 @@ export function ContactsAccountFilter({
   const selectedCount = values.length;
   const label =
     selectedCount === 0
-      ? 'All sub-accounts'
+      ? 'All accounts'
       : selectedCount === 1
-        ? accounts.find((a) => a.key === values[0])?.dealer || '1 sub-account'
-        : `${selectedCount} sub-accounts`;
+        ? accounts.find((a) => a.key === values[0])?.dealer || '1 account'
+        : `${selectedCount} accounts`;
 
   function toggle(key: string) {
     if (values.includes(key)) {

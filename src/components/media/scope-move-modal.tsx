@@ -60,7 +60,7 @@ export function ScopeMoveModal({
     const brands = [...MAJOR_US_OEMS, ...POWERSPORTS_BRANDS];
     return [
       { value: 'global', label: 'Loomi library — every account' },
-      ...brands.map((b) => ({ value: `oem:${b}`, label: `Shared — all ${b} sub-accounts` })),
+      ...brands.map((b) => ({ value: `oem:${b}`, label: `Shared — all ${b} accounts` })),
       ...accounts.map((a) => ({ value: `account:${a.key}`, label: a.dealer })),
     ];
   }, [accounts]);
@@ -75,14 +75,14 @@ export function ScopeMoveModal({
   const copySubject = count === 1 ? 'the copy' : 'the copies';
   const consequence = isCopy
     ? target.oem
-      ? `Every sub-account carrying ${target.oem} will be able to use ${copySubject}.`
+      ? `Every account carrying ${target.oem} will be able to use ${copySubject}.`
       : target.accountKey
-        ? `Only this sub-account will be able to use ${copySubject}. The original stays where it is.`
+        ? `Only this account will be able to use ${copySubject}. The original stays where it is.`
         : `Every account will be able to use ${copySubject}. The original stays where it is.`
     : target.oem
-      ? `Every sub-account carrying ${target.oem} will be able to use ${subject}.`
+      ? `Every account carrying ${target.oem} will be able to use ${subject}.`
       : target.accountKey
-        ? `Only this sub-account will be able to use ${subject}.`
+        ? `Only this account will be able to use ${subject}.`
         : `Every account will be able to use ${subject}.`;
 
   return (

@@ -249,7 +249,7 @@ function CardMenu({
               className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors whitespace-nowrap"
             >
               <ArrowUpTrayIcon className="w-3.5 h-3.5 flex-shrink-0" />
-              Deploy to sub-account
+              Deploy to account
             </button>
           )}
           {onDelete && (

@@ -274,7 +274,7 @@ export function AssetMetadataFields({
             <HelpTip title="Brand">
               <p>
                 The manufacturer this asset belongs to. Setting it on an asset in the
-                Loomi library makes it available to every sub-account that carries the
+                Loomi library makes it available to every account that carries the
                 brand, instead of being uploaded once per rooftop.
               </p>
             </HelpTip>

@@ -879,7 +879,7 @@ export function FlowList({
           <div className="mt-1">
             <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <span className="flex-1">Name</span>
-              <span className="w-36">Sub-Account</span>
+              <span className="w-36">Account</span>
               <span className="w-20 text-right">
                 <SortHeader label="STATUS" field="status" activeField={sortField} activeDir={sortDir} onToggle={toggleSort} />
               </span>

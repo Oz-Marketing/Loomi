@@ -144,7 +144,7 @@ export function SmsTab({ accountKey }: SmsTabProps) {
   }
 
   async function handleRemoveCredentials() {
-    if (!confirm('Remove Twilio credentials? Without them, SMS sends from this sub-account will fail until new credentials are provided.')) {
+    if (!confirm('Remove Twilio credentials? Without them, SMS sends from this account will fail until new credentials are provided.')) {
       return;
     }
     await persist({ accountSid: null, authToken: null });
@@ -195,7 +195,7 @@ export function SmsTab({ accountKey }: SmsTabProps) {
               )}
             </div>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Required for SMS — this sub-account&apos;s campaigns send through Twilio directly.
+              Required for SMS — this account&apos;s campaigns send through Twilio directly.
               Without credentials, SMS sends will fail.
             </p>
           </div>
@@ -238,7 +238,7 @@ export function SmsTab({ accountKey }: SmsTabProps) {
           </div>
           <p className={helpTextClass}>
             Find both in Twilio Console → Account → API keys &amp; tokens. Use a main
-            account or a sub-account; both work the same way.
+            account or an account; both work the same way.
             {state.configured && ' Submitting new values replaces the saved pair.'}
           </p>
 

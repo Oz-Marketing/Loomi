@@ -60,7 +60,7 @@ export async function POST(
   if (scope) accountKeys = accountKeys.filter((k) => scope.includes(k));
   if (accountKeys.length === 0) {
     return NextResponse.json(
-      { error: 'No accessible sub-accounts in the deploy list' },
+      { error: 'No accessible accounts in the deploy list' },
       { status: 403 },
     );
   }

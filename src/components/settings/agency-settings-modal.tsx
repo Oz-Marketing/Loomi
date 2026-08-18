@@ -143,7 +143,7 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
                 {activeTab?.titleLabel ?? 'Agency Settings'}
               </h2>
               <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-                Platform configuration, shared by every sub-account.
+                Platform configuration, shared by every account.
               </p>
             </div>
             <div className="flex items-center gap-2">

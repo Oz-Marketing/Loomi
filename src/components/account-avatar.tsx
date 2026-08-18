@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { BuildingOffice2Icon } from '@heroicons/react/24/outline';
 import { useTheme } from '@/contexts/theme-context';
 import { generateLoomiAvatarDataUri } from '@/lib/avatar';
 
@@ -30,6 +31,13 @@ interface AccountAvatarProps {
   aspect?: 'square' | 'auto';
   /** Upper bound on width in 'auto' mode, so a very wide mark can't run away. */
   maxWidth?: number;
+  /**
+   * This account owns others. Draws a corner badge on the avatar so a group is
+   * recognisable wherever its logo appears, not only in the account picker —
+   * the identity of "this one rolls others up" belongs to the avatar, not to
+   * whichever list happens to be rendering it.
+   */
+  isGroup?: boolean;
 }
 
 export function AccountAvatar({
@@ -43,6 +51,7 @@ export function AccountAvatar({
   maxWidth,
   className = '',
   alt,
+  isGroup = false,
 }: AccountAvatarProps) {
   const { theme } = useTheme();
   const [hasImageError, setHasImageError] = useState(false);
@@ -68,7 +77,12 @@ export function AccountAvatar({
   // letting it stretch would just distort it.
   const freeWidth = aspect === 'auto' && isLogo;
 
-  return (
+  // The badge scales with the avatar and sits half-outside it, so the sized box
+  // itself keeps `overflow-hidden` (the logo must stay clipped) and the badge
+  // hangs off a relative wrapper instead of being cut off by it.
+  const badgePx = Math.max(11, Math.round(size * 0.42));
+
+  const box = (
     <span
       className={`inline-flex items-center justify-center overflow-hidden ${className}`}
       style={
@@ -88,6 +102,20 @@ export function AccountAvatar({
         }
         onError={() => setHasImageError(true)}
       />
+    </span>
+  );
+
+  if (!isGroup) return box;
+  return (
+    <span className="relative inline-flex flex-shrink-0">
+      {box}
+      <span
+        className="absolute flex items-center justify-center rounded-[3px] bg-[var(--primary)] border border-[var(--background)]"
+        style={{ width: badgePx, height: badgePx, right: -badgePx / 3, bottom: -badgePx / 6 }}
+        aria-hidden
+      >
+        <BuildingOffice2Icon className="text-white" style={{ width: badgePx * 0.6, height: badgePx * 0.6 }} />
+      </span>
     </span>
   );
 }

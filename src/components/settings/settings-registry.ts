@@ -111,8 +111,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
   //    org in Organization mode. ──
   {
     key: 'subaccounts',
-    label: 'Sub-Accounts',
-    titleLabel: 'Sub-Account Settings',
+    label: 'Accounts',
+    titleLabel: 'Account Settings',
     group: 'manage',
     icon: BuildingStorefrontIcon,
     visible: (s) => s.hasAdminAccess && (s.isAdmin || s.isGroup),
@@ -372,7 +372,7 @@ export function subaccountSectionGroupsForScope(
 ): SubaccountSectionGroup[] {
   const sections = subaccountSectionsForScope(scope);
   const labels: Record<SubaccountGroup, string> = {
-    account: 'Sub-Account Settings',
+    account: 'Account Settings',
     sector: sectorGroupLabel(scope.surface),
   };
   return (['account', 'sector'] as const)

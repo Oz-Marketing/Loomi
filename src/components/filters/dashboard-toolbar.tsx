@@ -163,7 +163,7 @@ export function DashboardToolbar({
 
   const singleSelectedAccount = selectedAccountObjs.length === 1 ? selectedAccountObjs[0] : null;
   const accountTriggerLabel = getFilterLabel(
-    'Sub-Account',
+    'Account',
     selectedAccountObjs.map(a => a.label),
   );
 
@@ -277,7 +277,7 @@ export function DashboardToolbar({
         )}
       </div>
 
-      {/* Sub-Account */}
+      {/* Account */}
       {showAccountFilter && (
         <div className="relative">
           <button
@@ -309,7 +309,7 @@ export function DashboardToolbar({
             >
               <div className="p-1.5">
                 <p className="px-2 py-1 text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
-                  Filter by Sub-Account
+                  Filter by Account
                 </p>
                 <button
                   onClick={clearAccounts}
@@ -319,7 +319,7 @@ export function DashboardToolbar({
                       : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                   }`}
                 >
-                  All Sub-Accounts
+                  All Accounts
                   {!hasSelectedAccounts && <CheckIcon className="w-3.5 h-3.5" />}
                 </button>
               </div>

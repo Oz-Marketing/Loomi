@@ -60,7 +60,7 @@ export default function ReportingDirectMailPage() {
         <EmptyState
           icon={EnvelopeIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its direct-mail campaigns."
+          body="Choose a single account from the top bar to see its direct-mail campaigns."
         />
       ) : (
         <DirectMailReport accountKey={accountKey} from={from} to={to} />

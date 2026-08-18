@@ -253,7 +253,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
   async function handleCreateNew(mode: 'visual' | 'code') {
     if (!emailDraft) return;
     if (!accountKey) {
-      toast.error('This blast has no sub-account, so a template can’t be created here.');
+      toast.error('This blast has no account, so a template can’t be created here.');
       return;
     }
     setApplying(true);

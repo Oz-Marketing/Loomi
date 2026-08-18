@@ -161,7 +161,7 @@ export function DeployFlowModal({
       const failureCount = Array.isArray(payload.failures) ? payload.failures.length : 0;
       if (createdCount > 0 && failureCount === 0) {
         toast.success(
-          `Deployed to ${createdCount} ${createdCount === 1 ? 'sub-account' : 'sub-accounts'} as drafts.`,
+          `Deployed to ${createdCount} ${createdCount === 1 ? 'account' : 'accounts'} as drafts.`,
         );
       } else if (createdCount > 0 && failureCount > 0) {
         toast.warning(
@@ -202,7 +202,7 @@ export function DeployFlowModal({
               id="deploy-flow-title"
               className="text-sm font-semibold text-[var(--foreground)] truncate"
             >
-              Deploy to sub-accounts
+              Deploy to accounts
             </h3>
             <p className="text-[11px] text-[var(--muted-foreground)] truncate">
               Creates a draft copy of <span className="font-medium text-[var(--foreground)]">{flowName}</span> in each selected account.
@@ -226,7 +226,7 @@ export function DeployFlowModal({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search sub-accounts..."
+              placeholder="Search accounts..."
               className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
             />
           </div>
@@ -246,7 +246,7 @@ export function DeployFlowModal({
             <div className="px-4 py-8 text-center">
               <p className="text-xs text-[var(--muted-foreground)]">
                 {available.length === 0 && alreadyDeployed.length === 0
-                  ? 'No sub-accounts available.'
+                  ? 'No accounts available.'
                   : 'No matches for your search.'}
               </p>
             </div>
@@ -302,7 +302,7 @@ export function DeployFlowModal({
                     Already deployed · {filteredDeployed.length}
                   </p>
                   <p className="px-4 pb-2 text-[10px] text-[var(--muted-foreground)] leading-snug">
-                    These sub-accounts already have an instance of this template.
+                    These accounts already have an instance of this template.
                     Open one to update it from the latest template state.
                   </p>
                   <ul className="pb-1">

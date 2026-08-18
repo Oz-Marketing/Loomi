@@ -102,7 +102,7 @@ export function BlastPageAnalytics({
   showAccountBreakdown,
   accountNames,
   emptyTitle = 'No blast data yet',
-  emptySubtitle = 'Sub-accounts may need to reconnect their integration with campaign scopes',
+  emptySubtitle = 'Accounts may need to reconnect their integration with campaign scopes',
   dateRange,
   customRange,
   workflows = [],

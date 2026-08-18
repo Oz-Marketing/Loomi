@@ -768,7 +768,7 @@ export default function AdGeneratorListPage() {
                         <span className="block text-[11px] text-[var(--muted-foreground)]">
                           {automationBlocker === 'no-template'
                             ? 'Needs a template mapped — open automation settings.'
-                            : 'Set up ad automation for this sub-account first.'}
+                            : 'Set up ad automation for this account first.'}
                         </span>
                       </span>
                     </Link>

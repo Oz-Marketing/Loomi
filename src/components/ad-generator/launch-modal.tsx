@@ -50,9 +50,9 @@ interface Blocker {
  * reader is told what's wrong and left to search for where.
  */
 const FIX_LOCATION: Record<string, string> = {
-  metaAdAccountId: 'Sub-account → Integrations → Meta Ads',
-  metaPageId: 'Sub-account → Integrations → Meta Ads → Publishing identity',
-  destinationUrl: "The launch preset's URL template, or the sub-account's website",
+  metaAdAccountId: 'Account → Integrations → Meta Ads',
+  metaPageId: 'Account → Integrations → Meta Ads → Publishing identity',
+  destinationUrl: "The launch preset's URL template, or the account's website",
   targetAdSetId: 'Pick an ad set above',
   copy: 'Open the ad and add copy, or re-run generation',
   specialAdCategories: 'Choose an ad set whose campaign carries the right category',
@@ -315,7 +315,7 @@ export function LaunchModal({
                   </select>
                   <span className="mt-1 block text-[11px] text-[var(--muted-foreground)]">
                     Adding to a running ad set keeps its learning and its budget — no new campaign. Saved for
-                    this sub-account, so you only pick once.
+                    this account, so you only pick once.
                   </span>
                 </label>
               )}

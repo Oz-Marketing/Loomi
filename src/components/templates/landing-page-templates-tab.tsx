@@ -104,7 +104,7 @@ export function LandingPageTemplatesTab({
   // Spin up a live landing page from this template's schema, then open it.
   const useTemplate = async (t: LandingPageSummary) => {
     if (usingId || !accountKey) {
-      if (!accountKey) toast.error('Switch into a sub-account to use a template.');
+      if (!accountKey) toast.error('Switch into an account to use a template.');
       return;
     }
     setUsingId(t.id);

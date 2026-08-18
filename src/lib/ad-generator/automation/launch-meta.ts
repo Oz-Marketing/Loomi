@@ -229,7 +229,7 @@ export async function launchToMeta(params: {
         {
           field: 'launchMode',
           reason:
-            'Creating a new campaign from Loomi is not available yet — it needs radius targeting that requires geocoding. Create the campaign once in Ads Manager, then set this sub-account to attach to its ad set.',
+            'Creating a new campaign from Loomi is not available yet — it needs radius targeting that requires geocoding. Create the campaign once in Ads Manager, then set this account to attach to its ad set.',
         },
       ],
       notices,

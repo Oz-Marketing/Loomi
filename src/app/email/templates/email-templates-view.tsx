@@ -885,7 +885,7 @@ function ManagementView({
             <div className="min-w-0">
               <h1 className="text-2xl font-bold">Templates</h1>
               <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
-                Shared template library. Publish templates to make them available to sub-accounts.
+                Shared template library. Publish templates to make them available to accounts.
               </p>
             </div>
           </div>

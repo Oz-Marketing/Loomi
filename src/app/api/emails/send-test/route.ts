@@ -95,10 +95,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error: accountKey
-            ? 'This sub-account has no SendGrid key configured and global SMTP isn\'t set up either. Add a SendGrid key in Email Settings.'
+            ? 'This account has no SendGrid key configured and global SMTP isn\'t set up either. Add a SendGrid key in Email Settings.'
             : 'Email not configured. Set SMTP_HOST, SMTP_USER, and SMTP_PASS in your .env.local file.',
           hint: accountKey
-            ? 'Open the sub-account Campaigns view and click the cog → SendGrid API Key.'
+            ? 'Open the account Campaigns view and click the cog → SendGrid API Key.'
             : 'For Gmail: SMTP_HOST=smtp.gmail.com, SMTP_PORT=587, SMTP_USER=you@gmail.com, SMTP_PASS=your-app-password',
         },
         { status: 400 },

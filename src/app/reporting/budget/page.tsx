@@ -75,7 +75,7 @@ export default function ReportingBudgetPage() {
         <EmptyState
           icon={BanknotesIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its budget."
+          body="Choose a single account from the top bar to see its budget."
         />
       ) : (
         <BudgetReport accountKey={accountKey} year={year} isDark={isDark} />

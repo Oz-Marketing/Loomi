@@ -645,7 +645,7 @@ export default function ContactDetailPage() {
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Sub-Account</p>
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Account</p>
                   <p className="text-sm font-medium truncate">{account.dealer}</p>
                   <p className="text-xs text-[var(--muted-foreground)] truncate">
                     {accountAddress || 'No address on file'}

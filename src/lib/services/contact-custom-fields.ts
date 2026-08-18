@@ -279,7 +279,7 @@ export async function createField(input: CreateFieldInput): Promise<CustomFieldD
   if (existing) {
     throw new CustomFieldValidationError(
       input.accountKey
-        ? `A custom field with key "${key}" already exists on this sub-account`
+        ? `A custom field with key "${key}" already exists on this account`
         : `A blueprint with key "${key}" already exists`,
       'key',
     );
@@ -393,7 +393,7 @@ export async function deployBlueprintToAccount(
   });
   if (collision) {
     throw new CustomFieldValidationError(
-      `Sub-account already has a field with key "${blueprint.key}". Delete or rename it before deploying the blueprint.`,
+      `Account already has a field with key "${blueprint.key}". Delete or rename it before deploying the blueprint.`,
       'key',
     );
   }

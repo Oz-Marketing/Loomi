@@ -147,7 +147,7 @@ export function PickTemplateModal({
               Pick from templates
             </h3>
             <p className="text-[11px] text-[var(--muted-foreground)] truncate">
-              Adopt a published template into your sub-account. You can edit it after.
+              Adopt a published template into your account. You can edit it after.
             </p>
           </div>
           <button

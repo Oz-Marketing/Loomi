@@ -28,6 +28,7 @@ import {
   ClockIcon,
   Cog6ToothIcon,
   ExclamationTriangleIcon,
+  PhotoIcon,
   PlayIcon,
   PlusIcon,
   TrashIcon,
@@ -38,7 +39,8 @@ import { HelpTip } from '@/components/ui/help-tip';
 import { aspectLabel } from '@/lib/ad-generator/ad-size-library';
 import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
 import { skipReasonFix, skipReasonLabel, summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
-import type { CycleState, RunSummary } from './types';
+import type { CreativeStep, CycleState, RunSummary, ShadowReport } from './types';
+import { STEP_LABEL } from '@/lib/playbooks/creative';
 import { type Automation } from './use-automation';
 
 /** Cycle-state presentation. `expiring_unrenewed` is amber, NOT red: the OEM
@@ -55,12 +57,6 @@ const CYCLE: Record<CycleState, { label: string; className: string; hint: string
   undated: { label: 'No end date', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]', hint: 'Timing cannot be assessed' },
   none: { label: 'No programmes', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]', hint: 'The OEM publishes nothing for this vehicle' },
   unwatched: { label: 'Never polled', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]', hint: 'No offer history yet' },
-};
-
-const WINDOW_LABEL: Record<string, string> = {
-  next_month: 'next month',
-  current_month: 'this month',
-  rolling: 'the next 30 days',
 };
 
 /**
@@ -148,29 +144,306 @@ function Field({
 const inputClass =
   'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
 
-function Stat({
-  label,
+
+const OFFER_TYPE_LABEL: Record<string, string> = { lease: 'Lease', apr: 'APR', cash: 'Cash' };
+const ALL_OFFER_TYPES = ['lease', 'apr', 'cash'];
+
+/**
+ * The offer-type priority, as an ordered row of chips.
+ *
+ * Reordering rather than a dropdown because the ORDER is the setting — this is
+ * the rule that answers "why did it run the lease and not the APR", which had
+ * no answer on screen at all before.
+ */
+function OfferPriorityPicker({
   value,
-  sub,
-  tone = 'default',
-  help,
+  onChange,
 }: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: 'default' | 'good' | 'warn';
-  help?: React.ReactNode;
+  value: string[];
+  onChange: (next: string[]) => void;
 }) {
-  const toneClass =
-    tone === 'good' ? 'text-emerald-500' : tone === 'warn' ? 'text-amber-500' : 'text-[var(--foreground)]';
+  const enabled = value.filter((t) => ALL_OFFER_TYPES.includes(t));
+  const disabled = ALL_OFFER_TYPES.filter((t) => !enabled.includes(t));
+
+  const move = (i: number) => {
+    const next = [...enabled];
+    [next[i - 1], next[i]] = [next[i], next[i - 1]];
+    onChange(next);
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {enabled.map((t, i) => (
+        <span
+          key={t}
+          className="flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--background)] py-0.5 pl-2 pr-1 text-[11px] text-[var(--foreground)]"
+        >
+          <span className="tabular-nums text-[var(--muted-foreground)]">{i + 1}</span>
+          {OFFER_TYPE_LABEL[t] ?? t}
+          {i > 0 && (
+            <button
+              type="button"
+              onClick={() => move(i)}
+              aria-label={`Move ${OFFER_TYPE_LABEL[t] ?? t} up`}
+              className="px-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+            >
+              ↑
+            </button>
+          )}
+          {/* Removing the last type would make nothing eligible and generate
+              zero ads, which reads as a broken automation rather than a choice. */}
+          {enabled.length > 1 && (
+            <button
+              type="button"
+              onClick={() => onChange(enabled.filter((x) => x !== t))}
+              aria-label={`Remove ${OFFER_TYPE_LABEL[t] ?? t}`}
+              className="px-0.5 text-[var(--muted-foreground)] transition-colors hover:text-red-500"
+            >
+              ×
+            </button>
+          )}
+        </span>
+      ))}
+      {disabled.map((t) => (
+        <button
+          key={t}
+          type="button"
+          onClick={() => onChange([...enabled, t])}
+          className="rounded-full border border-dashed border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          + {OFFER_TYPE_LABEL[t] ?? t}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The coverage chain: VINs on the lot → trims → offers → ads.
+ *
+ * This is the "is it working" answer, and it replaces four empty text boxes
+ * that made a VIN-driven default look like unfinished setup. Every link is a
+ * count you can act on: a drop between any two is a specific, findable problem
+ * (no feed, no OEM programme, a stock gate) rather than a vague "nothing
+ * generated".
+ */
+function CoverageFunnel({
+  totals,
+  narrowed,
+}: {
+  totals: ShadowReport['totals'] | undefined;
+  narrowed: boolean;
+}) {
+  if (!totals) {
+    return (
+      <div className="h-[62px] animate-pulse rounded-xl border border-[var(--border)] bg-[var(--muted)]" />
+    );
+  }
+
+  const steps = [
+    { n: totals.vins, label: 'VINs on the lot' },
+    { n: totals.trimGroups, label: 'trims' },
+    { n: totals.groupsWithOffer, label: 'with a live offer' },
+    { n: totals.adsThisRun, label: 'ads this run' },
+  ];
+
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-      <div className={`text-xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
-      <div className="mt-0.5 flex items-center gap-1">
-        <span className="text-[11px] text-[var(--muted-foreground)]">{label}</span>
-        {help && <HelpTip title={label} iconClassName="h-3 w-3">{help}</HelpTip>}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+        {steps.map((s, i) => (
+          <div key={s.label} className="flex items-center gap-2">
+            {i > 0 && <ChevronRightIcon className="h-3 w-3 text-[var(--muted-foreground)]" />}
+            <div>
+              <span
+                className={`text-lg font-semibold tabular-nums ${
+                  // Only the last link is judged: zero ads is the failure the
+                  // whole chain exists to explain. Zero VINs on a lot with no
+                  // feed yet is a setup state, not an alarm.
+                  i === steps.length - 1 && s.n === 0
+                    ? 'text-amber-500'
+                    : 'text-[var(--foreground)]'
+                }`}
+              >
+                {s.n}
+              </span>{' '}
+              <span className="text-[11px] text-[var(--muted-foreground)]">{s.label}</span>
+            </div>
+          </div>
+        ))}
       </div>
-      {sub && <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{sub}</div>}
+      <p className="mt-1.5 text-[10px] text-[var(--muted-foreground)]">
+        {narrowed
+          ? 'Every VIN on the lot, narrowed by the filters below, gets its best regional offer.'
+          : 'Every VIN on the lot gets its best regional offer — no setup needed.'}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * A rendered preview of the companion offer email.
+ *
+ * Renders the real HTML in a sandboxed iframe rather than reimplementing the
+ * layout in React: the email builder is the only thing that knows what actually
+ * gets sent, and a second renderer would drift from it silently — which is the
+ * exact failure a preview exists to prevent.
+ *
+ * Debounced, because it re-renders on every keystroke in Max offers.
+ */
+function OfferEmailPicker({
+  accountKey,
+  templateId,
+  maxOffers,
+  onChange,
+}: {
+  accountKey: string | null;
+  templateId: string;
+  maxOffers: string;
+  onChange: (slug: string) => void;
+}) {
+  const [state, setState] = useState<{
+    subject: string;
+    offers: number;
+    sample: boolean;
+    notes: string[];
+    options: { slug: string; title: string; html: string; usable: boolean }[];
+  } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!accountKey) return;
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({
+          accountKey,
+          maxOffers: String(Number(maxOffers) || 6),
+        });
+        const res = await fetch(`/api/ad-generator/automation/offer-email-preview?${qs}`);
+        const json = await res.json();
+        if (cancelled) return;
+        if (!res.ok) throw new Error(json.error);
+        setState(json);
+        setFailed(false);
+      } catch {
+        // A preview that can't render must not take the settings form with it.
+        if (!cancelled) setFailed(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // NOT keyed on templateId: every shell is rendered in one pass, so changing
+    // the selection is a local highlight, not a refetch.
+  }, [accountKey, maxOffers]);
+
+  if (failed) {
+    return (
+      <p className="mt-3 text-[10px] text-[var(--muted-foreground)]">
+        Couldn&apos;t render the preview.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-medium text-[var(--foreground)]">Template</span>
+        {state && (
+          <span className="text-[10px] text-[var(--muted-foreground)]">
+            {state.subject} · {state.offers} offer{state.offers === 1 ? '' : 's'}
+          </span>
+        )}
+        {loading && <span className="text-[10px] text-[var(--muted-foreground)]">Rendering…</span>}
+        {state?.sample && (
+          // Never let invented figures pass as real ones — someone will
+          // screenshot this.
+          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+            Placeholder offers
+          </span>
+        )}
+      </div>
+
+      {state?.notes.map((n) => (
+        <p key={n} className="mb-1.5 flex gap-1 text-[10px] text-amber-500">
+          <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
+          <span>{n}</span>
+        </p>
+      ))}
+
+      {loading && !state && (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-[196px] animate-pulse rounded-xl border border-[var(--border)] bg-[var(--muted)]"
+            />
+          ))}
+        </div>
+      )}
+
+      {state && (
+        <div role="radiogroup" aria-label="Offer email template" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {state.options.map((opt) => {
+            const selected = opt.slug === templateId;
+            return (
+              <button
+                key={opt.slug || 'brand-kit'}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => onChange(opt.slug)}
+                className={`group relative flex flex-col overflow-hidden rounded-xl border text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] ${
+                  selected
+                    ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]'
+                    : 'border-[var(--border)] hover:-translate-y-0.5 hover:border-[var(--primary)] hover:shadow-lg'
+                }`}
+              >
+                {selected && (
+                  <CheckCircleIcon className="absolute right-2 top-2 z-10 h-5 w-5 text-[var(--primary)] drop-shadow" />
+                )}
+                {/* A wide render scaled down, so the thumbnail has an email's
+                    proportions instead of a 260px-wide squeeze of one. The
+                    overlay swallows clicks — the CARD is the control, and a
+                    stray link inside the iframe must not compete with it. */}
+                <div className="relative h-[150px] overflow-hidden bg-white">
+                  <iframe
+                    title={`${opt.title} preview`}
+                    sandbox=""
+                    srcDoc={opt.html}
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    className="h-[500px] w-[600px] origin-top-left border-0"
+                    style={{ transform: 'scale(0.42)' }}
+                  />
+                  <div className="absolute inset-0" />
+                </div>
+                <div className="border-t border-[var(--border)] bg-[var(--card)] p-2.5">
+                  <div className="truncate text-xs font-semibold text-[var(--foreground)]">
+                    {opt.title}
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                    {opt.slug === '' ? (
+                      'Built from this sub-account’s branding'
+                    ) : opt.usable ? (
+                      'Offers replace its {{offers}} block'
+                    ) : (
+                      <span className="text-amber-500">
+                        No {'{{offers}}'} block — nothing would be sent
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -182,7 +455,10 @@ function Stat({
  * and its run-now actions render on all of them, because "is it on" and "run it
  * now" are questions you have regardless of which table you're reading.
  */
-export type AutomationView = 'overview' | 'inventory' | 'drafts' | 'runs' | 'settings';
+// 'settings' is the Config tab. The key is left alone deliberately: it's the
+// persisted `save_config` action name and the report's `scope` key, so renaming
+// the label is a UI change and renaming the key would be a data migration.
+export type AutomationView = 'inventory' | 'drafts' | 'runs' | 'settings';
 
 /**
  * One run in the history, expandable when it passed vehicles over.
@@ -316,11 +592,88 @@ export function ShadowPanel({
   // approves here is what that dealer's ads will actually look like.
   const { accountData } = useAccount();
   const branding = brandingFromAccount(accountData) as AdData;
+  // Narrowing is collapsed unless it's actually in use — an open, empty filter
+  // panel is what made the default look unfinished in the first place.
+  const narrowed =
+    !!form.makes.trim() || !!form.focus.trim() || !!form.exclude.trim() || Number(form.minStock) > 0;
+  const [narrowOpen, setNarrowOpen] = useState(narrowed);
   const [feedUrl, setFeedUrl] = useState('');
   const [feedName, setFeedName] = useState('');
 
   const templates = report?.templates ?? [];
   const templateSizes = templates.find((t) => t.id === form.templateId)?.sizes ?? [];
+
+  // Companion offer email. The shell list is NOT read here — the picker fetches
+  // its own, because each card needs the RENDERED email, not just a title.
+  const audiences = report?.audiences ?? [];
+
+  // ── playbook ──
+  const playbookOptions = report?.playbookOptions ?? [];
+  // The report's own `playbook` is resolved against the SAVED config, so it only
+  // matches the picker while nothing is edited. Re-resolve against the option
+  // the form currently holds, or switching playbooks would keep describing the
+  // old one until a save round-trips.
+  const playbook = useMemo(() => {
+    if (!form.playbookId) return null;
+    // Options carry their definitions, so a freshly picked playbook resolves
+    // fully without waiting for a save to round-trip.
+    const opt = playbookOptions.find((p) => p.id === form.playbookId);
+    if (opt) return { id: opt.id, name: opt.name, version: opt.version, definition: opt.definition };
+    // Followed but no longer published — keep describing it rather than
+    // silently showing "None" over a config it is still driving.
+    if (report?.playbook?.id === form.playbookId) return report.playbook;
+    return null;
+  }, [form.playbookId, report?.playbook, playbookOptions]);
+
+  // Drift computed from what's ON SCREEN, not from the saved report: an override
+  // should light up the moment you make it, not after you save.
+  const detached: CreativeStep[] = useMemo(() => {
+    const def = playbook?.definition;
+    if (!def) return [];
+    const out: CreativeStep[] = [];
+    if (form.templateId !== def.adTemplateId) out.push('adTemplate');
+    const a = [...form.sizeIds].sort().join(' ');
+    const b = [...def.sizeIds].sort().join(' ');
+    if (a !== b) out.push('sizes');
+    if (form.emailTemplateId !== def.emailTemplateSlug) out.push('emailTemplate');
+    if ((Number(form.emailMaxOffers) || 6) !== def.emailMaxOffers) out.push('emailMaxOffers');
+    return out;
+  }, [playbook, form.templateId, form.sizeIds, form.emailTemplateId, form.emailMaxOffers]);
+
+  /** Picking a playbook writes every field it presets, in one move. */
+  const applyPlaybook = (id: string) => {
+    set('playbookId', id);
+    if (!id) return; // Unlinking leaves the creative alone — nothing is lost.
+    const def = playbookOptions.find((p) => p.id === id)?.definition;
+    if (!def) return;
+    set('templateId', def.adTemplateId);
+    set('sizeIds', [...def.sizeIds]);
+    set('emailTemplateId', def.emailTemplateSlug);
+    set('emailMaxOffers', String(def.emailMaxOffers));
+  };
+
+  /** Undo ONE override, leaving the others alone. */
+  const resetPlaybookStep = (step: CreativeStep) => {
+    const def = playbook?.definition;
+    if (!def) return;
+    switch (step) {
+      case 'adTemplate':
+        set('templateId', def.adTemplateId);
+        // Sizes belong to the design, so ids picked against another template
+        // would silently render nothing.
+        set('sizeIds', [...def.sizeIds]);
+        break;
+      case 'sizes':
+        set('sizeIds', [...def.sizeIds]);
+        break;
+      case 'emailTemplate':
+        set('emailTemplateId', def.emailTemplateSlug);
+        break;
+      case 'emailMaxOffers':
+        set('emailMaxOffers', String(def.emailMaxOffers));
+        break;
+    }
+  };
 
   // Designs WITH their docs, so the picker can render a real preview of each.
   // The shadow report carries only names and sizes; this is the endpoint built
@@ -368,7 +721,6 @@ export function ShadowPanel({
     );
   }
 
-  const t = report?.totals;
   const templateName = templates.find((x) => x.id === form.templateId)?.name;
 
   /** One-line recap of the config, so the collapsed card still says what it does. */
@@ -383,76 +735,34 @@ export function ShadowPanel({
 
   return (
     <div className="space-y-5">
-      {/* ── overview ── */}
-      {view === 'overview' && (
-        <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
-          <div className="flex items-center gap-1.5">
-            <h2 className="text-sm font-semibold text-[var(--foreground)]">This month at a glance</h2>
-            <HelpTip title="Planning window" iconClassName="h-3.5 w-3.5">
-              <p>Set by <strong>Plan for</strong> in Settings. An offer has to stay valid through this range to count as advertisable.</p>
-            </HelpTip>
+      {/* Environment problems affecting every generated ad.
+          Kept when the at-a-glance stats were removed, and kept OUTSIDE the
+          tabs: "every ad you generate is broken" must not be reachable only by
+          picking the right tab. */}
+      {sharedNotes.size > 0 && (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-amber-500">
+            <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+            Affects every generated ad
           </div>
-          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-            {report ? (
-              <>
-                Planning for{' '}
-                <span className="text-[var(--foreground)]">
-                  {WINDOW_LABEL[report.runWindow.mode] ?? report.runWindow.mode}
-                </span>{' '}
-                — {report.runWindow.start} → {report.runWindow.end}.
-              </>
-            ) : (
-              'Loading…'
-            )}
-          </p>
-
-          {/* Environment problems affecting every generated ad. */}
-          {sharedNotes.size > 0 && (
-            <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-500">
-                <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                Affects every generated ad
-              </div>
-              <ul className="mt-1.5 space-y-1">
-                {[...sharedNotes].map((n) => (
-                  <li key={n} className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-                    {n}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {t && (
-            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="new units on lot" value={String(t.newUnits)} sub={`${t.stockGroups} model groups`} />
-            <Stat
-              label="have a usable offer"
-              value={`${t.matchRatePct}%`}
-              sub={`${t.groupsWithOffer} of ${t.stockGroups} groups`}
-              tone={t.matchRatePct >= 70 ? 'good' : 'warn'}
-              help={<p>Share of on-lot model groups with an OEM offer valid for the run window. The rest can&apos;t be advertised until the manufacturer publishes something.</p>}
-            />
-            <Stat label="live offers on file" value={String(t.liveOffers)} />
-            <Stat
-              label="awaiting next OEM cycle"
-              value={String(t.awaitingNextCycle)}
-              tone={t.awaitingNextCycle > 0 ? 'warn' : 'default'}
-              help={<p>Programmes that expire before the run window opens, where the manufacturer hasn&apos;t published the next cycle yet. A wait state, not a failure.</p>}
-            />
-            </div>
-          )}
-        </section>
+          <ul className="mt-1.5 space-y-1">
+            {[...sharedNotes].map((n) => (
+              <li key={n} className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                {n}
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
-      {/* ── settings ── */}
+      {/* ── config ── */}
       {view === 'settings' && (
       <section className="glass-card rounded-2xl border border-[var(--border)]">
         <div className="flex items-center gap-3 p-5 pb-0">
           <Cog6ToothIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
-              Settings
+              Config
               {dirty && (
                 <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
                   unsaved
@@ -464,38 +774,58 @@ export function ShadowPanel({
         </div>
 
         <div className="mt-5 space-y-5 px-5 pb-5">
-            {/* What to advertise */}
+            {/* ── source ──
+                The four filter boxes used to lead, which made a VIN-driven
+                default look like setup you hadn't finished. They're narrowing,
+                not configuration: blank means EVERY VIN on the lot. So the
+                default states itself, the funnel proves it, and the filters
+                collapse out of the way. */}
             <div>
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                1 · Which vehicles
+                Which vehicles
               </h3>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <Field label="Makes" help={<p>Comma-separated. Leave blank to watch <strong>every make</strong> the inventory feed reports.</p>}>
-                  <input value={form.makes} onChange={(e) => set('makes', e.target.value)} placeholder="Chevrolet" className={inputClass} />
-                </Field>
-                <Field label="Focus models" help={<p>Only advertise these. Leave blank for <strong>every model with stock</strong>.</p>}>
-                  <input value={form.focus} onChange={(e) => set('focus', e.target.value)} placeholder="Silverado 1500, Equinox" className={inputClass} />
-                </Field>
-                <Field label="Exclude models" help={<p>Never advertise these, even when they have stock and a live offer.</p>}>
-                  <input value={form.exclude} onChange={(e) => set('exclude', e.target.value)} placeholder="Bolt EV" className={inputClass} />
-                </Field>
-                <Field label="Min stock" help={<p>Skip a model unless at least this many new units are on the lot. <strong>0 turns the check off.</strong></p>}>
-                  <input value={form.minStock} onChange={(e) => set('minStock', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
-                </Field>
-              </div>
+              <CoverageFunnel totals={report?.totals} narrowed={narrowed} />
+
+              <button
+                type="button"
+                onClick={() => setNarrowOpen((v) => !v)}
+                className="mt-2.5 flex items-center gap-1 text-[11px] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+              >
+                <ChevronRightIcon
+                  className={`h-3 w-3 transition-transform ${narrowOpen ? 'rotate-90' : ''}`}
+                />
+                {narrowed ? 'Narrowing applied' : 'Narrow this'}
+              </button>
+
+              {narrowOpen && (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Field label="Makes" help={<p>Comma-separated. Leave blank to watch <strong>every make</strong> the inventory feed reports.</p>}>
+                    <input value={form.makes} onChange={(e) => set('makes', e.target.value)} placeholder="Chevrolet" className={inputClass} />
+                  </Field>
+                  <Field label="Focus models" help={<p>Only advertise these. Leave blank for <strong>every model with stock</strong>.</p>}>
+                    <input value={form.focus} onChange={(e) => set('focus', e.target.value)} placeholder="Silverado 1500, Equinox" className={inputClass} />
+                  </Field>
+                  <Field label="Exclude models" help={<p>Never advertise these, even when they have stock and a live offer.</p>}>
+                    <input value={form.exclude} onChange={(e) => set('exclude', e.target.value)} placeholder="Bolt EV" className={inputClass} />
+                  </Field>
+                  <Field label="Min stock" help={<p>Skip a model unless at least this many new units are on the lot. <strong>0 turns the check off.</strong></p>}>
+                    <input value={form.minStock} onChange={(e) => set('minStock', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
+                  </Field>
+                </div>
+              )}
             </div>
 
             {/* Which offers count as advertisable */}
             <div>
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                2 · Which offers count
+                Which offers count
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
                 <Field
                   label="Plan for"
                   help={
                     <>
-                      <p>The date range an offer has to stay valid through to be usable. It&apos;s what the <strong>Cycle</strong> column and the match rate on Overview are measured against.</p>
+                      <p>The date range an offer has to stay valid through to be usable. It&apos;s what the <strong>Cycle</strong> column and the match rate above are measured against.</p>
                       <p>Most manufacturers publish month by month, so <strong>next month</strong> is the usual choice — it&apos;s what lets you build next month&apos;s ads before it starts.</p>
                     </>
                   }
@@ -527,13 +857,162 @@ export function ShadowPanel({
                   <input value={form.zip} onChange={(e) => set('zip', e.target.value)} placeholder="84401" className={inputClass} />
                 </Field>
               </div>
-            </div>
 
+              {/* ── which offer wins ──
+                  The priority order was always stored per sub-account and never
+                  shown, so "why did it run the lease and not the APR" had no
+                  answer on screen. It's the rule, so it belongs here. */}
+              <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] font-medium text-[var(--foreground)]">
+                      Best offer
+                    </span>
+                    <HelpTip title="Best offer" iconClassName="h-3 w-3">
+                      <p>
+                        When a vehicle qualifies for several programmes, the earliest type in
+                        this order wins — and within a type, the strongest offer (cheapest
+                        payment, lowest rate, biggest cash).
+                      </p>
+                      <p className="mt-1.5">
+                        Drop a type to make it never eligible.
+                      </p>
+                    </HelpTip>
+                  </div>
+                  <OfferPriorityPicker
+                    value={form.offerPriority}
+                    onChange={(next) => set('offerPriority', next)}
+                  />
+                </div>
+
+                <label className="mt-2.5 flex cursor-pointer items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.expandOfferTypes}
+                    onChange={(e) => set('expandOfferTypes', e.target.checked)}
+                    className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                  />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">
+                    Build an ad for <strong>every</strong> qualifying type, not just the best —
+                    a lease ad and an APR ad for the same vehicle.
+                  </span>
+                </label>
+                {/* Expansion multiplies the run against a cap that would then
+                    truncate to an arbitrary subset, so the arithmetic is shown
+                    rather than discovered in Run history. */}
+                {form.expandOfferTypes && (
+                  <p className="mt-1.5 flex gap-1 text-[10px] text-amber-500">
+                    <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                    <span>
+                      This multiplies the run. The cap of {form.maxAds || 10} ads still applies,
+                      and anything over it is cut without choosing which.
+                    </span>
+                  </p>
+                )}
+              </div>
+            </div>
+        </div>
+      </section>
+      )}
+
+      {/* ── creative ──
+          Its own container, not a third heading inside Config above. The two
+          answer different questions — WHICH offers get advertised versus WHAT
+          the advertising looks like — and only the second is worth browsing
+          visually, so it wants the room. */}
+      {view === 'settings' && (
+      <section className="glass-card rounded-2xl border border-[var(--border)]">
+        <div className="flex items-center gap-3 p-5 pb-0">
+          <PhotoIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-[var(--foreground)]">Creative</div>
+            <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]">
+              What the ads and the offer email look like.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-5 px-5 pb-5">
             {/* How ads are built */}
             <div>
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                3 · How ads are built
-              </h3>
+
+              {/* ── playbook ──
+                  Above the individual pickers because it SETS them: picking one
+                  fills in the ad template, sizes and email shell in a single
+                  move, which is the whole point of not choosing each separately.
+                  Everything below stays editable — an override detaches just
+                  that step (docs/playbooks.md §7 decision 3: flag, never block). */}
+              <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[11px] font-medium text-[var(--foreground)]">Playbook</span>
+                    <HelpTip title="Playbook" iconClassName="h-3 w-3">
+                      <p>
+                        A named pairing of the ad design and the offer-email template, authored once
+                        for the agency and applied to many sub-accounts.
+                      </p>
+                      <p className="mt-1.5">
+                        Picking one fills in everything below. You can still change any of it —
+                        that step just shows as <strong>overridden</strong> instead of quietly
+                        diverging.
+                      </p>
+                    </HelpTip>
+                  </div>
+                  {playbook && detached.length === 0 && (
+                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-500">
+                      Following v{playbook.version}
+                    </span>
+                  )}
+                  {playbook && detached.length > 0 && (
+                    <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+                      {detached.length} override{detached.length === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  <div className="ml-auto w-full sm:w-64">
+                    <Select
+                      value={form.playbookId}
+                      onChange={applyPlaybook}
+                      previewFont={false}
+                      options={[
+                        { value: '', label: 'None — pick each by hand' },
+                        ...playbookOptions.map((p) => ({
+                          value: p.id,
+                          label: p.scopeValue ? `${p.name} · ${p.scopeValue}` : p.name,
+                        })),
+                      ]}
+                    />
+                  </div>
+                </div>
+
+                {playbook && detached.length > 0 && (
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] text-[var(--muted-foreground)]">
+                      Overridden here:
+                    </span>
+                    {detached.map((step) => (
+                      // Per-step undo. A single "reset to playbook" would throw
+                      // away deliberate overrides the person wasn't looking at.
+                      <button
+                        key={step}
+                        onClick={() => resetPlaybookStep(step)}
+                        className="group flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/5 px-2 py-0.5 text-[10px] font-medium text-amber-500 transition-colors hover:bg-amber-500/15"
+                      >
+                        {STEP_LABEL[step]}
+                        <span className="text-[var(--muted-foreground)] group-hover:text-amber-500">
+                          undo
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {!playbook && playbookOptions.length === 0 && (
+                  <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">
+                    No published playbooks yet — build one in Playbooks → Library, or keep picking
+                    each piece by hand below.
+                  </p>
+                )}
+              </div>
 
               {/* The design is the one setting whose value is a PICTURE. A list of
                   names made a wrong pick invisible until the ads came out, so it
@@ -658,6 +1137,101 @@ export function ShadowPanel({
                       })}
                     </div>
                   </Field>
+                )}
+              </div>
+
+              {/* ── companion offer email ──
+                  Its own block rather than another cell in the grid: everything
+                  above configures the ADS, and a customer-facing send sitting
+                  inline among render settings is too easy to switch on without
+                  noticing. */}
+              <div className="mt-5 border-t border-[var(--border)] pt-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-1">
+                    <h4 className="text-xs font-semibold text-[var(--foreground)]">Offer email</h4>
+                    <HelpTip title="Offer email" iconClassName="h-3 w-3">
+                      <p>
+                        Drafts <strong>one email per run</strong> covering the same offers that
+                        produced ads — never one per offer. The manufacturer&apos;s own wording and
+                        the ad&apos;s disclaimer are reproduced exactly.
+                      </p>
+                      <p className="mt-1.5">
+                        It is <strong>always a draft</strong>. Unlike ads there is no automatic
+                        send: a person picks the moment.
+                      </p>
+                    </HelpTip>
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <span className="text-[11px] text-[var(--muted-foreground)]">
+                      {form.emailEnabled ? 'On' : 'Off'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={form.emailEnabled}
+                      onChange={(e) => set('emailEnabled', e.target.checked)}
+                      className="h-3.5 w-3.5 accent-[var(--primary)]"
+                    />
+                  </label>
+                </div>
+
+                {form.emailEnabled && (
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    <Field
+                      label="Audience"
+                      help={
+                        <p>
+                          Who the draft is addressed to. Leave unset and the draft lands with{' '}
+                          <strong>no recipients</strong>, so it can never send.
+                        </p>
+                      }
+                    >
+                      <Select
+                        value={form.emailAudienceId}
+                        onChange={(v) => set('emailAudienceId', v)}
+                        previewFont={false}
+                        options={[
+                          { value: '', label: 'None — leave untargeted' },
+                          ...audiences.map((a) => ({ value: a.id, label: a.name })),
+                        ]}
+                      />
+                      {/* Silence here would read as "configured" while every
+                          draft quietly lands with nobody to send it to. */}
+                      {!form.emailAudienceId && (
+                        <p className="mt-1.5 flex gap-1 text-[10px] text-amber-500">
+                          <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                          <span>Drafts will need an audience picked by hand before they can send.</span>
+                        </p>
+                      )}
+                    </Field>
+
+                    <Field
+                      label="Max offers"
+                      help={
+                        <p>
+                          How many offers the email features, best first. The rest still become ads
+                          — they just don&apos;t all get a slot in one send.
+                        </p>
+                      }
+                    >
+                      <input
+                        value={form.emailMaxOffers}
+                        onChange={(e) => set('emailMaxOffers', e.target.value.replace(/[^0-9]/g, ''))}
+                        className={inputClass}
+                      />
+                    </Field>
+                  </div>
+                )}
+
+                {/* The email is the one setting whose value is a PICTURE, same
+                    as the ad template above it. A dropdown of shell names makes
+                    a wrong pick invisible until the send goes out. */}
+                {form.emailEnabled && (
+                  <OfferEmailPicker
+                    accountKey={accountKey}
+                    templateId={form.emailTemplateId}
+                    maxOffers={form.emailMaxOffers}
+                    onChange={(slug) => set('emailTemplateId', slug)}
+                  />
                 )}
               </div>
             </div>
@@ -804,7 +1378,7 @@ export function ShadowPanel({
               <li><strong>Last ends</strong> — when the latest one runs out.</li>
               <li><strong>Would choose</strong> — the offer the policy would put on an ad, if you generated one now.</li>
             </ul>
-            <p>The list builds itself. Anything with new stock in the feed and inside your Settings scope lands here — there&apos;s nothing to add by hand.</p>
+            <p>The list builds itself. Anything with new stock in the feed and inside your Config scope lands here — there&apos;s nothing to add by hand.</p>
           </>
         }
       >
@@ -882,7 +1456,7 @@ export function ShadowPanel({
             {report && !report.scope.templateMap.all ? (
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
                 No template is mapped yet, so a run would skip every vehicle. Pick one under{' '}
-                <strong>Settings → How ads are built</strong>.
+                <strong>Creative → How ads are built</strong>.
               </p>
             ) : (
               <p className="mt-1 text-xs text-[var(--muted-foreground)]">
@@ -977,7 +1551,9 @@ export function ShadowPanel({
       )}
 
       {/* ── measured OEM lead time ── */}
-      {view === 'overview' && report?.leadTimes.length ? (
+      {/* Followed Overview's stats onto Inventory: lead time is a property of
+          the OEM programmes behind the stock shown there. */}
+      {view === 'inventory' && report?.leadTimes.length ? (
         <Card
           title="Measured publication lead time"
           help={

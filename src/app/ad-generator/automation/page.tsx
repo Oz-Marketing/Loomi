@@ -71,12 +71,15 @@ const OFFER_TYPES = [
   { value: 'cash', label: 'Cash' },
 ] as const;
 
+// Config leads, where Overview used to. Overview's own panels weren't deleted
+// with the tab — the at-a-glance stats and the "affects every generated ad"
+// warnings now render above the tab strip on every view, because a warning that
+// every ad is broken should not be reachable only by picking the right tab.
 const TABS = [
-  ['overview', 'Overview'],
+  ['settings', 'Config'],
   ['inventory', 'Inventory'],
   ['drafts', 'Generated drafts'],
   ['runs', 'Run history'],
-  ['settings', 'Settings'],
   ['dryrun', 'Dry run'],
 ] as const;
 
@@ -197,7 +200,7 @@ export default function AutomationDryRunPage() {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   // Overview is the default: the day-to-day question is "is it healthy", and
   // the dry run is the diagnostic you reach for when the chain looks wrong.
-  const [tab, setTab] = useState<AutomationView | 'dryrun'>('overview');
+  const [tab, setTab] = useState<AutomationView | 'dryrun'>('settings');
 
   // `?tab=settings` lets the things that point here ("needs a template mapped")
   // land on the tab that fixes it. Read after mount rather than in the initial

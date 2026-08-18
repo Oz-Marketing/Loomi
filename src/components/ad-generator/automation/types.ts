@@ -81,6 +81,27 @@ export interface ShadowScope {
   minStock: number;
   offerTypePriority: string[];
   mode: string;
+  /** Whether the run also drafts the companion offer email. */
+  emailEnabled: boolean;
+  /** `Template.slug` of the v2 shell; empty/null = compose from the brand kit. */
+  emailTemplateId: string | null;
+  /** `Audience` id the draft is pre-targeted at; null = no recipients. */
+  emailAudienceId: string | null;
+  emailMaxOffers: number;
+  /** `Playbook.id` this sub-account follows, or null for a hand-picked setup. */
+  playbookId: string | null;
+  /** One ad per qualifying offer type, rather than only the best. */
+  expandOfferTypes: boolean;
+}
+
+/** Which parts of a playbook a sub-account has diverged from. */
+export type CreativeStep = 'adTemplate' | 'sizes' | 'emailTemplate' | 'emailMaxOffers';
+
+export interface CreativeDefinition {
+  adTemplateId: string;
+  sizeIds: string[];
+  emailTemplateSlug: string;
+  emailMaxOffers: number;
 }
 
 export interface GeneratedDraft {
@@ -99,6 +120,30 @@ export interface ShadowReport {
   configured: boolean;
   enabled: boolean;
   scope: ShadowScope;
+  /**
+   * The followed playbook, resolved. `detached` names the steps this
+   * sub-account has diverged from — derived server-side by comparing the config
+   * to the definition, so it is never stale.
+   */
+  playbook: {
+    id: string;
+    name: string;
+    version: number;
+    definition: CreativeDefinition;
+    detached: CreativeStep[];
+  } | null;
+  /** Published playbooks, definitions included so the picker can preset. */
+  playbookOptions: {
+    id: string;
+    name: string;
+    scopeValue: string | null;
+    version: number;
+    definition: CreativeDefinition;
+  }[];
+  /** v2 email templates on this sub-account, as offer-email shell candidates. */
+  emailTemplates: { slug: string; title: string; hasOffersBlock: boolean }[];
+  /** Saved audiences, for pre-targeting the offer email draft. */
+  audiences: { id: string; name: string }[];
   templates: {
     id: string;
     name: string;
@@ -118,5 +163,9 @@ export interface ShadowReport {
     matchRatePct: number;
     liveOffers: number;
     awaitingNextCycle: number;
+    /** VINs on the lot → distinct trims → ads a run would produce. */
+    vins: number;
+    trimGroups: number;
+    adsThisRun: number;
   };
 }

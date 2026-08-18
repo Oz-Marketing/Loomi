@@ -8,6 +8,8 @@ import { getCurrentSurface } from '@/lib/cross-site';
 import {
   ADMIN_VALUE,
   ALL_VALUE,
+  readSelfScope,
+  writeSelfScope,
   readActiveAccountCookie,
   writeActiveAccountCookie,
   parseOrgValue,
@@ -190,6 +192,23 @@ interface AccountContextValue {
   isAccount: boolean;
   /** The deliberate all-accounts overview scope (Reporting / Projects only). */
   isAllAccounts: boolean;
+  /**
+   * Does the current selection span MORE THAN ONE account — i.e. should a view
+   * roll up?
+   *
+   * This is the question almost every caller of `isGroup` was really asking.
+   * `isGroup` is structural ("this account owns others") and derived, so it
+   * could never be false for Young Automotive Group — which meant YAG's own
+   * campaigns were unreachable: every report rolled up the moment a rooftop
+   * pointed at it. Use `isRollup` for "how should I render", and keep `isGroup`
+   * for "what kind of account is this" (the avatar badge, the group settings
+   * tab).
+   */
+  isRollup: boolean;
+  /** A group is being viewed as itself. Always false for a leaf account. */
+  isSelfScoped: boolean;
+  /** Switch the active group between rolling up and standing alone. */
+  setRollup: (rollup: boolean) => void;
   accountKey: string | null;
   accountData: AccountData | null;
   accounts: Record<string, AccountData>;
@@ -406,6 +425,23 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     } catch {}
   }, [filterAccountsForCurrentUser]);
 
+  // Per-account roll-up preference. Read from the shared cookie so a hop
+  // between surfaces does not silently change the scope. Roll-up is the default,
+  // matching the behavior before the toggle existed.
+  const [selfScopedKeys, setSelfScopedKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const key = account.mode === 'account' ? account.accountKey : null;
+    if (!key) return;
+    setSelfScopedKeys((prev) => {
+      const isSelf = readSelfScope(key);
+      if (isSelf === prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (isSelf) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, [account]);
+
   const isAdmin = account.mode === 'admin';
   const isAllAccounts = account.mode === 'all';
   const isAccount = account.mode === 'account';
@@ -447,20 +483,47 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   // current selection fans out to.
   const scopedAccountKeys = useMemo<string[]>(() => {
     if (account.mode === 'account') {
-      // Self + descendants, so selecting a group rolls up its rooftops while a
-      // leaf account still resolves to just itself.
-      return account.accountKey ? descendantsOf(account.accountKey) : [];
+      if (!account.accountKey) return [];
+      // Self + descendants — unless this group is pinned to itself, in which
+      // case the scope IS just itself. This is the whole point of the toggle: a
+      // group that advertises for itself has its own numbers, and they were
+      // unreachable while the subtree was the only possible answer.
+      if (selfScopedKeys.has(account.accountKey)) return [account.accountKey];
+      return descendantsOf(account.accountKey);
     }
-    // admin
+    // admin / all
     return Object.keys(accounts);
-  }, [account, accounts, descendantsOf]);
+  }, [account, accounts, descendantsOf, selfScopedKeys]);
 
-  // A group is an account with anything beneath it. Roll-up pages branch on
-  // this to decide whether to aggregate.
+  // A group is an account with anything beneath it. STRUCTURAL — it answers
+  // "what kind of account is this", not "how should this page render". For the
+  // latter use `isRollup`, which honours the toggle.
   const isGroup = useMemo<boolean>(() => {
     if (account.mode !== 'account' || !account.accountKey) return false;
     return (childrenByParent[account.accountKey] ?? []).length > 0;
   }, [account, childrenByParent]);
+
+  const isSelfScoped =
+    account.mode === 'account' && !!account.accountKey && selfScopedKeys.has(account.accountKey);
+  // The question a rendering decision should ask. A group standing alone spans
+  // one account, so it renders like any leaf — which is what makes its own
+  // reports reachable.
+  const isRollup = isGroup && !isSelfScoped;
+
+  const setRollup = useCallback(
+    (rollup: boolean) => {
+      if (account.mode !== 'account' || !account.accountKey) return;
+      const key = account.accountKey;
+      writeSelfScope(key, !rollup);
+      setSelfScopedKeys((prev) => {
+        const next = new Set(prev);
+        if (rollup) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    },
+    [account],
+  );
 
   // Descendant count per parent — a group's full subtree, not just its direct
   // children, so a label reads the way a human would count rooftops.
@@ -518,6 +581,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         isUnrestricted,
         isAccount,
         isAllAccounts,
+        isRollup,
+        isSelfScoped,
+        setRollup,
         accountKey,
         accountData,
         accounts,

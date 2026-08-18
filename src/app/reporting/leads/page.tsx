@@ -77,13 +77,13 @@ function MonthPicker({
 }
 
 export default function ReportingLeadsPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
   const [period, setPeriod] = useState(currentPeriod);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -97,7 +97,7 @@ export default function ReportingLeadsPage() {
         <MonthPicker value={period} onChange={setPeriod} />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={UserPlusIcon}
           title="Pick an account"

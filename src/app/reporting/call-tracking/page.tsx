@@ -38,7 +38,7 @@ import { CallTrackingReport } from './_components/call-tracking-report';
 const ACCOUNT_TIMEZONE = 'America/Denver';
 
 export default function ReportingCallTrackingPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -46,7 +46,7 @@ export default function ReportingCallTrackingPage() {
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const { from, to } = resolveBounds(rangeKey, customRange);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -69,7 +69,7 @@ export default function ReportingCallTrackingPage() {
         />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={PhoneIcon}
           title="Pick an account"

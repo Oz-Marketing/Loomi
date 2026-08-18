@@ -26,7 +26,7 @@ import {
 import { ServiceTrendReport } from './_components/service-trend-report';
 
 export default function ReportingServiceTrendPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -34,7 +34,7 @@ export default function ReportingServiceTrendPage() {
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const { from, to } = resolveBounds(rangeKey, customRange);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -57,7 +57,7 @@ export default function ReportingServiceTrendPage() {
         />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={WrenchScrewdriverIcon}
           title="Pick an account"

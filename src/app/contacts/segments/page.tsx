@@ -57,7 +57,7 @@ function describeFilter(definition: FilterDefinition | null): string {
 
 export default function SegmentsPage() {
   const router = useRouter();
-  const { isAccount, isGroup, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
+  const { isAccount, isRollup, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
   const subHref = useScopedHref();
 
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
@@ -181,7 +181,7 @@ export default function SegmentsPage() {
     // Group is checked FIRST: a group account is also `isAccount`, so the
     // single-account branch would otherwise win and never roll up.
     let scoped = savedSegments;
-    if (isGroup) {
+    if (isRollup) {
       const allowed = new Set(scopedAccountKeys);
       scoped = savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
     } else if (isAccount && accountKey) {
@@ -195,7 +195,7 @@ export default function SegmentsPage() {
         s.name.toLowerCase().includes(q) ||
         (s.description || '').toLowerCase().includes(q),
     );
-  }, [savedSegments, search, isAccount, isGroup, accountKey, scopedAccountKeys]);
+  }, [savedSegments, search, isAccount, isRollup, accountKey, scopedAccountKeys]);
 
   // ── Actions ──────────────────────────────────────────────────────
   async function handleDelete(segment: SavedSegment) {

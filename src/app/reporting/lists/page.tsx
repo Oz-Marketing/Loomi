@@ -22,9 +22,9 @@ import { EmptyState } from '../ads/_components/shared';
 import { MarketingLists } from './_components/marketing-lists';
 
 export default function ReportingListsPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -34,7 +34,7 @@ export default function ReportingListsPage() {
         subtitle={`Saved audiences you can size, edit, and send to — ${scopeLabel}.`}
       />
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={FunnelIcon}
           title="Pick an account"

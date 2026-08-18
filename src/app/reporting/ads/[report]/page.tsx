@@ -26,7 +26,7 @@ export default function DigitalAdsReportPage() {
   const def = findReport(key);
   const Report = REPORT_COMPONENTS[key];
 
-  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts, userRole } = useAccount();
+  const { accountKey, accountData, isRollup, scopedAccountKeys, accounts, userRole } = useAccount();
   const isClient = userRole === 'client';
   // Tab bar mirrors the nav: an internal report is not a tab for a client.
   const { theme } = useTheme();
@@ -57,7 +57,7 @@ export default function DigitalAdsReportPage() {
   }
 
   const dealer = accountData?.dealer || 'all accounts';
-  const scopeLabel = isGroup
+  const scopeLabel = isRollup
     ? `${accountData?.dealer ?? 'Group'} — ${scopedAccountKeys.length} accounts`
     : accountKey
       ? dealer
@@ -100,7 +100,7 @@ export default function DigitalAdsReportPage() {
       <ClientPreviewNotice {...lensState} />
 
       <div className="mt-8">
-        {isGroup && rollupConfig ? (
+        {isRollup && rollupConfig ? (
           <OrgReportRollup
             config={rollupConfig}
             accountKeys={scopedAccountKeys}

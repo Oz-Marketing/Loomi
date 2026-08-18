@@ -7,6 +7,7 @@ import {
   BanknotesIcon,
   CalendarIcon,
   ChevronDownIcon,
+  ClipboardDocumentCheckIcon,
   CogIcon,
   MegaphoneIcon,
   PlusIcon,
@@ -15,6 +16,8 @@ import {
   UsersIcon,
   ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
+import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
+import { appSurfacePrefix, normalizeAppPath } from '@/lib/app-surface-path';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
 import { useIsMobile } from '@/hooks/use-is-mobile';
@@ -75,6 +78,19 @@ const NAV: NavEntry[] = [
   { key: 'my-work', label: 'My Work', href: '/projects/my-work', icon: UserCircleIcon },
   { key: 'calendar', label: 'Calendar', href: '/projects/calendar', icon: CalendarIcon },
   { key: 'budget', label: 'Budget', href: '/projects/budget', icon: BanknotesIcon },
+  // Playbooks — Phase 0 is the read-only coverage audit (docs/playbooks.md).
+  // Hidden until the env flag is on. Developers can still reach /playbooks
+  // directly; the server gate, not this list, is what grants access.
+  ...(PLAYBOOKS_ENABLED
+    ? [
+        {
+          key: 'playbooks',
+          label: 'Playbooks',
+          href: '/playbooks',
+          icon: ClipboardDocumentCheckIcon,
+        } as NavEntry,
+      ]
+    : []),
   // Ad Planning & Pacing — Meta and Google kept fully separate (different
   // specialists). Relocated from Studio /tools/*; the proxy rewrites those to
   // /app/tools/* on this host. Account-scoped by the global selector.
@@ -94,7 +110,13 @@ function itemActive(item: NavItem, pathname: string): boolean {
 }
 
 export function AppSidebar() {
-  const pathname = usePathname();
+  // The proxy decides whether `/app` is visible in the URL, so the URL is what
+  // tells us which form to emit. `prefix` goes onto every href; `pathname` is
+  // normalized back to the bare form the NAV entries are declared in, so all
+  // the active-state comparisons below are unchanged.
+  const rawPath = usePathname();
+  const prefix = appSurfacePrefix(rawPath);
+  const pathname = normalizeAppPath(rawPath);
   const { collapsed } = useSidebarCollapse();
   const { isAccount, accountKey } = useAccount();
   const isMobile = useIsMobile();
@@ -107,12 +129,14 @@ export function AppSidebar() {
   // /subaccount/<slug>/settings; this surface has no such route tree, so it
   // uses the admin-browse shape (section in ?tab=) against the active account.
   const subaccountSettingsHref =
-    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings';
+    isAccount && accountKey
+      ? `${prefix}/settings/subaccounts/${accountKey}?tab=general`
+      : `${prefix}/settings`;
 
   return (
     <SidebarFrame
       brand={
-        <Link href="/projects" className="block text-[var(--sidebar-foreground)]">
+        <Link href={`${prefix}/projects`} className="block text-[var(--sidebar-foreground)]">
           <LoomiWordmark className="h-8 w-auto" />
         </Link>
       }
@@ -136,22 +160,29 @@ export function AppSidebar() {
       }
     >
       {isSettingsPath(pathname) ? (
-        <SettingsNav backHref="/projects" backLabel="Back to Projects" collapsed={showCollapsed} />
+        <SettingsNav backHref={`${prefix}/projects`} backLabel="Back to Projects" collapsed={showCollapsed} />
       ) : (
         <>
           {/* New ticket — primary CTA */}
-          <NewTicketButton collapsed={showCollapsed} />
+          <NewTicketButton collapsed={showCollapsed} prefix={prefix} />
 
           <div className="mt-4 space-y-px">
             {NAV.map((entry) =>
               isGroup(entry) ? (
-                <GroupNav key={entry.key} group={entry} collapsed={showCollapsed} pathname={pathname} />
+                <GroupNav
+                  key={entry.key}
+                  group={entry}
+                  collapsed={showCollapsed}
+                  pathname={pathname}
+                  prefix={prefix}
+                />
               ) : (
                 <LeafNav
                   key={entry.key}
                   item={entry}
                   collapsed={showCollapsed}
                   active={itemActive(entry, pathname)}
+                  prefix={prefix}
                 />
               ),
             )}
@@ -162,10 +193,10 @@ export function AppSidebar() {
   );
 }
 
-function NewTicketButton({ collapsed }: { collapsed: boolean }) {
+function NewTicketButton({ collapsed, prefix }: { collapsed: boolean; prefix: string }) {
   const link = (
     <Link
-      href="/projects/new"
+      href={`${prefix}/projects/new`}
       className={`flex items-center ${
         collapsed ? 'justify-center px-2' : 'gap-2 px-3'
       } rounded-xl py-2 text-sm font-medium bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90`}
@@ -181,14 +212,16 @@ function LeafNav({
   item,
   collapsed,
   active,
+  prefix,
 }: {
   item: NavItem;
   collapsed: boolean;
   active: boolean;
+  prefix: string;
 }) {
   const link = (
     <Link
-      href={item.href}
+      href={`${prefix}${item.href}`}
       className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
         active
           ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
@@ -207,10 +240,12 @@ function GroupNav({
   group,
   collapsed,
   pathname,
+  prefix,
 }: {
   group: NavGroup;
   collapsed: boolean;
   pathname: string;
+  prefix: string;
 }) {
   const childActive = group.children.some((c) => pathname.startsWith(c.match ?? c.href));
   const [open, setOpen] = useState(childActive);
@@ -228,7 +263,7 @@ function GroupNav({
           return (
             <Link
               key={c.key}
-              href={c.href}
+              href={`${prefix}${c.href}`}
               role="menuitem"
               className={`flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors ${
                 active
@@ -268,7 +303,7 @@ function GroupNav({
             return (
               <Link
                 key={c.key}
-                href={c.href}
+                href={`${prefix}${c.href}`}
                 className={`flex items-center gap-2.5 rounded-xl px-3 py-2 text-sm transition-all duration-200 ${
                   active
                     ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'

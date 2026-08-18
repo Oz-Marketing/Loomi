@@ -15,3 +15,11 @@
  */
 export const AD_GENERATOR_ENABLED =
   process.env.NEXT_PUBLIC_ENABLE_AD_GENERATOR === 'true';
+
+/**
+ * Playbooks (`/playbooks` on the App surface). Phase 0 is the read-only
+ * coverage audit — see docs/playbooks.md. Hidden from the nav and 404s unless
+ * `NEXT_PUBLIC_ENABLE_PLAYBOOKS=true` is set, or the viewer is a developer.
+ */
+export const PLAYBOOKS_ENABLED =
+  process.env.NEXT_PUBLIC_ENABLE_PLAYBOOKS === 'true';

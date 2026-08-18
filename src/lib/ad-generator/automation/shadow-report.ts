@@ -10,6 +10,30 @@ import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import type { SkippedVehicle } from './skip-reasons';
 import { templatesForAccount } from '../template-access';
+import { stockGate, stockGatePassed } from './inventory-match';
+import { isV2Template } from '@/lib/email/types';
+import { templateHasOffersMarker } from './offer-email-doc';
+import {
+  parseDefinition,
+  detachedSteps,
+  type CreativeDefinition,
+  type CreativeStep,
+} from '@/lib/playbooks/creative';
+
+/**
+ * The ad template a config renders from. `templateMap` is a per-offer-type map
+ * whose `all` key is the only one the settings form writes today, so the
+ * playbook comparison reads that one key rather than the whole map.
+ */
+function templateIdFor(templateMap: string | null): string {
+  if (!templateMap) return '';
+  try {
+    const v = JSON.parse(templateMap) as Record<string, unknown>;
+    return typeof v?.all === 'string' ? v.all : '';
+  } catch {
+    return '';
+  }
+}
 
 /**
  * Shadow-mode reporting — everything the Phase 1 dashboard shows, read from the
@@ -166,7 +190,42 @@ export interface ShadowReport {
     offerTypePriority: string[];
     /** draft | ready. `ready` still needs a verified co-op pack to take effect. */
     mode: string;
+    /** Whether the run also drafts the companion offer email. */
+    emailEnabled: boolean;
+    /** `Template.slug` of the v2 shell; null = compose from the brand kit. */
+    emailTemplateId: string | null;
+    /** `Audience` id the draft is pre-targeted at; null = no recipients. */
+    emailAudienceId: string | null;
+    emailMaxOffers: number;
+    /** `Playbook.id` this account follows, or null for a hand-picked setup. */
+    playbookId: string | null;
+    /** One ad per qualifying offer type, rather than only the best. */
+    expandOfferTypes: boolean;
   };
+  /**
+   * The followed playbook, resolved. `detached` names the steps this
+   * account has diverged from — DERIVED by comparing the config to the
+   * definition, never stored, so it can't go stale (docs/playbooks.md §5).
+   */
+  playbook: {
+    id: string;
+    name: string;
+    version: number;
+    definition: CreativeDefinition;
+    detached: CreativeStep[];
+  } | null;
+  /** Published playbooks, definitions included so the picker can preset. */
+  playbookOptions: {
+    id: string;
+    name: string;
+    scopeValue: string | null;
+    version: number;
+    definition: CreativeDefinition;
+  }[];
+  /** v2 email templates on this account, as offer-email shell candidates. */
+  emailTemplates: { slug: string; title: string; hasOffersBlock: boolean }[];
+  /** Saved audiences, for pre-targeting the offer email draft. */
+  audiences: { id: string; name: string }[];
   /** Published templates in scope, for the mapping dropdown. */
   templates: {
     id: string;
@@ -194,6 +253,19 @@ export interface ShadowReport {
     liveOffers: number;
     /** Groups whose OEM has let the cycle lapse without publishing the next. */
     awaitingNextCycle: number;
+    /**
+     * The coverage chain, in the terms the automation actually works in:
+     * VINs on the lot → distinct trims → model groups with a usable offer →
+     * ads a run would produce.
+     *
+     * This is the "is it working" answer. Every other number here describes a
+     * part; this describes the funnel, and a drop between any two links is a
+     * specific, findable problem.
+     */
+    vins: number;
+    trimGroups: number;
+    /** Model groups that would produce an ad right now, after every gate. */
+    adsThisRun: number;
   };
 }
 
@@ -212,9 +284,9 @@ function describeChoice(inc: MarketCheckIncentive): string {
   }
 }
 
-/** Build the whole shadow report for one sub-account. */
+/** Build the whole shadow report for one account. */
 export async function buildShadowReport(accountKey: string, now = new Date()): Promise<ShadowReport> {
-  // ── config (absent is normal — a sub-account isn't watched until enabled) ──
+  // ── config (absent is normal — an account isn't watched until enabled) ──
   // The poll's row shape plus the template mapping, which only generation reads.
   let config:
     | (AutomationConfigRow & {
@@ -223,6 +295,12 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         maxAdsPerRun: number;
         minStock: number;
         mode: string;
+        emailEnabled: boolean;
+        emailTemplateId: string | null;
+        emailAudienceId: string | null;
+        emailMaxOffers: number;
+        playbookId: string | null;
+        expandOfferTypes: boolean;
       })
     | null = null;
   try {
@@ -244,6 +322,12 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         maxAdsPerRun: true,
         minStock: true,
         mode: true,
+        emailEnabled: true,
+        emailTemplateId: true,
+        emailAudienceId: true,
+        emailMaxOffers: true,
+        playbookId: true,
+        expandOfferTypes: true,
       },
     });
   } catch {
@@ -287,19 +371,30 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   // Normalized to a plain shape immediately: leaving Prisma's groupBy union in
   // place (via a typed .catch fallback) makes downstream reduce/map inference
   // fail in confusing ways.
-  let stockRows: { year: number; make: string; model: string; count: number }[] = [];
+  // Grouped by TRIM as well as model, then folded back: the counts are still
+  // per model (that's the unit an ad advertises), but the trim list rides along
+  // so "would choose" can apply the same trim eligibility generation does.
+  // Without it the panel would recommend an offer the run then refuses.
+  let stockRows: { year: number; make: string; model: string; count: number; trims: (string | null)[] }[] = [];
   try {
-    const grouped = await prisma.inventoryVehicle.groupBy({
-      by: ['year', 'make', 'model'],
+    const groupedByTrim = await prisma.inventoryVehicle.groupBy({
+      by: ['year', 'make', 'model', 'trim'],
       where: { accountKey, condition: 'new', soldAt: null },
       _count: { _all: true },
     });
-    stockRows = grouped.map((r) => ({
-      year: r.year,
-      make: r.make,
-      model: r.model,
-      count: r._count._all,
-    }));
+    const byModel = new Map<string, { year: number; make: string; model: string; count: number; trims: (string | null)[] }>();
+    for (const r of groupedByTrim) {
+      const k = `${r.year}|${r.make.toLowerCase()}|${r.model.toLowerCase()}`;
+      const hit = byModel.get(k) ?? { year: r.year, make: r.make, model: r.model, count: 0, trims: [] };
+      hit.count += r._count._all;
+      // One entry per VIN, matching what generation passes — a trim held by 20
+      // units and one held by a single unit are equally "in stock".
+      for (let i = 0; i < r._count._all; i += 1) hit.trims.push(r.trim);
+      byModel.set(k, hit);
+    }
+    stockRows = [...byModel.values()].sort(
+      (a, b) => a.make.localeCompare(b.make) || a.model.localeCompare(b.model),
+    );
   } catch {
     stockRows = [];
   }
@@ -314,19 +409,26 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
 
   // Union of "has stock" and "has offers on file" — a vehicle can have offers
   // recorded after its last unit sold, and stock can arrive before any offer.
-  const groups = new Map<string, { year: number; make: string; model: string; stock: number }>();
+  const groups = new Map<
+    string,
+    { year: number; make: string; model: string; stock: number; trims: (string | null)[] }
+  >();
   for (const s of stockRows) {
     groups.set(keyOf(s.year, s.make, s.model), {
       year: s.year,
       make: s.make,
       model: s.model,
       stock: s.count,
+      trims: s.trims,
     });
   }
   for (const snap of snapshots) {
     const k = keyOf(snap.year, snap.make, snap.model);
     if (!groups.has(k)) {
-      groups.set(k, { year: snap.year, make: snap.make, model: snap.model, stock: 0 });
+      // Offers on file but nothing on the lot. An empty trim list means the trim
+      // check can't judge, which is the right answer here — there is no stock to
+      // judge against, and the stock gate refuses the vehicle anyway.
+      groups.set(k, { year: snap.year, make: snap.make, model: snap.model, stock: 0, trims: [] });
     }
   }
 
@@ -372,7 +474,14 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     const assessable = mine.length > 0 || polledScopes.has(k);
     const cycle = assessable ? evaluateOfferCycle(incentives, window) : null;
     const selection = incentives.length
-      ? selectOffer(incentives, { runWindow: window, priority: priority.length ? priority : undefined, now })
+      ? selectOffer(incentives, {
+          runWindow: window,
+          priority: priority.length ? priority : undefined,
+          // Same trim eligibility generation applies, so "would choose" cannot
+          // recommend an offer the run would then refuse.
+          stockedTrims: g.trims,
+          now,
+        })
       : null;
 
     if (selection?.chosen) groupsWithOffer++;
@@ -452,6 +561,54 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     })
     .catch(() => []);
 
+  // ── options for the companion-email settings ──
+  //
+  // Only v2 (visual) templates can be a shell, because the `{{offers}}` marker
+  // is a block — a legacy HTML template has nowhere to put one. Filtering here
+  // rather than in the dropdown means an unusable template is never offered.
+  const emailTemplateRows = await prisma.template
+    .findMany({
+      where: { accountKey, type: 'design' },
+      select: { slug: true, title: true, content: true },
+      orderBy: { updatedAt: 'desc' },
+      take: 100,
+    })
+    .catch(() => []);
+
+  // ── the followed playbook, and what this account has diverged from ──
+  //
+  // Both reads are unconditional so the picker always has its options, but the
+  // detached-step comparison only means anything when a playbook is linked.
+  const [playbookRow, playbookOptionRows] = await Promise.all([
+    config?.playbookId
+      ? prisma.playbook
+          .findUnique({
+            where: { id: config.playbookId },
+            select: { id: true, name: true, version: true, definition: true },
+          })
+          .catch(() => null)
+      : Promise.resolve(null),
+    prisma.playbook
+      .findMany({
+        where: { scope: 'creative', publishedAt: { not: null } },
+        // The definition ships with every option, not just the followed one:
+        // picking a playbook has to preset the fields IMMEDIATELY, and a client
+        // that had to fetch it first would apply nothing until a save
+        // round-tripped. The list is small and the payload is four fields.
+        select: { id: true, name: true, scopeValue: true, version: true, definition: true },
+        orderBy: { name: 'asc' },
+      })
+      .catch(() => []),
+  ]);
+
+  const audienceRows = await prisma.audience
+    .findMany({
+      where: { accountKey },
+      select: { id: true, name: true },
+      orderBy: { name: 'asc' },
+    })
+    .catch(() => []);
+
   const draftRows = await prisma.adCreative
     .findMany({
       where: { accountKey, autoGenerated: true },
@@ -498,7 +655,55 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       minStock: config?.minStock ?? 0,
       offerTypePriority: jsonArray(config?.offerTypePriority ?? null),
       mode: config?.mode ?? 'draft',
+      // Companion offer email. No `mode` counterpart on purpose — the email is
+      // always drafted for a person to send.
+      emailEnabled: !!config?.emailEnabled,
+      emailTemplateId: config?.emailTemplateId ?? null,
+      emailAudienceId: config?.emailAudienceId ?? null,
+      emailMaxOffers: config?.emailMaxOffers ?? 6,
+      playbookId: config?.playbookId ?? null,
+      expandOfferTypes: !!config?.expandOfferTypes,
     },
+    playbook: (() => {
+      if (!playbookRow) return null;
+      const definition = parseDefinition(playbookRow.definition);
+      // The config columns are the truth; the definition is what they were
+      // preset from. Anything that differs is a deliberate local override.
+      const detached = detachedSteps(
+        {
+          adTemplateId: templateIdFor(config?.templateMap ?? null),
+          sizeIds: jsonArray(config?.sizeIds ?? null),
+          emailTemplateSlug: config?.emailTemplateId ?? '',
+          emailMaxOffers: config?.emailMaxOffers ?? 6,
+        },
+        definition,
+      );
+      return {
+        id: playbookRow.id,
+        name: playbookRow.name,
+        version: playbookRow.version,
+        definition,
+        detached,
+      };
+    })(),
+    playbookOptions: playbookOptionRows.map((p) => ({
+      id: p.id,
+      name: p.name,
+      scopeValue: p.scopeValue,
+      version: p.version,
+      definition: parseDefinition(p.definition),
+    })),
+    // Shell candidates for the offer email. `hasOffersBlock` is surfaced rather
+    // than filtered on, so a template that's missing the marker can be shown as
+    // unusable with a reason instead of silently vanishing from the list.
+    emailTemplates: emailTemplateRows
+      .filter((t) => isV2Template(t.content))
+      .map((t) => ({
+        slug: t.slug,
+        title: t.title,
+        hasOffersBlock: templateHasOffersMarker(t.content),
+      })),
+    audiences: audienceRows.map((a) => ({ id: a.id, name: a.name })),
     templates: templatesForAccount(templateRows, { accountKey }).map((t) => ({
       id: t.id,
       name: t.name,
@@ -549,6 +754,18 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       matchRatePct: stockGroups === 0 ? 0 : Math.round((groupsWithOffer / stockGroups) * 100),
       liveOffers,
       awaitingNextCycle,
+      // One InventoryVehicle row IS one VIN.
+      vins: stockRows.reduce((n, s) => n + s.count, 0),
+      trimGroups: stockRows.reduce((n, s) => n + new Set(s.trims.map((t) => (t ?? '').toLowerCase())).size, 0),
+      // Mirrors generation exactly by reusing its own gate rather than
+      // re-deriving the rule — note `minStock: 0` means NOT ENFORCED, so a
+      // vehicle with offers and no stock still counts.
+      adsThisRun: Math.min(
+        vehicles.filter(
+          (v) => v.wouldChoose && stockGatePassed(stockGate(v.stock, config?.minStock ?? 0)),
+        ).length,
+        config?.maxAdsPerRun ?? 10,
+      ),
     },
   };
 }

@@ -214,11 +214,20 @@ async function runAdgenGenerate(): Promise<void> {
     const made = results.reduce((n, r) => n + r.generated.filter((g) => !g.updated).length, 0);
     const refreshed = results.reduce((n, r) => n + r.generated.filter((g) => g.updated).length, 0);
     const skipped = results.reduce((n, r) => n + r.skipped.length, 0);
+    const emails = results.filter((r) => r.email?.blastId).length;
     if (results.length > 0 && (made || refreshed || skipped)) {
       console.log(
         `[worker] adgen generate: ${made} new draft(s), ${refreshed} refreshed, ${skipped} skipped ` +
-          `across ${results.length} account(s) in ${Date.now() - startedAt}ms`,
+          `across ${results.length} account(s), ${emails} offer email(s) ` +
+          `in ${Date.now() - startedAt}ms`,
       );
+    }
+    // Only worth a line when it did NOT produce an email despite generating ads
+    // — the silent case is the one that hides a misconfiguration.
+    for (const r of results) {
+      if (r.generated.length && r.email && !r.email.blastId) {
+        console.warn(`[worker] adgen offer email skipped for ${r.accountKey}: ${r.email.reason}`);
+      }
     }
   } catch (err) {
     console.error('[worker] adgen generateAllAccounts failed', err);

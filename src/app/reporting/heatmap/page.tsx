@@ -74,7 +74,7 @@ function Segmented<T extends string>({
 }
 
 export default function ReportingHeatmapPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -84,7 +84,7 @@ export default function ReportingHeatmapPage() {
   const [dealType, setDealType] = useState<DealTypeFilter>('ALL');
   const { from, to } = resolveBounds(rangeKey, customRange);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -132,7 +132,7 @@ export default function ReportingHeatmapPage() {
         />
       </div>
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={MapIcon}
           title="Pick an account"

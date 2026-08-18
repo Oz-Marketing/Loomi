@@ -58,7 +58,7 @@ export default function ListsPage() {
   // Org-aware: keeps links inside /org/<slug> on the org roll-up instead of
   // bouncing into the org's house sub-account.
   const subHref = useScopedHref();
-  const { isAccount, isGroup, accountKey, accounts, scopedAccountKeys, userRole } = useAccount();
+  const { isAccount, isRollup, accountKey, accounts, scopedAccountKeys, userRole } = useAccount();
 
   const [lists, setLists] = useState<ListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,13 +107,13 @@ export default function ListsPage() {
   // role/assignments, not the active selection, so without this filter a group
   // would surface lists belonging to accounts outside it.
   const accountFiltered = useMemo(() => {
-    if (isGroup) {
+    if (isRollup) {
       const allowed = new Set(scopedAccountKeys);
       return lists.filter((l) => allowed.has(l.accountKey));
     }
     if (isAccount && accountKey) return lists.filter((l) => l.accountKey === accountKey);
     return lists;
-  }, [lists, isAccount, isGroup, accountKey, scopedAccountKeys]);
+  }, [lists, isAccount, isRollup, accountKey, scopedAccountKeys]);
 
   const filteredAndSorted = useMemo(() => {
     const q = search.trim().toLowerCase();

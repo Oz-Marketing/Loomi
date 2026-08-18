@@ -7,7 +7,6 @@ import { toast } from '@/lib/toast';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import PrimaryButton from '@/components/primary-button';
 import { TemplateLibraryPanel } from '@/components/campaigns/template-library-panel';
-import { TemplatePreviewModal } from '@/components/campaigns/template-preview-modal';
 import { SelectedTemplatePanel } from '@/components/campaigns/selected-template-panel';
 
 interface PageProps {
@@ -72,7 +71,6 @@ export default function MessageStepPage({ params }: PageProps) {
   const [draftLoading, setDraftLoading] = useState(true);
   const [subject, setSubject] = useState('');
   const [previewText, setPreviewText] = useState('');
-  const [previewDesign, setPreviewDesign] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -179,6 +177,10 @@ export default function MessageStepPage({ params }: PageProps) {
 
   async function applyTemplate(design: string) {
     if (!draft) return;
+    // Without the preview modal in the way, two quick clicks in the library
+    // fire two applies — each compiling and PATCHing — and the second can
+    // land after the first, attaching a template the user did not pick last.
+    if (applying) return;
     setApplying(true);
     try {
       const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(design)}&format=raw`);
@@ -209,7 +211,6 @@ export default function MessageStepPage({ params }: PageProps) {
         setDraft(updated);
         setSubject(updated.subject);
       }
-      setPreviewDesign(null);
       // Selecting a template drops you straight into the existing template
       // editor so the user can adjust before scheduling.
       // campaignId is passed so the editor shows campaign-aware actions
@@ -274,8 +275,13 @@ export default function MessageStepPage({ params }: PageProps) {
   }
 
   async function handleChangeTemplate() {
+    // No confirm() here. It is a native modal, which is SUPPRESSED in an
+    // embedded or sandboxed view (Loomi's own preview pane, an in-app
+    // browser) — it returns false there, so the button looked dead rather
+    // than cancelled. The action is also cheap to undo: it detaches the
+    // template from this blast, it does not delete the template, and the
+    // picker opens immediately so re-selecting is one click.
     if (!draft) return;
-    if (!confirm('Clear the current template and pick a different one?')) return;
     try {
       const updated = await patchDraft({ htmlContent: '' });
       if (updated) setDraft(updated);
@@ -362,19 +368,15 @@ export default function MessageStepPage({ params }: PageProps) {
               onChangeTemplate={handleChangeTemplate}
             />
           ) : (
-            <TemplateLibraryPanel onSelect={setPreviewDesign} onCreateNew={handleCreateNew} />
+            // Selecting a design applies it and goes STRAIGHT to the editor,
+            // with no preview-and-confirm step in between. You are going to
+            // edit this template regardless — that is the whole point of
+            // picking one for a blast — so previewing first was a step that
+            // only ever delayed the edit.
+            <TemplateLibraryPanel onSelect={applyTemplate} onCreateNew={handleCreateNew} />
           )}
         </div>
       </div>
-
-      {previewDesign && (
-        <TemplatePreviewModal
-          design={previewDesign}
-          onClose={() => !applying && setPreviewDesign(null)}
-          onUse={() => applyTemplate(previewDesign)}
-          applying={applying}
-        />
-      )}
 
       <BottomBar
         onBack={() =>

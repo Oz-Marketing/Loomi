@@ -29,6 +29,26 @@ export interface ScopeForm {
   maxAds: string;
   minStock: string;
   mode: string;
+  // ── companion offer email ──
+  // These MUST live on the form even though the switch is the only one most
+  // people touch: `save_config` is a full replace, so a payload that omits them
+  // resets the email config to its defaults on the next save or toggle.
+  emailEnabled: boolean;
+  emailTemplateId: string;
+  emailAudienceId: string;
+  emailMaxOffers: string;
+  /** `Playbook.id` followed, or '' for a hand-picked setup. */
+  playbookId: string;
+  /** One ad per qualifying offer type, rather than only the best. */
+  expandOfferTypes: boolean;
+  /**
+   * Offer types in priority order; omitted types are never eligible.
+   *
+   * This was absent from the form until the picker existed, which meant
+   * `save_config` — a full replace — reset a customised priority to
+   * lease/apr/cash every time anyone pressed Save.
+   */
+  offerPriority: string[];
 }
 
 export const BLANK_FORM: ScopeForm = {
@@ -42,6 +62,13 @@ export const BLANK_FORM: ScopeForm = {
   maxAds: '10',
   minStock: '0',
   mode: 'draft',
+  emailEnabled: false,
+  emailTemplateId: '',
+  emailAudienceId: '',
+  emailMaxOffers: '6',
+  playbookId: '',
+  expandOfferTypes: false,
+  offerPriority: ['lease', 'apr', 'cash'],
 };
 
 function formFromReport(rep: ShadowReport): ScopeForm {
@@ -56,6 +83,15 @@ function formFromReport(rep: ShadowReport): ScopeForm {
     maxAds: String(rep.scope?.maxAdsPerRun ?? 10),
     minStock: String(rep.scope?.minStock ?? 0),
     mode: rep.scope?.mode ?? 'draft',
+    emailEnabled: rep.scope?.emailEnabled ?? false,
+    emailTemplateId: rep.scope?.emailTemplateId ?? '',
+    emailAudienceId: rep.scope?.emailAudienceId ?? '',
+    emailMaxOffers: String(rep.scope?.emailMaxOffers ?? 6),
+    playbookId: rep.scope?.playbookId ?? '',
+    expandOfferTypes: rep.scope?.expandOfferTypes ?? false,
+    offerPriority: rep.scope?.offerTypePriority?.length
+      ? rep.scope.offerTypePriority
+      : ['lease', 'apr', 'cash'],
   };
 }
 
@@ -74,10 +110,19 @@ export function toPayload(f: ScopeForm) {
     maxAdsPerRun: Number(f.maxAds) || 10,
     minStock: Number(f.minStock) || 0,
     mode: f.mode,
+    emailEnabled: f.emailEnabled,
+    emailTemplateId: f.emailTemplateId,
+    emailAudienceId: f.emailAudienceId,
+    emailMaxOffers: Number(f.emailMaxOffers) || 6,
+    playbookId: f.playbookId,
+    expandOfferTypes: f.expandOfferTypes,
+    offerTypePriority: f.offerPriority,
   };
 }
 
 /** Order-insensitive on sizeIds, so re-picking the same sizes isn't "dirty". */
+// sizeIds is a SET (order meaningless); offerPriority is a LIST whose order is
+// the setting itself, so it is deliberately not sorted here.
 const formKey = (f: ScopeForm) => JSON.stringify({ ...f, sizeIds: [...f.sizeIds].sort() });
 
 export interface Automation {

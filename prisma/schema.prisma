@@ -1998,7 +1998,9 @@ model Campaign {
   // Only `building` and `archived` are written explicitly; draft/ready/
   // partial are derived at read time from the assets' own statuses.
   status          String    @default("draft")
-  // How the campaign was created: ai (plan → confirm → generate) | manual.
+  // How the campaign was created: ai (plan → confirm → generate) | manual |
+  // automation (the ad generator's OEM offer run, which creates the container
+  // so the ads and their companion email hang off one row).
   source          String    @default("ai")
   // The user's original natural-language brief (the hero textarea).
   goal            String?   @db.Text
@@ -2034,6 +2036,14 @@ model EmailBlast {
   // upsert to one row instead of racing two duplicate wrappers. Null on
   // all normal campaigns (Postgres treats nulls as distinct).
   flowNodeKey      String?   @unique
+  // Set ONLY on the companion offer email the ad-generator automation creates.
+  // Keyed on the sub-account plus the SET of offers featured, so re-running
+  // generate over the same offers updates one draft instead of stacking a new
+  // one every night — the same idempotency discipline as
+  // `AdCreative.offerFingerprint`. A new or changed offer yields a new key, and
+  // therefore a new draft. Null on everything else (Postgres treats nulls as
+  // distinct, so hand-built blasts never collide).
+  automationKey    String?   @unique
   subject          String
   previewText      String?
   htmlContent      String
@@ -4041,12 +4051,103 @@ model AdAutomationConfig {
 
   templateMap String? @db.Text
 
+  /// The agency-wide Playbook this sub-account follows for its creative, or null
+  /// for a hand-picked setup. A playbook PRESETS `templateMap`, `sizeIds` and
+  /// `emailTemplateId` rather than replacing them: the columns above stay the
+  /// single source of truth for what a run actually uses, so generation never
+  /// has to resolve a playbook and nothing breaks if one is deleted.
+  ///
+  /// Drift is therefore DERIVED — compare those columns to the playbook's
+  /// definition — rather than tracked in a `stepStates` column. That keeps the
+  /// override state honest with no backfill and no second thing to keep in sync.
+  playbookId String?
+  playbook   Playbook? @relation(fields: [playbookId], references: [id], onDelete: SetNull)
+
+  /// Generate an ad for EVERY qualifying offer type on a vehicle (a lease ad
+  /// AND an APR ad), rather than only the best one.
+  ///
+  /// Off by default deliberately. On a 12-model lot, expansion produces ~30 ads
+  /// against a `maxAdsPerRun` default of 10 — the cap would silently truncate to
+  /// an arbitrary subset, which is worse than a smaller set somebody chose.
+  /// Costs no extra MarketCheck calls either way: the offers are already on file.
+  expandOfferTypes Boolean @default(false)
+
   // ── output ──
   mode          String  @default("draft") // draft | ready
   notifyUserIds String? @db.Text // JSON string[]
 
+  // ── companion offer email ──
+  //
+  // One multi-offer email per RUN, not per offer: an OEM programme drop commonly
+  // covers six models at once, and six separate sends to one dealer list is how
+  // a database gets burned. The offers featured are exactly the ones that
+  // produced ads, so the email can never advertise something the paid side
+  // isn't running.
+  //
+  // Off by default — an existing sub-account keeps generating ads and nothing
+  // else until someone opts in, because an email has no equivalent of a PAUSED
+  // campaign to undo.
+  emailEnabled    Boolean @default(false)
+  /// `Template.slug` of a v2 email template used as the SHELL — its blocks wrap
+  /// the generated offer section, which replaces a text block reading `{{offers}}`.
+  /// Null = compose the whole email from the sub-account's branding.
+  emailTemplateId String?
+  /// `Audience` whose saved filter pre-targets the draft. Null leaves the draft
+  /// with no recipients, so a person must choose before it can send.
+  emailAudienceId String?
+  /// Cap on how many offers the email features, best-first by the same
+  /// `offerTypePriority` the ads use.
+  emailMaxOffers  Int     @default(6)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+/// An agency-wide, versioned bundle of the creative that goes together: the ad
+/// template + sizes and the offer-email shell. See docs/playbooks.md.
+///
+/// This is Phase 1's `Playbook` arriving as ONE NARROW SLICE — scope 'creative'
+/// only. The spec's wider flavours (department motion, season/event) and the
+/// step registry are deliberately not built; `scope`/`scopeValue` exist so they
+/// can be without a migration.
+///
+/// Authored once and applied to many sub-accounts, which is the entire point:
+/// "are all our Chevy stores running the same creative?" has no answer while the
+/// pairing lives only in each rooftop's own config.
+model Playbook {
+  id   String @id @default(cuid())
+  /// Stable slug, like `AlertRule.key` — safe to reference from a seed or a doc.
+  key  String @unique
+  name String
+
+  /// creative | oem | department | event. Only 'creative' is honored today.
+  scope      String  @default("creative")
+  /// e.g. "Chevrolet" for an OEM-scoped playbook. Null = applies anywhere.
+  scopeValue String?
+
+  /// Bumped on every published edit, so an application can be seen as behind.
+  version Int @default(1)
+
+  /// JSON: { adTemplateId, sizeIds[], emailTemplateSlug, emailMaxOffers }.
+  /// Text + JSON rather than columns because the step list is meant to grow;
+  /// see `src/lib/playbooks/creative.ts` for the parsed shape.
+  definition String @db.Text
+  /// Hash of `definition`, the staleness test — same discipline as
+  /// `AdTemplateCoopCheck.docHash`. Lets "this rooftop is on an older version"
+  /// be a fact rather than a guess.
+  definitionHash String
+
+  /// Null = draft, never offered to a sub-account.
+  publishedAt DateTime?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  configs AdAutomationConfig[]
+
+  @@index([scope, scopeValue])
+  @@index([publishedAt])
 }
 
 // One OEM offer as last seen by the poll, keyed by a fingerprint of its

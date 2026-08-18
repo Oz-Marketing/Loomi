@@ -28,7 +28,7 @@ import { OrgReportRollup } from '../_components/org-report-rollup';
 import { GA4_ROLLUP } from '../_components/rollup-configs';
 
 export default function ReportingWebsitesPage() {
-  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts } = useAccount();
+  const { accountKey, accountData, isRollup, scopedAccountKeys, accounts } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -38,7 +38,7 @@ export default function ReportingWebsitesPage() {
   const { from, to } = resolveBounds(rangeKey, customRange);
 
   const dealer = accountData?.dealer || 'all accounts';
-  const scopeLabel = isGroup
+  const scopeLabel = isRollup
     ? `${accountData?.dealer ?? 'Group'} — ${scopedAccountKeys.length} accounts`
     : accountKey
       ? dealer
@@ -69,7 +69,7 @@ export default function ReportingWebsitesPage() {
 
       <ClientPreviewNotice {...lensState} />
 
-      {isGroup ? (
+      {isRollup ? (
         <div className="mt-8">
           <OrgReportRollup
             config={GA4_ROLLUP}

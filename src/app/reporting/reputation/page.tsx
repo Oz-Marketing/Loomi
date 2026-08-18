@@ -16,9 +16,9 @@ import { OrgReportRollup } from '../_components/org-report-rollup';
 import { REPUTATION_ROLLUP } from '../_components/rollup-configs';
 
 export default function ReportingReputationPage() {
-  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts } = useAccount();
+  const { accountKey, accountData, isRollup, scopedAccountKeys, accounts } = useAccount();
   const dealer = accountData?.dealer || 'all accounts';
-  const scopeLabel = isGroup
+  const scopeLabel = isRollup
     ? `${accountData?.dealer ?? 'Group'} — ${scopedAccountKeys.length} accounts`
     : accountKey
       ? dealer
@@ -33,7 +33,7 @@ export default function ReportingReputationPage() {
         subtitle={`Live Google rating, recent reviews, and competitor comparison — ${scopeLabel}.`}
       />
 
-      {isGroup ? (
+      {isRollup ? (
         <div className="mt-8">
           <OrgReportRollup
             config={REPUTATION_ROLLUP}

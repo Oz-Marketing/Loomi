@@ -37,6 +37,11 @@ import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { resolveEventAsset } from './event-assets';
 import { resolveAutomationTemplate, type TemplateCandidate } from './resolve-automation-template';
 import { selectOffer, type SelectableOfferType } from './select-offer';
+import {
+  generateOfferEmail,
+  type OfferEmailConfigRow,
+  type OfferEmailResult,
+} from './generate-offer-email';
 
 /**
  * Phase 3 — generate draft ads from watched OEM offers.
@@ -92,6 +97,13 @@ export interface GenerateResult {
   runId: string | null;
   generated: GeneratedAd[];
   skipped: SkippedVehicle[];
+  /**
+   * The companion offer email, on the scheduled path only. Null on a manual
+   * run: an operator generating a slice of offers from the dialog is iterating
+   * on creative, and producing a customer-facing email draft as a side effect
+   * of that is a surprise nobody asked for.
+   */
+  email?: OfferEmailResult | null;
 }
 
 function jsonArray(raw: string | null): string[] {
@@ -140,7 +152,7 @@ function safeJson<T>(raw: string | null): T | null {
 }
 
 /** Full config row including the fields the poll doesn't need. */
-export interface GenerateConfigRow extends AutomationConfigRow {
+export interface GenerateConfigRow extends AutomationConfigRow, OfferEmailConfigRow {
   /** JSON string[] of size ids to render; null/empty = every size in the template. */
   sizeIds: string | null;
   maxAdsPerRun: number;
@@ -148,17 +160,24 @@ export interface GenerateConfigRow extends AutomationConfigRow {
   templateMap: string | null;
   mode: string;
   notifyUserIds: string | null;
+  /** One ad per qualifying offer type, rather than only the best. */
+  expandOfferTypes: boolean;
 }
 
 export const GENERATE_CONFIG_SELECT = {
   accountKey: true,
   enabled: true,
+  emailEnabled: true,
+  emailTemplateId: true,
+  emailAudienceId: true,
+  emailMaxOffers: true,
   makes: true,
   focusModels: true,
   excludeModels: true,
   zip: true,
   radius: true,
   offerTypePriority: true,
+  expandOfferTypes: true,
   runWindowMode: true,
   rollingDays: true,
   sizeIds: true,
@@ -326,32 +345,41 @@ export async function generateForAccount(
   const generated: GeneratedAd[] = [];
   const skipped: SkippedVehicle[] = [];
 
+  // ── work list: one entry per AD, not per vehicle ──
+  //
+  // Stock and offer selection are resolved up front so that `expandOfferTypes`
+  // can turn one vehicle into several ads without the 450-line build below
+  // having to know anything about it — it just walks the list.
+  //
+  // The stock read is one query for the whole run rather than one per vehicle,
+  // which is also what it should always have been.
+  type WorkItem = { g: (typeof groups) extends Map<string, infer V> ? V : never; vehicle: string; units: StockUnit[]; inc: MarketCheckIncentive };
+  const work: WorkItem[] = [];
+
+  const allUnits = (
+    await prisma.inventoryVehicle
+      .findMany({
+        where: { accountKey: config.accountKey, condition: 'new', soldAt: null },
+        select: {
+          vin: true, stockNumber: true, trim: true, price: true, msrp: true,
+          color: true, colorDetail: true, imageUrls: true,
+          year: true, make: true, model: true,
+        },
+      })
+      .catch(() => [])
+  ).map((u) => ({ ...u, imageUrls: jsonArray(u.imageUrls) }));
+
+  const unitsByGroup = new Map<string, StockUnit[]>();
+  for (const u of allUnits) {
+    const k = `${u.year}|${u.make.toLowerCase()}|${u.model.toLowerCase()}`;
+    const list = unitsByGroup.get(k) ?? [];
+    list.push(u);
+    unitsByGroup.set(k, list);
+  }
+
   for (const [, g] of [...groups.entries()].sort()) {
     const vehicle = `${g.year} ${g.make} ${g.model}`;
-    if (generated.length >= cap) {
-      skipped.push({ vehicle, reason: 'cap_reached', detail: `Run cap of ${cap} ad(s) reached.` });
-      continue;
-    }
-
-    // ── stock ──
-    const units: StockUnit[] = (
-      await prisma.inventoryVehicle
-        .findMany({
-          where: {
-            accountKey: config.accountKey,
-            condition: 'new',
-            soldAt: null,
-            year: g.year,
-            make: { equals: g.make, mode: 'insensitive' },
-            model: { equals: g.model, mode: 'insensitive' },
-          },
-          select: {
-            vin: true, stockNumber: true, trim: true, price: true, msrp: true,
-            color: true, colorDetail: true, imageUrls: true,
-          },
-        })
-        .catch(() => [])
-    ).map((u) => ({ ...u, imageUrls: jsonArray(u.imageUrls) }));
+    const units = unitsByGroup.get(`${g.year}|${g.make.toLowerCase()}|${g.model.toLowerCase()}`) ?? [];
 
     const gate = stockGate(units.length, config.minStock);
     if (!stockGatePassed(gate)) {
@@ -363,17 +391,45 @@ export async function generateForAccount(
     const selection = selectOffer(g.incentives, {
       runWindow: window,
       priority: priority.length ? priority : undefined,
+      // The trims actually on the lot, so a trim-specific programme can't be
+      // attached to stock that never qualified for it.
+      stockedTrims: units.map((u) => u.trim),
       now,
     });
     if (!selection.chosen) {
+      // Name the trim case specifically — "no eligible offer" on a vehicle whose
+      // OEM clearly published something is the report that sends someone hunting.
+      const trimRejects = selection.candidates.filter((c) => c.rejected === 'trim_not_stocked');
       skipped.push({
         vehicle,
         reason: 'no_eligible_offer',
-        detail: `No offer valid for ${window.start.toISOString().slice(0, 10)} onward among ${g.incentives.length}.`,
+        detail: trimRejects.length
+          ? `No offer valid for ${window.start.toISOString().slice(0, 10)} onward among ${g.incentives.length} — ${trimRejects.length} were for trims not in stock.`
+          : `No offer valid for ${window.start.toISOString().slice(0, 10)} onward among ${g.incentives.length}.`,
       });
       continue;
     }
-    const inc = selection.chosen.incentive;
+
+    if (config.expandOfferTypes) {
+      // The best offer OF EACH TYPE. `candidates` is already ranked, so the
+      // first sighting of a type is that type's winner — no re-sorting, and the
+      // same rule decides both modes.
+      const seenTypes = new Set<string>();
+      for (const c of selection.candidates) {
+        if (c.rank === null || seenTypes.has(c.incentive.type)) continue;
+        seenTypes.add(c.incentive.type);
+        work.push({ g, vehicle, units, inc: c.incentive });
+      }
+    } else {
+      work.push({ g, vehicle, units, inc: selection.chosen.incentive });
+    }
+  }
+
+  for (const { g, vehicle, units, inc } of work) {
+    if (generated.length >= cap) {
+      skipped.push({ vehicle, reason: 'cap_reached', detail: `Run cap of ${cap} ad(s) reached.` });
+      continue;
+    }
     // Vehicle-scoped: two vehicles can share one identical OEM programme, and each
     // still needs its own ad. See creativeOfferKey.
     const fingerprint = creativeOfferKey(g, offerFingerprint(inc));
@@ -891,7 +947,17 @@ export async function generateAllAccounts(now = new Date()): Promise<GenerateRes
   const out: GenerateResult[] = [];
   for (const config of configs) {
     try {
-      out.push(await generateForAccount(config, { now }));
+      const result = await generateForAccount(config, { now });
+      // The companion email. Isolated in its own try: an email that fails to
+      // build must never lose the ads that were already generated and recorded
+      // — they are the thing the run exists to produce.
+      let email: OfferEmailResult | null = null;
+      try {
+        email = await generateOfferEmail(config, result.generated, { runId: result.runId });
+      } catch (err) {
+        console.error(`[generate-ads] ${config.accountKey} offer email failed:`, err);
+      }
+      out.push({ ...result, email });
     } catch (err) {
       console.error(`[generate-ads] ${config.accountKey} failed:`, err);
     }

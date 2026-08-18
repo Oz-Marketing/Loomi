@@ -36,7 +36,7 @@ import { GbpReport } from './_components/gbp-report';
 import { GbpConnectPanel } from './_components/gbp-connect-panel';
 
 export default function ReportingBusinessProfilePage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const { data: session } = useSession();
   const isDark = theme === 'dark';
@@ -74,7 +74,7 @@ export default function ReportingBusinessProfilePage() {
     window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
   }, []);
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -109,7 +109,7 @@ export default function ReportingBusinessProfilePage() {
         </div>
       )}
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={BuildingStorefrontIcon}
           title="Pick an account"

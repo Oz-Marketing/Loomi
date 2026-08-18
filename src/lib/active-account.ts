@@ -74,3 +74,71 @@ export function writeActiveAccountCookie(value: string): void {
     `${ACTIVE_ACCOUNT_COOKIE}=${encodeURIComponent(value)}` +
     `; Path=/; Max-Age=${ONE_YEAR_SECONDS}; SameSite=Lax${domainAttr()}${secure}`;
 }
+
+// ── Roll-up vs self, for a group account ──────────────────────────────────
+//
+// A group is an Account with children, and until now "is a group" WAS the
+// answer to "does this scope span several accounts" — derived, binary, and
+// therefore unanswerable when a group also advertises for itself. Young
+// Automotive Group runs its own campaigns, so its own numbers have to be
+// reachable, and the only way to ask that question is to make the scope a
+// CHOICE rather than a property of the row.
+//
+// Stored in the same shared cookie style as the active account so a hop between
+// Reporting, Projects and Studio does not silently change what you are looking
+// at. Keyed by account, because the answer is per group: you may want YAG rolled
+// up and another group on its own.
+
+const SELF_SCOPE_COOKIE = 'loomi-self-scope';
+
+/**
+ * Parse the stored exception list.
+ *
+ * Split from the `document.cookie` read so the logic is testable — the test
+ * environment is node, with no DOM, so anything touching `document` directly
+ * can only be asserted by adding a DOM shim for one function's sake.
+ */
+export function parseSelfScope(cookieValue: string | null | undefined): Set<string> {
+  if (!cookieValue) return new Set();
+  return new Set(cookieValue.split(',').filter(Boolean));
+}
+
+/** Apply a change to the exception set, returning the value to store. */
+export function nextSelfScope(
+  current: Set<string>,
+  accountKey: string,
+  selfOnly: boolean,
+): string {
+  const keys = new Set(current);
+  if (selfOnly) keys.add(accountKey);
+  else keys.delete(accountKey);
+  return [...keys].join(',');
+}
+
+function readSelfScopeCookie(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(new RegExp(`(?:^|; )${SELF_SCOPE_COOKIE}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/** Is this group account being viewed as ITSELF rather than rolled up? */
+export function readSelfScope(accountKey: string | null): boolean {
+  if (!accountKey) return false;
+  return parseSelfScope(readSelfScopeCookie()).has(accountKey);
+}
+
+/**
+ * Pin an account to self-only, or return it to rolling up.
+ *
+ * Stores the EXCEPTIONS rather than the state, so the default survives: a group
+ * created tomorrow rolls up without needing a row, and clearing the cookie
+ * restores the pre-toggle behavior for every account at once.
+ */
+export function writeSelfScope(accountKey: string, selfOnly: boolean): void {
+  if (typeof document === 'undefined') return;
+  const value = nextSelfScope(parseSelfScope(readSelfScopeCookie()), accountKey, selfOnly);
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
+  document.cookie =
+    `${SELF_SCOPE_COOKIE}=${encodeURIComponent(value)}` +
+    `; Path=/; Max-Age=${ONE_YEAR_SECONDS}; SameSite=Lax${domainAttr()}${secure}`;
+}

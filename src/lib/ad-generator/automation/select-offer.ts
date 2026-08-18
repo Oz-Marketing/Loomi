@@ -45,6 +45,15 @@ export interface SelectOfferPolicy {
    * misleading for month-boundary planning — prefer `runWindow` there.
    */
   minDaysRemaining?: number;
+  /**
+   * Trims actually on the lot for this vehicle, one entry per VIN.
+   *
+   * A trim-specific programme is only eligible when at least one stocked VIN
+   * carries that trim. Omit to skip the check entirely — which is what every
+   * caller did before this existed, and why LT programmes could be attached to
+   * LTZ stock.
+   */
+  stockedTrims?: (string | null)[];
   /** Evaluation time. Injected so runs are reproducible in tests + replays. */
   now?: Date;
 }
@@ -53,7 +62,58 @@ export type RejectionReason =
   | 'type_not_eligible'
   | 'no_usable_numbers'
   | 'expired'
-  | 'expiring_soon';
+  | 'expiring_soon'
+  | 'trim_not_stocked';
+
+/**
+ * Trim words, normalized for comparison. The feed and MarketCheck disagree on
+ * case and punctuation for the same trim ("High Country" vs "HIGH COUNTRY",
+ * "LT w/1LT"), so both sides are reduced to lowercase alphanumeric tokens.
+ */
+export function trimTokens(raw: string | null | undefined): string[] {
+  return (raw ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter(Boolean);
+}
+
+/**
+ * Does a programme's trim restriction cover anything actually on the lot?
+ *
+ * WHY THIS EXISTS. MarketCheck tags each incentive with the trim it applies to,
+ * and the pipeline used to discard it — so a Silverado LT programme could be
+ * attached to High Country stock, published, and carry a resolved disclaimer for
+ * an offer those VINs never qualified for.
+ *
+ * Matching is a token-PREFIX test, not a substring one. `"LT"` must not match
+ * `"LTZ"` — `'ltz'.includes('lt')` is true and would be a false positive on a
+ * different, more expensive trim — but `"LT"` should match `"LT Trail Boss"`,
+ * which is an LT with a package. Comparing token sequences gets both right.
+ *
+ * A longer restriction than the stock trim never matches: an "LT Crew Cab"
+ * programme does not cover every LT, and guessing in that direction is the
+ * expensive mistake.
+ *
+ * Unknowns never reject. An incentive with no trim is a model-wide programme,
+ * and a VIN whose trim the feed omitted cannot disprove eligibility — in both
+ * cases the honest answer is "can't rule it out", and wrongly dropping a valid
+ * programme is worse than the status quo this fixes.
+ */
+export function trimAppliesToStock(
+  incentiveTrim: string | null,
+  stockedTrims: (string | null)[],
+): boolean {
+  const want = trimTokens(incentiveTrim);
+  if (!want.length) return true;
+  if (!stockedTrims.length) return true;
+  return stockedTrims.some((stocked) => {
+    const have = trimTokens(stocked);
+    if (!have.length) return true;
+    if (want.length > have.length) return false;
+    return want.every((token, i) => token === have[i]);
+  });
+}
 
 export interface OfferCandidate {
   incentive: MarketCheckIncentive;
@@ -167,6 +227,17 @@ export function selectOffer(
         rank: null,
         rejected: 'no_usable_numbers',
         reason: `The feed gave no usable numbers for this ${inc.type} program.`,
+      };
+    }
+    // Checked before the date tests so the run log says "wrong trim" rather than
+    // "expired" for a programme that was never eligible for this lot anyway.
+    if (policy.stockedTrims && !trimAppliesToStock(inc.trim, policy.stockedTrims)) {
+      return {
+        incentive: inc,
+        key,
+        rank: null,
+        rejected: 'trim_not_stocked',
+        reason: `Applies to ${inc.trim} — no ${inc.trim} in stock.`,
       };
     }
     const remaining = daysUntil(inc.endDate, now);

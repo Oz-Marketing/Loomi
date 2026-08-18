@@ -105,6 +105,17 @@ export async function POST(req: NextRequest) {
     minStock?: number;
     radius?: number;
     mode?: string;
+    // companion offer email
+    emailEnabled?: boolean;
+    /** `Template.slug` of the v2 shell carrying the `{{offers}}` marker. */
+    emailTemplateId?: string;
+    /** `Audience` id used to pre-target the draft. */
+    emailAudienceId?: string;
+    emailMaxOffers?: number;
+    /** `Playbook.id` this sub-account follows, or '' to unlink. */
+    playbookId?: string;
+    /** One ad per qualifying offer type, rather than only the best. */
+    expandOfferTypes?: boolean;
     // add_feed / remove_feed
     name?: string;
     url?: string;
@@ -170,6 +181,19 @@ export async function POST(req: NextRequest) {
           minStock: clamp(body.minStock, 0, 500, 0),
           radius: clamp(body.radius, 5, 500, 75),
           mode: body.mode === 'ready' ? 'ready' : 'draft',
+          // ── companion offer email ──
+          // Off unless explicitly enabled. There is deliberately no `mode`
+          // equivalent: the email is always a draft, so the only decision here
+          // is whether one gets drafted at all.
+          emailEnabled: body.emailEnabled ?? false,
+          emailTemplateId: (body.emailTemplateId ?? '').trim() || null,
+          emailAudienceId: (body.emailAudienceId ?? '').trim() || null,
+          emailMaxOffers: clamp(body.emailMaxOffers, 1, 20, 6),
+          // The playbook is a LINK, not a source of truth — the creative columns
+          // above still carry what a run uses, so generation never resolves a
+          // playbook and an unlinked rooftop keeps working exactly as it was.
+          playbookId: (body.playbookId ?? '').trim() || null,
+          expandOfferTypes: body.expandOfferTypes ?? false,
         };
         const row = await prisma.adAutomationConfig.upsert({
           where: { accountKey },

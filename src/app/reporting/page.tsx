@@ -24,9 +24,9 @@ import { RoleDashboard } from '@/components/dashboards/role-dashboard';
 import { MarketingOverview } from './_components/marketing-overview';
 
 export default function ReportingDashboardPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
 
-  if (accountKey && !isGroup) {
+  if (accountKey && !isRollup) {
     return (
       <MarketingOverview accountKey={accountKey} dealer={accountData?.dealer || accountKey} />
     );

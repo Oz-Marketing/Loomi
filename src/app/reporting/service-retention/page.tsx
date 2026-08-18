@@ -22,11 +22,11 @@ import { EmptyState } from '../ads/_components/shared';
 import { ServiceRetentionReport } from './_components/service-retention-report';
 
 export default function ReportingServiceRetentionPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
-  const scopeLabel = accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -36,7 +36,7 @@ export default function ReportingServiceRetentionPage() {
         subtitle={`Whether buyers come back for service, and whether service customers come back again — ${scopeLabel}.`}
       />
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={ArrowPathIcon}
           title="Pick an account"

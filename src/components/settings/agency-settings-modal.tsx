@@ -190,7 +190,17 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
               them the flag never flips, the ::after never paints, and a drill-in
               header sits transparent while content scrolls THROUGH it. Same
               mechanism SurfaceShell uses for the main content card. */}
-          <div ref={panelRef} data-scrolled="false" className="min-h-0 flex-1 overflow-y-auto p-6">
+          <div
+            ref={panelRef}
+            data-scrolled="false"
+            /* Padding MATCHES `.page-sticky-header`'s negative margins, which are
+               -1.5rem and -2rem from md up. At a flat `p-6` the header's -2rem
+               overhung this box by 8px a side from md up and the panel scrolled
+               sideways. No TOP padding for the same reason SurfaceShell has
+               none: the sticky header carries its own, and doubling it left a
+               dead band above the title. */
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 md:px-8 md:pb-8"
+          >
             <div aria-hidden className="content-dock-lead" />
             {/* Drill-ins render over the tab they came from, so the tier keeps
                 its rail and its close button and the app shell behind is never

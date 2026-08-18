@@ -59,6 +59,7 @@ export function OrgReportRollup({
   from,
   to,
   compareTo,
+  params: extraParams,
 }: {
   config: RollupConfig;
   accountKeys: string[];
@@ -66,13 +67,28 @@ export function OrgReportRollup({
   from: string;
   to: string;
   compareTo: string;
+  /**
+   * Query params this route needs beyond the date window — Budget's `year`, for
+   * instance. Folded into the refetch signature below, which is the part that
+   * matters: without it a year change would leave the previous year's rows on
+   * screen under the new year's label.
+   */
+  params?: Record<string, string | number>;
 }) {
   const [rows, setRows] = useState<RooftopRow[] | null>(null);
 
   const keysSig = [...accountKeys].sort().join(',');
   const supportsDates = config.supportsDates !== false;
   const paramSig = supportsDates ? `${from}|${to}|${config.supportsCompare ? compareTo : ''}` : '';
-  const sig = `${config.route}|${keysSig}|${paramSig}`;
+  // Sorted so an object built fresh each render cannot change the signature and
+  // retrigger the fetch on every paint.
+  const extraSig = extraParams
+    ? Object.entries(extraParams)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => `${k}=${v}`)
+        .join('&')
+    : '';
+  const sig = `${config.route}|${keysSig}|${paramSig}|${extraSig}`;
 
   useEffect(() => {
     const keys = keysSig ? keysSig.split(',') : [];
@@ -83,9 +99,10 @@ export function OrgReportRollup({
     let cancelled = false;
     setRows(null);
 
-    const params = supportsDates
-      ? `&start_date=${from}&end_date=${to}${config.supportsCompare ? `&compare_to=${compareTo}` : ''}`
-      : '';
+    const params =
+      (supportsDates
+        ? `&start_date=${from}&end_date=${to}${config.supportsCompare ? `&compare_to=${compareTo}` : ''}`
+        : '') + (extraSig ? `&${extraSig}` : '');
 
     Promise.all(
       keys.map(async (key): Promise<RooftopRow> => {

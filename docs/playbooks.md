@@ -286,6 +286,10 @@ The audit is the weaker half of that argument: its checks straddle both surfaces
 would be worse than keeping them together where the authoring belongs, so both
 moved.
 
+Playbooks is also the first page to take the all-accounts scope outside the App
+surface. Which roll-up a page should offer — and why that is a property of the
+page rather than its surface — is written up in `docs/account-scope.md`.
+
 The move inverts `fixHref`: on Studio, `surface: 'studio'` fixes are same-host
 links and `surface: 'app'` ones cross via `getAppUrl`. Left as it was, every fix
 link would have pointed at the wrong host.

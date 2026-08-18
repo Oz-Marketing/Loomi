@@ -24,12 +24,12 @@ import { EmptyState } from '../ads/_components/shared';
 import { BillboardReport } from './_components/billboard-report';
 
 export default function ReportingBillboardsPage() {
-  const { accountKey, accountData, isGroup } = useAccount();
+  const { accountKey, accountData, isRollup } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
   const scopeLabel =
-    accountKey && !isGroup ? accountData?.dealer || accountKey : 'select an account';
+    accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
 
   return (
     <>
@@ -39,7 +39,7 @@ export default function ReportingBillboardsPage() {
         subtitle={`Out-of-home boards, locations and renewal dates — ${scopeLabel}.`}
       />
 
-      {isGroup || !accountKey ? (
+      {isRollup || !accountKey ? (
         <EmptyState
           icon={MapPinIcon}
           title="Pick an account"

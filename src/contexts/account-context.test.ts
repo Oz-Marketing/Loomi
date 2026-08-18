@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { nextSelfScope, parseSelfScope } from '@/lib/active-account';
 import { resolveDefaultAccountKey } from './account-context';
 import type { AccountData } from './account-context';
 
@@ -58,5 +59,42 @@ describe('resolveDefaultAccountKey', () => {
     );
     expect(forwards).toBe('aGroup');
     expect(backwards).toBe('aGroup');
+  });
+});
+
+describe('roll-up vs self scope (a group viewed as itself)', () => {
+  // The bug the toggle exists for: `isGroup` is derived from "has children", so
+  // it can never be false for Young Automotive Group — and every report keyed off
+  // it, which made YAG's OWN campaigns unreachable the moment a rooftop pointed
+  // at it. These lock in the invariants that keep that from coming back.
+
+  it('rolls up by default — only the exceptions are stored', () => {
+    // Nothing stored means every group rolls up, so a group created tomorrow
+    // needs no row and clearing the cookie restores pre-toggle behavior.
+    expect(parseSelfScope(null).size).toBe(0);
+    expect(parseSelfScope('').size).toBe(0);
+    expect(parseSelfScope('yag').has('yag')).toBe(true);
+  });
+
+  it('pins one account without disturbing another', () => {
+    const one = nextSelfScope(new Set(), 'yag', true);
+    expect(parseSelfScope(one).has('yag')).toBe(true);
+
+    const two = nextSelfScope(parseSelfScope(one), 'other-group', true);
+    expect(parseSelfScope(two).has('yag')).toBe(true);
+    expect(parseSelfScope(two).has('other-group')).toBe(true);
+  });
+
+  it('unpinning one leaves the other pinned — the choice is per group', () => {
+    const both = parseSelfScope(nextSelfScope(new Set(['yag']), 'other-group', true));
+    const after = nextSelfScope(both, 'yag', false);
+    expect(parseSelfScope(after).has('yag')).toBe(false);
+    expect(parseSelfScope(after).has('other-group')).toBe(true);
+  });
+
+  it('is idempotent, so a double click cannot duplicate a key', () => {
+    const once = nextSelfScope(new Set(), 'yag', true);
+    const twice = nextSelfScope(parseSelfScope(once), 'yag', true);
+    expect(twice).toBe('yag');
   });
 });

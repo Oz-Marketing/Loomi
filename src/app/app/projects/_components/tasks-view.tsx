@@ -56,13 +56,13 @@ export function TasksView() {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [search, setSearch] = useState('');
 
-  const { accountKey: globalAccountKey, isAdmin, isGroup, scopedAccountKeys } = useAccount();
+  const { accountKey: globalAccountKey, isAdmin, isRollup, scopedAccountKeys } = useAccount();
 
   // Which accounts this view spans. It used to be "one account, unless the
   // switcher is in Agency View" — agency scope is gone, so the cross-account
   // board now belongs to an ORGANIZATION account, which rolls its rooftops up
   // (`scopedAccountKeys`) exactly as Contacts does.
-  const rollsUp = isAdmin || isGroup;
+  const rollsUp = isAdmin || isRollup;
   // The API filters by a single key, so a roll-up asks for everything in the
   // caller's server-side scope and narrows to the subtree client-side, below.
   const serverAccount = rollsUp ? '' : globalAccountKey ?? '';
@@ -78,10 +78,10 @@ export function TasksView() {
   // every account the caller can reach.
   const filterAccountKeys = useMemo(() => {
     if (!rollsUp) return [];
-    if (!isGroup) return accountKeys;
+    if (!isRollup) return accountKeys;
     const subtree = scopedAccountKeys ?? [];
     return accountKeys.length > 0 ? accountKeys.filter((k) => subtree.includes(k)) : subtree;
-  }, [rollsUp, isGroup, accountKeys, scopedAccountKeys]);
+  }, [rollsUp, isRollup, accountKeys, scopedAccountKeys]);
 
   const filters: TaskFilters = useMemo(
     () => ({

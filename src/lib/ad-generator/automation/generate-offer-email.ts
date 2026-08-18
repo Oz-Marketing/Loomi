@@ -321,7 +321,7 @@ export async function generateOfferEmail(
     } else {
       // Wrong-account or deleted audience: leave the draft untargeted rather
       // than silently mailing another rooftop's list.
-      base.warnings.push('Configured audience is missing or belongs to another sub-account.');
+      base.warnings.push('Configured audience is missing or belongs to another account.');
     }
   }
 

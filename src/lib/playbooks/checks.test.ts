@@ -245,7 +245,7 @@ describe('companion offer email', () => {
     expect(out.detail).toContain('{{offers}}');
   });
 
-  it('fails an audience belonging to another sub-account', () => {
+  it('fails an audience belonging to another account', () => {
     // Worse than none: the generator refuses it, so the draft goes out
     // untargeted while the setting still reads as configured.
     const c = ctx({ automation: { ...ctx().automation, emailAudienceOk: false } });

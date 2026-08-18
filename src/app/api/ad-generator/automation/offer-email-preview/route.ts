@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     const preview = await previewOfferEmail(accountKey, {
       emailMaxOffers: Number(req.nextUrl.searchParams.get('maxOffers')) || 6,
     });
-    if (!preview) return NextResponse.json({ error: 'Sub-account not found' }, { status: 404 });
+    if (!preview) return NextResponse.json({ error: 'Account not found' }, { status: 404 });
     return NextResponse.json(preview);
   } catch (err) {
     console.error('[api/ad-generator/automation/offer-email-preview] GET failed:', err);

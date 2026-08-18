@@ -13,7 +13,7 @@ import { parseDefinition } from '@/lib/playbooks/creative';
  * The agency-wide creative playbook library (docs/playbooks.md §5).
  *
  * Reading is `agency.subaccounts.view` — the same guard as the audit, since the
- * sub-account settings picker has to list them. Writing is
+ * account settings picker has to list them. Writing is
  * `agency.platform.configure`: a playbook is platform configuration that reaches
  * every rooftop following it, so it sits a tier above reading.
  */
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    // The sub-account picker asks for published only; the library screen wants
+    // The account picker asks for published only; the library screen wants
     // drafts too.
     const publishedOnly = req.nextUrl.searchParams.get('published') === '1';
     return NextResponse.json({ playbooks: await listPlaybooks({ publishedOnly }) });

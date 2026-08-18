@@ -197,14 +197,14 @@ export interface ShadowReport {
     /** `Audience` id the draft is pre-targeted at; null = no recipients. */
     emailAudienceId: string | null;
     emailMaxOffers: number;
-    /** `Playbook.id` this sub-account follows, or null for a hand-picked setup. */
+    /** `Playbook.id` this account follows, or null for a hand-picked setup. */
     playbookId: string | null;
     /** One ad per qualifying offer type, rather than only the best. */
     expandOfferTypes: boolean;
   };
   /**
    * The followed playbook, resolved. `detached` names the steps this
-   * sub-account has diverged from — DERIVED by comparing the config to the
+   * account has diverged from — DERIVED by comparing the config to the
    * definition, never stored, so it can't go stale (docs/playbooks.md §5).
    */
   playbook: {
@@ -222,7 +222,7 @@ export interface ShadowReport {
     version: number;
     definition: CreativeDefinition;
   }[];
-  /** v2 email templates on this sub-account, as offer-email shell candidates. */
+  /** v2 email templates on this account, as offer-email shell candidates. */
   emailTemplates: { slug: string; title: string; hasOffersBlock: boolean }[];
   /** Saved audiences, for pre-targeting the offer email draft. */
   audiences: { id: string; name: string }[];
@@ -284,9 +284,9 @@ function describeChoice(inc: MarketCheckIncentive): string {
   }
 }
 
-/** Build the whole shadow report for one sub-account. */
+/** Build the whole shadow report for one account. */
 export async function buildShadowReport(accountKey: string, now = new Date()): Promise<ShadowReport> {
-  // ── config (absent is normal — a sub-account isn't watched until enabled) ──
+  // ── config (absent is normal — an account isn't watched until enabled) ──
   // The poll's row shape plus the template mapping, which only generation reads.
   let config:
     | (AutomationConfigRow & {
@@ -575,7 +575,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     })
     .catch(() => []);
 
-  // ── the followed playbook, and what this sub-account has diverged from ──
+  // ── the followed playbook, and what this account has diverged from ──
   //
   // Both reads are unconditional so the picker always has its options, but the
   // detached-step comparison only means anything when a playbook is linked.

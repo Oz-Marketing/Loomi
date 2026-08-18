@@ -56,7 +56,7 @@ export interface OfferEmailPreview {
   sample: boolean;
   /** Why the preview is degraded, in the reader's terms. */
   notes: string[];
-  /** Every shell choice, each rendered with THIS sub-account's real offers. */
+  /** Every shell choice, each rendered with THIS account's real offers. */
   options: OfferEmailOption[];
 }
 
@@ -75,7 +75,7 @@ function jsonArray(raw: string | null): string[] {
 }
 
 /**
- * Stand-ins used only when the sub-account has no generated ads yet.
+ * Stand-ins used only when the account has no generated ads yet.
  *
  * Deliberately obvious placeholders rather than plausible fake numbers —
  * "$XXX/mo" cannot be mistaken for a real programme if someone screenshots the

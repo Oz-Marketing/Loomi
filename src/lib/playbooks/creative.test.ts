@@ -64,7 +64,7 @@ describe('definitionHash', () => {
 });
 
 describe('detachedSteps', () => {
-  it('reports nothing when the sub-account matches', () => {
+  it('reports nothing when the account matches', () => {
     expect(detachedSteps(synced, DEF)).toEqual([]);
     expect(isFullySynced(synced, DEF)).toBe(true);
   });

@@ -9,13 +9,13 @@ import { buildAuditPayload } from '@/lib/playbooks/audit';
 /**
  * Playbook coverage audit — read-only (docs/playbooks.md §4).
  *
- * Returns the whole matrix in one payload: every sub-account the caller may
+ * Returns the whole matrix in one payload: every account the caller may
  * see, scored against every playbook that applies to it, plus the per-check
  * rollup. It's a handful of batched queries and a few hundred pure functions,
  * so there's no pagination to design around.
  */
 export async function GET() {
-  // The audit enumerates every sub-account's configuration, so it reads as a
+  // The audit enumerates every account's configuration, so it reads as a
   // cross-rooftop admin view. `agency.subaccounts.view` maps to the `management`
   // legacy bucket, so this is the same set of roles `requireRole` allowed.
   const { session, error } = await requirePermission('agency.subaccounts.view');

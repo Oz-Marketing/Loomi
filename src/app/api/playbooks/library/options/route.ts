@@ -8,10 +8,10 @@ import { templateHasOffersMarker } from '@/lib/ad-generator/automation/offer-ema
 /**
  * Template choices for authoring a playbook.
  *
- * Deliberately NOT scoped to one sub-account: a playbook is applied to many, so
+ * Deliberately NOT scoped to one account: a playbook is applied to many, so
  * it can only be built from designs every rooftop can reach — shared ad
  * templates and shared email templates. Offering a template owned by a single
- * sub-account would produce a playbook that silently renders nothing everywhere
+ * account would produce a playbook that silently renders nothing everywhere
  * else.
  */
 export async function GET() {

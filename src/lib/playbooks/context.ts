@@ -5,7 +5,7 @@
  * downstream (checks, definitions, audit) is pure, so the whole scoring model
  * is testable without one.
  *
- * It issues a FIXED number of queries regardless of how many sub-accounts are
+ * It issues a FIXED number of queries regardless of how many accounts are
  * being audited — nine reads, then in-memory indexing. The obvious shape (loop
  * the accounts, query per check) is 38 rooftops × 25 checks of round trips and
  * gets slower every time someone adds a store.
@@ -222,7 +222,7 @@ export async function loadAuditContexts(
         },
       }),
       // NO accountKey filter: a null accountKey is a GLOBAL SWEEP covering every
-      // enabled sub-account. Filtering it out reports each rooftop as stale while
+      // enabled account. Filtering it out reports each rooftop as stale while
       // the nightly job is running perfectly.
       prisma.adAutomationRun.groupBy({ by: ['accountKey'], _max: { startedAt: true } }),
       prisma.ingestRun.groupBy({
@@ -454,7 +454,7 @@ export async function loadAuditContexts(
         emailTemplateOk: shellState(config?.emailTemplateId ?? null).ok,
         emailTemplateProblem: shellState(config?.emailTemplateId ?? null).problem,
         emailAudienceId: config?.emailAudienceId ?? null,
-        // An audience belonging to another sub-account is worse than none: the
+        // An audience belonging to another account is worse than none: the
         // generator refuses it, so the draft silently lands untargeted.
         emailAudienceOk: config?.emailAudienceId
           ? audienceById.get(config.emailAudienceId)?.accountKey === key

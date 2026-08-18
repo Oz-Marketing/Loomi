@@ -1,10 +1,10 @@
 /**
  * Playbooks — shared types for the Phase 0 coverage audit.
  *
- * A playbook is the standard way a kind of sub-account is run (see
+ * A playbook is the standard way a kind of account is run (see
  * docs/playbooks.md). Phase 0 is the read-only half: a registry of checks, a
  * handful of playbooks that bundle them, and a coverage matrix across every
- * sub-account the viewer can see.
+ * account the viewer can see.
  *
  * Nothing here imports prisma or react. The audit context is built once per
  * account by `context.ts` (the only module that touches the database) and every
@@ -108,7 +108,7 @@ export interface AutomationFacts {
   emailTemplateSlug: string | null;
   emailTemplateOk: boolean;
   emailTemplateProblem: string | null;
-  /** Configured audience, and whether it still exists on THIS sub-account. */
+  /** Configured audience, and whether it still exists on THIS account. */
   emailAudienceId: string | null;
   emailAudienceOk: boolean;
   /** Most recent draft the automation produced, for a heartbeat check. */

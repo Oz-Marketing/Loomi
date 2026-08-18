@@ -23,7 +23,7 @@ export interface PlaybookSummary {
   definition: CreativeDefinition;
   definitionHash: string;
   published: boolean;
-  /** How many sub-accounts follow it — the "is this real" signal in the list. */
+  /** How many accounts follow it — the "is this real" signal in the list. */
   appliedCount: number;
   updatedAt: string;
 }
@@ -40,7 +40,7 @@ export function playbookKey(name: string): string {
 /**
  * Every playbook, newest first.
  *
- * `publishedOnly` is what the sub-account picker passes: a half-built playbook
+ * `publishedOnly` is what the account picker passes: a half-built playbook
  * must never be selectable, or a rooftop ends up pointed at a template that
  * isn't finished.
  */
@@ -158,7 +158,7 @@ export async function updatePlaybook(
 }
 
 /**
- * Delete a playbook. Sub-accounts following it keep their creative — the FK is
+ * Delete a playbook. Accounts following it keep their creative — the FK is
  * `onDelete: SetNull` and the config columns already hold the real values, so
  * deleting a playbook unlinks rooftops rather than blanking their setup.
  */

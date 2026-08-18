@@ -93,7 +93,7 @@ export function PlaybookAudit() {
         title="Playbooks"
         subtitle={
           data
-            ? `Coverage audit across ${data.accounts.length} sub-account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
+            ? `Coverage audit across ${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
             : 'Coverage audit'
         }
         actions={
@@ -110,7 +110,7 @@ export function PlaybookAudit() {
         tabs={
           <>
             <TabButton active={tab === 'accounts'} onClick={() => setTab('accounts')}>
-              By sub-account
+              By account
             </TabButton>
             <TabButton active={tab === 'checks'} onClick={() => setTab('checks')}>
               By check
@@ -151,7 +151,7 @@ export function PlaybookAudit() {
       {tab !== 'library' && data && summary && (
         <>
           <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Stat label="Sub-accounts" value={String(summary.accounts)} />
+            <Stat label="Accounts" value={String(summary.accounts)} />
             <Stat label="Average coverage" value={summary.avg == null ? '—' : `${summary.avg}%`} />
             <Stat
               label="Blocking failures"
@@ -163,7 +163,7 @@ export function PlaybookAudit() {
 
           {data.accounts.length === 0 ? (
             <div className="mt-6 rounded-2xl border border-dashed border-[var(--border)] py-16 text-center text-sm text-[var(--muted-foreground)]">
-              No sub-accounts in scope.
+              No accounts in scope.
             </div>
           ) : tab === 'accounts' ? (
             <div className="mt-4 space-y-2">
@@ -217,7 +217,7 @@ function PhaseNotice() {
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3 text-xs leading-relaxed text-[var(--muted-foreground)]">
       <span className="font-medium text-[var(--foreground)]">Read-only.</span> Nothing here changes a
-      sub-account. Which playbooks apply is <em>inferred</em> from what each account has configured —
+      account. Which playbooks apply is <em>inferred</em> from what each account has configured —
       a rooftop that deliberately doesn&apos;t run a channel can still show as missing it. Applying
       playbooks explicitly, so applicability is a recorded fact rather than a guess, is Phase 1.
     </div>
@@ -321,7 +321,7 @@ function AccountRow({ account }: { account: AccountCoverage }) {
         <div className="border-t border-[var(--border)] px-4 py-3">
           {applied.length === 0 ? (
             <p className="py-4 text-center text-sm text-[var(--muted-foreground)]">
-              No playbook applies to this sub-account.
+              No playbook applies to this account.
             </p>
           ) : (
             <div className="space-y-5">

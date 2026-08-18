@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * The automation panel — everything about one sub-account's autonomous ads.
+ * The automation panel — everything about one account's autonomous ads.
  *
  * Reads top to bottom as a single story: is it on and healthy → what it's set
  * to do → what it found → what it built. The three questions it exists to
@@ -429,7 +429,7 @@ function OfferEmailPicker({
                   </div>
                   <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
                     {opt.slug === '' ? (
-                      'Built from this sub-account’s branding'
+                      'Built from this account’s branding'
                     ) : opt.usable ? (
                       'Offers replace its {{offers}} block'
                     ) : (
@@ -588,7 +588,7 @@ export function ShadowPanel({
   automation: Automation;
 }) {
   const { report, loading, busy, form, dirty, set, reset, act, save } = automation;
-  // Previews render in the sub-account's own logo and colour, so what an admin
+  // Previews render in the account's own logo and colour, so what an admin
   // approves here is what that dealer's ads will actually look like.
   const { accountData } = useAccount();
   const branding = brandingFromAccount(accountData) as AdData;
@@ -859,7 +859,7 @@ export function ShadowPanel({
               </div>
 
               {/* ── which offer wins ──
-                  The priority order was always stored per sub-account and never
+                  The priority order was always stored per account and never
                   shown, so "why did it run the lease and not the APR" had no
                   answer on screen. It's the rule, so it belongs here. */}
               <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
@@ -949,7 +949,7 @@ export function ShadowPanel({
                     <HelpTip title="Playbook" iconClassName="h-3 w-3">
                       <p>
                         A named pairing of the ad design and the offer-email template, authored once
-                        for the agency and applied to many sub-accounts.
+                        for the agency and applied to many accounts.
                       </p>
                       <p className="mt-1.5">
                         Picking one fills in everything below. You can still change any of it —

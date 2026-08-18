@@ -2,7 +2,7 @@
 
 Plan for making "how we run a Chevrolet store" a **thing in the system** rather
 than a thing in someone's head: a named, versioned definition that can be
-applied to a sub-account, kept in sync with it, and audited against it.
+applied to an account, kept in sync with it, and audited against it.
 
 Status: **Phase 0 built** (read-only coverage audit, flag-gated). Phases 1–3
 specified, unbuilt. See §7.
@@ -21,8 +21,8 @@ the others.
 | Fragment | Where | Scope | Versioned? |
 |---|---|---|---|
 | Six lifecycle audiences, auto-seeded | `LIFECYCLE_PRESETS` (`src/lib/smart-list-presets.ts`) + `Account.lifecyclePresetsSeededAt` | hard-coded to automotive | no |
-| Offer watch scope, offer-type priority, template map | `AdAutomationConfig` | per sub-account | no |
-| Objective, budget, geo, UTM, destination | `AdLaunchPreset` | per sub-account + platform | no |
+| Offer watch scope, offer-type priority, template map | `AdAutomationConfig` | per account | no |
+| Objective, budget, geo, UTM, destination | `AdLaunchPreset` | per account + platform | no |
 | Co-op rules and template pre-approval | `AdCoopRulePack`, `AdTemplateCoopApproval` | per OEM | pack version + `docHash` |
 | Department fan-out for onboarding | `TEMPLATES` in `projects/new/_components/intake-form.tsx` | picks teams, seeds no tasks | no |
 | Pacing alert thresholds | `AlertRule` | global, not per-brand | no |
@@ -41,7 +41,7 @@ bundle is just what makes the answer actionable.
 ## 2. Definition
 
 A **playbook** is a named, versioned definition of the standard way a certain
-kind of sub-account is run, plus a per-sub-account link recording that this
+kind of account is run, plus a per-account link recording that this
 rooftop follows it.
 
 It is not a template (one artifact) and not a preset (one setting). It is the
@@ -202,7 +202,7 @@ un-switched-on it is* is the only honest picture of that migration.
 | `coop.template_approved` | blocking | every mapped template has a live `AdTemplateCoopApproval` for one of the account's makes whose `docHash` equals the template's current `designHash` — warns when an approval exists but the design has moved |
 | `adgen.email_enabled` | advisory | `emailEnabled` is true |
 | `adgen.email_template` | blocking | no shell configured (composed from the brand kit), or the configured `Template` exists, is v2, and carries an `{{offers}}` block |
-| `adgen.email_audience` | standard | `emailAudienceId` resolves to an `Audience` on THIS sub-account |
+| `adgen.email_audience` | standard | `emailAudienceId` resolves to an `Audience` on THIS account |
 | `adgen.email_recent` | standard | an offer email drafted within 35 days |
 
 The four email checks are `na` unless `emailEnabled` — the companion email is off
@@ -229,7 +229,7 @@ bounces client roles to Studio). Flag-gated behind
 
 Two views over one payload:
 
-- **By sub-account** — a row per rooftop, a coverage bar, and per-playbook
+- **By account** — a row per rooftop, a coverage bar, and per-playbook
   pass/warn/fail counts. Expand a row for the individual checks with their
   detail strings and a link to the screen that fixes each one.
 - **By check** — a row per check, showing how many rooftops fail it. This is
@@ -245,13 +245,13 @@ three rooftops audits three rooftops.
 
 The `Playbook` model below now exists, scoped to **`creative`** only: the ad
 template + sizes and the offer-email shell that go together, authored once for
-the agency and applied to many sub-accounts. `scope`/`scopeValue` are on the
+the agency and applied to many accounts. `scope`/`scopeValue` are on the
 model so the other flavours can arrive without a migration; nothing reads them
 yet.
 
 ### The one decision that shaped it
 
-A playbook **presets** a sub-account's creative rather than owning it.
+A playbook **presets** an account's creative rather than owning it.
 `AdAutomationConfig.templateMap` / `sizeIds` / `emailTemplateId` stay the single
 source of truth for what a run uses, and `playbookId` is only a link. So:
 
@@ -277,11 +277,11 @@ belong to a design and ids picked against another template render nothing.
 | Authoring UI (Playbooks → Library) | `src/app/app/playbooks/_components/playbook-library.tsx` |
 | Selection + override badges | the automation **Config** tab |
 
-Authoring is agency-wide and deliberately NOT in a sub-account's settings: a
+Authoring is agency-wide and deliberately NOT in an account's settings: a
 playbook exists to be applied to many rooftops, and building it from inside one
 of them is how it quietly becomes that rooftop's private setting. For the same
 reason the authoring dropdowns offer only shared templates — a design owned by
-one sub-account would render nothing everywhere else.
+one account would render nothing everywhere else.
 
 `definitionHash` normalizes key and size ORDER before hashing, and only a real
 content change bumps `version`. Renaming a playbook, or re-saving it untouched,
@@ -337,14 +337,14 @@ subset. It costs no extra MarketCheck calls — the offers are already on file.
 Generation now builds a work list of (vehicle × offer) up front, which also
 collapsed an N+1 stock query into one read.
 
-> **Trap found here.** `offerTypePriority` was stored per sub-account but never on
+> **Trap found here.** `offerTypePriority` was stored per account but never on
 > the form, so `save_config` — a full replace — reset a customised priority to
 > lease/apr/cash every time anyone pressed Save. It is now on `ScopeForm`, shown
 > as a reorderable chip row, and covered by the completeness test.
 
 ### Not built
 
-- Applying a playbook to many sub-accounts at once. Today it is picked per
+- Applying a playbook to many accounts at once. Today it is picked per
   rooftop; the model supports the sweep, the UI doesn't.
 - Version-behind prompting. `version` and `definitionHash` are recorded, but a
   rooftop on an older version isn't yet told so — that is §5 Phase 2.
@@ -537,7 +537,7 @@ already generated and recorded.
   draft. Same discipline as `AdCreative.offerFingerprint`. A draft that has left
   the `draft` state is never rewritten — a person has scheduled or sent it.
 - **Pre-targeted, or untargeted.** The draft is pointed at the configured
-  `Audience`. An audience belonging to another sub-account is *refused*, not
+  `Audience`. An audience belonging to another account is *refused*, not
   used, and the draft lands untargeted — which cannot send, and is the safe
   failure.
 
@@ -569,7 +569,7 @@ easy to switch on without noticing.
 The shell is chosen from **rendered cards, not a dropdown** — the same treatment
 the ad design gets, and for the same reason: the thing being chosen is a picture,
 and a list of names makes a wrong pick invisible until the send goes out. Every
-card is the real email HTML in a sandboxed iframe, built with this sub-account's
+card is the real email HTML in a sandboxed iframe, built with this account's
 own offers, branding and disclaimers.
 
 A shell with no `{{offers}}` block still renders — as ITSELF, with no offers in

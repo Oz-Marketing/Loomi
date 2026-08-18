@@ -48,7 +48,7 @@ const OFFER_EMAIL_STALE_DAYS = 35;
 const SUBACCOUNT_SETTINGS = {
   surface: 'app' as const,
   path: '/settings/subaccounts/{key}',
-  label: 'Sub-account settings',
+  label: 'Account settings',
 };
 
 export const CHECKS: PlaybookCheck[] = [
@@ -62,7 +62,7 @@ export const CHECKS: PlaybookCheck[] = [
     run: (c) =>
       c.makes.length > 0
         ? pass(c.makes.join(', '))
-        : fail('no make set on the sub-account'),
+        : fail('no make set on the account'),
   },
   {
     id: 'account.branding',
@@ -107,7 +107,7 @@ export const CHECKS: PlaybookCheck[] = [
   {
     id: 'meta.page_confirmed',
     label: 'Publishing Page confirmed',
-    why: 'A creative cannot be created without a Page id, and the WRONG Page publishes one store’s ad from another store’s brand. Confirmation is per sub-account, never bulk-matched.',
+    why: 'A creative cannot be created without a Page id, and the WRONG Page publishes one store’s ad from another store’s brand. Confirmation is per account, never bulk-matched.',
     severity: 'blocking',
     fix: SUBACCOUNT_SETTINGS,
     run: (c) => {
@@ -300,7 +300,7 @@ export const CHECKS: PlaybookCheck[] = [
   },
   // ── companion offer email ────────────────────────────────────────────────
   //
-  // These are `na` unless the sub-account has opted in. The email is off by
+  // These are `na` unless the account has opted in. The email is off by
   // default, and reporting every automated rooftop as failing a feature nobody
   // switched on is exactly the "red everywhere" noise that makes an audit
   // ignorable.
@@ -342,7 +342,7 @@ export const CHECKS: PlaybookCheck[] = [
       // so the draft goes out untargeted while the setting reads as configured.
       return c.automation.emailAudienceOk
         ? pass('audience set')
-        : fail('the audience is missing or belongs to another sub-account');
+        : fail('the audience is missing or belongs to another account');
     },
   },
   {

@@ -7,7 +7,7 @@ import { PlaybookAudit } from './_components/playbook-audit';
  *
  * Server gate only; the matrix itself is fetched client-side. The gate runs
  * server-side so a direct URL can't reach a screen that enumerates every
- * sub-account's configuration when the nav link is hidden.
+ * account's configuration when the nav link is hidden.
  */
 export default async function PlaybooksPage() {
   if (!(await playbooksAllowed())) notFound();

@@ -5,7 +5,7 @@ import { MANAGEMENT_ROLES } from '@/lib/roles';
 /**
  * Server-side gate for Playbooks (page route + API).
  *
- * Phase 0 is an internal operations view of every sub-account's configuration,
+ * Phase 0 is an internal operations view of every account's configuration,
  * so it's staff-only regardless of the flag — a client role must never reach a
  * screen that enumerates other rooftops. On top of that it stays hidden until
  * the env flag is on, with a developer bypass so it can be exercised in prod

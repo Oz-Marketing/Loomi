@@ -11,7 +11,7 @@ import type { CreativeDefinition } from '@/lib/playbooks/creative';
 /**
  * The agency-wide creative playbook library (docs/playbooks.md §5).
  *
- * Authoring lives here rather than in a sub-account's settings on purpose: a
+ * Authoring lives here rather than in an account's settings on purpose: a
  * playbook exists to be applied to MANY rooftops, and building it from inside
  * one of them is how it quietly becomes that rooftop's private setting.
  */
@@ -41,7 +41,7 @@ export function PlaybookLibrary() {
     fetcher,
     { revalidateOnFocus: false },
   );
-  // Template choices come from the agency-wide pool, not one sub-account's.
+  // Template choices come from the agency-wide pool, not one account's.
   const { data: opts } = useSWR<Options>('/api/playbooks/library/options', fetcher, {
     revalidateOnFocus: false,
   });
@@ -74,7 +74,7 @@ export function PlaybookLibrary() {
     <div className="mt-6">
       <div className="mb-4 flex items-center justify-between gap-3">
         <p className="text-xs text-[var(--muted-foreground)]">
-          A playbook pairs one ad design with one offer-email template, so a sub-account picks the
+          A playbook pairs one ad design with one offer-email template, so an account picks the
           bundle instead of each piece.
         </p>
         <button
@@ -97,7 +97,7 @@ export function PlaybookLibrary() {
         <div className="rounded-2xl border border-dashed border-[var(--border)] py-16 text-center">
           <p className="text-sm text-[var(--foreground)]">No playbooks yet.</p>
           <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-            Build one here, publish it, and it becomes selectable on every sub-account&apos;s ad
+            Build one here, publish it, and it becomes selectable on every account&apos;s ad
             automation Config tab.
           </p>
         </div>
@@ -169,7 +169,7 @@ function PlaybookCard({
           {playbook.published ? `Published · v${playbook.version}` : 'Draft'}
         </span>
         <span className="text-[10px] text-[var(--muted-foreground)]">
-          {playbook.appliedCount} sub-account{playbook.appliedCount === 1 ? '' : 's'}
+          {playbook.appliedCount} account{playbook.appliedCount === 1 ? '' : 's'}
         </span>
         <button
           onClick={onToggle}
@@ -206,7 +206,7 @@ function PlaybookCard({
                 <HelpTip title="Brand" iconClassName="h-3 w-3">
                   <p>
                     Optional label, e.g. <strong>Chevrolet</strong>. Records who the playbook is
-                    for; it does not restrict which sub-accounts can pick it.
+                    for; it does not restrict which accounts can pick it.
                   </p>
                 </HelpTip>
               </span>
@@ -335,7 +335,7 @@ function PlaybookCard({
             </div>
           </div>
           <p className="text-[10px] text-[var(--muted-foreground)]">
-            Publishing makes it selectable on sub-accounts. Sub-accounts already following it keep
+            Publishing makes it selectable on accounts. Accounts already following it keep
             their own overrides — they are shown the new version, never force-updated.
           </p>
         </div>

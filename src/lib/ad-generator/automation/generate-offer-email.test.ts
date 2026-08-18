@@ -76,7 +76,7 @@ describe('offerEmailKey', () => {
     expect(offerEmailKey('youngchev', ['a', 'b'])).not.toBe(offerEmailKey('youngchev', ['a', 'b', 'c']));
   });
 
-  it('is scoped per sub-account', () => {
+  it('is scoped per account', () => {
     expect(offerEmailKey('youngchev', ['a'])).not.toBe(offerEmailKey('youngford', ['a']));
   });
 

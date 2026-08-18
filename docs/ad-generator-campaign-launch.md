@@ -623,3 +623,21 @@ is a matter of pointing the existing campaign generators at the same offer data.
 Nothing in this proposal forecloses it, and the phasing deliberately builds toward
 it rather than around it. But it is still a separate piece of work — so:
 **direction, not next step.**
+
+### Update 2026-08-16 — the email half is built
+
+The last line of that end state now exists. `generateAllAccounts()` drafts ONE
+multi-offer `EmailBlast` per sub-account per run, from the same offers that
+produced the ads, and hangs both off one `Campaign` row via the previously
+reserved `AdCreative.campaignId`. It reuses the resolved disclaimer rather than
+re-deriving it, which is the "resolved once and used everywhere" the paragraph
+above asks for.
+
+It did NOT go through the campaign generators as predicted. Those write AI prose,
+and a model rewording an OEM's legal offer terms every month is a compliance
+liability — so the document is composed deterministically and the manufacturer's
+own verbiage passes through verbatim. See
+[playbooks.md §8](./playbooks.md#8-the-companion-offer-email-built-2026-08-16).
+
+Still open from that end state: SMS, and the landing page the email should point
+at (it currently uses `Account.website`) — which is Phase D.

@@ -17,6 +17,8 @@
 
 import { useState } from 'react';
 import { BanknotesIcon } from '@heroicons/react/24/outline';
+import { OrgReportRollup } from '../_components/org-report-rollup';
+import { BUDGET_ROLLUP } from '../_components/rollup-configs';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { PageHeader } from '@/components/page-header';
@@ -51,13 +53,18 @@ function YearPicker({ value, onChange }: { value: number; onChange: (y: number) 
 }
 
 export default function ReportingBudgetPage() {
-  const { accountKey, accountData, isRollup } = useAccount();
+  const { accountKey, accountData, isRollup, scopedAccountKeys, accounts } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
   const [year, setYear] = useState(() => new Date().getFullYear());
 
-  const scopeLabel = accountKey && !isRollup ? accountData?.dealer || accountKey : 'select an account';
+  const scopeLabel = isRollup
+    ? `${accountData?.dealer ?? 'All accounts'} — ${scopedAccountKeys.length} accounts`
+    : accountKey
+      ? accountData?.dealer || accountKey
+      : 'select an account';
+  const dealers = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k]));
 
   return (
     <>
@@ -71,11 +78,23 @@ export default function ReportingBudgetPage() {
         <YearPicker value={year} onChange={setYear} />
       </div>
 
-      {/* Deliberately NOT rolled up. `BUDGET_ROLLUP` is `supportsDates: false`,
-          so the roll-up would never receive the year this page's picker selects
-          — it would report some other year under the year you chose. Wiring it
-          means teaching the config to carry a year first. */}
-      {isRollup || !accountKey ? (
+      {/* The `year` is passed explicitly. This route takes a year, not a date
+          window (`supportsDates: false`), and its default is the CURRENT year —
+          so a roll-up that did not forward the picker's value would quietly
+          report this year underneath whatever year you had selected. */}
+      {isRollup ? (
+        <div className="mt-8">
+          <OrgReportRollup
+            config={BUDGET_ROLLUP}
+            accountKeys={scopedAccountKeys}
+            dealers={dealers}
+            from=""
+            to=""
+            compareTo="none"
+            params={{ year }}
+          />
+        </div>
+      ) : !accountKey ? (
         <EmptyState
           icon={BanknotesIcon}
           title="Pick an account"

@@ -13,7 +13,7 @@ import {
   Squares2X2Icon,
   UserGroupIcon,
   PhotoIcon,
-  ClipboardDocumentCheckIcon,
+  BookOpenIcon,
   MegaphoneIcon,
   SunIcon,
   MoonIcon,
@@ -102,14 +102,14 @@ const adGeneratorNav: NavItem = {
   absolute: true,
 };
 // Playbooks — the coverage audit and the agency-wide creative library
-// (docs/playbooks.md). Sits with Ad Generator because a playbook bundles the
-// ad design and the email template that live on THIS surface, and the Config
-// tab that selects one is in the Ad Generator. Global, like Ad Generator: it
-// spans every account rather than scoping to the active one.
+// (docs/playbooks.md). Sits under Templates: a playbook is a named bundle OF
+// templates (an ad design plus an email shell), so it reads as the next step
+// up from the library rather than a separate tool. Global, like Ad Generator —
+// it spans every account rather than scoping to the active one.
 const playbooksNav: NavItem = {
   href: '/playbooks',
   label: 'Playbooks',
-  icon: ClipboardDocumentCheckIcon,
+  icon: BookOpenIcon,
   absolute: true,
 };
 // Media library — re-added below Ad Generator.
@@ -158,15 +158,15 @@ const adminNavItems: NavEntry[] = [
   dashboardNav,
   campaignBuilderNav,
   templatesNav,
+  // Hidden until the env flag is on. A developer can still reach /playbooks
+  // directly; the server gate, not this list, is what grants access.
+  ...(PLAYBOOKS_ENABLED ? [playbooksNav] : []),
   { divider: true },
   contactsNav,
   emailSmsNav,
   websitesNav,
   flowsNavItem,
   adGeneratorNav,
-  // Hidden until the env flag is on. A developer can still reach /playbooks
-  // directly; the server gate, not this list, is what grants access.
-  ...(PLAYBOOKS_ENABLED ? [playbooksNav] : []),
   mediaNav,
 ];
 

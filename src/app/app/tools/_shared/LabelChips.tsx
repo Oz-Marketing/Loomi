@@ -330,7 +330,10 @@ export function LabelFilterBar({
 
       {open && (
         <div
-          className={`${POPOVER_CLASS} absolute left-10 top-full z-40 mt-1.5 w-56 p-2`}
+          // Right-aligned to the trigger. `left-10` was a fixed 40px inset that
+          // matched nothing: on a 10rem-wide field the panel started a third of
+          // the way across it and overhung the right edge.
+          className={`${POPOVER_CLASS} absolute right-0 top-full z-40 mt-1.5 w-56 p-2`}
           role="listbox"
         >
           <div className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">

@@ -33,6 +33,7 @@ import {
   GOOGLE_AT_CAP_RATIO,
   GOOGLE_RECENT_PACE_MIN_DAYS,
   GOOGLE_RECENT_PACE_WINDOW_DAYS,
+  MONTH_DAYS_MULTIPLIER,
   MOVE_DEST_JUMP_WARN_RATIO,
   MOVE_SOURCE_PACE_WARN_RATIO,
 } from './constants';
@@ -69,6 +70,11 @@ export const PUSH_DRIFT_MIN_DOLLARS = 1;
 export const MONEY_EPSILON = 0.005;
 export const moneyEq = (a: number, b: number): boolean => Math.abs(a - b) < MONEY_EPSILON;
 const round2 = (n: number): number => Math.round(n * 100) / 100;
+/** §6 — the precision a DERIVED percent is carried at. Not two decimals: the
+ *  dollar target is rebuilt from this number, and two decimals is exactly the
+ *  round trip that shaved cents off fixed allocations. Ten is far below any
+ *  cent's worth of payable and keeps the stored string free of float noise. */
+const round10 = (n: number): number => Math.round(n * 1e10) / 1e10;
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, n));
 
 export type AllocationMode = 'pct' | 'amt';
@@ -349,13 +355,23 @@ export function targetOf(input: number, mode: AllocationMode, payable: number): 
  *  `allocationPercent` (the stored percent) so the dollar target can be
  *  RE-DERIVED when the payable changes; a stored dollar alone can't do that.
  *  Falls back to inferring the percent from the dollars for rows that predate
- *  percent mode. */
+ *  percent mode.
+ *
+ *  THE INFERRED PERCENT IS NOT ROUNDED (§6). It used to come back at two
+ *  decimals, and the dollar target is then rebuilt FROM it — so a line stored at
+ *  $1,694.00 inferred 14.49%, and 14.49% of payable rebuilt a few cents off the
+ *  amount someone had typed. That round trip is the cent drift: the allocation
+ *  wandered on refresh, and a clean dollar amount written by the Planner (which
+ *  stores a null percent, so the Pacer always has to infer one) arrived here
+ *  light. Carrying full precision makes `percent / 100 × payable` land back on
+ *  the exact cents. The rounding belongs to the DISPLAY, not to the stored
+ *  value — see `formatInput` on the card. */
 export function inputOf(ad: PacerAd, mode: AllocationMode, payable: number): number {
   const dollars = num(ad.allocation) ?? 0;
   if (mode === 'amt') return dollars;
   const stored = num(ad.allocationPercent);
   if (stored != null) return stored;
-  return payable > 0 ? round2((dollars / payable) * 100) : 0;
+  return payable > 0 ? round10((dollars / payable) * 100) : 0;
 }
 
 export function buildAllocatorLine(
@@ -467,10 +483,25 @@ export interface AllocatorView {
   visible: AllocatorLine[];
   totals: AllocatorTotals;
   activeLabel: string | null;
-  /** The label's intended budget, when one is set and a filter is active. */
-  eventBudget: number | null;
+  /**
+   * The label's BUDGET TARGET, when one is set and a filter is active. Two
+   * numbers because the desk and the platform deal in different dollars:
+   *
+   *  - `gross` is what someone typed — the CLIENT budget for that push, the
+   *    figure the event was actually sold at.
+   *  - `spend` is that times the account's markup: the part of it that reaches
+   *    Google, and therefore the only figure the campaign allocations (which are
+   *    spend dollars) can honestly be measured against.
+   *
+   * It used to be one raw number used directly as the denominator, which forced
+   * whoever typed it to do the margin conversion in their head — and typing the
+   * gross figure, which is the natural thing to reach for, produced a shortfall
+   * exactly the size of the margin against money that was never going to reach
+   * Google in the first place.
+   */
+  budgetTarget: { gross: number; spend: number } | null;
   /** Denominator provenance, so the UI can name what it's checking against. */
-  denominatorKind: 'payable' | 'eventBudget' | 'subsetTotal';
+  denominatorKind: 'payable' | 'budgetTarget' | 'subsetTotal';
 }
 
 export interface BuildViewInput {
@@ -479,7 +510,12 @@ export interface BuildViewInput {
   payable: number;
   clock: AllocatorClock;
   activeLabel?: string | null;
+  /** Per-label budget targets in CLIENT-GROSS dollars, keyed by label. Persisted
+   *  as `googleEventBudgets` — the column predates the rename. */
   eventBudgets?: Record<string, number> | null;
+  /** The account's gross→spend factor, for converting a target to spend. Omit
+   *  and a target is taken at face value, which is the pre-conversion behavior. */
+  markup?: number | null;
 }
 
 /**
@@ -524,14 +560,21 @@ export function buildAllocatorView(input: BuildViewInput): AllocatorView {
     visible.filter((l) => l.reserved).reduce((s, l) => s + l.target, 0),
   );
 
-  const eventBudget = activeLabel ? eventBudgetFor(input.eventBudgets, activeLabel) : null;
+  // The stored figure is CLIENT-GROSS; the denominator has to be spend, because
+  // that is what every campaign target on the other side of the comparison is.
+  const targetGross = activeLabel ? eventBudgetFor(input.eventBudgets, activeLabel) : null;
+  const markup = input.markup != null && input.markup > 0 ? input.markup : 1;
+  const budgetTarget =
+    targetGross != null && targetGross > 0
+      ? { gross: round2(targetGross), spend: round2(targetGross * markup) }
+      : null;
   const denominatorKind: AllocatorView['denominatorKind'] =
-    activeLabel == null ? 'payable' : eventBudget != null && eventBudget > 0 ? 'eventBudget' : 'subsetTotal';
+    activeLabel == null ? 'payable' : budgetTarget != null ? 'budgetTarget' : 'subsetTotal';
   const denominator =
     denominatorKind === 'payable'
       ? input.payable
-      : denominatorKind === 'eventBudget'
-        ? (eventBudget as number)
+      : denominatorKind === 'budgetTarget'
+        ? (budgetTarget as { spend: number }).spend
         : allocated;
 
   const paceRatio = expected > 0 ? spent / expected : null;
@@ -560,7 +603,7 @@ export function buildAllocatorView(input: BuildViewInput): AllocatorView {
               : 'on',
     },
     activeLabel,
-    eventBudget,
+    budgetTarget,
     denominatorKind,
   };
 }
@@ -595,7 +638,12 @@ export function convertMode(
     if (to === 'amt') return { id: line.id, input: round2(target), target };
     // amt → pct. With no payable there is no percentage to express; hold at 0
     // rather than dividing by zero and writing Infinity into the plan.
-    const pct = payable > 0 ? round2((line.input / payable) * 100) : 0;
+    //
+    // Full precision, not two decimals (§6). The dollar target is rebuilt from
+    // this percent, so rounding it here is what made a switch to percent and
+    // back shave cents off a fixed allocation — the switch is a change of
+    // notation and must move no money at all.
+    const pct = payable > 0 ? round10((line.input / payable) * 100) : 0;
     return { id: line.id, input: pct, target: targetOf(pct, 'pct', payable) };
   });
 }
@@ -1039,6 +1087,155 @@ export function projectAtDaily(
 }
 
 // ── §7 delivery health verdict ──
+
+/**
+ * Where the month lands at a daily budget someone is TYPING (addendum §2.5), and
+ * the most Google could bill at it.
+ *
+ * Google is not Meta here. A straight daily × days-left projection is right on
+ * Meta, where the budget is what the campaign spends; on Google a campaign that
+ * is only filling half its daily will not suddenly fill a bigger one, so the
+ * straight line would climb with every keystroke and re-introduce exactly the
+ * overpacing fantasy this card removed. So the projection is held under what the
+ * campaign is actually delivering:
+ *
+ *     min( spent + recentAvgDaily × daysLeft , spent + typedDaily × daysLeft )
+ *
+ * Raising the daily past current delivery therefore holds the projection still
+ * (delivery is the binding constraint) while the billing ceiling above it rises
+ * to show the new headroom; lowering it below current delivery drops the
+ * projection, because the budget is now what caps it. `boundBy` says which of
+ * the two is binding, so the readout can name the reason rather than leaving a
+ * number that refuses to move looking broken.
+ *
+ * `recentAvgDaily` is the finalized delivery average the delivery verdict
+ * already computes from the synced series — no extra read, and the two surfaces
+ * cannot disagree.
+ */
+export interface TypedDailyProjection {
+  projected: number;
+  boundBy: 'delivery' | 'budget' | 'ceiling';
+  /** Google's monthly spending limit for the month if this rate is set now. */
+  billingCeiling: number;
+  /** The limit as things stand, so the readout can show what a push moves it
+   *  from and to. */
+  billingCeilingBefore: number;
+}
+
+/**
+ * Google's MONTHLY SPENDING LIMIT for a rate that has been in effect all month:
+ * the average daily budget × 30.4. This is the figure Google quotes when a
+ * budget is set and left alone, and it is only correct in that case — the moment
+ * the rate changes mid-month, use `monthlyLimitAfterChange`.
+ */
+export function monthlyLimitFlat(daily: number): number {
+  return round2(Math.max(0, daily) * MONTH_DAYS_MULTIPLIER);
+}
+
+/**
+ * Google's monthly spending limit AFTER a mid-month budget change, stated
+ * exactly as Google states it:
+ *
+ *     spend so far + (new average daily budget × remaining calendar days)
+ *
+ * Google's own worked example, which this function reproduces: November (30
+ * days), $5/day set on the 1st for a $152.00 limit ($5 × 30.4). On the 24th the
+ * campaign has spent $103 and the daily is raised to $10. Seven calendar days
+ * remain (the 24th through the 30th), so the most November can be charged is
+ * $103 + ($10 × 7) = $173.00 — NOT $10 × 30.4, and not a blend of the two rates
+ * across the month either. It applies to ad-schedule campaigns as well.
+ *
+ * Two earlier versions of this were wrong in ways worth naming, because both
+ * look plausible:
+ *
+ *  - `newDaily × 30.4` treats a rate set on the 24th as though it had bought
+ *    30.4 days of itself. On a CUT it under-states the limit badly (the money
+ *    already spent does not disappear), which is how the edit box came to print
+ *    a monthly projection ABOVE the ceiling printed directly beneath it.
+ *  - A calendar-day-weighted average of the old and new rates × 30.4 is closer
+ *    but still not Google's rule: it re-prices the days already gone at the old
+ *    rate rather than using what those days ACTUALLY cost. In Google's example
+ *    it yields $187.47 against the documented $173.00.
+ *
+ * `remainingCalendarDays` counts from the change forward INCLUSIVE of the day
+ * the change is made, matching the example's seven days for a change made on
+ * the 24th of a 30-day month; `spentToDate` is therefore spend through the day
+ * before it.
+ */
+export function monthlyLimitAfterChange(input: {
+  spentToDate: number;
+  newDaily: number;
+  remainingCalendarDays: number;
+}): number {
+  return round2(
+    Math.max(0, input.spentToDate) +
+      Math.max(0, input.newDaily) * Math.max(0, input.remainingCalendarDays),
+  );
+}
+
+export function projectAtTypedDaily(input: {
+  spentMTD: number;
+  recentAvgDaily: number | null;
+  typedDaily: number;
+  /** Flight days left — what the campaign can actually spend over. */
+  remainingDays: number;
+  /** The rate already set, for the "as it stands" limit. */
+  currentDaily?: number;
+  /**
+   * Calendar days left in the MONTH, which is what Google's limit counts.
+   * Never the flight: a campaign that ends on the 20th stops spending then, but
+   * Google's limit for the month is still computed over the whole month.
+   * Defaults to the flight's remaining days, which is the full-month case.
+   */
+  remainingCalendarDays?: number;
+}): TypedDailyProjection {
+  const days = Math.max(0, input.remainingDays);
+  const daily = Math.max(0, input.typedDaily);
+  const currentDaily = input.currentDaily ?? daily;
+  const calendarDays = Math.max(0, input.remainingCalendarDays ?? days);
+
+  // As it stands: the standing rate, untouched, limits the month to rate × 30.4
+  // — floored at what has already been charged, because a monthly limit cannot
+  // sit below the money the month has already billed. (When it would, our daily
+  // figure is stale, not Google's limit.)
+  const billingCeilingBefore = Math.max(
+    round2(input.spentMTD),
+    monthlyLimitFlat(currentDaily),
+  );
+  // Only an actual CHANGE re-bases the limit. Typing the rate that is already
+  // set is not a change, and must leave the month's limit exactly where it is.
+  const billingCeiling = moneyEq(daily, currentDaily)
+    ? billingCeilingBefore
+    : monthlyLimitAfterChange({
+        spentToDate: input.spentMTD,
+        newDaily: daily,
+        remainingCalendarDays: calendarDays,
+      });
+
+  const atBudget = input.spentMTD + daily * days;
+  // The limit is a real cap — Google will not bill past it whatever the
+  // campaign would otherwise spend. It only binds when the flight is shorter
+  // than the month, since over a full month it IS the budget line.
+  const candidates: [number, TypedDailyProjection['boundBy']][] = [
+    [atBudget, 'budget'],
+    [billingCeiling, 'ceiling'],
+  ];
+  // No usable run rate — a brand-new campaign, or one with a day or two of
+  // history. There is no delivery figure to hold the projection under, so only
+  // the budget and the limit bound it, and `boundBy` says which.
+  if (input.recentAvgDaily != null) {
+    candidates.push([input.spentMTD + input.recentAvgDaily * days, 'delivery']);
+  }
+  const [projected, boundBy] = candidates.reduce((lowest, c) =>
+    c[0] < lowest[0] ? c : lowest,
+  );
+  return {
+    projected: round2(Math.max(input.spentMTD, projected)),
+    boundBy,
+    billingCeiling,
+    billingCeilingBefore,
+  };
+}
 
 export type DeliveryVerdictKind = 'at_cap_ahead' | 'at_cap' | 'room' | 'underdelivering';
 

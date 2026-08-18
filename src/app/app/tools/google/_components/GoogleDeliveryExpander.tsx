@@ -2,13 +2,14 @@
 
 /**
  * Delivery detail for one Google campaign, as an inline row expander
- * (delivery/reallocation spec §1). Replaces the delivery-health modal.
+ * (delivery/reallocation spec §1), plus the Google-native budget report the
+ * budget-report addendum §4 adds to it.
  *
  * WHY THIS EXISTS: the pace badge cannot tell the two underspending cases apart.
- * "Behind but delivering its full daily" and "spending half its cap" look
- * identical there and need OPPOSITE actions — raise the cap on the first, move
- * the money away from the second. Distinguishing them is the entire value of
- * this panel, so the verdict is the loudest thing in it.
+ * "Behind but delivering its full daily budget" and "spending half of it" look
+ * identical there and need OPPOSITE actions — raise the budget on the first,
+ * move the money away from the second. Distinguishing them is the entire value
+ * of this panel, so the verdict is the loudest thing in it.
  *
  * WHY A PANEL AND NOT A MODAL: the decision this feeds is comparative — who
  * gives budget and who gets it — and a modal can only ever show one campaign
@@ -21,16 +22,30 @@
  * good/bad call on the card (invariant 9), so the metrics are labelled
  * reference and point back to the platform.
  *
- * COST: opening a row costs no Google request. The chart reads the already
+ * COST: opening a row costs no Google request. The charts read the already
  * synced daily-spend series, and the tiles read columns the account sync wrote
  * (§4) — which is what makes multi-open safe. Nothing here may reintroduce a
  * per-open live API read.
+ *
+ * NO "CAP" ANYWHERE (addendum §0). The line the bars are measured against is the
+ * DAILY BUDGET. "Cap" collided with the monthly spending limit, which is a
+ * genuine hard ceiling and a different number — that one keeps its own name, the
+ * billing ceiling (daily budget × 30.4).
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import useSWR from 'swr';
-import { ArrowPathIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
-import { COLORS, GOOGLE_CONVERSION_FLOOR } from '@/lib/ad-pacer/constants';
+import {
+  ArrowPathIcon,
+  ChevronDownIcon,
+  InformationCircleIcon,
+  PencilSquareIcon,
+} from '@heroicons/react/24/outline';
+import {
+  COLORS,
+  GOOGLE_CONVERSION_FLOOR,
+  MONTH_DAYS_MULTIPLIER,
+} from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate } from '@/lib/ad-pacer/helpers';
 import {
   deliveryVerdict,
@@ -38,23 +53,22 @@ import {
   recentPace,
   type AllocatorLine,
   type DeliveryVerdictKind,
+  type TypedDailyProjection,
 } from '@/lib/ad-pacer/google-allocator';
+import {
+  buildBudgetReport,
+  isoRange,
+  type BudgetReport,
+} from '@/lib/ad-pacer/google-budget-report';
 import {
   campaignMetrics,
   impressionShareText,
   type ImpressionShareState,
 } from '@/lib/ad-pacer/google-metrics';
-import {
-  normalizeAdStatus,
-  parseStatusReasons,
-  statusMismatch,
-  statusReasonText,
-} from '@/lib/ad-pacer/platform-status';
 import type { PacerAd } from '@/lib/ad-pacer/types';
-import { Tooltip } from '@/app/app/tools/_shared';
+import { MetricBox, Tooltip } from '@/app/app/tools/_shared';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { monthBoundsIso } from '@/lib/timezone';
-import { CAMPAIGN_COLORS } from './google-pacing-theme';
 
 interface HealthPayload {
   adId: string;
@@ -74,8 +88,9 @@ interface HealthPayload {
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 /**
- * The four verdicts (§7). Each one is an OBSERVATION about delivery — is this
- * campaign filling its cap — and nothing more.
+ * The four delivery reads (§7, reworded by addendum §4.4). Each one is an
+ * OBSERVATION about delivery — is this campaign spending its daily budget — and
+ * nothing more.
  *
  * They deliberately do not say "raise it" or "cut it". Delivery is one axis;
  * whether the campaign is ahead or behind on the month is a different one, and
@@ -84,33 +99,46 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
  * campaign ("room to spend, a modest increase should get absorbed") that the
  * target math was simultaneously, and correctly, trying to trim. Direction
  * belongs to the surfaces that can see both axes — the pace badge, the
- * recommended daily, and the capped/headroom tooltip.
+ * recommended daily, and the headroom tag.
  */
 const VERDICTS: Record<
   DeliveryVerdictKind,
   { title: string; body: string; tone: 'over' | 'under' | 'on' }
 > = {
   at_cap_ahead: {
-    title: 'Spending to cap',
-    body: 'It is using its full daily budget, and it is running ahead of target for the month.',
+    title: 'Spending its full daily budget',
+    body: 'It is using all of its daily budget, and it is running ahead of target for the month.',
     tone: 'over',
   },
   at_cap: {
-    title: 'Delivering to cap',
-    body: 'It is spending its full daily budget — the cap is what limits it, not demand.',
+    title: 'Spending its full daily budget',
+    body: 'It is using all of its daily budget — the budget is what limits it, not demand.',
     tone: 'on',
   },
   room: {
-    title: 'Room to spend',
+    title: 'Spending below its daily budget',
     body: 'It is delivering most of its daily budget, but not all of it.',
     tone: 'on',
   },
   underdelivering: {
-    title: 'Underdelivering',
-    body: 'It is spending well under its cap: it is not filling the budget it already has. Search volume, bids, ad rank and the schedule are the usual causes.',
+    title: 'Spending well below its daily budget',
+    body: 'It is not filling the daily budget it already has. Search volume, bids, ad rank and the schedule are the usual causes.',
     tone: 'under',
   },
 };
+
+/**
+ * The charts draw in the system accent, not in the campaign's identity color.
+ *
+ * The identity colors exist to tie a row to its slice of the allocation bar —
+ * they answer "which campaign is this". Inside a panel that is already about one
+ * campaign there is nothing to disambiguate, so the color stopped carrying
+ * meaning and started carrying only variance: the same chart rendered pink on
+ * one row and green on the next, and two panels open side by side looked like
+ * two different instruments. The swatch beside the panel title keeps the
+ * identity color; the data uses one color everywhere.
+ */
+const CHART_COLOR = 'var(--primary)';
 
 const toneColor = (tone: 'over' | 'under' | 'on') =>
   tone === 'over' ? COLORS.warn : tone === 'under' ? COLORS.lifetime : COLORS.success;
@@ -121,6 +149,8 @@ export function GoogleDeliveryExpander({
   line,
   ad,
   daysInMonth,
+  typedDaily = null,
+  typedProjection = null,
   onFlightChange,
   onSyncFromGoogle,
   syncing = false,
@@ -132,6 +162,21 @@ export function GoogleDeliveryExpander({
   /** The row behind the line — carries the sync's metric columns (§4). */
   ad: PacerAd | undefined;
   daysInMonth: number;
+  /**
+   * §2.5 — the daily budget being typed in the row's edit box, or null when
+   * nobody is typing. The money line mirrors the box's live projection so an
+   * open panel and the box above it never state two different landings for the
+   * same keystroke.
+   */
+  typedDaily?: number | null;
+  /**
+   * The projection the edit box computed for that typed daily. Handed down
+   * rather than recomputed here: the row and this panel have DIFFERENT views of
+   * how the campaign has been delivering — the row's series is a rolling
+   * eight-day slice, this panel's is the whole flight — so recomputing would put
+   * two different landings for one keystroke on screen at once.
+   */
+  typedProjection?: TypedDailyProjection | null;
   /** Manual flight override (§6) — day-of-month bounds within the month in view. */
   onFlightChange?: (startDay: number, endDay: number) => void;
   /** Re-run the account sync. Undefined when Google isn't connected. */
@@ -144,6 +189,10 @@ export function GoogleDeliveryExpander({
     fetcher,
     { revalidateOnFocus: false },
   );
+  /** §4.1 — the full two-chart view. Collapsed by default so the panel stays
+   *  scannable when several rows are open at once, which is the whole point of
+   *  it being a panel and not a modal. */
+  const [reportOpen, setReportOpen] = useState(false);
 
   // Every finalized day of the FLIGHT, not a rolling window (§2). The rolling
   // 7/14/30 view answered a different question every day you opened it, and on
@@ -159,15 +208,15 @@ export function GoogleDeliveryExpander({
       (data?.series ?? []).filter((p) => p.date >= flightStartIso && p.date <= flightEndIso),
     [data?.series, flightStartIso, flightEndIso],
   );
-  // The cap the campaign is measured against: its live daily budget. Falls back
-  // to the row's own figure so the dashed line still has a place to sit while
-  // the fetch is in flight.
-  const cap = data?.cap ?? line.currentDaily;
+  // The daily budget the campaign is measured against. Falls back to the row's
+  // own figure so the reference line still has a place to sit while the fetch is
+  // in flight.
+  const dailyBudget = data?.cap ?? line.currentDaily;
   const verdict = useMemo(
     // Every shown day counts toward the verdict — no trailing slice, because the
     // series IS the window now.
-    () => deliveryVerdict(series, cap, series.length || 1, line.paceStatus),
-    [series, cap, line.paceStatus],
+    () => deliveryVerdict(series, dailyBudget, series.length || 1, line.paceStatus),
+    [series, dailyBudget, line.paceStatus],
   );
   // Today's partial (§3). Present only when the sync has run today, which also
   // means the finalized series is complete through yesterday — so the live total
@@ -175,22 +224,71 @@ export function GoogleDeliveryExpander({
   const todaySpend = data?.todaySpend ?? null;
   const liveTotal = todaySpend != null ? line.spentMTD + todaySpend : null;
 
-  // The two projections (§5). They will often disagree, and the disagreement is
-  // the signal: recent-pace far below at-current-daily means the campaign has
-  // budget room it isn't using.
   const pace = useMemo(() => recentPace(series), [series]);
   const projectedRecent = projectAtDaily(line.spentMTD, pace.avgDaily, line.flight.remaining);
   // At-current-daily is already on the line, and is null when no daily has
   // synced — a projection off a zero rate would read as "will spend nothing"
   // when the truth is "we don't know the rate".
-  const projectedAtCap = line.projectedSpend;
+  const projectedAtDailyBudget = line.projectedSpend;
 
-  // §13 platform truth, for the reason panel above the chart.
-  const platformStatus = ad ? normalizeAdStatus(ad) : 'Unknown';
-  const statusReasons = parseStatusReasons(ad?.googlePrimaryStatusReasons);
-  const mismatch = ad ? statusMismatch(ad) : null;
+  // §2.5 mirrored: while a daily is being typed upstairs, both forward-looking
+  // figures follow the box exactly — the same object it rendered, never a second
+  // computation of the same thing. At rest the projection is the single
+  // recent-pace figure (§4.2) and the ceiling is the daily that is actually set.
+  const monthlyProjection = typedProjection ? typedProjection.projected : projectedRecent;
+
+  // §4.1 — the report's geometry. Built over the whole FLIGHT, not just the days
+  // with data: the cumulative chart's job is the gap between where the month is
+  // and where it is going, and a window that stops at the last synced day cannot
+  // draw the second half of that.
+  const report = useMemo<BudgetReport>(
+    () =>
+      buildBudgetReport({
+        series,
+        window: isoRange(flightStartIso, flightEndIso),
+        target: line.target,
+        currentDaily: dailyBudget,
+        recentAvgDaily: pace.avgDaily,
+        daysInMonth,
+      }),
+    [
+      series,
+      flightStartIso,
+      flightEndIso,
+      line.target,
+      dailyBudget,
+      pace.avgDaily,
+      daysInMonth,
+    ],
+  );
+  /**
+   * Google's monthly charging limit. At rest this is the last day of the
+   * report's own ceiling series, which is the calendar-day-weighted average of
+   * the rates ACTUALLY in effect × 30.4 — not the current daily × 30.4, which
+   * is only the same number in a month where nothing changed. While a daily is
+   * being typed it follows the box, so the two never state different limits.
+   */
+  const restingCeiling =
+    report.days.length > 0
+      ? report.days[report.days.length - 1].billingCeiling
+      : dailyBudget * MONTH_DAYS_MULTIPLIER;
+  const billingCeiling = typedProjection ? typedProjection.billingCeiling : restingCeiling;
+  // Has the limit been re-based by a mid-month change, or is it still the plain
+  // rate × 30.4? Decides which of two genuinely different sentences to print.
+  const ceilingIsFlat =
+    Math.abs(billingCeiling - dailyBudget * MONTH_DAYS_MULTIPLIER) < 0.5 && !typedProjection;
+
+  /** §4.5 — when the daily budget in effect was last changed, from the series'
+   *  own transitions. A permanent record: Google's change_event only retains 30
+   *  days, so it can back-fill edits made outside Loomi but can never be the
+   *  source of record. */
+  const lastChange = report.changes.length > 0 ? report.changes[report.changes.length - 1] : null;
+
+  // §13 platform truth lives entirely on the ROW now — the status word and its
+  // reason sit under the campaign name, and a contradiction is a badge there.
+  // The panel used to repeat all of it as a paragraph, which meant reading the
+  // same sentence twice on every open row.
   const v = VERDICTS[verdict.kind];
-  const color = CAMPAIGN_COLORS[line.colorIndex % CAMPAIGN_COLORS.length];
   // Month-to-date, from the sync's columns — NOT a live read. Scoped to the
   // month, unlike the chart window above it, so the tiles say so on the label.
   const metrics = useMemo(() => campaignMetrics(ad, line.spentMTD), [ad, line.spentMTD]);
@@ -201,8 +299,8 @@ export function GoogleDeliveryExpander({
   const shortfall = useMemo(() => {
     const remaining = Math.max(0, line.target - line.spentMTD);
     const daysLeft = line.flight.remaining;
-    if (cap <= 0 || daysLeft <= 0 || remaining <= 0) return null;
-    const maxBillable = cap * 2 * daysLeft;
+    if (dailyBudget <= 0 || daysLeft <= 0 || remaining <= 0) return null;
+    const maxBillable = dailyBudget * 2 * daysLeft;
     const gap = remaining - maxBillable;
     // A whisker over is rounding, not a shortfall — only flag a real gap.
     if (gap <= Math.max(1, remaining * 0.02)) return null;
@@ -213,196 +311,250 @@ export function GoogleDeliveryExpander({
       daysLeft,
       endIso: `${period}-${String(line.flight.endDay).padStart(2, '0')}`,
     };
-  }, [line.target, line.spentMTD, line.flight.remaining, line.flight.endDay, cap, period]);
+  }, [line.target, line.spentMTD, line.flight.remaining, line.flight.endDay, dailyBudget, period]);
 
-  // Chart scale: the taller of the cap and the biggest day, with headroom, so
-  // the dashed cap line is always on screen even when nothing came close to it.
-  const maxSpend = series.reduce((m, p) => Math.max(m, p.spend), 0);
-  const scale = Math.max(cap, maxSpend) * 1.12 || 1;
   const loadError = error || data?.error;
 
   return (
-    <div className="border-t border-[var(--border)] bg-[var(--muted)]/20 px-4 py-4 sm:px-5">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <span className="h-2.5 w-2.5 flex-shrink-0 rounded-sm" style={{ background: color }} />
-        <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--foreground)]">
-          Delivery
-        </span>
-        {data?.until && (
-          <span className="text-[11px] text-[var(--muted-foreground)]">
-            data through {fmtDate(data.until)}
+    // A RECESSED well, not a continuation of the row. At `bg-[var(--muted)]/20`
+    // the panel and the row above it were within a hair of each other, so an
+    // open row read as one very tall row and the eye had to hunt for where the
+    // campaign ended and its detail began. A deeper fill, a rule top and bottom,
+    // and a soft inner shadow under the top edge make it read as something that
+    // opened out of the row rather than more of it.
+    <div className="border-y border-[var(--border)] bg-[var(--muted)]/60 px-4 py-4 shadow-[inset_0_8px_12px_-10px_rgb(0_0_0_/_0.65)] sm:px-5">
+      {/* Panel head, in the Meta pacer card's shape: what this is on the left,
+          the flight window as a right-aligned label/value/sub block on the
+          right. The flight used to sit in a bordered bar of its own below the
+          head, which made the panel open with two stacked headers. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Title over its own timestamp, mirroring the FLIGHT block opposite.
+            The stamp used to run inline after the title, which made a
+            three-fragment sentence of "PACING SUMMARY data through Aug 16 · set
+            on Aug 11" and left the title no more weight than the caveats
+            trailing it.
+
+            No identity swatch, either: it repeated the one on the row directly
+            above, and now that the charts draw in the system accent it was the
+            only campaign color left in the panel — one stray dot with nothing to
+            distinguish it from. */}
+        <div>
+          <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
+            Pacing Summary
           </span>
-        )}
+          <div className="text-[11px] text-[var(--muted-foreground)]">
+            {data?.until ? `data through ${fmtDate(data.until)}` : 'no settled days yet'}
+            {/* §4.5 — the budget-change record, at its most useful size: when
+                the rate the bars are measured against last moved. The full
+                history is the markers on the chart below. */}
+            {lastChange && (
+              <Tooltip
+                label={`The daily budget changed from ${fmt(lastChange.from)} to ${fmt(lastChange.to)} on ${fmtDate(lastChange.date)}. Read off this campaign's own daily-budget history, so it records changes made in Google as well as pushes made here.`}
+              >
+                <span className="cursor-help"> · set on {fmtDate(lastChange.date)}</span>
+              </Tooltip>
+            )}
+          </div>
+        </div>
         {/* Everything in this panel is as fresh as the last sync, so the way to
             make it fresher lives next to the stamp that admits it. One shared
             account sync, not a per-campaign read: ten open panels must not fire
             ten requests, which is the whole reason the metrics moved onto the
             sync in the first place. */}
         {onSyncFromGoogle && (
-          <Tooltip label="Re-pull spend and metrics for every campaign on this account from Google.">
             <button
               type="button"
               onClick={onSyncFromGoogle}
               disabled={syncing}
-              className="ml-auto inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[10px] font-semibold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[10px] font-semibold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <ArrowPathIcon className={`h-3 w-3 ${syncing ? 'animate-spin' : ''}`} />
               {syncing ? 'Syncing…' : 'Refresh from Google'}
             </button>
-          </Tooltip>
         )}
       </div>
 
-      {/* §13 — the full "why it isn't serving" reason set. The row carries the
-          status dot and, on a contradiction, the warning; this is where the
-          detail behind it lives, because it is a paragraph and the row is not. */}
-      {ad && (statusReasons.length > 0 || mismatch) && (
-        <div
-          className="mb-3 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
-          style={{
-            background: mismatch ? `${COLORS.error}14` : 'var(--muted)',
-            color: 'var(--foreground)',
-          }}
-        >
-          {mismatch && (
-            <div className="mb-0.5 font-bold" style={{ color: COLORS.error }}>
-              {mismatch.kind === 'not_serving'
-                ? `Not serving — Loomi has this as “${ad.adStatus}”, Google reports it ${platformStatus.toLowerCase()}`
-                : `Running in Google — Loomi has this as “${ad.adStatus}”`}
-            </div>
-          )}
-          {statusReasons.length > 0 ? (
-            <>
-              Google status: <strong>{ad.googlePrimaryStatus ?? platformStatus}</strong> —{' '}
-              {statusReasons.map(statusReasonText).join('; ')}.
-            </>
-          ) : (
-            <>
-              Google reports this campaign <strong>{platformStatus.toLowerCase()}</strong>.
-            </>
-          )}
-          {mismatch?.kind === 'not_serving' && (
-            <>
-              {' '}
-              Until that is resolved, its recommended daily is a number for a campaign that is not
-              running.
-            </>
-          )}
-        </div>
-      )}
+        {/* §6 flight window — editable, because the funding window sometimes
+            differs from Google's literal campaign dates. */}
+        <FlightEditor
+          line={line}
+          period={period}
+          daysInMonth={daysInMonth}
+          readOnly={readOnly || !onFlightChange}
+          onChange={onFlightChange}
+        />
+      </div>
 
-      {/* §6 flight window — editable, because the funding window sometimes
-          differs from Google's literal campaign dates. */}
-      <FlightEditor
-        line={line}
-        period={period}
-        daysInMonth={daysInMonth}
-        readOnly={readOnly || !onFlightChange}
-        onChange={onFlightChange}
-      />
-
-      <div className="mt-4" />
+      {/* §4.2 — the money line, above the charts. The two "where it stands now"
+          figures sit together before the two forward-looking ones, so the line
+          reads left to right as the month does. It replaced a "Where the month
+          lands" block that printed the projection and the remaining budget a
+          second time; the projection appears once now. */}
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+        <MetricBox
+          label="Monthly target"
+          value={fmt(line.target)}
+          sub={`${line.flight.total}-day flight`}
+        />
+        <MetricBox
+          label="Spend to Date"
+          value={fmt(line.spentMTD)}
+          sub={data?.until ? `through ${fmtDate(data.until)}` : 'to the data edge'}
+          color={COLORS.daily}
+        />
+        <MetricBox
+          label="Remaining Spend"
+          value={fmt(line.remainingBudget)}
+          sub={`${line.flight.remaining} day${line.flight.remaining === 1 ? '' : 's'} left`}
+        />
+        <MetricBox
+          label="Monthly projection"
+          value={monthlyProjection != null ? fmt(monthlyProjection) : '—'}
+          sub={
+            typedProjection != null
+              ? `at the ${fmt(typedDaily ?? 0)}/day being typed`
+              : pace.avgDaily != null
+                ? `at ${fmt(pace.avgDaily)}/day recent pace`
+                : 'not enough delivery yet'
+          }
+          color={typedProjection != null ? 'var(--primary)' : undefined}
+          tooltip={
+            pace.avgDaily == null
+              ? 'Too few days with spend to state a run rate — one busy day would set the projection for the rest of the month. This is what a brand-new or not-yet-launched campaign shows.'
+              : `Where it lands if it keeps behaving as it has: ${fmt(pace.avgDaily)}/day across the last ${pace.days} finalized day${pace.days === 1 ? '' : 's'}${pace.rampDaysSkipped > 0 ? `, ignoring ${pace.rampDaysSkipped} day${pace.rampDaysSkipped === 1 ? '' : 's'} of launch ramp` : ''}. Its daily budget could deliver up to ${projectedAtDailyBudget != null ? fmt(projectedAtDailyBudget) : '—'} over the same days; the gap between the two is budget room this campaign is not using, which is a reallocation question rather than a daily-budget one.${
+                  typedDaily != null
+                    ? ` Following the ${fmt(typedDaily)}/day being typed above — ${typedProjection?.boundBy === 'delivery' ? 'held at recent delivery, so a bigger budget moves the ceiling and not this number' : 'the budget is the binding constraint at that rate'}.`
+                    : monthlyProjection != null && monthlyProjection > billingCeiling
+                      ? ` This sits ABOVE the ${fmt(billingCeiling)} billing ceiling, which means the campaign has lately been outrunning what its daily budget can bill for a full month — Google will settle it back to the ceiling, so the chart's projection is drawn held under that line while this figure is the raw run rate.`
+                      : ''
+                }`
+          }
+        />
+        <MetricBox
+          label="Billing ceiling"
+          value={fmt(billingCeiling)}
+          sub={
+            typedProjection &&
+            Math.abs(typedProjection.billingCeiling - typedProjection.billingCeilingBefore) >= 0.5
+              ? `was ${fmt(typedProjection.billingCeilingBefore)}`
+              : ceilingIsFlat
+                ? `${fmt(dailyBudget)}/day × 30.4`
+                : 're-based at the last budget change'
+          }
+          tooltip={`The most Google can bill this month — a LIMIT, and Google's, where the monthly target is ours.${
+            ceilingIsFlat
+              ? ` One rate all month, so it is the plain form: ${fmt(dailyBudget)}/day × 30.4.`
+              : " The budget changed mid-month, so this is NOT the current daily × 30.4. Google re-bases the limit at a change: what the month had already spent, plus the new daily × the calendar days left in the month."
+          }`}
+        />
+      </div>
 
       {isLoading ? (
-        <div className="flex h-32 items-center justify-center gap-2 text-xs text-[var(--muted-foreground)]">
+        <div className="mt-4 flex h-32 items-center justify-center gap-2 text-xs text-[var(--muted-foreground)]">
           <ArrowPathIcon className="h-4 w-4 animate-spin" />
           Loading delivery history…
         </div>
       ) : loadError ? (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
+        <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
           {typeof loadError === 'string' ? loadError : 'Could not load delivery history.'}
         </div>
       ) : series.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
+        <div className="mt-4 rounded-lg border border-dashed border-[var(--border)] px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
           No synced daily spend yet for this campaign. Sync from Google to build the delivery
           series.
         </div>
       ) : (
         <>
-          {/* Bars = actual daily spend; dashed line = the daily cap. A day over
-              the cap is normal on Google (up to 2×), so it is tinted rather
-              than flagged. */}
-          <div className="relative flex h-28 items-end gap-[3px]">
-            {series.map((p) => (
-              <Tooltip
-                key={p.date}
-                label={`${fmtDate(p.date)} · ${fmt(p.spend)}`}
-                // h-full matters: the bar's height is a PERCENTAGE, so the
-                // tooltip wrapper it sits in has to be a full-height box or the
-                // percentage resolves against auto and the bar vanishes.
-                className="h-full min-w-0 flex-1 items-end"
-              >
-                <span
-                  className="block w-full self-end rounded-t-sm"
-                  style={{
-                    height: `${Math.max(2, (p.spend / scale) * 100)}%`,
-                    background: p.spend > cap && cap > 0 ? COLORS.warn : color,
-                    opacity: 0.9,
-                  }}
-                />
-              </Tooltip>
-            ))}
-            {cap > 0 && (
-              <span
-                className="pointer-events-none absolute left-0 right-0 border-t border-dashed border-[var(--foreground)]/60"
-                style={{ bottom: `${Math.min(100, (cap / scale) * 100)}%` }}
-              >
-                <span className="absolute right-0 -translate-y-full bg-[var(--card)] px-1 text-[9px] font-medium tabular-nums text-[var(--muted-foreground)]">
-                  cap {fmt(cap)}/day
-                </span>
+          {/* §4.1 — the budget report. The daily bars are always on, because they
+              are what the delivery read below is computed from; the cumulative
+              chart is behind the disclosure, because it answers the slower
+              question ("where does the month land") and stacking two charts on
+              every open row makes the table unscannable. */}
+          <div className="mt-4 mb-1.5 flex flex-wrap items-center gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              Daily delivery
+            </span>
+            <Tooltip label="Blue is what the campaign spent that day. The gray behind it is Google's single-day spending limit — 2× that day's daily budget — so a day over the daily budget is normal, and a day at the gray is the most it could possibly have spent.">
+              <span className="cursor-help text-[10px] text-[var(--muted-foreground)]">
+                vs the 2× single-day limit
               </span>
-            )}
+            </Tooltip>
+            <button
+              type="button"
+              onClick={() => setReportOpen((o) => !o)}
+              aria-expanded={reportOpen}
+              className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+            >
+              {reportOpen ? 'Hide budget report' : 'Budget report'}
+              <ChevronDownIcon
+                className={`h-3 w-3 transition-transform ${reportOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
           </div>
+
+          {reportOpen && (
+            <CumulativeChart
+              report={report}
+              color={CHART_COLOR}
+              target={line.target}
+              todayIso={data?.todayIso ?? null}
+            />
+          )}
+
+          <DailyBars
+            report={report}
+            color={CHART_COLOR}
+            compact={!reportOpen}
+            todayIso={data?.todayIso ?? null}
+            todaySpend={todaySpend}
+            hasAdSchedule={line.hasAdSchedule}
+          />
+
+          {/* The axis spans the charted WINDOW — the whole flight — not the days
+              with data in it. It used to end at the data edge, which was right
+              when the chart stopped there; now that the bars run to the end of
+              the flight, an axis ending on the last synced day would label the
+              wrong bar. How current the data is is the "data through" stamp at
+              the top of the panel and the finalized-day count in the middle
+              here, both of which say it in words. */}
           <div className="mt-1.5 flex justify-between text-[10px] text-[var(--muted-foreground)]">
-            <span>{fmtDate(series[0]?.date ?? flightStartIso)}</span>
+            <span>{fmtDate(flightStartIso)}</span>
             <span className="tabular-nums">
               avg {fmt(verdict.avgDaily)}/day across {series.length} finalized day
               {series.length === 1 ? '' : 's'}
             </span>
-            <span>{data?.until ? fmtDate(data.until) : ''}</span>
+            <span>{fmtDate(flightEndIso)}</span>
           </div>
-
-          {/* Today so far (§3). Hatched and set apart from the bars on purpose:
-              it is a PARTIAL day, it is not compared to the cap, and it feeds no
-              average, verdict, projection or total above. Absent in a closed
-              month and before the day's first sync — a zero here would read as
-              "spent nothing today". */}
-          {todaySpend != null && data && (
-            <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-dashed border-[var(--border)] px-3 py-2">
-              <span
-                className="h-3 w-6 flex-shrink-0 rounded-sm opacity-60"
-                style={{
-                  backgroundImage: `repeating-linear-gradient(45deg, ${color} 0 3px, transparent 3px 6px)`,
-                }}
-              />
-              <span className="text-[11px] text-[var(--muted-foreground)]">
-                {fmtDate(data.todayIso)} so far
-              </span>
-              <span className="text-[11px] font-bold tabular-nums text-[var(--foreground)]">
-                {fmt(todaySpend)}
-              </span>
-              <span className="text-[10px] text-[var(--muted-foreground)]">
-                partial day — not in the average, the verdict, or any figure above
-              </span>
-            </div>
-          )}
 
           {/* Live-total cross-check (§3). "~", never "=": today keeps accruing
               after the sync that produced it. This is the number someone sees in
               the Google Ads account, so it exists to make the finalized figures
               above trustworthy rather than look stale. */}
           {liveTotal != null && (
-            <div className="mt-1.5 mb-4 text-[10px] text-[var(--muted-foreground)]">
-              live total ~
-              <span className="font-semibold tabular-nums text-[var(--foreground)]">
-                {fmt(liveTotal)}
-              </span>{' '}
-              ({fmt(line.spentMTD)} through {data?.until ? fmtDate(data.until) : 'the data edge'} +{' '}
-              {fmt(todaySpend ?? 0)} today) — approximate, for cross-checking against Google Ads
-            </div>
+            <Tooltip
+              className="mt-1.5 mb-4 block"
+              label={`Approximate, and for cross-checking against the Google Ads account: ${fmt(line.spentMTD)} finalized through ${data?.until ? fmtDate(data.until) : 'the data edge'} plus ${fmt(todaySpend ?? 0)} so far today. "~" because today keeps accruing after the sync that produced it.`}
+            >
+              <div className="cursor-help">
+                <span className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  live total ~
+                </span>{' '}
+                <span className="text-base font-bold tabular-nums text-[var(--foreground)]">
+                  {fmt(liveTotal)}
+                </span>{' '}
+                <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                  ({fmt(line.spentMTD)} through{' '}
+                  {data?.until ? fmtDate(data.until) : 'the data edge'} + {fmt(todaySpend ?? 0)}{' '}
+                  today)
+                </span>
+              </div>
+            </Tooltip>
           )}
           {liveTotal == null && <div className="mb-4" />}
 
+          {/* §4.4 — the plain delivery read. Neutral and descriptive: whether to
+              spend more is carried by the recommended daily, not by this. */}
           <div
             className="mb-4 rounded-lg px-3.5 py-3 text-[11px] leading-relaxed"
             style={{ background: `${toneColor(v.tone)}14`, color: 'var(--foreground)' }}
@@ -411,7 +563,7 @@ export function GoogleDeliveryExpander({
               {v.title}
               {verdict.ratio != null && (
                 <span className="ml-1.5 font-medium tabular-nums opacity-80">
-                  {Math.round(verdict.ratio * 100)}% of cap
+                  {Math.round(verdict.ratio * 100)}% of daily budget
                 </span>
               )}
             </div>
@@ -434,60 +586,22 @@ export function GoogleDeliveryExpander({
               </div>
               {fmt(shortfall.remaining)} remains but at most ~{fmt(shortfall.maxBillable)} can still
               bill over {shortfall.daysLeft} day{shortfall.daysLeft === 1 ? '' : 's'} at 2× the{' '}
-              {fmt(cap)} daily — short about {fmt(shortfall.gap)}. Move it to a campaign that can
-              absorb it, or accept the miss.
+              {fmt(dailyBudget)} daily budget — short about {fmt(shortfall.gap)}. Move it to a
+              campaign that can absorb it, or accept the miss.
             </div>
           )}
 
-          {/* Where the month lands, two ways (§5). Both are straight-line
-              what-ifs and are labelled as such: Google treats the daily as an
-              average it paces to its own monthly limit and will spend up to 2× of
-              it on a strong day, so neither predicts its actual behaviour. */}
-          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Where the month lands
-          </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <Metric
-              label="At recent pace"
-              value={projectedRecent != null ? fmt(projectedRecent) : '—'}
-              sub={
-                pace.avgDaily != null
-                  ? `${fmt(pace.avgDaily)}/day × ${line.flight.remaining}d left`
-                  : 'not enough delivery yet'
-              }
-              hint={
-                pace.avgDaily == null
-                  ? 'Too few days with spend to state a run rate — one busy day would set the projection for the rest of the month. This is what a brand-new or not-yet-launched campaign shows.'
-                  : `Where it lands if it keeps behaving as it has: the last ${pace.days} finalized day${pace.days === 1 ? '' : 's'}${pace.rampDaysSkipped > 0 ? `, ignoring ${pace.rampDaysSkipped} day${pace.rampDaysSkipped === 1 ? '' : 's'} of launch ramp` : ''}. A straight line, not a forecast of Google's day-to-day behaviour.`
-              }
-            />
-            <Metric
-              label="At current daily"
-              value={projectedAtCap != null ? fmt(projectedAtCap) : '—'}
-              sub={
-                projectedAtCap != null
-                  ? `ceiling · ${fmt(line.currentDaily)}/day × ${line.flight.remaining}d`
-                  : 'no daily synced'
-              }
-              hint="A CEILING, not a prediction: what the daily you have set could deliver if the campaign filled it every day. When this sits well above the recent-pace figure, the campaign has budget room it is not using — that is a reallocation question, not a daily-budget one."
-            />
-            <Metric
-              label="Remaining budget"
-              value={fmt(line.remainingBudget)}
-              sub={`of ${fmt(line.target)} target`}
-              hint="Target minus spent. This is also exactly what Move can take out of this campaign — money already spent cannot be given away."
-            />
-          </div>
-
-          {/* Month-to-date, not the chart window above — the two answer
-              different questions and the labels have to say which is which. */}
-          <div className="mt-4 mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          {/* §4.3 — one reference line, one neutral weight. These are soft
+              figures whose quality varies by account, so they deliberately do
+              NOT sit at equal weight with the firm dollars above the chart, and
+              nothing here is colored as a verdict. */}
+          <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t border-[var(--border)] pt-3">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              Month to date
+              Quick campaign insights
             </span>
             {metrics.asOf && (
               <span className="text-[10px] text-[var(--muted-foreground)]">
-                through {fmtDate(metrics.asOf)}
+                reference · through {fmtDate(metrics.asOf)}
               </span>
             )}
           </div>
@@ -496,57 +610,56 @@ export function GoogleDeliveryExpander({
               No metrics synced for this campaign yet. Sync from Google to fill these in.
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              <Metric
+            <div className="flex flex-wrap items-end">
+              <InsightStat
                 label="Conv rate"
-                value={metrics.convRate != null ? `${(metrics.convRate * 100).toFixed(2)}%` : '—'}
-                sub={
-                  metrics.conversions != null
-                    ? `${Math.round(metrics.conversions)} conv`
-                    : undefined
-                }
+                value={metrics.convRate != null ? `${(metrics.convRate * 100).toFixed(1)}%` : '—'}
                 hint={
                   metrics.convRate == null
                     ? `Too few conversions this month to state a rate — below ${GOOGLE_CONVERSION_FLOOR}, one more lead swings it wildly. Read it in Google Ads.`
-                    : undefined
+                    : `${Math.round(metrics.conversions ?? 0)} conversions this month, month to date.`
                 }
               />
-              <Metric
+              <InsightStat
                 label="Cost / conv"
-                value={metrics.costPerConversion != null ? fmt(metrics.costPerConversion) : '—'}
+                value={metrics.costPerConversion != null ? whole(metrics.costPerConversion) : '—'}
                 hint={
                   metrics.costPerConversion == null
                     ? `Too few conversions this month to state a cost per conversion — below ${GOOGLE_CONVERSION_FLOOR}, one more lead would move it by hundreds of dollars. Read it in Google Ads.`
-                    : undefined
+                    : `${fmt(line.spentMTD)} spent ÷ ${Math.round(metrics.conversions ?? 0)} conversions.`
                 }
               />
-              <Metric
+              <InsightStat
                 label="Avg CPC"
                 value={metrics.avgCpc != null ? fmt(metrics.avgCpc) : '—'}
-                sub={metrics.clicks != null ? `${metrics.clicks} clicks` : undefined}
-              />
-              <Metric
-                label="CTR"
-                value={metrics.ctr != null ? `${(metrics.ctr * 100).toFixed(2)}%` : '—'}
-                sub={
-                  metrics.impressions != null
-                    ? `${metrics.impressions.toLocaleString()} impr`
+                hint={
+                  metrics.clicks != null
+                    ? `${fmt(line.spentMTD)} spent ÷ ${metrics.clicks.toLocaleString()} clicks.`
                     : undefined
                 }
               />
-              <ImpressionShareMetric
-                label="Lost IS (budget)"
+              <InsightStat
+                label="CTR"
+                value={metrics.ctr != null ? `${(metrics.ctr * 100).toFixed(1)}%` : '—'}
+                hint={
+                  metrics.impressions != null && metrics.clicks != null
+                    ? `${metrics.clicks.toLocaleString()} clicks ÷ ${metrics.impressions.toLocaleString()} impressions.`
+                    : undefined
+                }
+              />
+              <ImpressionShareInsight
+                label="Lost IS budget"
                 state={metrics.budgetLostIs}
                 hint="Share of impressions lost because the budget ran out. HIGH means real demand is going unserved — this campaign will absorb more money. Near zero means it is not budget-limited, so raising its daily will not increase spend."
               />
-              <ImpressionShareMetric
-                label="Lost IS (rank)"
+              <ImpressionShareInsight
+                label="Lost IS rank"
                 state={metrics.rankLostIs}
                 hint="Share of impressions lost to ad rank. HIGH means bid or Quality Score is the constraint, not budget — more money will just sit unspent. It answers whether budget will help, yes or no; it does NOT tell you whether to fix the bid or the Quality Score."
               />
             </div>
           )}
-          <p className="mt-2.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
+          <p className="mt-2 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
             Reference only. Conversion figures depend on this account’s tracking setup — verify in
             Google Ads before acting on efficiency.
           </p>
@@ -556,56 +669,393 @@ export function GoogleDeliveryExpander({
   );
 }
 
-function Metric({
+/**
+ * §4.1 — the cumulative chart, modeled on Google's own budget report.
+ *
+ * Four series, and the two reference lines are the ones that get confused, so
+ * both carry a hover tooltip saying whose number they are:
+ *
+ *  - **Target pace** (primary) is OURS. The even-spend line to the monthly
+ *    target — what the pace badge grades against.
+ *  - **Billing ceiling** (secondary) is GOOGLE'S, and it is a limit rather than a
+ *    plan. It steps wherever the daily budget changed.
+ *  - **Cost to date** is what actually happened, and it stops at the data edge.
+ *    Today is never folded into it: it is a partial day, and a half-day of spend
+ *    at the end of a solid line reads as a collapse.
+ *  - **Loomi projection** is the only line that can be wrong, so it is dotted and
+ *    carries a band — the room between recent delivery and what the current
+ *    daily could deliver.
+ *
+ * Hand-rolled SVG rather than the unused Google Charts wrapper: four series with
+ * one step function and one band is less code than the adapter would be, and it
+ * inherits the theme's colors for free.
+ */
+function CumulativeChart({
+  report,
+  color,
+  target,
+  todayIso,
+}: {
+  report: BudgetReport;
+  color: string;
+  target: number;
+  todayIso: string | null;
+}) {
+  const { days, cumulativeScale, projection, edgeIndex } = report;
+  if (days.length === 0) return null;
+  const n = days.length;
+  // A viewBox in DAY units, so every x is just an index. Strokes are pinned with
+  // vector-effect so the non-uniform scale can't render a 1px line as a wedge.
+  const x = (i: number) => i + 0.5;
+  const y = (value: number) => 100 - (value / cumulativeScale) * 100;
+
+  // Both cumulative lines start at ZERO on the left edge. They used to begin at
+  // day one's value, which floats the whole chart off its own baseline and makes
+  // a campaign that spent $30 on the 1st look like it started the month $30 in
+  // the air with no origin to read it against.
+  const origin = `0,${y(0)}`;
+  const targetLine = [origin, ...days.map((d) => `${x(d.index)},${y(d.targetPace)}`)].join(' ');
+  // Stepped: the ceiling holds its value until the day it changes.
+  const ceilingLine = days
+    .flatMap((d, i) =>
+      i === 0
+        ? [`${x(0)},${y(d.billingCeiling)}`]
+        : [`${x(i)},${y(days[i - 1].billingCeiling)}`, `${x(i)},${y(d.billingCeiling)}`],
+    )
+    .join(' ');
+  const costPoints = days.filter((d) => d.cumulative != null);
+  const costLine =
+    costPoints.length > 0
+      ? [origin, ...costPoints.map((d) => `${x(d.index)},${y(d.cumulative as number)}`)].join(' ')
+      : '';
+  const paceLine = projection.map((p) => `${x(p.index)},${y(p.pace)}`).join(' ');
+  const band =
+    projection.length > 1
+      ? [
+          ...projection.map((p) => `${x(p.index)},${y(p.high)}`),
+          ...[...projection].reverse().map((p) => `${x(p.index)},${y(p.low)}`),
+        ].join(' ')
+      : '';
+
+  const todayIndex = todayIso ? days.findIndex((d) => d.date === todayIso) : -1;
+
+  return (
+    <div className="mb-3">
+      <svg
+        viewBox={`0 0 ${n} 100`}
+        preserveAspectRatio="none"
+        className="h-36 w-full"
+        role="img"
+        aria-label="Cumulative spend against target pace and the billing ceiling"
+      >
+        {/* A baseline, so the lines have a floor to be read against. */}
+        <line
+          x1={0}
+          x2={n}
+          y1={100}
+          y2={100}
+          stroke="var(--border)"
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+        />
+        {/* The projection band, first so every line draws over it. It fans out
+            from the data edge: closed where the last real day is, widening with
+            every day of forecast, and flattened wherever the billing ceiling
+            caps it. */}
+        {band && <polygon points={band} fill={color} opacity={0.18} />}
+        {/* §4.5 — a divider wherever the daily budget changed. The steps in the
+            ceiling line are the same event; the divider is what makes them
+            legible as a deliberate change rather than a kink in the data. */}
+        {days
+          .filter((d) => d.budgetChange)
+          .map((d) => (
+            <line
+              key={d.date}
+              x1={x(d.index)}
+              x2={x(d.index)}
+              y1={0}
+              y2={100}
+              stroke="var(--muted-foreground)"
+              strokeWidth={1}
+              strokeDasharray="2 3"
+              opacity={0.4}
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        <polyline
+          points={ceilingLine}
+          fill="none"
+          stroke="var(--muted-foreground)"
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          opacity={0.7}
+          vectorEffect="non-scaling-stroke"
+        />
+        <polyline
+          points={targetLine}
+          fill="none"
+          stroke="var(--foreground)"
+          strokeWidth={1.5}
+          opacity={0.55}
+          vectorEffect="non-scaling-stroke"
+        />
+        {paceLine && (
+          <polyline
+            points={paceLine}
+            fill="none"
+            stroke={color}
+            strokeWidth={1.5}
+            strokeDasharray="2 3"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {costLine && (
+          <polyline
+            points={costLine}
+            fill="none"
+            stroke={color}
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {/* Today, at the edge — a marker, never part of the solid line. */}
+        {todayIndex >= 0 && (
+          <line
+            x1={x(todayIndex)}
+            x2={x(todayIndex)}
+            y1={0}
+            y2={100}
+            stroke={color}
+            strokeWidth={1}
+            strokeDasharray="1 2"
+            opacity={0.8}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {/* Where the real data stops. A TICK, not a dot: this viewBox is one
+            unit per day stretched across the panel's full width, so x is scaled
+            roughly thirty times more than y and any circle drawn in it comes out
+            as a wide lens lying across the chart — which is exactly what it did.
+            Anything marking a point in here has to be a stroked line with a
+            non-scaling stroke, which is measured in screen pixels and cannot be
+            distorted by the viewBox at all. */}
+        {edgeIndex != null && (
+          <line
+            x1={x(edgeIndex)}
+            x2={x(edgeIndex)}
+            y1={y(report.costToDate) - 4}
+            y2={y(report.costToDate) + 4}
+            stroke={color}
+            strokeWidth={3}
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+      </svg>
+      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[var(--muted-foreground)]">
+        <Tooltip label="What this campaign is graded against: its monthly target spread evenly across its flight days. Ours, not Google's — Google has never heard of it.">
+          <span className="flex cursor-help items-center gap-1.5">
+            <span className="h-0 w-4 border-t-2 border-[var(--foreground)] opacity-55" />
+            Target pace · {fmt(target)}
+          </span>
+        </Tooltip>
+        <Tooltip label="The most Google can bill this month at the daily budgets actually in effect: their calendar-day-weighted average × 30.4. A hard limit set by Google, and a different number from the target — it steps wherever the budget changed.">
+          <span className="flex cursor-help items-center gap-1.5">
+            <span className="h-0 w-4 border-t border-dashed border-[var(--muted-foreground)]" />
+            Billing ceiling
+          </span>
+        </Tooltip>
+        {/* No dollar figure here on purpose. The authoritative cost to date is
+            the account sync's month-to-date spend, printed on the money line a
+            few inches above; this line is drawn from the daily series, which can
+            legitimately sit lower when the sync is behind on a day or the flight
+            window clips one. Two figures under one name would read as a bug
+            whichever way they disagreed. */}
+        <span className="flex items-center gap-1.5">
+          <span className="h-0 w-4 border-t-2" style={{ borderColor: color }} />
+          Cost to date
+        </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-0 w-4 border-t border-dashed" style={{ borderColor: color }} />
+            Projection
+          </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * §4.1 — the daily bars: what the campaign spent each day against what Google
+ * would have let it spend.
+ *
+ * The gray bar behind each blue one is that day's SINGLE-DAY spending limit —
+ * 2× that day's daily budget — not the daily budget itself. Google will spend up
+ * to double on a strong day and settle the average over the month, so a bar over
+ * the daily budget is ordinary and a bar at the gray is genuinely everything
+ * that day could hold. Because `dailyBudget` is frozen per day by the sync, the
+ * gray steps at each budget change on its own.
+ */
+function DailyBars({
+  report,
+  color,
+  compact,
+  todayIso,
+  todaySpend,
+  hasAdSchedule,
+}: {
+  report: BudgetReport;
+  color: string;
+  compact: boolean;
+  todayIso: string | null;
+  todaySpend: number | null;
+  hasAdSchedule: boolean;
+}) {
+  const scale = report.dailyScale;
+  return (
+    <>
+      <div className={`relative flex ${compact ? 'h-20' : 'h-32'} items-end gap-[3px]`}>
+        {report.days.map((d) => {
+          const isToday = todayIso != null && d.date === todayIso;
+          const spend = isToday ? (todaySpend ?? 0) : (d.spend ?? 0);
+          const limitPct = Math.min(100, (d.dailyLimit / scale) * 100);
+          const budgetPct = Math.min(100, (d.dailyBudget / scale) * 100);
+          const spendPct = Math.max(spend > 0 ? 2 : 0, (spend / scale) * 100);
+          return (
+            <Tooltip
+              key={d.date}
+              label={
+                isToday
+                  ? `${fmtDate(d.date)} · ${fmt(spend)} so far — a partial day. It is in no average, verdict or total on this panel.`
+                  : d.future
+                    ? `${fmtDate(d.date)} · not yet — at ${fmt(d.dailyBudget)}/day Google could bill up to ${fmt(d.dailyLimit)} that day.`
+                    : `${fmtDate(d.date)} · ${fmt(spend)} of a ${fmt(d.dailyLimit)} single-day limit (${fmt(d.dailyBudget)}/day budget)${d.budgetChange ? ' · budget changed this day' : ''}`
+              }
+              // h-full matters: the bar's height is a PERCENTAGE, so the tooltip
+              // wrapper it sits in has to be a full-height box or the percentage
+              // resolves against auto and the bar vanishes.
+              className="h-full min-w-0 flex-1 items-end"
+            >
+              <span className="relative block h-full w-full">
+                {/* Google's single-day limit — a BACKDROP, not a bar. It is 2×
+                    the daily budget, so at any healthy delivery it is twice the
+                    height of the blue beside it: drawn at full strength it made
+                    the chart a wall of gray blocks with the actual data buried at
+                    half height inside them. It is a reference, so it is drawn
+                    like one. */}
+                <span
+                  className="absolute bottom-0 left-0 w-full rounded-t-sm bg-[var(--muted)]"
+                  style={{ height: `${limitPct}%`, opacity: d.future && !isToday ? 0.25 : 0.5 }}
+                />
+                {/* The daily budget itself (1×) — the line the delivery read
+                    below is measured against, and the one number this chart is
+                    really about. Without it "spending its full daily budget"
+                    has nothing on the chart to point at. */}
+                <span
+                  className="absolute left-0 w-full border-t border-dashed border-[var(--muted-foreground)]"
+                  style={{ bottom: `${budgetPct}%`, opacity: d.future && !isToday ? 0.3 : 0.6 }}
+                />
+                <span
+                  className="absolute bottom-0 left-0 w-full rounded-t-sm"
+                  style={{
+                    height: `${spendPct}%`,
+                    // Today is hatched, never solid (§3): it is a partial day and
+                    // a short solid bar beside full ones reads as a collapse.
+                    background: isToday ? 'transparent' : color,
+                    backgroundImage: isToday
+                      ? `repeating-linear-gradient(45deg, ${color} 0 3px, transparent 3px 6px)`
+                      : undefined,
+                    opacity: 0.9,
+                  }}
+                />
+                {/* §4.5 — the budget-change divider. */}
+                {d.budgetChange && (
+                  <span className="absolute bottom-0 left-0 h-full w-px bg-[var(--muted-foreground)] opacity-50" />
+                )}
+              </span>
+            </Tooltip>
+          );
+        })}
+      </div>
+      {hasAdSchedule && (
+        <Tooltip label="This campaign runs on an ad schedule, so Google concentrates its monthly budget into the days it is actually on. The gray limits above assume every day — on a scheduled campaign they read low on active days and high on inactive ones. Badged, not modeled.">
+          <div
+            className="mt-1.5 cursor-help text-[10px]"
+            style={{ color: COLORS.warn }}
+          >
+            Ad schedule — the single-day limits above assume every day is active.
+          </div>
+        </Tooltip>
+      )}
+    </>
+  );
+}
+
+/** Whole dollars. A cost-per-conversion is never accurate to the cent — it moves
+ *  by dollars every time one more lead lands — so printing two decimals claims a
+ *  precision the figure does not have. */
+function whole(n: number): string {
+  return `$${Math.round(n).toLocaleString('en-US')}`;
+}
+
+/**
+ * §4.3 — one figure on the reference line: an evenly-spaced column with a thin
+ * left rule, label above value.
+ *
+ * Deliberately lighter than the money cards above the chart. These are soft
+ * figures whose quality varies by account — conversion tracking especially —
+ * and giving them equal weight with the firm dollars is how an account with a
+ * broken conversion tag ends up driving a budget decision. The supporting counts
+ * (clicks, impressions, conversions) moved into the hover: they are the working,
+ * not the reading.
+ */
+function InsightStat({
   label,
   value,
-  sub,
   hint,
   muted = false,
 }: {
   label: string;
   value: string;
-  sub?: string;
   hint?: string;
-  /** Render the value quietly — for "not available", which is a state, not a
-   *  figure, and must not sit at the same weight as a real number. */
   muted?: boolean;
 }) {
+  const outer =
+    'min-w-0 flex-1 border-l border-[var(--border)] pl-4 first:border-l-0 first:pl-0';
   const body = (
-    <div className="h-full rounded-lg bg-[var(--muted)]/40 px-3 py-2">
-      <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+    <>
+      <div className="inline-flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
         {label}
+        {hint && <InformationCircleIcon className="h-3 w-3 flex-shrink-0 opacity-60" />}
       </div>
       <div
         className={
           muted
-            ? 'mt-0.5 text-[11px] font-medium leading-tight text-[var(--muted-foreground)]'
-            : 'mt-0.5 text-sm font-bold tabular-nums'
+            ? 'text-[11px] font-medium leading-tight text-[var(--muted-foreground)]'
+            : 'text-base font-semibold tabular-nums leading-tight text-[var(--foreground)]'
         }
       >
         {value}
       </div>
-      {sub && <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{sub}</div>}
-    </div>
+    </>
   );
   // A dash with no explanation reads as a bug. When we are deliberately
   // withholding a figure, say why on hover rather than leaving it blank.
   return hint ? (
-    <Tooltip label={hint} className="w-full">
-      <div className="w-full cursor-help">{body}</div>
+    <Tooltip label={hint} className={`${outer} cursor-help`}>
+      <div className="w-full">{body}</div>
     </Tooltip>
   ) : (
-    body
+    <div className={outer}>{body}</div>
   );
 }
 
 /**
- * An impression-share tile (§4). Three outcomes, three different sentences —
+ * An impression-share figure (§4). Three outcomes, three different sentences —
  * collapsing any of them into "0%" inverts the move decision, because 0% lost to
  * budget means "this campaign cannot absorb more money" while no reading at all
  * means "look at the bars instead".
  */
-function ImpressionShareMetric({
+function ImpressionShareInsight({
   label,
   state,
   hint,
@@ -616,27 +1066,25 @@ function ImpressionShareMetric({
 }) {
   if (state.kind === 'unsupported') {
     return (
-      <Metric
+      <InsightStat
         label={label}
         value="Not available"
-        sub="Search & Shopping only"
         muted
-        hint={`${hint}\n\nGoogle does not report search impression share for this campaign type. For Performance Max and Demand Gen, read delivery off the daily bars above instead.`}
+        hint={`${hint}\n\nSearch and Shopping only — Google does not report search impression share for this campaign type. For Performance Max and Demand Gen, read delivery off the daily bars above instead.`}
       />
     );
   }
   if (state.kind === 'no_data') {
     return (
-      <Metric
+      <InsightStat
         label={label}
         value="No data"
-        sub="below Google's reporting threshold"
         muted
-        hint={`${hint}\n\nGoogle returned no figure this month — usually too little volume to report on yet. This is not the same as zero.`}
+        hint={`${hint}\n\nBelow Google's reporting threshold: it returned no figure this month, usually too little volume to report on yet. This is not the same as zero.`}
       />
     );
   }
-  return <Metric label={label} value={impressionShareText(state).text} hint={hint} />;
+  return <InsightStat label={label} value={impressionShareText(state).text} hint={hint} />;
 }
 
 /**
@@ -676,15 +1124,23 @@ function FlightEditor({
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--card)]/60 px-3 py-2.5">
-      <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs (e.g. the campaign existed on the 1st but wasn't funded until mid-month).">
-        <span className="cursor-help text-[11px] font-semibold text-[var(--foreground)]">
-          Flight this month
-        </span>
-      </Tooltip>
-      <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-        {fmtDate(range.start ?? '')} – {fmtDate(range.end ?? '')}
-      </span>
+    // Meta's card-head shape: tiny uppercase label, the value at size, the
+    // supporting count underneath, right-aligned. It reads as part of the panel
+    // head rather than as a control panel of its own.
+    <div className="flex flex-shrink-0 items-start gap-1.5 text-right">
+      <div>
+        <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs (e.g. the campaign existed on the 1st but wasn't funded until mid-month).">
+          <span className="cursor-help text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Flight
+          </span>
+        </Tooltip>
+        <div className="whitespace-nowrap text-base font-bold tabular-nums text-[var(--foreground)]">
+          {fmtDate(range.start ?? '')} – {fmtDate(range.end ?? '')}
+        </div>
+        <div className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
+          {line.flight.elapsed} of {line.flight.total} days in · {line.flight.remaining} left
+        </div>
+      </div>
       {!readOnly && onChange && (
         <DatePicker
           mode="range"
@@ -693,7 +1149,7 @@ function FlightEditor({
           // The trigger's default styling is a full bordered input. Our
           // triggerContent is already a bordered icon button, so leaving it on
           // draws a box around a box — pass a bare class to strip it.
-          className="inline-flex rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
+          className="mt-3 inline-flex rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]"
           triggerContent={
             <Tooltip label="Adjust flight">
               <span
@@ -706,9 +1162,6 @@ function FlightEditor({
           }
         />
       )}
-      <span className="ml-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
-        {line.flight.elapsed} of {line.flight.total} flight days in · {line.flight.remaining} left
-      </span>
     </div>
   );
 }

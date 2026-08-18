@@ -46,8 +46,27 @@ export const PACE_COLORS: Record<PaceStatus, string> = {
   none: 'var(--muted-foreground)',
 };
 
+/**
+ * The CAMPAIGN pace badge (addendum §2.2). Read on a row, beside a dozen other
+ * rows, so it names the campaign's relationship to its own target rather than
+ * describing the money: "Over Pacing" is a rate, "Overspending" sounds like an
+ * overspend has already happened.
+ */
 export const PACE_LABELS: Record<PaceStatus, string> = {
-  on: 'On track',
+  on: 'On Track',
+  over: 'Over Pacing',
+  under: 'Under Pacing',
+  none: 'No data',
+};
+
+/**
+ * The ACCOUNT verdict (addendum §1.1). Deliberately different words from the
+ * row badge: this one is a statement about the month's money as a whole, which
+ * is the sentence a rep repeats to a client, and it sits alone at the top of the
+ * card where there is nothing to confuse it with.
+ */
+export const ACCOUNT_PACE_LABELS: Record<PaceStatus, string> = {
+  on: 'On pace',
   over: 'Overspending',
   under: 'Underspending',
   none: 'No data',

@@ -239,7 +239,7 @@ async function buildServerView(
 ) {
   const payload = await fetchPeriodPlan(planId, period, 'google');
   const ads = payload.ads as unknown as PacerAd[];
-  const { payable } = resolvePayable({
+  const { payable, markup } = resolvePayable({
     baseBudgetGoal: payload.baseBudgetGoal,
     addedBudgetGoal: payload.addedBudgetGoal,
     markup: payload.markup,
@@ -256,6 +256,9 @@ async function buildServerView(
     clock,
     activeLabel: label,
     eventBudgets: payload.eventBudgets,
+    // A budget target is stored client-gross; without the factor the server's
+    // filtered denominator would be a different number from the card's.
+    markup,
   });
   const budgetResourceByLine = new Map<string, string | null>(
     ads.map((ad) => [ad.id, ad.googleBudgetResourceName ?? null]),

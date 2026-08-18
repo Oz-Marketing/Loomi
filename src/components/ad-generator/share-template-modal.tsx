@@ -85,9 +85,9 @@ export function ShareTemplateModal({
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
       toast.success(
         keys.length
-          ? `Shared with ${keys.length} sub-account${keys.length === 1 ? '' : 's'}`
+          ? `Shared with ${keys.length} account${keys.length === 1 ? '' : 's'}`
           : ownerKey
-            ? 'Sharing removed — only its own sub-account can use it'
+            ? 'Sharing removed — only its own account can use it'
             : 'Sharing removed — back in the shared library for everyone',
       );
       onSaved?.(keys);
@@ -109,7 +109,7 @@ export function ShareTemplateModal({
           <div className="min-w-0">
             <h2 className="text-sm font-bold text-[var(--foreground)]">Share template</h2>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-              Pick which sub-accounts can use &ldquo;{name}&rdquo;. They all use this one template, so
+              Pick which accounts can use &ldquo;{name}&rdquo;. They all use this one template, so
               your edits reach every one of them.
             </p>
           </div>
@@ -119,17 +119,17 @@ export function ShareTemplateModal({
         </div>
 
         {/* What "nothing selected" means depends on whether the template is owned
-            by a sub-account, so say it rather than leaving it to be inferred. */}
+            by an account, so say it rather than leaving it to be inferred. */}
         {!ownerKey && selected.size > 0 && (
           <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-500">
-            This is a shared-library template. Sharing it with specific sub-accounts also limits it
+            This is a shared-library template. Sharing it with specific accounts also limits it
             to them — clear the list to offer it to everyone again.
           </p>
         )}
 
         {list.length === 0 ? (
           <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
-            No other sub-accounts to share with.
+            No other accounts to share with.
           </p>
         ) : (
           <>
@@ -139,7 +139,7 @@ export function ShareTemplateModal({
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search sub-accounts…"
+                placeholder="Search accounts…"
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-2 pl-8 pr-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
               />
             </div>

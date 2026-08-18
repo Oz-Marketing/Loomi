@@ -225,7 +225,7 @@ export function AccountAssignmentManager({
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-[var(--foreground)]">
-              {selectedKeys.length} assigned sub-account{selectedKeys.length === 1 ? '' : 's'}
+              {selectedKeys.length} assigned account{selectedKeys.length === 1 ? '' : 's'}
             </p>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">{description}</p>
           </div>
@@ -240,9 +240,9 @@ export function AccountAssignmentManager({
         </div>
 
         {!accountsLoaded ? (
-          <p className="text-xs text-[var(--muted-foreground)]">Loading sub-accounts...</p>
+          <p className="text-xs text-[var(--muted-foreground)]">Loading accounts...</p>
         ) : selectedKeys.length === 0 ? (
-          <p className="text-xs text-[var(--muted-foreground)]">No sub-accounts selected</p>
+          <p className="text-xs text-[var(--muted-foreground)]">No accounts selected</p>
         ) : (
           <div className="flex flex-wrap items-center gap-1.5">
             {previewRows.map((row) => (
@@ -282,7 +282,7 @@ export function AccountAssignmentManager({
           >
             <div className="flex items-start justify-between gap-3 p-5 border-b border-[var(--border)]">
               <div>
-                <h3 className="text-lg font-semibold text-[var(--foreground)]">Manage Assigned Sub-Accounts</h3>
+                <h3 className="text-lg font-semibold text-[var(--foreground)]">Manage Assigned Accounts</h3>
                 <p className="text-xs text-[var(--muted-foreground)] mt-1">{description}</p>
               </div>
               <button
@@ -301,7 +301,7 @@ export function AccountAssignmentManager({
                   type="text"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search sub-accounts..."
+                  placeholder="Search accounts..."
                   className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
                 />
               </div>
@@ -337,12 +337,12 @@ export function AccountAssignmentManager({
 
             <div className="p-4 overflow-y-auto flex-1 min-h-0">
               {!accountsLoaded ? (
-                <p className="text-sm text-[var(--muted-foreground)] text-center py-8">Loading sub-accounts...</p>
+                <p className="text-sm text-[var(--muted-foreground)] text-center py-8">Loading accounts...</p>
               ) : allRows.length === 0 ? (
-                <p className="text-sm text-[var(--muted-foreground)] text-center py-8">No sub-accounts available</p>
+                <p className="text-sm text-[var(--muted-foreground)] text-center py-8">No accounts available</p>
               ) : filteredRows.length === 0 ? (
                 <p className="text-sm text-[var(--muted-foreground)] text-center py-8">
-                  {search ? 'No sub-accounts match your search' : 'No assigned sub-accounts in this view'}
+                  {search ? 'No accounts match your search' : 'No assigned accounts in this view'}
                 </p>
               ) : (
                 <>
@@ -356,7 +356,7 @@ export function AccountAssignmentManager({
                               onClick={() => toggleSort('dealer')}
                               className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors"
                             >
-                              Sub-Account
+                              Account
                               <span className="text-[10px]">{sortIndicator('dealer')}</span>
                             </button>
                           </th>

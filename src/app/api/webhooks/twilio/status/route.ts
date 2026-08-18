@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     const authToken = await loadAuthToken(accountKey);
     if (!authToken) {
       return NextResponse.json(
-        { error: 'No Twilio credentials configured for this sub-account' },
+        { error: 'No Twilio credentials configured for this account' },
         { status: 400 },
       );
     }

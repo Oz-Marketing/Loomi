@@ -265,7 +265,7 @@ describe('guard migration', () => {
   // `agency.admin` must not carry the elevated sub-account actions. This is the
   // same shape as the users.manage mistake — the delta test would catch it too,
   // but naming it here says why the omission is deliberate.
-  it('keeps sub-account create/delete out of agency.admin', () => {
+  it('keeps account create/delete out of agency.admin', () => {
     expect(ROLE_PERMISSIONS['agency.admin']).not.toContain('agency.subaccounts.create');
     expect(ROLE_PERMISSIONS['agency.admin']).not.toContain('agency.subaccounts.archive');
     expect(ROLE_PERMISSIONS['agency.owner']).toContain('agency.subaccounts.create');

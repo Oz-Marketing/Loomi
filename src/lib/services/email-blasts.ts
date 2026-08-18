@@ -1113,7 +1113,7 @@ export async function processEmailBlast(
         data: {
           status: 'failed',
           error:
-            'No sending transport configured for this sub-account. Add a SendGrid API key in Sending settings, or set SMTP_* env vars for a fallback.',
+            'No sending transport configured for this account. Add a SendGrid API key in Sending settings, or set SMTP_* env vars for a fallback.',
         },
       });
       return;

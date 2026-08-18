@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useDockedScroll } from '@/hooks/use-docked-scroll';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { AccountsList } from '@/components/accounts-list';
 import { SubAccountDetailPage } from '@/components/subaccount-detail';
@@ -55,6 +56,9 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
   const firstKey = groups[0]?.items[0]?.key;
   const [active, setActive] = useState<SettingsTabKey | undefined>(firstKey);
   const [drill, setDrill] = useState<Drill | null>(null);
+  // Paints a pinned header's backdrop once this panel scrolls.
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDockedScroll(panelRef);
 
   /** Switching tabs always lands on the list, never a stale drill-in. */
   const selectTab = (key: SettingsTabKey) => {
@@ -143,7 +147,7 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
                 {activeTab?.titleLabel ?? 'Agency Settings'}
               </h2>
               <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-                Platform configuration, shared by every sub-account.
+                Platform configuration, shared by every account.
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -181,7 +185,23 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
             ))}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          {/* `data-scrolled` + the dock-lead spacer are what make a pinned
+              `.page-sticky-header` inside this panel paint its backdrop. Without
+              them the flag never flips, the ::after never paints, and a drill-in
+              header sits transparent while content scrolls THROUGH it. Same
+              mechanism SurfaceShell uses for the main content card. */}
+          <div
+            ref={panelRef}
+            data-scrolled="false"
+            /* Padding MATCHES `.page-sticky-header`'s negative margins, which are
+               -1.5rem and -2rem from md up. At a flat `p-6` the header's -2rem
+               overhung this box by 8px a side from md up and the panel scrolled
+               sideways. No TOP padding for the same reason SurfaceShell has
+               none: the sticky header carries its own, and doubling it left a
+               dead band above the title. */
+            className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 md:px-8 md:pb-8"
+          >
+            <div aria-hidden className="content-dock-lead" />
             {/* Drill-ins render over the tab they came from, so the tier keeps
                 its rail and its close button and the app shell behind is never
                 navigated. */}

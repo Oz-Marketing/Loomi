@@ -18,7 +18,7 @@ import { FlowsAnalyticsBody } from '@/components/flows/flows-analytics-body';
 
 function AccountAnalyticsPage() {
   const { accountKey, accountData } = useAccount();
-  const dealerName = accountData?.dealer || 'Your Sub-Account';
+  const dealerName = accountData?.dealer || 'Your Account';
 
   return (
     <FlowsAnalyticsBody

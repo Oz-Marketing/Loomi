@@ -403,7 +403,7 @@ export default function SegmentsPage() {
                       className="text-[11px] text-[var(--muted-foreground)] tabular-nums"
                       title={
                         !isAccount || !accountKey
-                          ? 'Member counts are per sub-account — switch scope to see this segment’s size'
+                          ? 'Member counts are per account — switch scope to see this segment’s size'
                           : undefined
                       }
                     >

@@ -145,7 +145,7 @@ describe('offerScopeKey', () => {
     expect(a).toBe(b);
   });
 
-  it('separates models, years, ZIPs and sub-accounts', () => {
+  it('separates models, years, ZIPs and accounts', () => {
     const base = { accountKey: 'a', make: 'Mazda', model: 'CX-5', year: 2026, zip: '84405' };
     expect(offerScopeKey(base)).not.toBe(offerScopeKey({ ...base, model: 'CX-50' }));
     expect(offerScopeKey(base)).not.toBe(offerScopeKey({ ...base, year: 2027 }));

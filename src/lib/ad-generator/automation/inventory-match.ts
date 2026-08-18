@@ -51,7 +51,7 @@ export interface StockGateResult {
  */
 export function stockGate(count: number, minStock: number): StockGateResult {
   if (minStock <= 0) {
-    return { verdict: 'not_enforced', count, minStock, reason: 'Stock gating is off for this sub-account.' };
+    return { verdict: 'not_enforced', count, minStock, reason: 'Stock gating is off for this account.' };
   }
   if (count <= 0) {
     return { verdict: 'no_stock', count, minStock, reason: 'No units of this vehicle are on the lot.' };

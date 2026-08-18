@@ -576,9 +576,9 @@ body {
   pointer-events: none;
   background: linear-gradient(
     to bottom,
-    var(--content-fade) 0,
-    var(--content-fade) calc(100% - 2rem),
-    var(--content-fade-clear) 100%
+    var(--dock-fade, var(--content-fade)) 0,
+    var(--dock-fade, var(--content-fade)) calc(100% - 2rem),
+    var(--dock-fade-clear, var(--content-fade-clear)) 100%
   );
 }
 
@@ -1473,6 +1473,32 @@ button.glass-card:hover,
 .glass-modal-solid {
   background: rgba(20, 20, 26, 0.97);
   backdrop-filter: blur(24px) saturate(140%);
+}
+
+/* A pinned header inside a modal docks over the MODAL's body, not the content
+   card's. Without these the backdrop painted `--content-fade` (#120f18, a
+   violet-tinted near-black tuned to the card) over the modal's neutral
+   rgba(20,20,26,.97), and the band read plainly purple against everything
+   around it. The blur behind the modal is already resolved by the time the
+   header paints, so an opaque colour is right here. */
+.glass-modal {
+  --dock-fade: rgb(20, 20, 26);
+  --dock-fade-clear: rgba(20, 20, 26, 0);
+  /* Cards inside the modal, for the same reason as the backdrop above.
+     `--surface` is #1e1a25 — rgb(30,26,37), a VIOLET tuned to the app's own
+     violet content card (#120f18). The modal's body is a neutral-cool
+     rgb(20,20,26), so every section card sitting on it read purple. This keeps
+     the card's lift over its surface identical while following the modal's hue
+     (R=G, a touch more blue) instead of the card's. */
+  --surface: rgb(31, 31, 40);
+}
+
+[data-theme='light'] .glass-modal {
+  --dock-fade: rgb(250, 250, 252);
+  --dock-fade-clear: rgba(250, 250, 252, 0);
+  /* Light's `--surface` is white-based and already neutral — nothing to correct,
+     so it stays on the shared token. */
+  --surface: rgba(255, 255, 255, 0.62);
 }
 [data-theme='light'] .glass-modal-solid {
   background: rgba(253, 253, 255, 0.98);

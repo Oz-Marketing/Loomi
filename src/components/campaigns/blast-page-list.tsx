@@ -1597,7 +1597,7 @@ export function BlastPageList({
                     if (selectedAccount) setCampaignPage(1);
                     else setAccountPage(1);
                   }}
-                  placeholder={selectedAccount ? 'Search blasts...' : 'Search sub-accounts...'}
+                  placeholder={selectedAccount ? 'Search blasts...' : 'Search accounts...'}
                   className="w-52 pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
                 />
               </div>
@@ -1613,7 +1613,7 @@ export function BlastPageList({
               <div className="text-center py-16 text-[var(--muted-foreground)]">
                 <p className="text-sm">
                   {debouncedSearch
-                    ? 'No sub-accounts match your search.'
+                    ? 'No accounts match your search.'
                     : (emptyState?.title || 'No blasts found')}
                 </p>
                 {!debouncedSearch && emptyState?.subtitle && (
@@ -1639,7 +1639,7 @@ export function BlastPageList({
                       <th className="w-12 px-3 py-2"></th>
                       <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                         <button type="button" onClick={() => toggleAccountSort('dealer')} className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors">
-                          Sub-Account
+                          Account
                           <span className="text-[10px]">{accountSortIndicator('dealer')}</span>
                         </button>
                       </th>

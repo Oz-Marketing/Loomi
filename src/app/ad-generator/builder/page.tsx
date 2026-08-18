@@ -3974,7 +3974,7 @@ export default function AdBuilderPage() {
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                       >
                         <RocketLaunchIcon className="h-4 w-4" />
-                        Share with sub-accounts
+                        Share with accounts
                       </button>
                       {templateId && (
                         <button
@@ -6043,7 +6043,7 @@ function SelectionPanel({
 
         {/* Which logo — pick one of the account's variants for an element bound to
             "Account logo". This pins the CHOICE, not the file: the template says
-            "the dark one" and every sub-account resolves its own, which a literal
+            "the dark one" and every account resolves its own, which a literal
             URL couldn't do (it baked one dealer's logo into a shared template).
             Shown for any element on the account logo, plus Logo elements pinned to
             a static file, so those have a way back to the brand. */}

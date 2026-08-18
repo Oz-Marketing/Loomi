@@ -61,7 +61,7 @@ export function MessagingSettingsPage({ tab }: MessagingSettingsPageProps) {
     [router, basePath],
   );
 
-  const accountLabel = accountData?.dealer || 'Sub-Account';
+  const accountLabel = accountData?.dealer || 'Account';
   const backHref = subHref('/messaging/blasts');
 
   return (

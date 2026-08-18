@@ -87,7 +87,7 @@ export const REPORTS: ReportDefinition[] = [
   { key: 'business_profile', label: 'Business Profile', group: 'presence', blurb: 'Google Business Profile views, searches and actions.', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'reputation', label: 'Reputation', group: 'presence', blurb: 'Review volume, rating trend and response rate.', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'leads', label: 'Lead Performance', group: 'sales', blurb: 'Lead volume and source attribution.', permission: 'reporting.report.view', defaultForClients: true },
-  { key: 'contacts', label: 'Contacts', group: 'audience', blurb: 'The contact database for this sub-account.', permission: 'reporting.report.view', defaultForClients: true },
+  { key: 'contacts', label: 'Contacts', group: 'audience', blurb: 'The contact database for this account.', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'lists', label: 'Marketing Lists', group: 'audience', blurb: 'Marketing lists and segments.', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'engagement', label: 'Engagement', group: 'audience', blurb: 'Email and text sends, plus flow performance.', permission: 'reporting.report.view', defaultForClients: true },
   { key: 'sales_trend', label: 'Sales Trend', group: 'sales', blurb: 'Units sold over time, new and used.', permission: 'reporting.report.view', defaultForClients: true },

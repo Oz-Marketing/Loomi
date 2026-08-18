@@ -105,7 +105,7 @@ export function BudgetReport({
       <EmptyState
         icon={BanknotesIcon}
         title={`No budget on file for ${data.year}`}
-        body="Nothing has been recorded against this account for the selected year. Budget lines arrive from Oz Reports, and a handful of sub-accounts aren't mapped across yet."
+        body="Nothing has been recorded against this account for the selected year. Budget lines arrive from Oz Reports, and a handful of accounts aren't mapped across yet."
       />
     );
   }

@@ -25,7 +25,7 @@ const NO_ACCESS = '';
  */
 const ROLE_DESCRIPTIONS: Record<string, string> = {
   'agency.owner': 'Everything in Agency Settings, including industries, markup and alert rules.',
-  'agency.admin': 'Sub-accounts, users, teams and the knowledge base. Not platform configuration.',
+  'agency.admin': 'Accounts, users, teams and the knowledge base. Not platform configuration.',
   'agency.user_manager': 'Invite and deactivate users. Nothing else.',
 
   'studio.lead': 'All of Studio, including publishing templates and launching ads.',
@@ -33,7 +33,7 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   'studio.designer': 'Ad Generator, templates, blocks and assets. Nothing that reaches a contact.',
   'studio.viewer': 'Read-only across Studio.',
 
-  'reporting.admin': 'Every report, plus which reports each sub-account sees.',
+  'reporting.admin': 'Every report, plus which reports each account sees.',
   'reporting.analyst': 'Every report, including Budget and Executive.',
   'reporting.client': 'The client-facing report set. No Budget, no cost figures.',
   'reporting.viewer': 'A limited set of reports.',

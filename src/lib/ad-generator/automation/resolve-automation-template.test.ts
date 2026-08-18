@@ -211,7 +211,7 @@ describe('determinism — the property idempotency depends on', () => {
     expect(resolveAutomationTemplate({ ...BASE, candidates }).template?.id).toBe('a');
   });
 
-  it('prefers a sub-account-owned template over a global one', () => {
+  it('prefers an account-owned template over a global one', () => {
     const r = resolveAutomationTemplate({
       ...BASE,
       candidates: [

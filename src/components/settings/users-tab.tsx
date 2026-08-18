@@ -275,7 +275,7 @@ export function UsersTab({
               </th>
               <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                 <button type="button" onClick={() => toggleSort('accounts')} className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors">
-                  Sub-Accounts
+                  Accounts
                   <span className="text-[10px]">{sortIndicator('accounts')}</span>
                 </button>
               </th>
@@ -299,7 +299,7 @@ export function UsersTab({
                     ? 'No users match your search'
                     : agencyScope
                       ? 'No agency users yet'
-                      : 'No client users on this sub-account yet'}
+                      : 'No client users on this account yet'}
                 </td>
               </tr>
             ) : (
@@ -336,7 +336,7 @@ export function UsersTab({
                   </td>
                   <td className="px-3 py-2 align-middle text-sm text-[var(--muted-foreground)]">
                     {user.accountKeys.length === 0 ? (
-                      <span className="text-xs opacity-50">All sub-accounts</span>
+                      <span className="text-xs opacity-50">All accounts</span>
                     ) : (
                       <div className="account-avatar-stack flex items-center pl-2">
                         {user.accountKeys.slice(0, 4).map((acctKey) => {
@@ -384,7 +384,7 @@ export function UsersTab({
 
                         {user.accountKeys.length > 4 && (
                           <span
-                            title={`${user.accountKeys.length - 4} more sub-account${user.accountKeys.length - 4 === 1 ? '' : 's'}`}
+                            title={`${user.accountKeys.length - 4} more account${user.accountKeys.length - 4 === 1 ? '' : 's'}`}
                             className="account-avatar-stack-item inline-flex items-center justify-center w-[34px] h-[34px] rounded-full border border-[var(--background)] bg-[var(--background)] text-[10px] font-medium text-[var(--muted-foreground)] shadow-sm"
                           >
                             +{user.accountKeys.length - 4}

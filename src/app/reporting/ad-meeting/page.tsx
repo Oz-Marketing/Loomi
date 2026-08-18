@@ -80,7 +80,7 @@ export default function ReportingAdMeetingPage() {
         <EmptyState
           icon={PresentationChartLineIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to build its meeting document."
+          body="Choose a single account from the top bar to build its meeting document."
         />
       ) : (
         <AdMeetingBuilder accountKey={accountKey} dealer={dealer} from={from} to={to} />

@@ -1153,11 +1153,11 @@ function ManagementRoleDashboard({
       </div>
 
       <div className="themed-scrollbar flex-1 space-y-5 overflow-y-auto p-4">
-        {/* Sub-Account */}
+        {/* Account */}
         <section className="space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
-              Sub-Account
+              Account
             </p>
             <span className="text-[10px] text-[var(--sidebar-muted-foreground)] tabular-nums">
               {selectedAccounts.length > 0 ? `${selectedAccounts.length} selected` : `${accountOptions.length} total`}
@@ -1174,7 +1174,7 @@ function ManagementRoleDashboard({
                   : 'border-[var(--sidebar-border-soft)] text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:border-[var(--primary)]/35 hover:bg-[var(--sidebar-muted)]/70'
               }`}
             >
-              All Sub-Accounts
+              All Accounts
             </button>
             {accountOptions.filter((a) => selectedAccounts.includes(a.key)).map((account) => (
               <button
@@ -1204,7 +1204,7 @@ function ManagementRoleDashboard({
                   type="text"
                   value={accountSearchQuery}
                   onChange={(e) => setAccountSearchQuery(e.target.value)}
-                  placeholder="Filter sub-accounts..."
+                  placeholder="Filter accounts..."
                   className="w-full h-8 rounded-lg border border-[var(--sidebar-border-soft)] bg-[var(--sidebar-input)]/60 pl-8 pr-2 text-[11px] text-[var(--sidebar-foreground)] placeholder:text-[var(--sidebar-muted-foreground)] focus:outline-none focus:border-[var(--primary)]/60 focus:ring-1 focus:ring-[var(--primary)]/30"
                 />
               </div>
@@ -1245,7 +1245,7 @@ function ManagementRoleDashboard({
                 })}
                 {filteredAccountOptions.length === 0 && (
                   <p className="px-1 py-2 text-[11px] text-[var(--sidebar-muted-foreground)]">
-                    No matching sub-accounts.
+                    No matching accounts.
                   </p>
                 )}
               </div>

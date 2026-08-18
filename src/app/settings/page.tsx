@@ -111,7 +111,7 @@ export default function SettingsPage() {
                 {accountData.dealer || accountKey}
               </h1>
               <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
-                Manage settings and configuration for this sub-account
+                Manage settings and configuration for this account
               </p>
             </div>
           </div>
@@ -169,7 +169,7 @@ export default function SettingsPage() {
 function IntegrationsTab() {
   const { accountKey } = useAccount();
   if (!accountKey) {
-    return <div className="text-[var(--muted-foreground)]">Select a sub-account to manage its integrations.</div>;
+    return <div className="text-[var(--muted-foreground)]">Select an account to manage its integrations.</div>;
   }
   // ReportingIntegrationCards renders bare card buttons (no wrapper) — give them
   // a responsive grid so they don't flow inline and wrap unevenly.
@@ -266,8 +266,8 @@ function AccountSettingsTab() {
   if (!accountData || !accountKey) {
     return (
       <div className="text-center py-16">
-        <p className="text-[var(--muted-foreground)] text-sm">Select a sub-account to manage settings.</p>
-        <p className="text-[var(--muted-foreground)] text-xs mt-1">Use the sub-account switcher in the sidebar.</p>
+        <p className="text-[var(--muted-foreground)] text-sm">Select an account to manage settings.</p>
+        <p className="text-[var(--muted-foreground)] text-xs mt-1">Use the account switcher in the sidebar.</p>
       </div>
     );
   }
@@ -326,7 +326,7 @@ function AccountSettingsTab() {
         <h3 className={sectionHeadingClass}>General</h3>
         <div className="space-y-4">
           <div>
-            <label className={labelClass}>Sub-Account Key</label>
+            <label className={labelClass}>Account Key</label>
             <div className="px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--muted)] text-[var(--muted-foreground)]">
               {accountKey}
             </div>
@@ -356,17 +356,17 @@ function AccountSettingsTab() {
             <div>
               <div className="mb-1.5 flex items-center gap-1.5">
                 <label className="text-xs font-medium text-[var(--muted-foreground)]">
-                  Organization
+                  Group
                 </label>
-                <HelpTip title="Organization">
+                <HelpTip title="Group">
                   <p>
                     The account this one belongs to. Its contacts roll up to that account, and it
                     inherits that account&rsquo;s brand kit and templates.
                   </p>
                   <p>
-                    There is no separate promote step — an account becomes an Organization the
+                    There is no separate promote step — an account becomes a group the
                     moment another account points at it here. To dissolve one, set this field back
-                    to <strong>None</strong> on each of its sub-accounts.
+                    to <strong>None</strong> on each of its accounts.
                   </p>
                 </HelpTip>
               </div>
@@ -382,7 +382,7 @@ function AccountSettingsTab() {
               </select>
               {rooftopCount > 0 && (
                 <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
-                  This account is itself an Organization — {rooftopCount} sub-account
+                  This account is itself a group — {rooftopCount} account
                   {rooftopCount === 1 ? '' : 's'} roll{rooftopCount === 1 ? 's' : ''} up to it.
                 </p>
               )}

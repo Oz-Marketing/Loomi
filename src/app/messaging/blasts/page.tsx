@@ -208,7 +208,7 @@ function AccountCampaignsPage() {
           : 'Drafts, scheduled, and sent campaigns will all appear here.')
       : 'Try expanding the selected date range.';
 
-  const dealerName = accountData?.dealer || 'Your Sub-Account';
+  const dealerName = accountData?.dealer || 'Your Account';
   const accountProvider = resolveAccountProvider(accountData, '');
   const accountLocationId = resolveAccountLocationId(accountData);
   const accountNames = useMemo(
@@ -293,7 +293,7 @@ function AccountCampaignsPage() {
                 {/* Cog → messaging-scoped settings (sender identity,
                     SendGrid, suppressions). Lives inside /messaging so
                     these surfaces stay close to the surface that uses
-                    them, rather than buried in the global sub-account
+                    them, rather than buried in the global account
                     settings page. */}
                 <Link
                   href={subHref('/messaging/settings')}

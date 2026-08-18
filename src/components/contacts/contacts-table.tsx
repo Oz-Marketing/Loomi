@@ -531,7 +531,7 @@ export function ContactsTable({
                 <SortHeader label="Source" sortKey="source" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
                 <SortHeader label="Added" sortKey="dateAdded" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
                 {showAccountColumn && (
-                  <SortHeader label="Sub-Account" sortKey="_dealer" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Account" sortKey="_dealer" currentKey={sortKey} dir={sortDir} onSort={handleSort} />
                 )}
                 <th className="w-8" />
               </tr>
@@ -955,7 +955,7 @@ function SubAccountCell({
 
       {extra > 0 && (
         <span
-          title={`${extra} more sub-account${extra === 1 ? '' : 's'}: ${accounts.slice(MAX_AVATARS_VISIBLE).map((a) => a.dealer).join(', ')}`}
+          title={`${extra} more account${extra === 1 ? '' : 's'}: ${accounts.slice(MAX_AVATARS_VISIBLE).map((a) => a.dealer).join(', ')}`}
           className="account-avatar-stack-item inline-flex items-center justify-center w-[30px] h-[30px] rounded-full border border-[var(--background)] bg-[var(--background)] text-[10px] font-medium text-[var(--muted-foreground)] shadow-sm"
         >
           +{extra}

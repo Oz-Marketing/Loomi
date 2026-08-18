@@ -71,7 +71,7 @@ export async function POST(
       select: { key: true },
     });
     if (!account) {
-      return NextResponse.json({ error: 'That sub-account does not exist' }, { status: 400 });
+      return NextResponse.json({ error: 'That account does not exist' }, { status: 400 });
     }
   }
 

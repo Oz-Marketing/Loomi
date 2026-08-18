@@ -113,7 +113,7 @@ export default function ReportingBusinessProfilePage() {
         <EmptyState
           icon={BuildingStorefrontIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see its Business Profile performance."
+          body="Choose a single account from the top bar to see its Business Profile performance."
         />
       ) : (
         <>

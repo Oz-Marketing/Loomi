@@ -304,7 +304,7 @@ function AssetOriginBadge({ f }: { f: MediaFile }) {
           ? 'bg-[var(--primary)]/85 text-white'
           : 'bg-black/50 text-white/90'
       }`}
-      title={shared ? `Shared across all ${f.oem} sub-accounts` : label}
+      title={shared ? `Shared across all ${f.oem} accounts` : label}
     >
       {label}
     </span>
@@ -437,7 +437,7 @@ function MediaCard({
         </button>
 
         {/* Provenance badge. An OEM-shared asset has to be visually distinct from
-            a rooftop's own — editing one changes it for every sub-account that
+            a rooftop's own — editing one changes it for every account that
             carries the brand. */}
         <AssetOriginBadge f={f} />
         <RightsBadge f={f} />
@@ -845,7 +845,7 @@ export default function MediaPage() {
    */
   const uploadScopeOptions = useMemo(() => {
     const here = effectiveAccountKey
-      ? `This sub-account${accountData?.dealer ? ` — ${accountData.dealer}` : ''}`
+      ? `This account${accountData?.dealer ? ` — ${accountData.dealer}` : ''}`
       : 'Loomi library — all accounts';
     const options = [{ value: 'account', label: here }];
     if (!canManageSharedAssets) return options;
@@ -856,7 +856,7 @@ export default function MediaPage() {
       ? accountBrands
       : [...MAJOR_US_OEMS, ...POWERSPORTS_BRANDS];
     for (const brand of brands) {
-      options.push({ value: `oem:${brand}`, label: `Shared — all ${brand} sub-accounts` });
+      options.push({ value: `oem:${brand}`, label: `Shared — all ${brand} accounts` });
     }
     if (effectiveAccountKey) {
       options.push({ value: 'global', label: 'Loomi library — all accounts' });
@@ -1780,7 +1780,7 @@ export default function MediaPage() {
       const destination = target.accountKey
         ? accounts[target.accountKey]?.dealer || target.accountKey
         : target.oem
-          ? `all ${target.oem} sub-accounts`
+          ? `all ${target.oem} accounts`
           : 'the Loomi library';
       toast.success(`Copied ${ok} asset${ok > 1 ? 's' : ''} to ${destination}`);
       // The source view is unchanged — the originals never moved — so only
@@ -2014,7 +2014,7 @@ export default function MediaPage() {
                   label — and the model is still MediaAsset. */}
               <h2 className="text-2xl font-bold">Asset Library</h2>
               <div className="flex items-center gap-2 text-sm mt-0.5 flex-wrap">
-                {/* One library, one scope: the sub-account you're in. The
+                {/* One library, one scope: the account you're in. The
                     "All Accounts" crumb belonged to agency scope, which is
                     gone — shared and OEM assets still appear here, inherited. */}
                 <span className="text-[var(--muted-foreground)]">
@@ -2655,12 +2655,12 @@ export default function MediaPage() {
                     Upload to
                     <HelpTip title="Upload destination">
                       <p>
-                        <strong>This sub-account</strong> keeps the file private to the
+                        <strong>This account</strong> keeps the file private to the
                         account you&apos;re viewing.
                       </p>
                       <p className="mt-2">
                         <strong>Shared</strong> stores it once against the brand — every
-                        sub-account carrying that brand sees it, instead of it being
+                        account carrying that brand sees it, instead of it being
                         uploaded per rooftop.
                       </p>
                       <p className="mt-2">

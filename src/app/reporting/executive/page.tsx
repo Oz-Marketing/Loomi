@@ -79,7 +79,7 @@ export default function ReportingExecutivePage() {
       <PageHeader
         icon={PresentationChartLineIcon}
         title="Executive dashboard"
-        subtitle={`Every channel across ${keys.length} sub-account${keys.length === 1 ? '' : 's'}.`}
+        subtitle={`Every channel across ${keys.length} account${keys.length === 1 ? '' : 's'}.`}
       />
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
@@ -101,19 +101,19 @@ export default function ReportingExecutivePage() {
         <EmptyState
           icon={PresentationChartLineIcon}
           title="Staff only"
-          body="The executive dashboard compares every sub-account side by side. Your own account's reports are in the sidebar."
+          body="The executive dashboard compares every account side by side. Your own account's reports are in the sidebar."
         />
       ) : keys.length < 2 ? (
         <EmptyState
           icon={PresentationChartLineIcon}
-          title="Needs more than one sub-account"
-          body="Only one sub-account is visible to you, so there is nothing to compare. The individual reports in the sidebar cover it in more detail."
+          title="Needs more than one account"
+          body="Only one account is visible to you, so there is nothing to compare. The individual reports in the sidebar cover it in more detail."
         />
       ) : (
         <div className="mt-8 space-y-10">
           <Muted>
-            Each block is one channel across every sub-account. Totals recompute rates from the
-            summed parts, so a small store can&rsquo;t swing a group average. A sub-account with no
+            Each block is one channel across every account. Totals recompute rates from the
+            summed parts, so a small store can&rsquo;t swing a group average. An account with no
             data for a channel is shown as not configured rather than as a zero.
           </Muted>
 

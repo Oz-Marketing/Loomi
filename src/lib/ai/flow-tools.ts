@@ -360,10 +360,10 @@ When the user describes a flow they want to build from scratch, call \`apply_gen
 - \`add_tag\` — add a tag. Config: \`{ tag: string }\`.
 - \`remove_tag\` — remove a tag. Config: \`{ tag: string }\`.
 - \`update_field\` — set a contact field. Config: \`{ field: string, value: string }\`. \`field\` is either a writable Contact column (${UPDATABLE_CONTACT_FIELDS.join(', ')}) or \`custom:<key>\` for one of the account's custom fields. Email and phone are NOT writable. An empty \`value\` clears the field. Mergetags work in \`value\`.
-- \`add_to_list\` — add to a static list. Config: \`{ listId: string, listName?: string }\`. \`listId\` must be a ContactList belonging to this flow's sub-account — never invent one; ask the user which list they mean.
-- \`remove_from_list\` — remove from a static list. Config: \`{ listId: string, listName?: string }\`. Same sub-account rule as \`add_to_list\`.
+- \`add_to_list\` — add to a static list. Config: \`{ listId: string, listName?: string }\`. \`listId\` must be a ContactList belonging to this flow's account — never invent one; ask the user which list they mean.
+- \`remove_from_list\` — remove from a static list. Config: \`{ listId: string, listName?: string }\`. Same account rule as \`add_to_list\`.
 - \`add_note\` — attach a note. Config: \`{ note: string }\`. **Coming soon.**
-- \`create_task\` — file a task on the sub-account's Projects board. Config: \`{ title: string, description?: string, priority?: 'low'|'medium'|'high'|'urgent', dueInDays?: number }\`. \`dueInDays\` is an offset from when the step runs, not an absolute date. Mergetags work in \`title\` and \`description\`.
+- \`create_task\` — file a task on the account's Projects board. Config: \`{ title: string, description?: string, priority?: 'low'|'medium'|'high'|'urgent', dueInDays?: number }\`. \`dueInDays\` is an offset from when the step runs, not an absolute date. Mergetags work in \`title\` and \`description\`.
 - \`wait\` — pause for a duration. Config: \`{ ms: number }\` where \`ms\` is milliseconds. Common values: hour = 3600000, day = 86400000.
 - \`wait_until\` — pause until a contact-field date. Config: \`{ field: string, offsetDays: number }\`.
 - \`condition\` — branch on contact predicates. Config: \`{ branches: ConditionBranch[], fallbackLabel?: string }\`. A \`ConditionBranch\` is \`{ id: string, label: string, logic: 'AND'|'OR', rules: ConditionRule[] }\`. A \`ConditionRule\` is \`{ id: string, field: string, operator: FilterOperator, value: string, value2?: string }\`. Branches evaluate top-to-bottom; the first match wins. There's an implicit "else" branch with id \`"else"\`.

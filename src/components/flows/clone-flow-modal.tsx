@@ -149,7 +149,7 @@ export function CloneFlowModal({
       }
       if (created.length > 0 && failed.length === 0) {
         toast.success(
-          `Cloned to ${created.length} ${created.length === 1 ? 'sub-account' : 'sub-accounts'} as drafts.`,
+          `Cloned to ${created.length} ${created.length === 1 ? 'account' : 'accounts'} as drafts.`,
         );
       } else if (created.length > 0 && failed.length > 0) {
         toast.warning(
@@ -187,10 +187,10 @@ export function CloneFlowModal({
               id="clone-flow-title"
               className="text-sm font-semibold text-[var(--foreground)] truncate"
             >
-              Clone to sub-accounts
+              Clone to accounts
             </h3>
             <p className="text-[11px] text-[var(--muted-foreground)] truncate">
-              Creates a draft copy of <span className="font-medium text-[var(--foreground)]">{flowName}</span> in each selected sub-account.
+              Creates a draft copy of <span className="font-medium text-[var(--foreground)]">{flowName}</span> in each selected account.
             </p>
           </div>
           <button
@@ -211,7 +211,7 @@ export function CloneFlowModal({
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search sub-accounts..."
+              placeholder="Search accounts..."
               className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
             />
           </div>
@@ -231,7 +231,7 @@ export function CloneFlowModal({
             <div className="px-4 py-8 text-center">
               <p className="text-xs text-[var(--muted-foreground)]">
                 {accountList.length === 0
-                  ? 'No sub-accounts available.'
+                  ? 'No accounts available.'
                   : 'No matches for your search.'}
               </p>
             </div>
@@ -280,7 +280,7 @@ export function CloneFlowModal({
         <footer className="px-4 py-3 border-t border-[var(--border)] flex items-center justify-between gap-3">
           <span className="text-[11px] text-[var(--muted-foreground)] tabular-nums">
             {selected.size === 0
-              ? 'No sub-accounts selected'
+              ? 'No accounts selected'
               : `${selected.size} selected`}
           </span>
           <div className="flex items-center gap-2">

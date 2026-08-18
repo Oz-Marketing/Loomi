@@ -176,8 +176,8 @@ export function resolveAutomationTemplate({
         reason,
         explanation:
           reason === 'offer_type_default'
-            ? `"${t.name}" is this sub-account's default for ${offerType} offers.`
-            : `"${t.name}" is this sub-account's default for all offer types.`,
+            ? `"${t.name}" is this account's default for ${offerType} offers.`
+            : `"${t.name}" is this account's default for all offer types.`,
       };
     }
   }
@@ -200,8 +200,8 @@ export function resolveAutomationTemplate({
       template: null,
       reason: 'none',
       explanation: candidates.length
-        ? `${candidates.length} template(s) are in scope for this sub-account but all are marked custom-only, so automation may not use them. Mark one "OEM" or "Both" in the builder.`
-        : 'No published templates are in scope for this sub-account.',
+        ? `${candidates.length} template(s) are in scope for this account but all are marked custom-only, so automation may not use them. Mark one "OEM" or "Both" in the builder.`
+        : 'No published templates are in scope for this account.',
     };
   }
   return {

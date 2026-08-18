@@ -136,7 +136,7 @@ export default function ReportingHeatmapPage() {
         <EmptyState
           icon={MapIcon}
           title="Pick an account"
-          body="Choose a single sub-account from the top bar to see where its customers come from."
+          body="Choose a single account from the top bar to see where its customers come from."
         />
       ) : (
         <CustomerGeographyReport

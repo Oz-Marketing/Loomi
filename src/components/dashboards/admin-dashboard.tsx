@@ -226,7 +226,7 @@ export function AdminDashboard() {
   // Top-level KPI stats
   const stats = [
     {
-      label: 'Sub-Accounts',
+      label: 'Accounts',
       value: accountCount,
       sub: `${crmTotals.connectedAccounts} connected`,
       href: '/subaccounts',

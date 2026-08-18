@@ -261,7 +261,7 @@ function BlastsBody({ accountKey, from, to, isDark }: ReportComponentProps) {
           <div className="mt-3">
             <Muted>
               An opt-out is someone replying STOP. They are removed from every future text for this
-              sub-account automatically.
+              account automatically.
             </Muted>
           </div>
         </Section>

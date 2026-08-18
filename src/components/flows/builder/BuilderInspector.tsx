@@ -1225,9 +1225,9 @@ function ListMembershipForm({
   if (!accountKey) {
     return (
       <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">
-        Contact lists belong to a sub-account, so this step can&rsquo;t be
+        Contact lists belong to an account, so this step can&rsquo;t be
         pointed at one from a template. Deploy the flow, then pick the list
-        on each sub-account&rsquo;s copy.
+        on each account&rsquo;s copy.
       </p>
     );
   }
@@ -1268,7 +1268,7 @@ function ListMembershipForm({
       {selectedMissing && (
         <p className="text-[10px] text-amber-400 -mt-2">
           The list this step points at isn&rsquo;t available for this
-          sub-account. Pick another before publishing.
+          account. Pick another before publishing.
         </p>
       )}
       {!loading && scoped.length === 0 && (
@@ -1390,7 +1390,7 @@ function TaskForm({
         />
       </Field>
       <p className="text-[10px] text-[var(--muted-foreground)] -mt-1 leading-relaxed">
-        The task lands on this sub-account&rsquo;s Projects board, unassigned,
+        The task lands on this account&rsquo;s Projects board, unassigned,
         with the contact&rsquo;s name and email attached. Mergetags work in
         both the title and details.
       </p>

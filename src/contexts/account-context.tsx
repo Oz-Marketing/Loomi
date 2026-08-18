@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
+import { usePathname } from 'next/navigation';
 import type { UserRole } from '@/lib/auth';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { getCurrentSurface } from '@/lib/cross-site';
@@ -137,7 +138,8 @@ export type AccountType =
    * Widening those gates is its own piece of work.
    *
    * The effect below returns any other surface to a real account rather than
-   * leaving its pages with nothing selected.
+   * leaving its pages with nothing selected. Individual cross-account pages can
+   * opt back in via ALL_ACCOUNTS_PATHS — Playbooks does.
    */
   | { mode: 'all' }
   | { mode: 'account'; accountKey: string };
@@ -145,10 +147,38 @@ export type AccountType =
 /** Surfaces where the all-accounts scope is offered and allowed to persist. */
 export const ALL_ACCOUNTS_SURFACES = ['app'] as const;
 
+/**
+ * Individual pages that are cross-account views even though their surface is
+ * not, listed by path prefix.
+ *
+ * The exclusion above is about Studio's TOOLS — Contacts, Campaigns, Websites —
+ * which are per-account and would render "pick an account" with nothing
+ * selected. Playbooks is the opposite kind of page: its whole subject is the
+ * comparison ACROSS accounts, so "no account" is its most useful state, not a
+ * broken one.
+ *
+ * Kept as a path list rather than adding 'studio' to the surfaces above, which
+ * would offer the scope on every Studio page and break most of them — and would
+ * make it possible to land on Contacts in all-accounts scope and export a list
+ * mixing unrelated clients.
+ *
+ * The rule for deciding which pages belong here is in `docs/account-scope.md`.
+ */
+export const ALL_ACCOUNTS_PATHS = ['/playbooks'] as const;
+
+/** Does this path opt into the all-accounts scope? Pure, so it is testable. */
+export function pathOffersAllAccounts(pathname: string): boolean {
+  return ALL_ACCOUNTS_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
 /** Is the all-accounts scope available where we are right now? */
 export function allAccountsSurface(): boolean {
   const surface = getCurrentSurface();
-  return surface != null && (ALL_ACCOUNTS_SURFACES as readonly string[]).includes(surface);
+  if (surface != null && (ALL_ACCOUNTS_SURFACES as readonly string[]).includes(surface)) {
+    return true;
+  }
+  if (typeof window === 'undefined') return false;
+  return pathOffersAllAccounts(window.location.pathname);
 }
 
 /**
@@ -251,6 +281,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const [account, setAccountState] = useState<AccountType>({ mode: 'admin' });
   const [accounts, setAccounts] = useState<Record<string, AccountData>>({});
   const [accountsLoaded, setAccountsLoaded] = useState(false);
+  // Route changes have to re-run the resolve effect below. Without this the
+  // provider only ever saw the path it mounted on.
+  const pathname = usePathname();
   const [initialized, setInitialized] = useState(false);
 
   // Set default mode when session loads.
@@ -489,6 +522,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     // destination. `all` is a real choice, so it only gets resolved on the
     // surfaces that do not offer it (Studio), where a null account would leave
     // per-sub-account pages with nothing to render.
+    // Re-evaluated on every navigation (see the `pathname` dependency). Before
+    // all-accounts was reachable from a Studio page, leaving the scope always
+    // meant a cross-host load, so mounting was enough. Now you can walk from
+    // Playbooks to Contacts inside one React tree, and without this the scope
+    // would follow you onto a page that cannot aggregate — which is exactly the
+    // mixed-client roster docs/account-scope.md exists to prevent.
     if (account.mode === 'all' && allAccountsSurface()) return;
     if (account.mode === 'account') return;
     if (
@@ -502,7 +541,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     if (!defaultKey) return; // no visible accounts — nothing to open
     setAccountState({ mode: 'account', accountKey: defaultKey });
     writeActiveAccountCookie(defaultKey);
-  }, [initialized, accountsLoaded, account.mode, accounts, childCounts]);
+  }, [initialized, accountsLoaded, account.mode, accounts, childCounts, pathname]);
 
   // Don't render until the very first session is resolved.
   // After initialization, keep rendering children during session refreshes

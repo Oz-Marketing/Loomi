@@ -12,6 +12,7 @@ import {
 import { PageHeader } from '@/components/page-header';
 import { HelpTip } from '@/components/ui/help-tip';
 import { getAppUrl } from '@/lib/cross-site';
+import { useAccount } from '@/contexts/account-context';
 import type {
   AccountCoverage,
   AuditPayload,
@@ -71,8 +72,28 @@ function fixHref(fix: NonNullable<CheckResult['fix']>, account: { accountKey: st
 }
 
 export function PlaybookAudit() {
+  const { isAllAccounts, scopedAccountKeys, accountsLoaded } = useAccount();
+
+  /**
+   * The audit follows the account selector (docs/account-scope.md): one account
+   * audits itself, a group audits its whole subtree, and All accounts audits
+   * everything the session may see.
+   *
+   * `null` until the account context has settled. The server reads "no keys" as
+   * "everything I may see", so firing early with an empty list would flash the
+   * entire roster at someone who has one account selected — and it would look
+   * like the scope simply doesn't work.
+   */
+  const auditKey = !accountsLoaded
+    ? null
+    : isAllAccounts
+      ? '/api/playbooks/audit'
+      : scopedAccountKeys.length
+        ? `/api/playbooks/audit?accountKeys=${encodeURIComponent(scopedAccountKeys.join(','))}`
+        : null;
+
   const { data, error, isLoading, mutate, isValidating } = useSWR<AuditPayload>(
-    '/api/playbooks/audit',
+    auditKey,
     fetcher,
     { revalidateOnFocus: false },
   );
@@ -99,7 +120,7 @@ export function PlaybookAudit() {
         title="Playbooks"
         subtitle={
           data
-            ? `Coverage audit across ${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
+            ? `${isAllAccounts ? 'All accounts' : 'Selected scope'} · ${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
             : 'Coverage audit'
         }
         actions={

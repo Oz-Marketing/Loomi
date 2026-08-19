@@ -12,6 +12,7 @@ import {
   CheckCircleIcon,
   ClockIcon,
   EnvelopeIcon,
+  ExclamationTriangleIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
   UsersIcon,
@@ -55,6 +56,21 @@ interface UtmSettings {
   campaign: string;
   term: string;
   content: string;
+}
+
+interface PreflightIssue {
+  severity: 'blocker' | 'warning';
+  code: string;
+  accountKey: string;
+  message: string;
+  remedy: string;
+}
+
+interface PreflightReport {
+  ok: boolean;
+  issues: PreflightIssue[];
+  /** No account selected yet, so nothing could be checked. */
+  pending?: boolean;
 }
 
 interface ResendSettings {
@@ -192,6 +208,12 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const [utm, setUtm] = useState<UtmSettings>(defaultUtm(''));
   const [resend, setResend] = useState<ResendSettings>(defaultResend());
 
+  // Deliverability + compliance report for this draft. Fetched on load so a
+  // misconfigured sub-account is visible BEFORE the user picks a send time —
+  // the schedule POST runs the same checks and hard-blocks, and discovering
+  // that at the final click is a miserable way to find out.
+  const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+
   useEffect(() => {
     setSubjectDraft(draft?.subject || '');
     setPreviewTextDraft(draft?.previewText || '');
@@ -204,6 +226,28 @@ export default function ScheduleStepPage({ params }: PageProps) {
     setUtm({ ...baseUtm, ...(meta.utm ?? {}) });
     setResend({ ...defaultResend(), ...(meta.resend ?? {}) });
   }, [draft]);
+
+  useEffect(() => {
+    if (!draft?.id) return;
+    let canceled = false;
+    const accountKey = draft.accountKeys?.[0] || '';
+    const qs = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/blasts/email/${encodeURIComponent(draft.id)}/preflight${qs}`,
+        );
+        if (!res.ok || canceled) return;
+        const data = (await res.json()) as PreflightReport;
+        if (!canceled) setPreflight(data);
+      } catch {
+        // Advisory only — the send gate is authoritative.
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [draft?.id, draft?.accountKeys]);
 
   async function persistField(patch: { subject?: string; previewText?: string }) {
     if (!draft) return;
@@ -412,6 +456,11 @@ export default function ScheduleStepPage({ params }: PageProps) {
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // The preflight gate returns 422 with the full issue list — refresh
+        // the panel so the user sees every blocker, not just the summary.
+        if (res.status === 422 && Array.isArray(data?.issues)) {
+          setPreflight({ ok: false, issues: data.issues });
+        }
         throw new Error(data?.error || 'Failed to schedule campaign');
       }
       toast.success(
@@ -440,6 +489,10 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
   const fromName = account?.senderName || account?.dealer || '';
   const fromEmail = account?.senderEmail || '';
+
+  const blockers = (preflight?.issues ?? []).filter((i) => i.severity === 'blocker');
+  const warnings = (preflight?.issues ?? []).filter((i) => i.severity === 'warning');
+  const preflightBlocked = blockers.length > 0;
 
   return (
     <div className="pb-32">
@@ -795,6 +848,53 @@ export default function ScheduleStepPage({ params }: PageProps) {
         </div>
       </div>
 
+      {/* Deliverability + compliance report */}
+      {(blockers.length > 0 || warnings.length > 0) && (
+        <div className="max-w-7xl mx-auto px-6 pb-4">
+          <div
+            className={`rounded-2xl border p-5 ${
+              preflightBlocked
+                ? 'border-red-500/40 bg-red-500/[0.06]'
+                : 'border-amber-500/40 bg-amber-500/[0.06]'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <ExclamationTriangleIcon
+                className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
+                  preflightBlocked ? 'text-red-400' : 'text-amber-400'
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-[var(--foreground)]">
+                  {preflightBlocked
+                    ? 'This blast can\u2019t send yet'
+                    : 'Worth checking before you send'}
+                </h3>
+                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                  {preflightBlocked
+                    ? 'Each item below would push this email into spam folders or breach CAN-SPAM.'
+                    : 'These won\u2019t stop the send, but fixing them improves inbox placement.'}
+                </p>
+
+                <ul className="mt-3 space-y-2.5">
+                  {[...blockers, ...warnings].map((issue, i) => (
+                    <li key={`${issue.code}-${issue.accountKey}-${i}`} className="text-xs">
+                      <span
+                        className={`inline-block w-1.5 h-1.5 rounded-full mr-2 align-middle ${
+                          issue.severity === 'blocker' ? 'bg-red-400' : 'bg-amber-400'
+                        }`}
+                      />
+                      <span className="text-[var(--foreground)]">{issue.message}</span>{' '}
+                      <span className="text-[var(--muted-foreground)]">{issue.remedy}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Bottom action bar */}
       <div className="fixed bottom-0 left-0 right-0 bg-[var(--card)]/80 backdrop-blur-md border-t border-[var(--border)] z-40">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
@@ -817,7 +917,11 @@ export default function ScheduleStepPage({ params }: PageProps) {
               audienceTruncated ||
               recipients.length === 0 ||
               !draft?.subject?.trim() ||
-              !draft?.htmlContent?.trim()
+              !draft?.htmlContent?.trim() ||
+              // Deliverability gate. The server enforces this too; disabling
+              // the button just means the user isn't told "no" only after
+              // committing to a send time.
+              preflightBlocked
             }
           >
             <PaperAirplaneIcon className="w-4 h-4" />

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllPermissions } from '@/lib/permissions/require';
 import {
+  formatPreflightBlockers,
+  preflightEmailBlast,
+} from '@/lib/sending/blast-preflight';
+import {
   getEmailBlast,
   scheduleEmailBlastDraft,
   type EmailRecipientInput,
@@ -70,19 +74,6 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     }
   }
 
-  if (!existing.subject?.trim()) {
-    return NextResponse.json(
-      { error: 'Campaign has no subject line. Set one on the Message step.' },
-      { status: 400 },
-    );
-  }
-  if (!existing.htmlContent?.trim()) {
-    return NextResponse.json(
-      { error: 'Campaign has no template content. Pick a template on the Message step.' },
-      { status: 400 },
-    );
-  }
-
   const body = await req.json().catch(() => ({}));
   const recipients = normalizeRecipients(body?.recipients);
   if (recipients.length === 0) {
@@ -108,6 +99,32 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   }
 
   const scheduledFor = parseDate(body?.scheduledFor);
+
+  // Deliverability + compliance gate. This is the last point at which we can
+  // stop a blast that would land in spam or breach CAN-SPAM, and it is a hard
+  // block: scheduling is sending, and once pg-boss fires there is no undo.
+  //
+  // Preflight is run against the accounts in the RECIPIENT payload rather
+  // than existing.accountKeys, because accountKeys isn't stamped onto the
+  // blast until scheduleEmailBlastDraft runs a few lines below — reading it
+  // here would check an empty list on a first-time send and wave everything
+  // through.
+  const preflight = await preflightEmailBlast({
+    subject: existing.subject || '',
+    htmlContent: existing.htmlContent || '',
+    textContent: existing.textContent,
+    accountKeys: [...new Set(recipients.map((r) => r.accountKey))],
+  });
+  if (!preflight.ok) {
+    return NextResponse.json(
+      {
+        error: formatPreflightBlockers(preflight),
+        // The Schedule step renders these individually with a settings link.
+        issues: preflight.issues,
+      },
+      { status: 422 },
+    );
+  }
 
   try {
     const updated = await scheduleEmailBlastDraft(id, {

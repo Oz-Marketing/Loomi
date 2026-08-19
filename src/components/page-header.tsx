@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { AccountScopeToggle } from '@/components/account-scope-toggle';
 
 /**
  * Shared sticky page header — the canonical studio page-title section:
@@ -11,6 +12,11 @@ import * as React from 'react';
  * card that carries the `data-scrolled` flag). Pass `tabs` to pin a tab row
  * inside the header so it never scrolls away (`.has-tabs` drops the bottom
  * padding since the tab underline becomes the divider).
+ *
+ * Pass `scoped` on pages whose CONTENT changes with the roll-up choice (anything
+ * reading `isRollup`) to surface the group scope toggle here. It is opt-in
+ * rather than automatic because a control that appears on a page it cannot
+ * affect is worse than no control — see docs/account-scope.md.
  */
 export function PageHeader({
   icon: Icon,
@@ -18,6 +24,7 @@ export function PageHeader({
   subtitle,
   actions,
   tabs,
+  scoped = false,
   className = 'mb-6',
 }: {
   icon?: React.ComponentType<{ className?: string }>;
@@ -26,6 +33,11 @@ export function PageHeader({
   actions?: React.ReactNode;
   /** Tab strip pinned inside the header. Renders inside the `.has-tabs` divider row. */
   tabs?: React.ReactNode;
+  /**
+   * Show the group roll-up toggle. Set it on pages that read `isRollup`; it
+   * renders nothing when the selection is not a group.
+   */
+  scoped?: boolean;
   /** Bottom-margin / spacing utility. Defaults to `mb-6` to match studio pages. */
   className?: string;
 }) {
@@ -42,8 +54,11 @@ export function PageHeader({
           </div>
         </div>
 
-        {actions && (
-          <div className="flex items-center gap-2 flex-wrap justify-end">{actions}</div>
+        {(scoped || actions) && (
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {scoped && <AccountScopeToggle />}
+            {actions}
+          </div>
         )}
       </div>
 

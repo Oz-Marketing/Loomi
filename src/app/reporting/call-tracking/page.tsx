@@ -59,6 +59,7 @@ export default function ReportingCallTrackingPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={PhoneIcon}
         title="Call tracking"
         subtitle={`Tracked call volume, answer rate, and when people call — ${scopeLabel}.`}

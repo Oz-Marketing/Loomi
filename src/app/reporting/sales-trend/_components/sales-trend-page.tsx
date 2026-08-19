@@ -50,6 +50,7 @@ export function SalesTrendPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={ArrowTrendingUpIcon}
         title="Sales trend"
         subtitle={`Units, deal mix, and transaction revenue by month — ${scopeLabel}.`}

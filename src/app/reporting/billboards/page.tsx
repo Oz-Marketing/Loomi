@@ -34,6 +34,7 @@ export default function ReportingBillboardsPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={MapPinIcon}
         title="Billboards"
         subtitle={`Out-of-home boards, locations and renewal dates — ${scopeLabel}.`}

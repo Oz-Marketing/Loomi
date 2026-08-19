@@ -48,6 +48,7 @@ export default function ReportingAdMeetingPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={PresentationChartLineIcon}
         title="Ad meeting"
         subtitle={`Every channel for one account, assembled into a single reviewable document — ${

@@ -55,6 +55,7 @@ import {
   type DateRangeKey,
 } from '../ads/_components/shared';
 import { RankedBarChart } from './dealer-charts';
+import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import {
   fetchAllSources,
   fetchJson,
@@ -172,9 +173,15 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{dealer}</h1>
-          <Muted>Everything for this account in one place.</Muted>
+        <div className="flex items-center gap-3">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">{dealer}</h1>
+            <Muted>Everything for this account in one place.</Muted>
+          </div>
+          {/* The reporting index swaps between THIS page and the roll-up
+              dashboard on `isRollup`, so without the toggle here a group has no
+              way back to its own numbers. */}
+          <AccountScopeToggle />
         </div>
         <DashboardToolbar
           dateRange={rangeKey}

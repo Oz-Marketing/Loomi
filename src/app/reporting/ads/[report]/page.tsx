@@ -70,6 +70,7 @@ export default function DigitalAdsReportPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={ChartBarIcon}
         title={def.label}
         subtitle={`${def.blurb} — ${scopeLabel}.`}

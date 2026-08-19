@@ -31,6 +31,7 @@
 
 import {
   GOOGLE_AT_CAP_RATIO,
+  GOOGLE_POST_CHANGE_SETTLE_DAYS,
   GOOGLE_RECENT_PACE_MIN_DAYS,
   GOOGLE_RECENT_PACE_WINDOW_DAYS,
   MONTH_DAYS_MULTIPLIER,
@@ -1084,6 +1085,178 @@ export function projectAtDaily(
 ): number | null {
   if (avgDaily == null) return null;
   return round2(spentMTD + avgDaily * Math.max(0, remainingDays));
+}
+
+// ── additions §B/§C/§D: the settling-aware monthly projection ──
+
+/**
+ * The month's landing, measured on delivery SINCE THE LAST BUDGET CHANGE, held
+ * under Google's monthly limit, and allowed to say "not yet" (§B, §C, §D).
+ *
+ * THE FORMULA, and why it is stated in two pieces (§D). The number is
+ * `spent-to-date + rate × remaining days`, which is algebraically identical to
+ * `spend-before-change + spend-since-change + rate × remaining days` — the two
+ * actuals just add up to spent-to-date. The card explains it in the second form
+ * on purpose: the pre-change days are literal dollars that already happened, and
+ * only the rate is a forecast. One lump hides which half is which.
+ *
+ * WHY THE WINDOW IS THE CHANGE, not a fixed seven days. The rate is meant to
+ * answer "where does this land if it keeps behaving as it has", and a window that
+ * straddles a budget change averages two different budgets into one rate. So the
+ * window starts after the change — and the day OF the change is dropped with the
+ * pre-change days, because it ran partly at each rate and belongs to neither.
+ *
+ * WHY IT CAN RETURN NOTHING (`settling`). Push a budget and the since-change
+ * window is empty. A projection computed then is a guess about a budget the
+ * campaign has not run under for a single full day, and for a demand-limited
+ * undershooter there is no way to know whether the raise took until delivery
+ * comes in. Holding is the honest answer, and the caller renders it as a
+ * deliberate pause rather than as a broken number. Note what does NOT settle: the
+ * billing ceiling and the recommended daily are pure arithmetic on the pushed
+ * number, so they move at once.
+ *
+ * WHY THE CEILING IS A CAP AND NOT AN ALARM (§C). Google settles spend back to
+ * the monthly limit, so when the raw run rate exceeds it the ceiling IS where the
+ * month lands — `atCeiling` exists to say why the two figures are equal, not to
+ * warn. Whether to act comes from the projection against the TARGET, which is a
+ * different axis: at the ceiling and under target is a campaign spending
+ * full-out with room to spare.
+ *
+ * `series` is the finalized, flight-clamped day series (no today, no prior
+ * month) — the delivery panel's chart series exactly. `changeDate` is the
+ * CORRECTED change date: an exact push timestamp where Loomi made the change,
+ * the series' own budget transition otherwise.
+ */
+export interface ProjectionBasis {
+  /** The change the window is measured from, or null when the rate never moved. */
+  changeDate: string | null;
+  /** Complete days STRICTLY AFTER the change, through the data edge. */
+  daysSinceChange: number;
+  /** Literal actual dollars through the change date. Never extrapolated. */
+  spentBeforeChange: number;
+  /** Literal actual dollars over the complete days since the change. */
+  spentSinceChange: number;
+  /** The rate carried forward, or null when there is none to state. */
+  rate: number | null;
+  /** Days the rate averaged over — the divisor actually used. */
+  rateDays: number;
+  /** Leading zero-spend days dropped before averaging (the no-change path). */
+  rampDaysSkipped: number;
+  /** A change landed too recently to measure. Hold; do not recompute (§B). */
+  settling: boolean;
+}
+
+export interface MonthlyProjection extends ProjectionBasis {
+  /** spent + rate × remaining days, before Google's monthly limit bites. */
+  raw: number | null;
+  /** What the card shows: the run rate held under the billing ceiling (§C). */
+  projected: number | null;
+  /** The cap bit, so the caller can say why projection equals ceiling (§C). */
+  atCeiling: boolean;
+}
+
+/**
+ * The rate half of the projection: what this campaign has been delivering since
+ * its budget last moved, and whether that is measurable yet.
+ *
+ * Split from `projectMonthly` because the delivery panel needs the rate BEFORE it
+ * has a ceiling to hold the projection under — the ceiling comes off the report's
+ * own series, and the report needs the rate to draw its forecast line. Two
+ * functions, one direction of dependency, no circle.
+ */
+export function projectionBasis(input: {
+  /** Finalized flight days, ascending — the panel's chart series exactly. */
+  series: readonly { date: string; spend: number }[];
+  /** The corrected date of the last daily-budget change (YYYY-MM-DD), or null. */
+  changeDate?: string | null;
+  windowDays?: number;
+  minDays?: number;
+  settleDays?: number;
+}): ProjectionBasis {
+  const windowDays = Math.max(1, input.windowDays ?? GOOGLE_RECENT_PACE_WINDOW_DAYS);
+  const minDays = input.minDays ?? GOOGLE_RECENT_PACE_MIN_DAYS;
+  const settleDays = input.settleDays ?? GOOGLE_POST_CHANGE_SETTLE_DAYS;
+  const changeDate = input.changeDate ?? null;
+
+  if (changeDate == null) {
+    // No change to measure from: the ordinary trailing window, floor and all.
+    const pace = recentPace(input.series, windowDays, minDays);
+    return {
+      changeDate: null,
+      daysSinceChange: 0,
+      spentBeforeChange: 0,
+      spentSinceChange: round2(input.series.reduce((s, p) => s + (Number(p.spend) || 0), 0)),
+      rate: pace.avgDaily,
+      rateDays: pace.days,
+      rampDaysSkipped: pace.rampDaysSkipped,
+      settling: false,
+    };
+  }
+
+  const since = input.series.filter((p) => p.date > changeDate);
+  const before = input.series.filter((p) => p.date <= changeDate);
+  const daysSinceChange = since.length;
+  let rate: number | null = null;
+  let rateDays = 0;
+  let settling = false;
+
+  if (daysSinceChange < settleDays) {
+    // Too soon to measure. Not "no data" — a deliberate hold (§B).
+    settling = true;
+  } else {
+    // Capped at the trailing window, so a budget left alone for three weeks
+    // still reads as a RECENT rate rather than a month-long average.
+    const window = since.slice(-windowDays);
+    const spending = window.filter((p) => (Number(p.spend) || 0) > 0).length;
+    // The settle gate is the floor here, not GOOGLE_RECENT_PACE_MIN_DAYS: the
+    // change reset the clock, and refusing a rate for three more days would
+    // leave the projection empty for most of the week after every push. One
+    // real day of delivery under the new budget is the minimum.
+    if (spending > 0) {
+      rate = round2(window.reduce((s, p) => s + (Number(p.spend) || 0), 0) / window.length);
+      rateDays = window.length;
+    }
+  }
+
+  return {
+    changeDate,
+    daysSinceChange,
+    spentBeforeChange: round2(before.reduce((s, p) => s + (Number(p.spend) || 0), 0)),
+    spentSinceChange: round2(since.reduce((s, p) => s + (Number(p.spend) || 0), 0)),
+    rate,
+    rateDays,
+    rampDaysSkipped: 0,
+    settling,
+  };
+}
+
+/**
+ * Carry the rate forward to the end of the flight and hold the result under
+ * Google's monthly limit.
+ *
+ * `projected` is null in the two cases the card must not print a number for: a
+ * budget change too recent to measure (`settling` — hold, do not recompute off
+ * the pushed number) and too little delivery to state a rate at all.
+ */
+export function projectMonthly(input: {
+  basis: ProjectionBasis;
+  /** Spend to date — the same figure every other number on the card uses. */
+  spentMTD: number;
+  /** Flight days left, counted from the data edge. */
+  remainingDays: number;
+  /** Google's monthly charging limit for this campaign. */
+  billingCeiling: number;
+}): MonthlyProjection {
+  const days = Math.max(0, input.remainingDays);
+  const rate = input.basis.rate;
+  const raw = rate == null ? null : round2(input.spentMTD + rate * days);
+  const ceiling = input.billingCeiling;
+  const atCeiling = raw != null && ceiling > 0 && raw > ceiling + MONEY_EPSILON;
+  const projected =
+    input.basis.settling || raw == null
+      ? null
+      : round2(Math.max(input.spentMTD, atCeiling ? ceiling : raw));
+  return { ...input.basis, raw, projected, atCeiling };
 }
 
 // ── §7 delivery health verdict ──

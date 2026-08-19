@@ -158,9 +158,6 @@ const adminNavItems: NavEntry[] = [
   dashboardNav,
   campaignBuilderNav,
   templatesNav,
-  // Hidden until the env flag is on. A developer can still reach /playbooks
-  // directly; the server gate, not this list, is what grants access.
-  ...(PLAYBOOKS_ENABLED ? [playbooksNav] : []),
   { divider: true },
   contactsNav,
   emailSmsNav,
@@ -231,6 +228,22 @@ export function Sidebar() {
     // before the account context settles). Unprefixed routes read the active
     // account from context, so this is a safe interim.
     navItems = isClientRole ? subaccountClientNavItems : adminNavItems;
+  }
+
+  // Playbooks is flag-gated, with the SAME developer bypass the server gate
+  // uses (`playbooksAllowed` in src/lib/playbooks/access.ts). Gating the nav on
+  // the flag alone let a developer open /playbooks directly while having no
+  // link to it — the two gates have to agree or the bypass is only half real.
+  //
+  // Spliced here rather than in the module-level list above, which is built at
+  // import time, before any role is known. It sits after Templates, since a
+  // playbook bundles the ad design and email template that live there.
+  if (!isClientRole && (PLAYBOOKS_ENABLED || userRole === 'developer')) {
+    const at = navItems.findIndex((e) => !('divider' in e) && e.href === templatesNav.href);
+    navItems =
+      at === -1
+        ? [...navItems, playbooksNav]
+        : [...navItems.slice(0, at + 1), playbooksNav, ...navItems.slice(at + 1)];
   }
 
   // Resolve nav item hrefs with the prefix (skip for absolute items)

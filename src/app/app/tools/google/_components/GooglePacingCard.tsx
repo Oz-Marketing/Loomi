@@ -90,7 +90,10 @@ import {
   statusMismatch,
   statusReasonLabel,
   statusReasonText,
+  statusReasonTone,
+  statusWordState,
   type StatusMismatch,
+  type StatusReasonTone,
 } from '@/lib/ad-pacer/platform-status';
 import { GoogleDeliveryExpander } from './GoogleDeliveryExpander';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
@@ -1696,6 +1699,25 @@ function paceHelp(line: AllocatorLine): string {
   return base + band + caveat;
 }
 
+/**
+ * §A.2 — the row status line's two colors, which say two different things.
+ *
+ * The REASON carries Google's severity: amber for something holding delivery
+ * back, red only for ads that cannot serve, plain gray for a state nobody needs
+ * to act on. The WORD keeps its own indicator, so an enabled campaign that is
+ * limited by its budget still reads as enabled — which it is, and which is fine.
+ */
+const REASON_TONE_COLOR: Record<StatusReasonTone, string> = {
+  neutral: 'var(--muted-foreground)',
+  warn: COLORS.warn,
+  bad: COLORS.error,
+};
+const WORD_STATE_COLOR: Record<'on' | 'off' | 'fault', string> = {
+  on: COLORS.success,
+  off: 'var(--muted-foreground)',
+  fault: COLORS.error,
+};
+
 /** Stop a control inside the row from also toggling the row (§2.3). Every
  *  interactive thing on a collapsed row needs this now that the row itself is
  *  the click target — a lock that also opened the delivery panel would make both
@@ -1913,13 +1935,27 @@ function Row({
               first, then why, if it says why. */}
           {statusWord && (
             <Tooltip
-              label={`What Google reports for this campaign right now. Platform truth, read-only — it never changes the Ad Status the team sets.`}
+              label={`What Google reports for this campaign right now. Platform truth, read-only — it never changes the Ad Status the team sets.${
+                statusReasons.length > 0
+                  ? ` Amber is something holding delivery back; red is ads that cannot serve at all. The ${statusWord} indicator is separate — a campaign can be enabled and limited at the same time.`
+                  : ''
+              }`}
             >
-              <span className="cursor-help whitespace-nowrap text-[11px] text-[var(--muted-foreground)]">
+              {/* §A.2 — the severity the retired status dot used to carry, moved
+                  onto the words that name it. The Enabled/Paused indicator stays
+                  its own thing: it answers "is the switch on", which stays true
+                  whatever the reason beside it says. */}
+              <span className="inline-flex cursor-help items-center gap-1 whitespace-nowrap text-[11px]">
+                <span
+                  className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
+                  style={{ background: WORD_STATE_COLOR[statusWordState(statusWord)] }}
+                />
                 <span className="font-semibold text-[var(--foreground)]">{statusWord}</span>
-                {statusReasons.length > 0 && (
-                  <> · {statusReasons.map(statusReasonLabel).join(' · ')}</>
-                )}
+                {statusReasons.map((reason) => (
+                  <span key={reason} style={{ color: REASON_TONE_COLOR[statusReasonTone(reason)] }}>
+                    · {statusReasonLabel(reason)}
+                  </span>
+                ))}
               </span>
             </Tooltip>
           )}
@@ -1986,9 +2022,12 @@ function Row({
           </Tooltip>
         ) : (
           <>
+            {/* §A.3 — a step larger than the figures beneath it. The verdict is
+                what a scan down the Pace column is FOR, and at the same size as
+                its own footnote it was just another small gray line. */}
             <Tooltip label={paceHelp(line)}>
               <span
-                className="inline-block cursor-help whitespace-nowrap rounded-md px-2 py-0.5 text-[11px] font-bold"
+                className="inline-block cursor-help whitespace-nowrap rounded-md px-2.5 py-1 text-[13px] font-bold"
                 style={{
                   background: `${PACE_COLORS[line.paceStatus]}1f`,
                   color: PACE_COLORS[line.paceStatus],
@@ -2132,7 +2171,13 @@ function AllocationCell({
           />
         </span>
       </span>
-      {/* The other unit — always shown, never editable. */}
+      {/* The other unit — always shown, never editable.
+
+          §A.1 — a CAPTION, on one line. It inherited the table's own text size,
+          which put it within a hair of the figure above it and wrapped
+          "10.9% of budget" across two or three lines on a narrow allocation
+          column; every row in the table paid for that in height. The active unit
+          is the number; this rides quietly beneath it. */}
       <Tooltip
         label={
           mode === 'pct'
@@ -2140,7 +2185,7 @@ function AllocationCell({
             : 'This amount as a share of the month’s actual spend.'
         }
       >
-        <span className="cursor-help text-[var(--muted-foreground)]">
+        <span className="cursor-help whitespace-nowrap text-[10px] leading-tight tabular-nums text-[var(--muted-foreground)]">
           {mode === 'pct' ? dollars : percent}
         </span>
       </Tooltip>

@@ -46,6 +46,7 @@ export default function ReportingDirectMailPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={EnvelopeIcon}
         title="Direct mail ROI"
         subtitle={`Who was mailed, who came in, and what it was worth — ${scopeLabel}.`}

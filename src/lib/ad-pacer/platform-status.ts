@@ -172,6 +172,81 @@ export function statusReasonLabel(reason: string): string {
 }
 
 /**
+ * Severity of one status reason (spec additions §A.2).
+ *
+ * When the right-of-name status dot was retired, the thing it carried was
+ * SEVERITY, and the quiet status line that replaced it printed a disapproval and
+ * a healthy "Eligible" in the same gray. This puts the tone back, on the reason
+ * rather than on the whole line, keyed the way Google keys it:
+ *
+ *  - **bad** — the ads cannot serve. A fault to fix, and the one case where red
+ *    is right: every number on the row is fiction until it is fixed.
+ *  - **warn** — serving, but something is holding delivery back. "Limited by
+ *    budget" is the common one, and it is the pacing desk's own business.
+ *  - **neutral** — a state, not a problem: paused on purpose, not started yet,
+ *    still learning. An unknown enum lands here too, because inventing an alarm
+ *    for a reason we have not mapped is worse than printing it plainly.
+ *
+ * Deliberately NOT applied to the Enabled/Paused word beside it: a campaign that
+ * is enabled and budget-limited is enabled, and coloring the word off the reason
+ * next to it would say the switch itself was the problem.
+ */
+export type StatusReasonTone = 'neutral' | 'warn' | 'bad';
+
+const REASON_TONE: Record<string, StatusReasonTone> = {
+  // Cannot serve, or is configured wrongly.
+  CAMPAIGN_REMOVED: 'bad',
+  BUDGET_MISCONFIGURED: 'bad',
+  BID_STRATEGY_MISCONFIGURED: 'bad',
+  NO_AD_GROUPS: 'bad',
+  NO_ADS: 'bad',
+  AD_GROUPS_PAUSED: 'bad',
+  ADS_PAUSED: 'bad',
+  HAS_ADS_DISAPPROVED: 'bad',
+  // Serving, but constrained.
+  BUDGET_CONSTRAINED: 'warn',
+  SEARCH_VOLUME_LIMITED: 'warn',
+  BID_STRATEGY_LIMITED: 'warn',
+  LOW_QUALITY: 'warn',
+  HAS_ADS_LIMITED_BY_POLICY: 'warn',
+  MOST_ADS_UNDER_REVIEW: 'warn',
+  // States, not problems.
+  CAMPAIGN_PAUSED: 'neutral',
+  CAMPAIGN_PENDING: 'neutral',
+  CAMPAIGN_ENDED: 'neutral',
+  CAMPAIGN_DRAFT: 'neutral',
+  BID_STRATEGY_LEARNING: 'neutral',
+};
+
+export function statusReasonTone(reason: string): StatusReasonTone {
+  return REASON_TONE[reason] ?? 'neutral';
+}
+
+/** The worst tone across a reason list — what the status line as a whole is
+ *  saying. Empty (a plain "Eligible") is neutral, which is the point: nothing
+ *  is wrong, so nothing is colored. */
+export function statusLineTone(reasons: readonly string[]): StatusReasonTone {
+  let tone: StatusReasonTone = 'neutral';
+  for (const reason of reasons) {
+    const t = statusReasonTone(reason);
+    if (t === 'bad') return 'bad';
+    if (t === 'warn') tone = 'warn';
+  }
+  return tone;
+}
+
+/**
+ * Whether the campaign is switched on, off, or cannot run at all — the state the
+ * status word's own indicator shows (§A.2), kept apart from the reason's tone so
+ * "Enabled" never turns red because of the warning printed next to it.
+ */
+export function statusWordState(word: string | null): 'on' | 'off' | 'fault' {
+  if (word === 'Enabled') return 'on';
+  if (word === 'Not eligible' || word === 'Removed') return 'fault';
+  return 'off';
+}
+
+/**
  * Google's own word for whether the campaign is switched on — the first thing
  * on the row's status line (addendum §2.1). Reads `campaign.primary_status`,
  * falling back to the effective status for rows synced before primary status

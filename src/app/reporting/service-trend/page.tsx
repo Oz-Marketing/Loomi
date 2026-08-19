@@ -47,6 +47,7 @@ export default function ReportingServiceTrendPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={WrenchScrewdriverIcon}
         title="Service trend"
         subtitle={`Repair orders and revenue by pay type, by month — ${scopeLabel}.`}

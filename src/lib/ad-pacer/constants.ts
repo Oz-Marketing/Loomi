@@ -268,6 +268,22 @@ export const GOOGLE_RECENT_PACE_WINDOW_DAYS = 7;
  */
 export const GOOGLE_RECENT_PACE_MIN_DAYS = 3;
 /**
+ * How many COMPLETE days must sit between a daily-budget change and the data
+ * edge before a run rate is stated again (spec additions §B).
+ *
+ * The projection runs on delivery since the last budget change, so the instant a
+ * budget moves that window is empty: a number computed then would describe a
+ * budget the campaign has not run under for even one full day. Worse, for a
+ * demand-limited undershooter there is no way to know whether the raise took
+ * until delivery comes in. So the projection HOLDS in a settling state instead of
+ * recomputing off the pushed number, and refills as finalized days accrue.
+ *
+ * Two, not one: the day of the change is itself excluded (it ran partly at each
+ * rate), so one day would mean projecting the rest of the month off a single
+ * day's delivery — the exact noise GOOGLE_RECENT_PACE_MIN_DAYS exists to refuse.
+ */
+export const GOOGLE_POST_CHANGE_SETTLE_DAYS = 2;
+/**
  * Delivery ratio (avg daily spend ÷ daily cap) at or above which a campaign
  * counts as filling its budget. Used by the delivery verdict and by the
  * capped/headroom tag's fallback path, from one place so the tag and the

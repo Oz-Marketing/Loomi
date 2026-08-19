@@ -360,3 +360,145 @@ in pure dollar mode with an unchanged account budget. If it still does, there is
 contributor, most likely the payable being recomputed with slightly different precision
 between loads, or rows being re-saved on mount; chase that next. The percent round trip is
 a real and sufficient cause for what is described here and is the first thing to fix.
+
+---
+
+# Additions: density, post-change behavior, and the projection
+
+Decisions made after the sections above shipped. Where they disagree with anything
+earlier in this file, these are the later decision. §7 is display; §8–§10 are one
+change with three faces — the projection now runs on delivery **since the last
+budget change**, which is what makes the settling state, the ceiling flag and the
+two-piece tooltip all follow.
+
+## 7. Row density and status severity
+
+Three changes to the collapsed row, all in `GooglePacingCard.tsx`.
+
+1. **The allocation subtext is a caption, on one line.** The other-unit line under
+   the allocation figure ("10.9% of budget") inherited the table's own text size,
+   which put it within a hair of the number above it and wrapped across two or
+   three lines in a narrow column — every row in the table paid for that in
+   height. It is now `text-[10px]`, `leading-tight`, `whitespace-nowrap`. The
+   active unit stays the prominent figure; the other rides quietly beneath.
+
+2. **The status line carries Google's severity again.** Retiring the
+   right-of-name status dot (§2.1) removed the one thing it was actually
+   carrying: severity. The quiet text that replaced it printed a disapproval and
+   a healthy "Eligible" in the same gray. The tone is back, and it sits on the
+   **reason**, not on the whole line — `statusReasonTone` in `platform-status.ts`:
+
+   - **amber** — serving, but something is holding delivery back ("Limited by
+     budget", low search volume, a limiting bid strategy).
+   - **red** — the ads cannot serve: disapproved, no ads, a misconfigured budget
+     or bid strategy. Red stays this narrow on purpose.
+   - **neutral** — a state, not a problem (paused, not started, still learning).
+     An unmapped enum lands here too: inventing an alarm for a reason we have not
+     mapped is worse than printing it plainly.
+
+   The Enabled/Paused word keeps **its own indicator** (a small dot: green on,
+   gray off, red for not-eligible/removed). A campaign that is enabled and
+   limited by budget is enabled, and that is true and fine — coloring the word off
+   the reason next to it would say the switch itself was the problem.
+
+3. **The pace badge is a step larger** (`px-2.5 py-1`, `text-[13px]`), with the
+   "NN% · ±$X vs expected" line staying small beneath it. The verdict is what a
+   scan down the Pace column is for; at the same size as its own footnote it read
+   as one more small gray line.
+
+## 8. Post-change behavior: what moves at once, and what settles
+
+When a daily budget is pushed, the card's numbers move on two different clocks,
+and conflating them is what makes a pushed number look either broken or believed.
+
+**Immediately, because it is arithmetic on the pushed number:**
+
+- **Billing ceiling.** Spend so far + new daily × calendar days left in the month
+  (`monthlyLimitAfterChange`). Nothing settles, so it commits the moment the push
+  confirms — including *before the next sync*: a push is not in the daily series
+  yet, so the panel re-bases the ceiling itself off the pushed rate rather than
+  showing the report's now-stale ceiling (`ceilingRebasedOnPush`).
+- **Recommended daily**, off the new gap, and the **arrow** re-references to it.
+- **Pace badge** — unaffected. It compares spend to date against target, which a
+  budget change does not touch.
+
+**Settling, because it is a measurement of delivery:**
+
+- **Monthly projection.** The rate is delivery since the last change, so a push
+  creates a new "last change" and empties the window. A projection computed then
+  is a guess about a budget the campaign has not run under for one full day, and
+  for a demand-limited undershooter there is no way to know whether the raise took
+  until delivery comes in. The box therefore **does not recompute off the pushed
+  number**: it reads `Settling`, with the neutral note "budget changed — rebuilds
+  as delivery comes in", and refills once finalized days accrue.
+- **Daily delivery verdict.** Same window, same problem: yesterday's delivery
+  divided by the new, higher daily reads "spending well below its daily budget"
+  within a second of the push — a fault verdict about a rate the campaign has not
+  run at. It settles the same way, as a neutral "Delivery read rebuilding" card
+  rather than a fake fill number, and the chart's forecast line and band disappear
+  with it rather than being drawn out of a rate nobody has measured.
+
+**The settle gate is two complete days** (`GOOGLE_POST_CHANGE_SETTLE_DAYS`),
+counted from the day *after* the change — the change day itself ran partly at each
+rate and belongs to neither window. After that, one day with real delivery is
+enough to state a rate; the ordinary three-spending-day floor is deliberately not
+applied to a post-change window, because it would leave the box empty for most of
+the week after every push.
+
+**The live math stays in the edit popup.** "Here is the ceiling and the projection
+if you set this number" is a what-if, framed as one, and it is the one place a
+typed-but-unpushed number may drive a projection. It does not drive the box below:
+on push the ceiling commits for real and the projection box hands back to delivery
+data instead of treating the preview as a measurement. Popup is live as you type,
+the card is settle and measure, the push is the handoff.
+
+## 9. Projection ceiling flag (amends §4.1/§4.2)
+
+When the raw run rate exceeds the billing ceiling, the projection box shows the
+**ceiling value** — that is where spend lands, since Google settles it back — and
+carries the flag **"projected to hit its monthly ceiling"**. It replaces the
+earlier behavior of printing the raw run rate above its own ceiling and explaining
+the contradiction in a tooltip.
+
+- **Muted, not red.** The flag lives in the box's sub line and says why the
+  projection equals the ceiling. Hitting the ceiling is often healthy: a
+  budget-limited campaign under its client target that pins to the ceiling is
+  spending full-out with room to spare.
+- **The alarm is on the target axis.** A warning color goes on a projection that
+  lands **over the client target**, never on the ceiling flag. At the ceiling and
+  under target is fine; at the ceiling and over target is the one to act on.
+- **Conditional.** No cap, no flag — the common case for a demand-limited
+  undershooter is a projection well below the ceiling and a plain number.
+
+## 10. The projection formula, its window, and the change date
+
+The projection is `spend to date + rate × remaining days`, which is algebraically
+identical to `spend before the change + spend since it + rate × remaining days` —
+the two actuals just add back to spend to date.
+
+- **The tooltip uses the two-piece form**, because it is the one that can be
+  checked: the pre-change days are literal dollars that already happened, and only
+  the rate is carried forward.
+- **The rate never straddles a change.** The window is the complete days since the
+  corrected change date, capped at the trailing seven
+  (`GOOGLE_RECENT_PACE_WINDOW_DAYS`) so a budget left alone for three weeks still
+  reads as a *recent* rate rather than a month-long average. With no change in the
+  flight it is the ordinary trailing window, launch-ramp rule and all.
+- **The change date is corrected, and the same input feeds the ceiling.** A wrong
+  date poisons the rate exactly the way it poisons the ceiling, so both read one
+  resolved date (`projectionBasis` / `lastSeriesBudgetChange`):
+  - A push made **here** is stamped to the second (`googleDailyPushedAt`), so its
+    own calendar day dates the change. It is clamped to the account's own "today"
+    from the campaign-health route, which bounds browser-timezone skew to the safe
+    side, and ignored when it falls outside the flight.
+  - A change made **in Google** is visible only as the first day the sync stored
+    the new rate, which can be a day late. Late errs safely: it shortens the rate
+    window instead of letting an old-rate day into it, and the excluded day's
+    dollars still count as literal actuals.
+  - The later of the two is the last change, whichever record it came from.
+
+**Still open.** Persisting Google's `change_event` per campaign (§4.5's backfill)
+is the one piece not built. Until it exists, a change made directly in Google is
+dated by the series transition, with the day-late bias above; `change_event` is
+already fetched during the sync for the prorated ceiling, so the work is
+persistence and not a new read.

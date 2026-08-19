@@ -162,8 +162,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     childCounts,
     userRole,
     userEmail,
-    isSelfScoped,
-    setRollup,
   } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const router = useRouter();
@@ -448,39 +446,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
         </button>
       )}
       </div>
-      {/* Roll up, or stand alone. Shown for the SELECTED group only — it is a
-          property of what you are currently looking at, and putting it on every
-          group row would invite setting a scope for an account you are not in.
-          Young Automotive Group advertises for itself, so its own numbers have
-          to be reachable; before this the subtree was the only possible answer. */}
-      {selected && kids.length > 0 && (
-        <div className="mb-1 ml-[2.125rem] mr-1 flex items-center gap-1 rounded-lg bg-[var(--muted)]/60 p-0.5">
-          {(
-            [
-              [true, 'Roll up', `Its own numbers plus all ${kids.length}`],
-              [false, 'Just this', 'This account on its own'],
-            ] as const
-          ).map(([rollup, label, hint]) => (
-            <button
-              key={label}
-              type="button"
-              title={hint}
-              onClick={(e) => {
-                e.stopPropagation();
-                setRollup(rollup);
-              }}
-              aria-pressed={rollup ? !isSelfScoped : isSelfScoped}
-              className={`flex-1 rounded-md px-2 py-1 text-[10px] font-medium transition-colors ${
-                (rollup ? !isSelfScoped : isSelfScoped)
-                  ? 'bg-[var(--card-strong)] text-[var(--foreground)] shadow-sm'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
       {opts.expandable && expanded &&
         kids.map(([childKey, childData]) =>
           renderAccountOption(childKey, childData, `child-${childKey}`, { nested: true }),

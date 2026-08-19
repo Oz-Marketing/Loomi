@@ -28,6 +28,7 @@ export default function ReportingReputationPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={StarIcon}
         title="Reputation"
         subtitle={`Live Google rating, recent reviews, and competitor comparison — ${scopeLabel}.`}

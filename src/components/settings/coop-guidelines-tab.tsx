@@ -525,7 +525,7 @@ export function CoopGuidelinesTab() {
       {makes.length === 0 && !loading ? (
         <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
           <p className="text-sm text-[var(--muted-foreground)]">
-            No manufacturers yet. A make appears once it has a guideline document, a rule pack, an event, or a
+            No manufacturers yet. A make appears once it has a guideline document, a rule pack, an event, or an
             account configured for automation.
           </p>
         </div>

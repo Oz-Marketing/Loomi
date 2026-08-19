@@ -243,7 +243,7 @@ function TabButton({
 function PhaseNotice() {
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3 text-xs leading-relaxed text-[var(--muted-foreground)]">
-      <span className="font-medium text-[var(--foreground)]">Read-only.</span> Nothing here changes a
+      <span className="font-medium text-[var(--foreground)]">Read-only.</span> Nothing here changes an
       account. Which playbooks apply is <em>inferred</em> from what each account has configured —
       a rooftop that deliberately doesn&apos;t run a channel can still show as missing it. Applying
       playbooks explicitly, so applicability is a recorded fact rather than a guess, is Phase 1.

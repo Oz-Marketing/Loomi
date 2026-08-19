@@ -64,7 +64,15 @@ export async function GET(
     status: 200,
     headers: {
       'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      // PRIVATE, not public: this response is behind a session check, and a
+      // shared cache (Cloudflare, a corporate proxy) is entitled to reuse a
+      // `public` response for a different user. It's someone's face.
+      //
+      // `immutable` IS honest here — the filename carries an upload timestamp
+      // (`<userId>-<ms>.jpg`), so a new avatar is a new URL and this bytestream
+      // genuinely never changes. Contrast the logos route, whose filenames are
+      // stable and which therefore must revalidate.
+      'Cache-Control': 'private, max-age=31536000, immutable',
     },
   });
 }

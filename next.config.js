@@ -62,6 +62,22 @@ const nextConfig = {
         source: '/f/:path*',
         headers: [{ key: 'Content-Security-Policy', value: 'frame-ancestors *' }],
       },
+      // Logos and avatars are gated to a session by proxy.ts, so they must not
+      // sit in a shared cache. Setting that on the API routes alone is not
+      // enough: `/logos/*` and `/avatars/*` are rewritten to `/api/logos/*` and
+      // `/api/avatars/*` by an afterFiles rewrite, and Next resolves FILESYSTEM
+      // routes before those — so any file still present in `public/` is served
+      // by the static handler and the route's headers never run. `headers()`
+      // runs before both, which is why the policy belongs here.
+      //
+      // max-age=0 + must-revalidate rather than a long immutable TTL because
+      // logo filenames are stable (`light.png` forever): a re-uploaded logo has
+      // to be able to replace a cached one. The route pairs this with an ETag
+      // so revalidation is a bodyless 304.
+      ...['/logos/:path*', '/avatars/:path*'].map((source) => ({
+        source,
+        headers: [{ key: 'Cache-Control', value: 'private, max-age=0, must-revalidate' }],
+      })),
     ];
   },
   async rewrites() {

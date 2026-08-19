@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   adStatusTone,
   normalizeAdStatus,
+  statusLineTone,
   statusMismatch,
   statusReasonText,
+  statusReasonTone,
+  statusWordState,
 } from './platform-status';
 import type { PacerAd } from './types';
 
@@ -138,5 +141,40 @@ describe('statusMismatch', () => {
       gAd({ googleEffectiveStatus: 'PAUSED', googlePrimaryStatusReasons: '{not json' }),
     );
     expect(m?.reasons).toEqual([]);
+  });
+});
+
+describe('status severity on the row status line (§A.2)', () => {
+  it('colors a budget limit amber, not red — it is the pacing desk own business', () => {
+    expect(statusReasonTone('BUDGET_CONSTRAINED')).toBe('warn');
+    expect(statusReasonTone('SEARCH_VOLUME_LIMITED')).toBe('warn');
+  });
+
+  it('reserves red for ads that cannot serve', () => {
+    expect(statusReasonTone('HAS_ADS_DISAPPROVED')).toBe('bad');
+    expect(statusReasonTone('NO_ADS')).toBe('bad');
+    expect(statusReasonTone('BUDGET_MISCONFIGURED')).toBe('bad');
+  });
+
+  it('leaves a plain state uncolored', () => {
+    expect(statusReasonTone('CAMPAIGN_PENDING')).toBe('neutral');
+    expect(statusReasonTone('BID_STRATEGY_LEARNING')).toBe('neutral');
+    // An unmapped enum must not invent an alarm.
+    expect(statusReasonTone('SOME_NEW_REASON')).toBe('neutral');
+  });
+
+  it('takes the worst tone across the reasons, and nothing when there are none', () => {
+    expect(statusLineTone([])).toBe('neutral');
+    expect(statusLineTone(['BID_STRATEGY_LEARNING', 'BUDGET_CONSTRAINED'])).toBe('warn');
+    expect(statusLineTone(['BUDGET_CONSTRAINED', 'HAS_ADS_DISAPPROVED'])).toBe('bad');
+  });
+
+  it('keeps the Enabled/Paused indicator separate from the reason tone', () => {
+    // The whole point of §A.2: an enabled campaign that is limited by budget is
+    // still enabled, and its indicator must not turn red for the reason beside it.
+    expect(statusWordState('Enabled')).toBe('on');
+    expect(statusWordState('Paused')).toBe('off');
+    expect(statusWordState('Not eligible')).toBe('fault');
+    expect(statusWordState(null)).toBe('off');
   });
 });

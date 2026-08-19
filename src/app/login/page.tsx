@@ -270,7 +270,13 @@ export default function LoginPage() {
                 >
                   Password
                 </label>
-                <Link href={forgotHref} className="auth-link text-xs">
+                {/* prefetch={false}: the href is derived from the email field,
+                    so it changes on EVERY keystroke. With Next's default
+                    prefetch that means one RSC request per character typed,
+                    each carrying a partial email address in the query string
+                    (and into the access logs). Nothing here is worth
+                    pre-warming — it's a link people click once. */}
+                <Link href={forgotHref} prefetch={false} className="auth-link text-xs">
                   Forgot password?
                 </Link>
               </div>

@@ -14,6 +14,8 @@ import {
   monthlyLimitAfterChange,
   monthlyLimitFlat,
   projectAtTypedDaily,
+  projectMonthly,
+  projectionBasis,
   recentPace,
   resolveClock,
   resolveFlight,
@@ -1570,5 +1572,116 @@ describe("Google's monthly spending limit", () => {
     expect(
       monthlyLimitAfterChange({ spentToDate: -50, newDaily: -10, remainingCalendarDays: -3 }),
     ).toBe(0);
+  });
+});
+
+describe('projectionBasis / projectMonthly — the settling-aware projection (§B, §C, §D)', () => {
+  /** Ten $50 days, then a budget change, then three days at $80. */
+  const days = (spends: number[], startDay = 1): { date: string; spend: number }[] =>
+    spends.map((spend, i) => ({
+      date: `2026-08-${String(startDay + i).padStart(2, '0')}`,
+      spend,
+    }));
+
+  it('measures the rate only on days AFTER the change, and drops the change day', () => {
+    // The 11th is the change day: it ran partly at each rate, so it belongs to
+    // neither window.
+    const series = [...days([50, 50, 50]), ...days([65, 80, 80, 80], 4)];
+    const basis = projectionBasis({ series, changeDate: '2026-08-04' });
+    expect(basis.daysSinceChange).toBe(3);
+    expect(basis.rate).toBeCloseTo(80, 2);
+    expect(basis.spentBeforeChange).toBeCloseTo(50 * 3 + 65, 2);
+    expect(basis.spentSinceChange).toBeCloseTo(240, 2);
+  });
+
+  it('states the two pieces so they add back to spend to date', () => {
+    const series = [...days([50, 50, 50]), ...days([65, 80, 80, 80], 4)];
+    const basis = projectionBasis({ series, changeDate: '2026-08-04' });
+    const spentMTD = series.reduce((s, d) => s + d.spend, 0);
+    // §D — the two-piece framing in the tooltip is the same number as
+    // spent-to-date, which is what makes it safe to explain it that way.
+    expect(basis.spentBeforeChange + basis.spentSinceChange).toBeCloseTo(spentMTD, 2);
+  });
+
+  it('settles instead of projecting when a change has no complete day behind it', () => {
+    // The push landed today: the since-change window is empty.
+    const series = days([50, 50, 50, 50]);
+    const basis = projectionBasis({ series, changeDate: '2026-08-04' });
+    expect(basis.settling).toBe(true);
+    expect(basis.rate).toBeNull();
+    const p = projectMonthly({ basis, spentMTD: 200, remainingDays: 20, billingCeiling: 3000 });
+    // Not a number, not a zero — a hold. The pushed daily must not drive it.
+    expect(p.projected).toBeNull();
+    expect(p.raw).toBeNull();
+  });
+
+  it('refills on the since-change window once two complete days exist', () => {
+    const series = [...days([50, 50, 50, 50]), ...days([90, 90], 5)];
+    const basis = projectionBasis({ series, changeDate: '2026-08-04' });
+    expect(basis.settling).toBe(false);
+    expect(basis.rate).toBeCloseTo(90, 2);
+    const p = projectMonthly({ basis, spentMTD: 380, remainingDays: 10, billingCeiling: 5000 });
+    expect(p.projected).toBeCloseTo(380 + 90 * 10, 2);
+  });
+
+  it('never averages across a change, even when the old rate ran for weeks', () => {
+    const long = [...days(Array(20).fill(10)), ...days([100, 100], 21)];
+    const straddling = projectionBasis({ series: long, changeDate: null });
+    const sinceChange = projectionBasis({ series: long, changeDate: '2026-08-20' });
+    // The trailing-window rate is dragged down by pre-change days; the
+    // since-change rate is not.
+    expect(sinceChange.rate).toBeCloseTo(100, 2);
+    expect(straddling.rate ?? 0).toBeLessThan(100);
+  });
+
+  it('caps a long unchanged stretch at the trailing window, so the rate stays recent', () => {
+    // Changed on the 1st, then 12 days: only the last 7 count.
+    const series = [...days([0]), ...days([10, 10, 10, 10, 10, 60, 60, 60, 60, 60, 60, 60], 2)];
+    const basis = projectionBasis({ series, changeDate: '2026-08-01' });
+    expect(basis.daysSinceChange).toBe(12);
+    expect(basis.rateDays).toBe(7);
+    expect(basis.rate).toBeCloseTo(60, 2);
+  });
+
+  it('states no rate when nothing has been delivered since the change', () => {
+    const series = [...days([50, 50, 50]), ...days([0, 0, 0], 4)];
+    const basis = projectionBasis({ series, changeDate: '2026-08-03' });
+    expect(basis.settling).toBe(false); // there ARE days — they are just empty
+    expect(basis.rate).toBeNull();
+  });
+
+  it('falls back to the trailing window when the budget never moved', () => {
+    const series = days([0, 0, 40, 40, 40]);
+    const basis = projectionBasis({ series, changeDate: null });
+    expect(basis.changeDate).toBeNull();
+    expect(basis.rampDaysSkipped).toBe(2); // leading zero-spend days dropped
+    expect(basis.rate).toBeCloseTo(40, 2);
+  });
+
+  it('shows the CEILING, flagged, when the run rate would outrun it (§C)', () => {
+    const basis = projectionBasis({ series: days([100, 100, 100]), changeDate: null });
+    const p = projectMonthly({
+      basis,
+      spentMTD: 300,
+      remainingDays: 10,
+      billingCeiling: 900,
+    });
+    expect(p.raw).toBeCloseTo(1300, 2); // the raw trajectory
+    expect(p.projected).toBeCloseTo(900, 2); // where spend actually lands
+    expect(p.atCeiling).toBe(true);
+  });
+
+  it('carries no ceiling flag when the projection sits below it', () => {
+    const basis = projectionBasis({ series: days([10, 10, 10]), changeDate: null });
+    const p = projectMonthly({ basis, spentMTD: 30, remainingDays: 10, billingCeiling: 900 });
+    expect(p.atCeiling).toBe(false);
+    expect(p.projected).toBeCloseTo(130, 2);
+  });
+
+  it('never projects below the spend already booked', () => {
+    const basis = projectionBasis({ series: days([100, 100, 100]), changeDate: null });
+    // A stale ceiling under what the month has already billed.
+    const p = projectMonthly({ basis, spentMTD: 300, remainingDays: 5, billingCeiling: 50 });
+    expect(p.projected).toBeCloseTo(300, 2);
   });
 });

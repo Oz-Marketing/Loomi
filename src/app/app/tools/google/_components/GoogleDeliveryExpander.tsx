@@ -49,8 +49,9 @@ import {
 import { fmt, fmtDate } from '@/lib/ad-pacer/helpers';
 import {
   deliveryVerdict,
-  projectAtDaily,
-  recentPace,
+  monthlyLimitAfterChange,
+  projectMonthly,
+  projectionBasis,
   type AllocatorLine,
   type DeliveryVerdictKind,
   type TypedDailyProjection,
@@ -58,6 +59,7 @@ import {
 import {
   buildBudgetReport,
   isoRange,
+  lastSeriesBudgetChange,
   type BudgetReport,
 } from '@/lib/ad-pacer/google-budget-report';
 import {
@@ -212,30 +214,85 @@ export function GoogleDeliveryExpander({
   // own figure so the reference line still has a place to sit while the fetch is
   // in flight.
   const dailyBudget = data?.cap ?? line.currentDaily;
-  const verdict = useMemo(
-    // Every shown day counts toward the verdict — no trailing slice, because the
-    // series IS the window now.
-    () => deliveryVerdict(series, dailyBudget, series.length || 1, line.paceStatus),
-    [series, dailyBudget, line.paceStatus],
-  );
   // Today's partial (§3). Present only when the sync has run today, which also
   // means the finalized series is complete through yesterday — so the live total
   // below is a real cross-check rather than a figure with a hole in it.
   const todaySpend = data?.todaySpend ?? null;
   const liveTotal = todaySpend != null ? line.spentMTD + todaySpend : null;
 
-  const pace = useMemo(() => recentPace(series), [series]);
-  const projectedRecent = projectAtDaily(line.spentMTD, pace.avgDaily, line.flight.remaining);
+  /**
+   * §D — the CORRECTED change date, and it feeds two different numbers: the
+   * billing ceiling re-bases at it, and the projection's rate is measured from
+   * it. A wrong date poisons both, from the same input.
+   *
+   * Two records, and the exact one wins. A push made HERE is stamped to the
+   * second (`googleDailyPushedAt`), so its own calendar day is the truth. A
+   * change made in Google is only visible as the first day the sync saw the new
+   * rate, which can be a day late — safe, because a late date shortens the rate
+   * window instead of letting an old-rate day into it. The later of the two is
+   * the last change, whichever record it came from.
+   *
+   * The push date is read from the row's own field rather than refetched, so the
+   * settling state (§B) appears the instant a push confirms; it is clamped to the
+   * account's own "today" from this route, which bounds any browser-timezone skew
+   * to the safe side.
+   */
+  const seriesChange = useMemo(() => lastSeriesBudgetChange(series), [series]);
+  const pushedChangeDate = useMemo(() => {
+    const raw = ad?.googleDailyPushedAt ?? null;
+    if (!raw) return null;
+    const ts = new Date(raw);
+    if (Number.isNaN(ts.getTime())) return null;
+    const local = `${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())}`;
+    const capped = data?.todayIso && local > data.todayIso ? data.todayIso : local;
+    // A push from another month, or from after this flight ended, is not this
+    // window's last change.
+    if (capped < flightStartIso || capped > flightEndIso) return null;
+    return capped;
+  }, [ad?.googleDailyPushedAt, data?.todayIso, flightStartIso, flightEndIso]);
+  const changeDate = useMemo(() => {
+    const fromSeries = seriesChange?.date ?? null;
+    if (fromSeries == null) return pushedChangeDate;
+    if (pushedChangeDate == null) return fromSeries;
+    return pushedChangeDate > fromSeries ? pushedChangeDate : fromSeries;
+  }, [seriesChange, pushedChangeDate]);
+
+  /**
+   * §B/§D — the rate the month is projected on: delivery over the complete days
+   * SINCE that change, never straddling it. Empty window (a push that just
+   * landed) puts the projection into its settling state instead of recomputing
+   * off the pushed number.
+   */
+  const basis = useMemo(
+    () => projectionBasis({ series, changeDate }),
+    [series, changeDate],
+  );
+
+  /**
+   * §B — the delivery verdict runs on the same window for the same reason. Raise
+   * a budget and the flight-to-date average divided by the NEW daily reads
+   * "spending well below its daily budget" within a second of the push, which is
+   * an observation about a rate the campaign has not run at yet.
+   */
+  const verdictSeries = useMemo(() => {
+    if (changeDate == null) return series;
+    const since = series.filter((p) => p.date > changeDate);
+    // An empty window means the change landed today: the read is settling anyway,
+    // and the average printed under the chart still has to describe the bars that
+    // are drawn rather than nothing.
+    return since.length > 0 ? since : series;
+  }, [series, changeDate]);
+  const verdict = useMemo(
+    // Every day in the window counts — no trailing slice, because the window IS
+    // the question: what has it delivered under the budget it has now.
+    () => deliveryVerdict(verdictSeries, dailyBudget, verdictSeries.length || 1, line.paceStatus),
+    [verdictSeries, dailyBudget, line.paceStatus],
+  );
+
   // At-current-daily is already on the line, and is null when no daily has
   // synced — a projection off a zero rate would read as "will spend nothing"
   // when the truth is "we don't know the rate".
   const projectedAtDailyBudget = line.projectedSpend;
-
-  // §2.5 mirrored: while a daily is being typed upstairs, both forward-looking
-  // figures follow the box exactly — the same object it rendered, never a second
-  // computation of the same thing. At rest the projection is the single
-  // recent-pace figure (§4.2) and the ceiling is the daily that is actually set.
-  const monthlyProjection = typedProjection ? typedProjection.projected : projectedRecent;
 
   // §4.1 — the report's geometry. Built over the whole FLIGHT, not just the days
   // with data: the cumulative chart's job is the gap between where the month is
@@ -248,7 +305,10 @@ export function GoogleDeliveryExpander({
         window: isoRange(flightStartIso, flightEndIso),
         target: line.target,
         currentDaily: dailyBudget,
-        recentAvgDaily: pace.avgDaily,
+        // Null while settling, which drops the forecast line and its band off the
+        // chart rather than drawing a straight line out of a rate nobody has
+        // measured yet.
+        recentAvgDaily: basis.rate,
         daysInMonth,
       }),
     [
@@ -257,32 +317,126 @@ export function GoogleDeliveryExpander({
       flightEndIso,
       line.target,
       dailyBudget,
-      pace.avgDaily,
+      basis.rate,
       daysInMonth,
     ],
   );
   /**
    * Google's monthly charging limit. At rest this is the last day of the
-   * report's own ceiling series, which is the calendar-day-weighted average of
-   * the rates ACTUALLY in effect × 30.4 — not the current daily × 30.4, which
-   * is only the same number in a month where nothing changed. While a daily is
-   * being typed it follows the box, so the two never state different limits.
+   * report's own ceiling series, which re-bases at each change the SERIES knows
+   * about — not the current daily × 30.4, which is only the same number in a
+   * month where nothing changed. While a daily is being typed it follows the
+   * box, so the two never state different limits.
    */
   const restingCeiling =
     report.days.length > 0
       ? report.days[report.days.length - 1].billingCeiling
       : dailyBudget * MONTH_DAYS_MULTIPLIER;
-  const billingCeiling = typedProjection ? typedProjection.billingCeiling : restingCeiling;
+  /**
+   * §B — a push just made is NOT in the series yet (the next sync writes it), so
+   * the report's ceiling still describes the old rate. The ceiling is pure
+   * arithmetic on the pushed number, though, and §B is explicit that it must
+   * move at once: spend so far plus the new daily across the calendar days that
+   * are left. Only the projection settles.
+   */
+  const ceilingRebasedOnPush = useMemo(() => {
+    if (pushedChangeDate == null) return null;
+    if (seriesChange != null && seriesChange.date >= pushedChangeDate) return null;
+    const dayOfMonth = Number(pushedChangeDate.slice(8, 10)) || 1;
+    return monthlyLimitAfterChange({
+      spentToDate: report.costToDate,
+      newDaily: dailyBudget,
+      remainingCalendarDays: Math.max(0, daysInMonth - dayOfMonth + 1),
+    });
+  }, [pushedChangeDate, seriesChange, report.costToDate, dailyBudget, daysInMonth]);
+  const billingCeiling = typedProjection
+    ? typedProjection.billingCeiling
+    : (ceilingRebasedOnPush ?? restingCeiling);
   // Has the limit been re-based by a mid-month change, or is it still the plain
   // rate × 30.4? Decides which of two genuinely different sentences to print.
   const ceilingIsFlat =
     Math.abs(billingCeiling - dailyBudget * MONTH_DAYS_MULTIPLIER) < 0.5 && !typedProjection;
 
-  /** §4.5 — when the daily budget in effect was last changed, from the series'
-   *  own transitions. A permanent record: Google's change_event only retains 30
-   *  days, so it can back-fill edits made outside Loomi but can never be the
-   *  source of record. */
-  const lastChange = report.changes.length > 0 ? report.changes[report.changes.length - 1] : null;
+  /**
+   * §C/§D — where the month lands, held under the ceiling. `atCeiling` is why
+   * the projection can equal the ceiling exactly; it is a reason, not an alarm.
+   *
+   * §2.5 mirrored: while a daily is being typed upstairs, the forward-looking
+   * figures follow the box exactly — the same object it rendered, never a second
+   * computation of the same thing.
+   */
+  const projection = useMemo(
+    () =>
+      projectMonthly({
+        basis,
+        spentMTD: line.spentMTD,
+        remainingDays: line.flight.remaining,
+        billingCeiling,
+      }),
+    [basis, line.spentMTD, line.flight.remaining, billingCeiling],
+  );
+  const monthlyProjection = typedProjection ? typedProjection.projected : projection.projected;
+  /** Settling only at rest — the edit popup is deliberately live as you type
+   *  (§B), and its what-if is the one place a pushed number may drive a
+   *  projection. */
+  const settling = typedProjection == null && projection.settling;
+  /** §C — the projection is over the CLIENT TARGET, which is the axis that
+   *  decides whether to act. Never colored off the ceiling. */
+  const overTarget =
+    monthlyProjection != null && line.target > 0 && monthlyProjection > line.target + 0.5;
+
+  /**
+   * §D — the projection, explained in TWO PIECES. It is arithmetically
+   * `spend to date + rate × days left`, but that framing hides which half is a
+   * measurement: the days before the budget change are literal dollars that
+   * already happened, and only the rate is carried forward. Same number, and the
+   * two-piece form is the one that can be checked.
+   */
+  const projectionSub = settling
+    ? 'budget changed — rebuilds as delivery comes in'
+    : typedProjection != null
+      ? `at the ${fmt(typedDaily ?? 0)}/day being typed`
+      : projection.atCeiling
+        ? // §C — the FLAG, and deliberately in the muted sub line rather than in
+          // a color: it says why the projection equals the ceiling. Hitting the
+          // ceiling is often healthy, so red stays reserved for "can't serve".
+          'projected to hit its monthly ceiling'
+        : projection.rate == null
+          ? 'not enough delivery yet'
+          : projection.changeDate != null
+            ? `at ${fmt(projection.rate)}/day since the ${fmtDate(projection.changeDate)} change`
+            : `at ${fmt(projection.rate)}/day recent pace`;
+  const projectionTooltip = settling
+    ? `The daily budget changed on ${projection.changeDate ? fmtDate(projection.changeDate) : 'the last change'}, so no full day of delivery has run under the new rate yet. A projection now would describe a budget this campaign has not run under — and for one that was not filling its old budget, there is no way to know whether the raise took until delivery arrives. The billing ceiling and the recommended daily already reflect the change; this rebuilds after a day or two of finalized delivery.`
+    : projection.rate == null
+      ? 'Too few days with spend to state a run rate — one busy day would set the projection for the rest of the month. This is what a brand-new or not-yet-launched campaign shows.'
+      : `${
+          projection.changeDate != null
+            ? `${fmt(projection.spentBeforeChange)} actual through the ${fmtDate(projection.changeDate)} budget change, plus ${fmt(projection.spentSinceChange)} actual over the ${projection.daysSinceChange} finalized day${projection.daysSinceChange === 1 ? '' : 's'} since it, plus ${fmt(projection.rate)}/day × ${line.flight.remaining} day${line.flight.remaining === 1 ? '' : 's'} left${projection.rateDays < projection.daysSinceChange ? ` — the rate is the last ${projection.rateDays} of those days, so it stays a recent rate` : ''}. Only the last piece is a forecast: the dollars before it already happened, and the rate is measured only on days that ran under the budget it has now.`
+            : `${fmt(line.spentMTD)} actual to date, plus ${fmt(projection.rate)}/day × ${line.flight.remaining} day${line.flight.remaining === 1 ? '' : 's'} left — the rate is the last ${projection.rateDays} finalized day${projection.rateDays === 1 ? '' : 's'}${projection.rampDaysSkipped > 0 ? `, ignoring ${projection.rampDaysSkipped} day${projection.rampDaysSkipped === 1 ? '' : 's'} of launch ramp` : ''}.`
+        } Its daily budget could deliver up to ${projectedAtDailyBudget != null ? fmt(projectedAtDailyBudget) : '—'} over the same days; the gap between the two is budget room this campaign is not using, which is a reallocation question rather than a daily-budget one.${
+          typedDaily != null
+            ? ` Following the ${fmt(typedDaily)}/day being typed above — ${typedProjection?.boundBy === 'delivery' ? 'held at recent delivery, so a bigger budget moves the ceiling and not this number' : 'the budget is the binding constraint at that rate'}.`
+            : projection.atCeiling
+              ? ` At that rate it would reach ${fmt(projection.raw ?? 0)}, above the ${fmt(billingCeiling)} billing ceiling — Google settles spend back to the limit, so the ceiling is where the month lands and the projection shows it. That is not itself a problem: pinned to the ceiling and under the ${fmt(line.target)} target is a campaign spending full-out with room to spare. What to act on is the projection against the target.`
+              : ''
+        }${
+          overTarget
+            ? ` This lands over the ${fmt(line.target)} monthly target — the axis worth acting on.`
+            : ''
+        }`;
+
+  /** §4.5 — when the daily budget in effect was last changed. The series' own
+   *  transitions are the permanent record (Google's change_event only retains 30
+   *  days), corrected by an exact push timestamp where Loomi made the change. */
+  const lastChange = useMemo(() => {
+    if (pushedChangeDate != null && (seriesChange == null || pushedChangeDate > seriesChange.date)) {
+      return { date: pushedChangeDate, from: null as number | null, to: dailyBudget };
+    }
+    return seriesChange
+      ? { date: seriesChange.date, from: seriesChange.from as number | null, to: seriesChange.to }
+      : null;
+  }, [pushedChangeDate, seriesChange, dailyBudget]);
 
   // §13 platform truth lives entirely on the ROW now — the status word and its
   // reason sit under the campaign name, and a contradiction is a badge there.
@@ -350,7 +504,11 @@ export function GoogleDeliveryExpander({
                 history is the markers on the chart below. */}
             {lastChange && (
               <Tooltip
-                label={`The daily budget changed from ${fmt(lastChange.from)} to ${fmt(lastChange.to)} on ${fmtDate(lastChange.date)}. Read off this campaign's own daily-budget history, so it records changes made in Google as well as pushes made here.`}
+                label={
+                  lastChange.from != null
+                    ? `The daily budget changed from ${fmt(lastChange.from)} to ${fmt(lastChange.to)} on ${fmtDate(lastChange.date)}. Read off this campaign's own daily-budget history, so it records changes made in Google as well as pushes made here.`
+                    : `${fmt(lastChange.to)}/day was pushed from here on ${fmtDate(lastChange.date)} — exact to the second, which is why it dates the change rather than the synced series (the series only learns the new rate on its next run).`
+                }
               >
                 <span className="cursor-help"> · set on {fmtDate(lastChange.date)}</span>
               </Tooltip>
@@ -408,28 +566,28 @@ export function GoogleDeliveryExpander({
           value={fmt(line.remainingBudget)}
           sub={`${line.flight.remaining} day${line.flight.remaining === 1 ? '' : 's'} left`}
         />
+        {/* §B/§C — the one box on this line that is allowed to say "not yet".
+            While a change is settling it holds instead of recomputing off the
+            pushed number, and when the cap bites it shows the CEILING with a flag
+            saying so. Any warning color belongs to the target axis (over target),
+            never to the ceiling — a budget-limited campaign pinned to its ceiling
+            under target is spending full-out. */}
         <MetricBox
           label="Monthly projection"
-          value={monthlyProjection != null ? fmt(monthlyProjection) : '—'}
-          sub={
+          value={
+            settling ? 'Settling' : monthlyProjection != null ? fmt(monthlyProjection) : '—'
+          }
+          sub={projectionSub}
+          color={
             typedProjection != null
-              ? `at the ${fmt(typedDaily ?? 0)}/day being typed`
-              : pace.avgDaily != null
-                ? `at ${fmt(pace.avgDaily)}/day recent pace`
-                : 'not enough delivery yet'
+              ? 'var(--primary)'
+              : settling
+                ? 'var(--muted-foreground)'
+                : overTarget
+                  ? COLORS.warn
+                  : undefined
           }
-          color={typedProjection != null ? 'var(--primary)' : undefined}
-          tooltip={
-            pace.avgDaily == null
-              ? 'Too few days with spend to state a run rate — one busy day would set the projection for the rest of the month. This is what a brand-new or not-yet-launched campaign shows.'
-              : `Where it lands if it keeps behaving as it has: ${fmt(pace.avgDaily)}/day across the last ${pace.days} finalized day${pace.days === 1 ? '' : 's'}${pace.rampDaysSkipped > 0 ? `, ignoring ${pace.rampDaysSkipped} day${pace.rampDaysSkipped === 1 ? '' : 's'} of launch ramp` : ''}. Its daily budget could deliver up to ${projectedAtDailyBudget != null ? fmt(projectedAtDailyBudget) : '—'} over the same days; the gap between the two is budget room this campaign is not using, which is a reallocation question rather than a daily-budget one.${
-                  typedDaily != null
-                    ? ` Following the ${fmt(typedDaily)}/day being typed above — ${typedProjection?.boundBy === 'delivery' ? 'held at recent delivery, so a bigger budget moves the ceiling and not this number' : 'the budget is the binding constraint at that rate'}.`
-                    : monthlyProjection != null && monthlyProjection > billingCeiling
-                      ? ` This sits ABOVE the ${fmt(billingCeiling)} billing ceiling, which means the campaign has lately been outrunning what its daily budget can bill for a full month — Google will settle it back to the ceiling, so the chart's projection is drawn held under that line while this figure is the raw run rate.`
-                      : ''
-                }`
-          }
+          tooltip={projectionTooltip}
         />
         <MetricBox
           label="Billing ceiling"
@@ -438,9 +596,11 @@ export function GoogleDeliveryExpander({
             typedProjection &&
             Math.abs(typedProjection.billingCeiling - typedProjection.billingCeilingBefore) >= 0.5
               ? `was ${fmt(typedProjection.billingCeilingBefore)}`
-              : ceilingIsFlat
-                ? `${fmt(dailyBudget)}/day × 30.4`
-                : 're-based at the last budget change'
+              : ceilingRebasedOnPush != null
+                ? `re-based at today's ${fmt(dailyBudget)}/day push`
+                : ceilingIsFlat
+                  ? `${fmt(dailyBudget)}/day × 30.4`
+                  : 're-based at the last budget change'
           }
           tooltip={`The most Google can bill this month — a LIMIT, and Google's, where the monthly target is ours.${
             ceilingIsFlat
@@ -520,9 +680,16 @@ export function GoogleDeliveryExpander({
               here, both of which say it in words. */}
           <div className="mt-1.5 flex justify-between text-[10px] text-[var(--muted-foreground)]">
             <span>{fmtDate(flightStartIso)}</span>
+            {/* The average the delivery read below is computed from, over the
+                window it actually used — the days since the budget last changed
+                when there was one (§B), because an average that straddles a
+                change measures two budgets at once. */}
             <span className="tabular-nums">
-              avg {fmt(verdict.avgDaily)}/day across {series.length} finalized day
-              {series.length === 1 ? '' : 's'}
+              avg {fmt(verdict.avgDaily)}/day across {verdictSeries.length} finalized day
+              {verdictSeries.length === 1 ? '' : 's'}
+              {changeDate != null && verdictSeries.length < series.length
+                ? ' since the change'
+                : ''}
             </span>
             <span>{fmtDate(flightEndIso)}</span>
           </div>
@@ -554,21 +721,40 @@ export function GoogleDeliveryExpander({
           {liveTotal == null && <div className="mb-4" />}
 
           {/* §4.4 — the plain delivery read. Neutral and descriptive: whether to
-              spend more is carried by the recommended daily, not by this. */}
-          <div
-            className="mb-4 rounded-lg px-3.5 py-3 text-[11px] leading-relaxed"
-            style={{ background: `${toneColor(v.tone)}14`, color: 'var(--foreground)' }}
-          >
-            <div className="mb-1 text-[12px] font-bold" style={{ color: toneColor(v.tone) }}>
-              {v.title}
-              {verdict.ratio != null && (
-                <span className="ml-1.5 font-medium tabular-nums opacity-80">
-                  {Math.round(verdict.ratio * 100)}% of daily budget
-                </span>
-              )}
+              spend more is carried by the recommended daily, not by this.
+
+              §B — and it settles with the projection, on the same window and for
+              the same reason. The instant a budget is raised, yesterday's
+              delivery divided by the new daily reads "spending well below its
+              daily budget" — a fault verdict about a rate the campaign has not
+              run at for one full day. Holding says so instead of inventing a
+              fill number. */}
+          {settling ? (
+            <div className="mb-4 rounded-lg bg-[var(--muted)] px-3.5 py-3 text-[11px] leading-relaxed text-[var(--foreground)]">
+              <div className="mb-1 text-[12px] font-bold text-[var(--muted-foreground)]">
+                Delivery read rebuilding
+              </div>
+              The daily budget changed
+              {projection.changeDate ? ` on ${fmtDate(projection.changeDate)}` : ''}, so there is no
+              full day of delivery under {fmt(dailyBudget)}/day yet. This fills back in as
+              finalized days arrive — usually a day or two.
             </div>
-            {v.body}
-          </div>
+          ) : (
+            <div
+              className="mb-4 rounded-lg px-3.5 py-3 text-[11px] leading-relaxed"
+              style={{ background: `${toneColor(v.tone)}14`, color: 'var(--foreground)' }}
+            >
+              <div className="mb-1 text-[12px] font-bold" style={{ color: toneColor(v.tone) }}>
+                {v.title}
+                {verdict.ratio != null && (
+                  <span className="ml-1.5 font-medium tabular-nums opacity-80">
+                    {Math.round(verdict.ratio * 100)}% of daily budget
+                  </span>
+                )}
+              </div>
+              {v.body}
+            </div>
+          )}
 
           {/* The one piece of reasoning the recommendation deliberately no
               longer carries: whether the remaining budget can PHYSICALLY still

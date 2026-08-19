@@ -256,6 +256,38 @@ export function buildBudgetReport(input: BudgetReportInput): BudgetReport {
   };
 }
 
+/**
+ * The most recent daily-budget transition the stored series knows about: the
+ * first day whose budget-in-effect differs from the previous budgeted day's.
+ *
+ * The same rule `buildBudgetReport` uses for its own change markers, exposed on
+ * its own because the projection needs the change date BEFORE the report is
+ * built (the report's forecast line runs on the since-change rate — spec
+ * additions §D). If these two ever disagree, the chart's markers and the rate's
+ * window would be describing different days.
+ *
+ * It is a first-day-of-the-new-rate date, not a timestamp: the sync stamps each
+ * day with the rate it saw, so the day returned here ran partly at the old rate.
+ * Callers therefore treat it as the change day and measure the rate from the day
+ * AFTER it. It can also be a day late when the change was made in Google between
+ * syncs, which errs the safe way — a late date shortens the rate window rather
+ * than letting an old-rate day into it.
+ */
+export function lastSeriesBudgetChange(
+  series: readonly DailyPoint[],
+): { date: string; from: number; to: number } | null {
+  const budgeted = series.filter((p) => p.dailyBudget != null && p.dailyBudget > 0);
+  let last: { date: string; from: number; to: number } | null = null;
+  for (let i = 1; i < budgeted.length; i++) {
+    const from = budgeted[i - 1].dailyBudget as number;
+    const to = budgeted[i].dailyBudget as number;
+    if (Math.abs(to - from) > 0.005) {
+      last = { date: budgeted[i].date, from: round2(from), to: round2(to) };
+    }
+  }
+  return last;
+}
+
 /** Every ISO date from `start` to `end` inclusive. */
 export function isoRange(start: string, end: string): string[] {
   const out: string[] = [];

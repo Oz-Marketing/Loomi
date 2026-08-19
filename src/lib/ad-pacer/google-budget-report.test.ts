@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildBudgetReport, isoRange, type DailyPoint } from './google-budget-report';
+import {
+  buildBudgetReport,
+  isoRange,
+  lastSeriesBudgetChange,
+  type DailyPoint,
+} from './google-budget-report';
 
 // August 2026, a campaign flighted the whole month, data through the 7th.
 const WINDOW = isoRange('2026-08-01', '2026-08-31');
@@ -158,5 +163,39 @@ describe('buildBudgetReport', () => {
     expect(r.edgeIndex).toBeNull();
     expect(r.costToDate).toBe(0);
     expect(r.projection).toEqual([]);
+  });
+});
+
+describe('lastSeriesBudgetChange — the change date the projection measures from (§D)', () => {
+  it('returns the first day the new rate appears, not the last day of the old one', () => {
+    const s = series([10, 10, 10, 10], [20, 20, 35, 35]);
+    expect(lastSeriesBudgetChange(s)).toEqual({ date: '2026-08-03', from: 20, to: 35 });
+  });
+
+  it('returns the MOST RECENT change when a budget moved twice', () => {
+    const s = series([10, 10, 10, 10, 10], [20, 35, 35, 50, 50]);
+    expect(lastSeriesBudgetChange(s)?.date).toBe('2026-08-04');
+  });
+
+  it('agrees with the report own change markers', () => {
+    const s = series([10, 10, 10, 10], [20, 20, 35, 35]);
+    const report = buildBudgetReport({
+      series: s,
+      window: WINDOW,
+      target: 900,
+      currentDaily: 35,
+      recentAvgDaily: 10,
+      daysInMonth: DAYS_IN_MONTH,
+    });
+    expect(report.changes[report.changes.length - 1].date).toBe(lastSeriesBudgetChange(s)?.date);
+  });
+
+  it('ignores cent-level noise and days with no stored budget', () => {
+    expect(lastSeriesBudgetChange(series([10, 10, 10], [20, 20.004, 20]))).toBeNull();
+    expect(lastSeriesBudgetChange(series([10, 10], [null as unknown as number, null as unknown as number]))).toBeNull();
+  });
+
+  it('is null when the budget never moved', () => {
+    expect(lastSeriesBudgetChange(series([10, 10, 10], 20))).toBeNull();
   });
 });

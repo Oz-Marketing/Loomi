@@ -48,6 +48,7 @@ export default function ReportingWebsitesPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={GlobeAltIcon}
         title="Website analytics"
         subtitle={`Sessions, users, channels, and top pages from Google Analytics — ${scopeLabel}.`}

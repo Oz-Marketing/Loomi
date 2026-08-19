@@ -100,7 +100,7 @@ export default function ReportingContactsPage() {
 
   return (
     <>
-      <PageHeader icon={UsersIcon} title="Contact reporting" subtitle={subtitle} />
+      <PageHeader scoped icon={UsersIcon} title="Contact reporting" subtitle={subtitle} />
       {keysToFetch.length > 0 && (
         <ContactAnalytics
           contacts={contacts as never}

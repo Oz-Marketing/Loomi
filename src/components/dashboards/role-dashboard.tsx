@@ -47,6 +47,7 @@ import {
   useContactStats,
 } from '@/hooks/use-dashboard-data';
 import { usePortfolioDashboard } from '@/hooks/use-portfolio-dashboard';
+import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import {
   AccountHealthScoredGrid,
   AnomalyFeedWidget,
@@ -1489,7 +1490,13 @@ function ManagementRoleDashboard({
             })()}
 
             <div>
-              <h2 className="text-2xl font-bold">{dashboardTitle}</h2>
+              <div className="flex flex-wrap items-center gap-3">
+                <h2 className="text-2xl font-bold">{dashboardTitle}</h2>
+                {/* The reporting index renders this roll-up dashboard OR the
+                    single-account overview depending on `isRollup`, so the
+                    toggle has to be reachable from both sides. */}
+                <AccountScopeToggle />
+              </div>
               <p className="dashboard-welcome mt-0.5 text-sm font-medium text-[var(--foreground)]">Welcome, {welcomeName}!</p>
               {usingMockData ? (
                 <p className="mt-1 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">

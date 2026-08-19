@@ -31,6 +31,7 @@ export default function ReportingServiceRetentionPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={ArrowPathIcon}
         title="Service retention"
         subtitle={`Whether buyers come back for service, and whether service customers come back again — ${scopeLabel}.`}

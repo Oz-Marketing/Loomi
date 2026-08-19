@@ -29,6 +29,7 @@ export default function ReportingListsPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={FunnelIcon}
         title="Marketing lists"
         subtitle={`Saved audiences you can size, edit, and send to — ${scopeLabel}.`}

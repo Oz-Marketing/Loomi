@@ -69,6 +69,7 @@ export default function ReportingBudgetPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={BanknotesIcon}
         title="Budget"
         subtitle={`Contracted budget, what's planned against it, and what's been spent — ${scopeLabel}.`}

@@ -79,6 +79,7 @@ export default function ReportingBusinessProfilePage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={BuildingStorefrontIcon}
         title="Business Profile"
         subtitle={`How people find and act on your Google listing — ${scopeLabel}.`}

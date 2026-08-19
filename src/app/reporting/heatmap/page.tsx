@@ -89,6 +89,7 @@ export default function ReportingHeatmapPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={MapIcon}
         title="Customer heatmap"
         subtitle={`Where buyers and service customers live, by ZIP code — ${scopeLabel}.`}

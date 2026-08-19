@@ -88,6 +88,7 @@ export default function ReportingLeadsPage() {
   return (
     <>
       <PageHeader
+        scoped
         icon={UserPlusIcon}
         title="Lead performance"
         subtitle={`Lead volume, sources, and how this month compares — ${scopeLabel}.`}

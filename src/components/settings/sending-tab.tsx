@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { EnvelopeIcon, KeyIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
+import { EnvelopeIcon, KeyIcon, CheckCircleIcon, XCircleIcon, MapPinIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
 
@@ -19,6 +19,15 @@ interface SendingConfig {
   senderName: string;
   sendingDomain: string;
   replyToEmail: string;
+  // CAN-SPAM postal address. These live on Account and are read by
+  // buildUnsubscribeFooter, but had no editor anywhere in the app — so the
+  // footer shipped without the address the law requires, silently, because
+  // the builder drops missing parts rather than failing. Preflight now blocks
+  // a blast until they're filled in, and this is where you fill them in.
+  address: string;
+  city: string;
+  state: string;
+  postalCode: string;
 }
 
 const empty: SendingConfig = {
@@ -26,6 +35,10 @@ const empty: SendingConfig = {
   senderName: '',
   sendingDomain: '',
   replyToEmail: '',
+  address: '',
+  city: '',
+  state: '',
+  postalCode: '',
 };
 
 const sectionCardClass = 'glass-section-card rounded-xl p-6';
@@ -72,6 +85,10 @@ export function SendingTab({ accountKey }: SendingTabProps) {
       .then(([account, sg]: [Record<string, unknown>, SendGridState]) => {
         const next: SendingConfig = {
           senderEmail: (account.senderEmail as string) || '',
+          address: (account.address as string) || '',
+          city: (account.city as string) || '',
+          state: (account.state as string) || '',
+          postalCode: (account.postalCode as string) || '',
           senderName: (account.senderName as string) || '',
           sendingDomain: (account.sendingDomain as string) || '',
           replyToEmail: (account.replyToEmail as string) || '',
@@ -165,7 +182,14 @@ export function SendingTab({ accountKey }: SendingTabProps) {
   const dirty = JSON.stringify(config) !== JSON.stringify(initial);
   const senderEmailInvalid = !isValidEmail(config.senderEmail);
   const replyToInvalid = !isValidEmail(config.replyToEmail);
-  const canSave = dirty && !senderEmailInvalid && !replyToInvalid && !saving;
+  // Partially-filled addresses are the dangerous case: the footer builder
+  // joins whatever is present, so "Layton, UT" alone looks intentional while
+  // still being non-compliant. Require all four together or none.
+  const addressParts = [config.address, config.city, config.state, config.postalCode];
+  const filledParts = addressParts.filter((p) => p.trim()).length;
+  const addressIncomplete = filledParts > 0 && filledParts < 4;
+  const canSave =
+    dirty && !senderEmailInvalid && !replyToInvalid && !addressIncomplete && !saving;
 
   async function handleSave() {
     if (!canSave) return;
@@ -180,6 +204,31 @@ export function SendingTab({ accountKey }: SendingTabProps) {
         const data = await res.json();
         throw new Error(data?.error || 'Failed to save');
       }
+
+      // Keep Account.sendgridFromDomain in step with the Sending Domain field.
+      //
+      // There is ONE domain input on this screen but TWO columns behind it:
+      // `sendingDomain` (written by the PATCH above) and
+      // `sendgridFromDomain` (which the send preflight checks for SPF/DKIM
+      // alignment). Previously the second was only ever written when the user
+      // saved an API key, so editing the domain on its own left the two
+      // disagreeing — and the blast preflight then warned about an
+      // unauthenticated domain that the UI plainly showed as set.
+      if (sendgrid.configured && config.sendingDomain !== initial.sendingDomain) {
+        const sgRes = await fetch(`/api/accounts/${accountKey}/sendgrid`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fromDomain: config.sendingDomain || null }),
+        });
+        if (sgRes.ok) {
+          const data = await sgRes.json().catch(() => ({}));
+          setSendgrid((prev) => ({
+            ...prev,
+            fromDomain: data?.fromDomain ?? config.sendingDomain ?? null,
+          }));
+        }
+      }
+
       setInitial(config);
       toast.success('Sending config saved');
     } catch (err) {
@@ -274,6 +323,75 @@ export function SendingTab({ accountKey }: SendingTabProps) {
                 <p className="text-xs text-red-400 mt-1.5">Enter a valid email address.</p>
               )}
             </div>
+          </div>
+        </div>
+
+        <div className="mt-6 pt-6 border-t border-[var(--border)]">
+          <div className="flex items-start gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center flex-shrink-0">
+              <MapPinIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-[var(--foreground)]">
+                Mailing Address
+              </h3>
+              <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                Printed in the unsubscribe footer of every blast. CAN-SPAM
+                requires a valid physical address in commercial email, so blasts
+                are blocked until all four fields are set.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className={labelClass}>Street Address</label>
+              <input
+                type="text"
+                value={config.address}
+                onChange={(e) => setConfig({ ...config, address: e.target.value })}
+                className={inputClass}
+                placeholder="1234 N Main St"
+              />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className={labelClass}>City</label>
+                <input
+                  type="text"
+                  value={config.city}
+                  onChange={(e) => setConfig({ ...config, city: e.target.value })}
+                  className={inputClass}
+                  placeholder="Layton"
+                />
+              </div>
+              <div>
+                <label className={labelClass}>State</label>
+                <input
+                  type="text"
+                  value={config.state}
+                  onChange={(e) => setConfig({ ...config, state: e.target.value })}
+                  className={inputClass}
+                  placeholder="UT"
+                />
+              </div>
+              <div>
+                <label className={labelClass}>ZIP</label>
+                <input
+                  type="text"
+                  value={config.postalCode}
+                  onChange={(e) => setConfig({ ...config, postalCode: e.target.value })}
+                  className={inputClass}
+                  placeholder="84041"
+                />
+              </div>
+            </div>
+            {addressIncomplete && (
+              <p className="text-xs text-red-400">
+                Fill in all four address fields — a partial address still fails
+                CAN-SPAM.
+              </p>
+            )}
           </div>
         </div>
 

@@ -25,7 +25,7 @@ import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
-import { LoomiWordmark } from './loomi-wordmark';
+import { LoomiWordmark } from '@/components/loomi-wordmark';
 
 /**
  * App-surface sidebar. Branding + nav only — user identity, theme toggle,

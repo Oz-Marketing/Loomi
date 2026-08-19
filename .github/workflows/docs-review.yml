@@ -1,0 +1,126 @@
+name: Review Docs Against Merged Code
+
+# Keeps the /docs library honest as the app changes.
+#
+# Two halves, and the split is the point:
+#
+#   1. DRIFT (always runs, no model, cannot be wrong) — asks git which articles
+#      declare `covers:` paths that commits have touched since the article was
+#      last confirmed, and flags them in Loomi so staff see a "needs review"
+#      badge on the article itself.
+#   2. REVIEW (runs only when something drifted) — hands each flagged article and
+#      the diff of its covered code to Claude, and opens a PULL REQUEST with the
+#      proposed edits.
+#
+# Nothing here publishes. The badge tells a person where to look; the PR shows
+# them a diff they merge or close. That is the same contract release notes have
+# (docs/changelog.md) — a machine may notice and draft, a person decides.
+#
+# Deliberately NOT part of deploy.yml: it must never be able to fail a deploy,
+# and it needs full git history, which the deploy checkout doesn't fetch.
+
+on:
+  push:
+    branches:
+      - main
+  # Re-run the sweep by hand — after backfilling `covers:` on an article, or to
+  # check the library without waiting for a merge.
+  workflow_dispatch:
+    inputs:
+      flag_only:
+        description: 'Flag stale articles but skip the AI review pass'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: docs-review
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The drift check walks history between an article's reviewed commit
+          # and HEAD. A shallow clone would make every article look unreviewable
+          # and silently flag nothing.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --fund=false
+
+      - name: Find stale articles
+        id: drift
+        env:
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
+          DOCS_DRIFT_ENDPOINT: https://studio.loomilm.com/api/internal/docs/drift
+        run: |
+          set -euo pipefail
+          npx tsx scripts/docs-drift.ts --out /tmp/docs-drift.json --post
+          count=$(node -e "console.log(require('/tmp/docs-drift.json').stale.length)")
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "::notice::${count} article(s) have code changes since their last review."
+
+      - name: Propose doc updates
+        if: steps.drift.outputs.count != '0' && inputs.flag_only != true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npx tsx scripts/docs-propose.ts --report /tmp/docs-drift.json
+
+      - name: Open a pull request with the proposed edits
+        if: steps.drift.outputs.count != '0' && inputs.flag_only != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$(git status --porcelain content/docs)" ]; then
+            echo "::notice::The review found nothing to change. The articles stay flagged in Loomi."
+            exit 0
+          fi
+
+          branch="docs/auto-review-${HEAD_SHA:0:8}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${branch}"
+          git add content/docs
+          git commit -m "docs: update articles for changes through ${HEAD_SHA:0:8}"
+          git push --set-upstream origin "${branch}"
+
+          {
+            echo "Proposed by the docs review workflow after \`${HEAD_SHA:0:8}\` landed on main."
+            echo
+            cat /tmp/docs-propose-summary.md
+            echo
+            echo "---"
+            echo
+            echo "**Read this as a draft.** The review sees the diff of the code an article"
+            echo "declares it covers — it does not run the app. Check anything it marked"
+            echo "uncertain, and close this PR rather than merging a guess."
+            echo
+            echo "Merging republishes the articles on the next deploy, unless someone has"
+            echo "edited them inside Loomi — an in-app edit wins, and the seeder skips that"
+            echo "row (see \`scripts/seed-docs.ts\`)."
+          } > /tmp/docs-pr-body.md
+
+          gh pr create \
+            --title "docs: review updates for ${HEAD_SHA:0:8}" \
+            --body-file /tmp/docs-pr-body.md \
+            --base main \
+            --head "${branch}" \
+            --label documentation
+
+          echo "::notice::Opened a docs review PR on ${branch}."

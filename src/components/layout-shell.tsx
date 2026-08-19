@@ -150,6 +150,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // covers /media and /subaccount/<slug>/media alike.
   const isMediaLibrary = builderProbe === '/media';
 
+  // Docs — a full-viewport reference surface with its own top bar and side
+  // rail (src/app/docs/layout.tsx). Like the media library it is a BROWSING
+  // surface rather than a builder, so it carries its own way back to the app;
+  // unlike it, it is reached from all three hosts, and the host chrome is
+  // exactly what shouldn't follow you into a manual.
+  const isDocs = builderProbe === '/docs' || builderProbe.startsWith('/docs/');
+
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
   }
@@ -161,7 +168,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 
-  if (isFlowBuilder || isMediaLibrary) {
+  if (isFlowBuilder || isMediaLibrary || isDocs) {
     // Own their full canvas edge-to-edge — no shell padding, no sidebar.
     return <div className="flex-1 min-w-0">{children}</div>;
   }

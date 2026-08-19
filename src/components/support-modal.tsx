@@ -25,9 +25,12 @@ import {
   type ClipboardEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
+import Link from 'next/link';
 import {
   ArrowUpTrayIcon,
+  BookOpenIcon,
   CheckCircleIcon,
+  ChevronRightIcon,
   EnvelopeIcon,
   LifebuoyIcon,
   PhoneIcon,
@@ -359,6 +362,25 @@ export function SupportModal() {
           <>
             {/* ── Body (scrolls) ── */}
             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-5">
+              {/* The docs first. Most of what arrives on the help-desk board is
+                  "how do I…", and an answer someone reads now beats a ticket
+                  answered tomorrow. It sits above the contact strip because the
+                  cheapest resolution should be the first thing offered. */}
+              <Link
+                href="/docs"
+                onClick={close}
+                className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 hover:border-[var(--primary)] transition-colors"
+              >
+                <BookOpenIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-[var(--foreground)]">Browse the docs</p>
+                  <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                    How each part of Loomi works, and how to do the job in it.
+                  </p>
+                </div>
+                <ChevronRightIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
+              </Link>
+
               <ContactStrip />
 
               <div>

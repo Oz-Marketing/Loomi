@@ -167,7 +167,17 @@ function isGlobalAppPath(pathname: string): boolean {
     // Public media links. Shared outward to people with no Loomi account and no
     // idea which host they're on, so they must resolve identically everywhere —
     // exactly like /login. Host-rewriting one would 404 the recipient.
-    pathname.startsWith('/m/')
+    pathname.startsWith('/m/') ||
+    // The docs library. Opened from the help button on every surface, and its
+    // URLs get pasted into Slack by people who have no idea which host they were
+    // standing on — so /docs/segments must be the same page from Studio,
+    // Reporting and the App. Host-rewriting it would 404 two of the three.
+    //
+    // Global for ROUTING only: this list bypasses the host rewrite, not the auth
+    // gate below, so /docs still requires a session and still filters what a
+    // client may read.
+    pathname === '/docs' ||
+    pathname.startsWith('/docs/')
   );
 }
 

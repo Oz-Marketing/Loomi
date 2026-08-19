@@ -86,6 +86,10 @@ export const PERMISSIONS = [
   'agency.markup.view',
   'agency.alerts.view',
   'agency.changelog.manage',
+  /** Write and publish articles in the /docs library. Sits beside
+   *  `changelog.manage` because it is the same job — customer-facing words
+   *  about how Loomi works — and should never drift apart from it. */
+  'agency.docs.manage',
   'agency.coop.manage',
 
   // ── Studio: marketing production ──
@@ -212,6 +216,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'agency.markup.view',
     'agency.alerts.view',
     'agency.changelog.manage',
+    'agency.docs.manage',
     'agency.coop.manage',
   ],
   // Everything the owner has except `platform.configure` — the settings that
@@ -236,6 +241,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'agency.markup.view',
     'agency.alerts.view',
     'agency.changelog.manage',
+    'agency.docs.manage',
     'agency.coop.manage',
   ],
   'agency.user_manager': [

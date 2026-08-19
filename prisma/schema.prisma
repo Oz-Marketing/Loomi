@@ -2204,6 +2204,73 @@ model ChangelogEntry {
 }
 
 // ─────────────────────────────────────────────────────
+// Docs — the in-app documentation library
+// ─────────────────────────────────────────────────────
+//
+// Docs are authored as markdown under `content/docs/` so they version with the
+// code that they describe and get reviewed in the same PR. `scripts/seed-docs.ts`
+// loads them into this table per environment, which is what makes them editable
+// in Loomi without a deploy.
+//
+// The seed is deliberately NOT a mirror. Once someone edits an article in the
+// app, `editedInApp` latches and the seeder stops touching that row — a typo fix
+// made at 4pm must not be undone by the next deploy. See docs/docs-library.md.
+model DocArticle {
+  id      String @id @default(cuid())
+  slug    String @unique
+  title   String
+  summary String // one line; the card subtitle and the search result blurb
+  body    String @db.Text // markdown, rendered by src/lib/docs/markdown.ts
+
+  // Which part of Loomi this documents. Mirrors `Sector` in the permission
+  // registry plus `platform` for the cross-cutting articles (accounts, roles,
+  // notifications, integrations) that belong to no single sector.
+  sector   String // agency | studio | reporting | projects | platform
+  category String // grouping within a sector, e.g. "Audiences"
+
+  // Who may read it. `staff` keeps internal runbooks off client screens, the
+  // same contract `ChangelogEntry.audience` uses — one word, two meanings, so
+  // nobody has to learn a second vocabulary.
+  audience String @default("everyone") // everyone | staff
+  status   String @default("published") // draft | published
+
+  order Int @default(0) // sort within a category
+
+  // ── Freshness ───────────────────────────────────────
+  //
+  // `covers` is the set of repo globs the article describes. The drift job
+  // (scripts/docs-drift.ts) looks for commits touching those paths since
+  // `reviewedSha`; if it finds any, the article is flagged and staff see a
+  // "needs review" badge. This is why an article names its own code.
+  covers String[] @default([])
+
+  needsReview Boolean   @default(false)
+  reviewNote  String? // what changed, written by the drift job
+  reviewedSha String? // the commit the article was last confirmed against
+  reviewedAt  DateTime?
+
+  // ── Provenance ──────────────────────────────────────
+  //
+  // `sourceKey` is the seeding file (e.g. `studio/audiences.md`), unique so a
+  // re-seed can't duplicate the row. `sourceHash` is that file's content hash at
+  // the last successful seed, so an unchanged file is a no-op.
+  sourceKey  String? @unique
+  sourceHash String?
+
+  /// Latches the first time the article is saved in the app. The seeder skips
+  /// any row with this set — a person's edit outranks the file.
+  editedInApp Boolean @default(false)
+
+  updatedBy String? // display name of whoever last saved it in the app
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sector, category, order])
+  @@index([status, sector])
+  @@index([needsReview])
+}
+
+// ─────────────────────────────────────────────────────
 // S3 Media Assets (supplementary storage alongside ESP)
 // ─────────────────────────────────────────────────────
 

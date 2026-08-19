@@ -45,6 +45,29 @@ interface ContactsTableProps {
    * mutations the host triggered itself) so the parent can refetch.
    */
   onMutated?: () => void;
+  /**
+   * Opt in to SERVER-driven paging and sorting.
+   *
+   * Omit it and the table behaves exactly as it always has: it receives the
+   * whole result set and slices/sorts in the browser. That is still right for
+   * the single-account and list-detail views, whose sets are bounded.
+   *
+   * The group roll-up passes this instead, because "the whole result set"
+   * there was every contact from every rooftop — ~200k records shipped to
+   * render 50 rows. With this set, `contacts` IS the current page: the table
+   * renders it as given and reports page/sort changes back up.
+   */
+  serverPagination?: {
+    page: number;
+    pageSize: number;
+    pageCount: number;
+    /** Distinct people matching the query, across every page. */
+    total: number;
+    sortKey: SortKey;
+    sortDir: SortDir;
+    onPageChange: (page: number) => void;
+    onSortChange: (key: SortKey, dir: SortDir) => void;
+  };
 }
 
 export interface BulkActionContext {
@@ -109,13 +132,23 @@ export function ContactsTable({
   accountKey,
   extraBulkActions,
   onMutated,
+  serverPagination,
 }: ContactsTableProps) {
-  const [sortKey, setSortKey] = useState<SortKey>('fullName');
-  const [sortDir, setSortDir] = useState<SortDir>('asc');
-  const [page, setPage] = useState(0);
+  const server = serverPagination;
+  const [localSortKey, setLocalSortKey] = useState<SortKey>('fullName');
+  const [localSortDir, setLocalSortDir] = useState<SortDir>('asc');
+  const [localPage, setLocalPage] = useState(0);
 
-  // Sort
-  const sorted = [...contacts].sort((a, b) => {
+  // In server mode the parent owns page + sort; in client mode this component
+  // does. Everything below reads these, so the two paths stay one code path.
+  const sortKey = server ? server.sortKey : localSortKey;
+  const sortDir = server ? server.sortDir : localSortDir;
+  const page = server ? server.page : localPage;
+
+  // Sort. Skipped entirely in server mode: `contacts` is one page, so sorting
+  // it here would order the visible 50 rows and quietly disagree with the
+  // ordering the other pages were cut from.
+  const sorted = server ? contacts : [...contacts].sort((a, b) => {
     // Date-added sorts chronologically; missing/invalid dates always sort
     // last regardless of direction so blanks don't bubble to the top.
     if (sortKey === 'dateAdded') {
@@ -160,16 +193,25 @@ export function ContactsTable({
   });
 
   // Paginate
-  const totalContacts = sorted.length;
-  const totalPages = Math.ceil(totalContacts / PAGE_SIZE);
-  const paged = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const totalContacts = server ? server.total : sorted.length;
+  const totalPages = server ? server.pageCount : Math.ceil(totalContacts / PAGE_SIZE);
+  const paged = server ? contacts : sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  const setPage = (next: number) => (server ? server.onPageChange(next) : setLocalPage(next));
+  // Server mode reports its own page size; client mode uses the constant.
+  const pageSize = server ? server.pageSize : PAGE_SIZE;
 
   function handleSort(key: SortKey) {
+    if (server) {
+      const nextDir: SortDir = server.sortKey === key && server.sortDir === 'asc' ? 'desc' : 'asc';
+      server.onSortChange(key, nextDir);
+      return;
+    }
     if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+      setLocalSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
-      setSortKey(key);
-      setSortDir('asc');
+      setLocalSortKey(key);
+      setLocalSortDir('asc');
     }
     setPage(0);
   }
@@ -208,10 +250,15 @@ export function ContactsTable({
   // Cross-page selection: when the user selects the page checkbox, surface
   // a "Select all N contacts" affordance so they can grab every contact in
   // the current filtered set, not just the visible page.
-  const allFilteredIds = sorted.map((c) => c.id);
+  //
+  // Server mode has no such set to grab — only this page is loaded, and the
+  // ids of the other N-50 were never sent to the browser. So selection there
+  // is page-scoped, and the cross-page affordance is withheld rather than
+  // offered as a button that would silently select 50 while saying 200,000.
+  const allFilteredIds = server ? pageIds : sorted.map((c) => c.id);
   const allFilteredSelected =
     allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedIds.has(id));
-  const hasMultiplePages = totalPages > 1;
+  const hasMultiplePages = !server && totalPages > 1;
 
   function togglePageSelection() {
     setSelectedIds((prev) => {
@@ -598,11 +645,11 @@ export function ContactsTable({
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-4 pr-24 text-xs text-[var(--muted-foreground)]">
           <span>
-            {page * PAGE_SIZE + 1}&ndash;{Math.min((page + 1) * PAGE_SIZE, totalContacts)} of {totalContacts.toLocaleString()}
+            {page * pageSize + 1}&ndash;{Math.min(page * pageSize + paged.length, totalContacts)} of {totalContacts.toLocaleString()}
           </span>
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              onClick={() => setPage(Math.max(0, page - 1))}
               disabled={page === 0}
               className="p-1.5 rounded hover:bg-[var(--muted)] disabled:opacity-30 transition-colors"
             >
@@ -612,7 +659,7 @@ export function ContactsTable({
               {page + 1} / {totalPages}
             </span>
             <button
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
               disabled={page >= totalPages - 1}
               className="p-1.5 rounded hover:bg-[var(--muted)] disabled:opacity-30 transition-colors"
             >

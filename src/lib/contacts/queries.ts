@@ -12,7 +12,7 @@
 //     columns. Postgres `ilike` is fine here at expected dataset
 //     sizes (low five figures per account).
 
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import type { Contact as ApiContact } from './types';
 
@@ -267,4 +267,191 @@ export async function getContactById(
 
 export async function countContactsForAccount(accountKey: string): Promise<number> {
   return prisma.contact.count({ where: { accountKey } });
+}
+
+// ── Paged, cross-account list ──
+//
+// What the group ("roll-up") Contacts view runs on.
+//
+// It used to fan out one `?all=true` request PER ACCOUNT from the browser —
+// up to MAX_FETCH_ALL rows each, 8 in flight — merge them in JS, and then
+// render 50 rows from the result. On a 41-rooftop group that is ~200k contact
+// records serialized, shipped, parsed, and held in a tab to show one screenful.
+// It also meant the server built 8 of those payloads at once in a process pm2
+// restarts at 512MB RSS, which took the whole app down with it.
+//
+// So: one query, one page.
+//
+// The wrinkle is that the browser wasn't only paginating — it was DEDUPING.
+// One shopper who signed up at three rooftops is three Contact rows, and the
+// view collapses them into a single row carrying all three memberships. That
+// has to happen BEFORE the limit/offset or the page size is meaningless, so
+// the grouping runs in SQL.
+
+/** Rows are grouped by this — mirrors `contactIdentityKey` on the client. */
+const IDENTITY_SQL = Prisma.sql`
+  CASE
+    WHEN btrim(coalesce(c."email", '')) <> ''
+      THEN 'email:' || lower(btrim(c."email"))
+    WHEN btrim(coalesce(c."phone", '')) LIKE '+%'
+         AND regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') <> ''
+      THEN 'phone:+' || regexp_replace(c."phone", '\\D', '', 'g')
+    WHEN length(regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g')) = 10
+      THEN 'phone:+1' || regexp_replace(c."phone", '\\D', '', 'g')
+    WHEN length(regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g')) = 11
+         AND regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') LIKE '1%'
+      THEN 'phone:+' || regexp_replace(c."phone", '\\D', '', 'g')
+    -- No usable email or phone: not mergeable with anything, so key it to
+    -- itself. The client does the same by leaving such rows un-grouped.
+    ELSE 'id:' || c."id"
+  END
+`;
+
+/**
+ * Sortable columns, mirroring the table's header buttons. Whitelisted rather
+ * than interpolated — these become SQL identifiers.
+ *
+ * Every one aggregates, because a row here is a PERSON who may span several
+ * rooftops: `min(lower(...))` picks a stable representative value so the same
+ * person sorts to the same place regardless of which rooftop's row won.
+ */
+export type PagedSortKey =
+  | 'dateAdded'
+  | 'fullName'
+  | 'email'
+  | 'source'
+  | 'vehicleMake'
+  | '_dealer';
+
+export interface PagedContactsOptions {
+  accountKeys: string[];
+  /** 0-based. */
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  sort?: PagedSortKey;
+  dir?: 'asc' | 'desc';
+}
+
+export interface PagedContactsResult {
+  /** One page of deduped contacts, each carrying every account it belongs to. */
+  contacts: (ApiContact & { _accountKeys: string[] })[];
+  /** Distinct PEOPLE matching the query across every account in scope. */
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+const SORT_EXPR: Record<PagedSortKey, Prisma.Sql> = {
+  dateAdded: Prisma.sql`max(c."dateAdded")`,
+  fullName: Prisma.sql`min(lower(btrim(coalesce(nullif(btrim(c."fullName"), ''),
+    btrim(coalesce(c."firstName", '') || ' ' || coalesce(c."lastName", ''))))))`,
+  email: Prisma.sql`min(lower(coalesce(c."email", '')))`,
+  source: Prisma.sql`min(lower(coalesce(c."source", '')))`,
+  vehicleMake: Prisma.sql`min(lower(coalesce(c."vehicleMake", '')))`,
+  // The dealer NAME, not the key — the column shows names and sorts by them.
+  _dealer: Prisma.sql`min(lower(coalesce(a."dealer", c."accountKey")))`,
+};
+
+const PAGED_MAX_PAGE_SIZE = 200;
+const PAGED_DEFAULT_PAGE_SIZE = 50;
+
+export async function listContactsPaged(
+  opts: PagedContactsOptions,
+): Promise<PagedContactsResult> {
+  const accountKeys = [...new Set(opts.accountKeys.filter(Boolean))];
+  const pageSize = Math.min(
+    PAGED_MAX_PAGE_SIZE,
+    Math.max(1, opts.pageSize ?? PAGED_DEFAULT_PAGE_SIZE),
+  );
+  const page = Math.max(0, opts.page ?? 0);
+
+  if (accountKeys.length === 0) {
+    return { contacts: [], total: 0, page, pageSize };
+  }
+
+  const term = (opts.search ?? '').trim();
+  // Mirrors `searchClause`, which the single-account path uses. Phone is
+  // matched on digits so "(801) 555" finds "+18015550100".
+  const digits = term.replace(/\D/g, '');
+  const searchSql = term
+    ? Prisma.sql`AND (
+        c."firstName" ILIKE ${'%' + term + '%'} OR
+        c."lastName"  ILIKE ${'%' + term + '%'} OR
+        c."fullName"  ILIKE ${'%' + term + '%'} OR
+        c."email"     ILIKE ${'%' + term + '%'} OR
+        c."source"    ILIKE ${'%' + term + '%'} OR
+        c."phone"     LIKE  ${'%' + (digits || term) + '%'}
+      )`
+    : Prisma.empty;
+
+  // Two steps on purpose. Raw SQL resolves WHICH people are on this page and
+  // which accounts each belongs to; Prisma then fetches those rows through
+  // CONTACT_SELECT so the 30-odd columns stay typed and serializeContact keeps
+  // its single definition. Hand-mapping every column in raw SQL would be a
+  // second source of truth for the row shape.
+  const sortKey: PagedSortKey = opts.sort && SORT_EXPR[opts.sort] ? opts.sort : 'dateAdded';
+  // Default DESC for recency, ASC for the text columns — what each one reads
+  // as "first" to a person scanning the list.
+  const dir = opts.dir ?? (sortKey === 'dateAdded' ? 'desc' : 'asc');
+  const dirSql = dir === 'asc' ? Prisma.sql`ASC NULLS LAST` : Prisma.sql`DESC NULLS LAST`;
+
+  const groups = await prisma.$queryRaw<
+    { rep_id: string; account_keys: string[]; total: bigint }[]
+  >(Prisma.sql`
+    WITH scoped AS (
+      SELECT
+        c."id",
+        c."accountKey",
+        c."dateAdded",
+        c."createdAt",
+        ${IDENTITY_SQL} AS ident,
+        ${SORT_EXPR[sortKey]} OVER (PARTITION BY ${IDENTITY_SQL}) AS sort_val
+      FROM "Contact" c
+      LEFT JOIN "Account" a ON a."key" = c."accountKey"
+      WHERE c."accountKey" = ANY(${accountKeys})
+      ${searchSql}
+    ),
+    grouped AS (
+      SELECT
+        ident,
+        (array_agg("id" ORDER BY "dateAdded" DESC NULLS LAST, "createdAt" DESC))[1] AS rep_id,
+        array_agg(DISTINCT "accountKey") AS account_keys,
+        min(sort_val) AS sort_val,
+        max("createdAt") AS sort_created
+      FROM scoped
+      GROUP BY ident
+    )
+    SELECT
+      rep_id,
+      account_keys,
+      -- Total distinct PEOPLE, not rows. Windowed so it costs one pass
+      -- instead of a second round trip.
+      count(*) OVER () AS total
+    FROM grouped
+    ORDER BY sort_val ${dirSql}, sort_created DESC
+    LIMIT ${pageSize} OFFSET ${page * pageSize}
+  `);
+
+  if (groups.length === 0) {
+    return { contacts: [], total: 0, page, pageSize };
+  }
+
+  const total = Number(groups[0]!.total);
+  const repIds = groups.map((g) => g.rep_id);
+
+  const rows = await prisma.contact.findMany({
+    where: { id: { in: repIds } },
+    select: CONTACT_SELECT,
+  });
+
+  // `IN` does not preserve order — restore the ranking the window produced.
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const contacts = groups.flatMap((g) => {
+    const row = byId.get(g.rep_id);
+    if (!row) return [];
+    return [{ ...serializeContact(row), _accountKeys: g.account_keys }];
+  });
+
+  return { contacts, total, page, pageSize };
 }

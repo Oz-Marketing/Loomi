@@ -9,6 +9,7 @@ import {
   ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   ClockIcon,
+  ExclamationTriangleIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
   UsersIcon,
@@ -38,6 +39,30 @@ interface DraftCampaign {
   /** JSON-stringified array of Contact IDs for manual selection mode. */
   sourceContactIds: string;
   metadata: string;
+}
+
+interface SmsPreflightIssue {
+  severity: 'blocker' | 'warning';
+  code: string;
+  accountKey: string;
+  message: string;
+  remedy: string;
+}
+
+interface SmsPreflightReport {
+  ok: boolean;
+  issues: SmsPreflightIssue[];
+  /** Earliest compliant instant, when quiet hours are the problem. */
+  suggestedSendAt: string | null;
+  heldByQuietHours: number;
+  pending?: boolean;
+}
+
+/** Format an instant for a datetime-local input in the browser's timezone. */
+function toLocalInputValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function parseSmsMediaUrls(rawMetadata: string): string[] {
@@ -88,6 +113,15 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     toLocalDateTimeInputValue(new Date(Date.now() + 30 * 60_000)),
   );
   const [submitting, setSubmitting] = useState(false);
+
+  // Compliance + deliverability report. Fetched whenever the recipient list or
+  // send time changes, so a TCPA problem surfaces while the user is still
+  // choosing a time rather than at the final click. The POST /schedule gate
+  // runs the same checks and is authoritative.
+  const [preflight, setPreflight] = useState<SmsPreflightReport | null>(null);
+  // When true, recipients inside their local quiet period are HELD and go out
+  // as each window opens, instead of the send being refused outright.
+  const [deferQuietHours, setDeferQuietHours] = useState(false);
 
   // Keep the inline-editable message text in sync with the loaded draft.
   useEffect(() => {
@@ -194,6 +228,69 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectionKey, accountKey, draft?.id]);
 
+  // The instant the send would actually happen, as the preflight sees it.
+  const intendedSendAt = useMemo(() => {
+    if (sendMode === 'now') return null;
+    const d = new Date(sendAtLocal);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  }, [sendMode, sendAtLocal]);
+
+  useEffect(() => {
+    if (!draft?.id || recipientsLoading || recipients.length === 0) return;
+    let canceled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/blasts/sms/${encodeURIComponent(draft.id)}/preflight`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              recipients,
+              scheduledFor: intendedSendAt,
+              deferOutsideQuietHours: deferQuietHours,
+            }),
+          },
+        );
+        if (!res.ok || canceled) return;
+        const data = (await res.json()) as SmsPreflightReport;
+        if (!canceled) setPreflight(data);
+      } catch {
+        // Advisory only — the send gate is authoritative.
+      }
+    })();
+    return () => {
+      canceled = true;
+    };
+  }, [draft?.id, recipients, recipientsLoading, intendedSendAt, deferQuietHours]);
+
+  /**
+   * Persist the deferral choice onto the blast, then re-run the gate.
+   *
+   * The flag has to live on the campaign rather than in component state: the
+   * POST /schedule gate reads it from metadata, and the worker holds recipients
+   * based on the same record long after this page is closed.
+   */
+  async function enableQuietHoursDeferral() {
+    if (!draft) return;
+    setDeferQuietHours(true);
+    try {
+      const existing = draft.metadata ? JSON.parse(draft.metadata) : {};
+      const metadata = JSON.stringify({
+        ...existing,
+        deferOutsideQuietHours: true,
+      });
+      const res = await fetch(`/api/blasts/sms/${encodeURIComponent(draft.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata }),
+      });
+      if (res.ok) setDraft((prev) => (prev ? { ...prev, metadata } : prev));
+    } catch {
+      toast.error('Could not save the send-window preference.');
+    }
+  }
+
   async function handleSchedule() {
     if (!draft) return;
     if (recipients.length === 0) {
@@ -232,7 +329,19 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
         },
       );
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || 'Failed to schedule campaign');
+      if (!res.ok) {
+        // The gate returns 422 with the full issue list — refresh the panel so
+        // every blocker is visible, not just the summary in the toast.
+        if (res.status === 422 && Array.isArray(data?.issues)) {
+          setPreflight({
+            ok: false,
+            issues: data.issues,
+            suggestedSendAt: data.suggestedSendAt ?? null,
+            heldByQuietHours: data.heldByQuietHours ?? 0,
+          });
+        }
+        throw new Error(data?.error || 'Failed to schedule campaign');
+      }
       toast.success(
         sendMode === 'now'
           ? 'Blast queued — sending starts within ~1 minute.'
@@ -245,6 +354,13 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
       setSubmitting(false);
     }
   }
+
+  const smsBlockers = (preflight?.issues ?? []).filter((i) => i.severity === 'blocker');
+  const smsWarnings = (preflight?.issues ?? []).filter((i) => i.severity === 'warning');
+  const smsPreflightBlocked = smsBlockers.length > 0;
+  // Only quiet hours has a one-click remedy; everything else needs a settings
+  // or copy change, so the deferral buttons stay hidden for those.
+  const quietHoursBlocking = smsBlockers.some((i) => i.code === 'quiet_hours');
 
   if (loading) {
     return (
@@ -435,6 +551,87 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
         </div>
       </div>
 
+      {/* Compliance + deliverability report */}
+      {(smsBlockers.length > 0 || smsWarnings.length > 0) && (
+        <div className="max-w-5xl mx-auto px-6 pb-4">
+          <div
+            className={`rounded-2xl border p-5 ${
+              smsPreflightBlocked
+                ? 'border-red-500/40 bg-red-500/[0.06]'
+                : 'border-amber-500/40 bg-amber-500/[0.06]'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <ExclamationTriangleIcon
+                className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
+                  smsPreflightBlocked ? 'text-red-400' : 'text-amber-400'
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-[var(--foreground)]">
+                  {smsPreflightBlocked
+                    ? 'This blast can\u2019t send yet'
+                    : 'Worth checking before you send'}
+                </h3>
+                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                  {/* The TCPA line is specific to a quiet-hours block — it read
+                      as a non-sequitur when the actual blocker was a missing
+                      Twilio credential. */}
+                  {!smsPreflightBlocked
+                    ? 'These won\u2019t stop the send, but they affect cost or deliverability.'
+                    : quietHoursBlocking
+                      ? 'Texting outside the legal window carries statutory damages per message, so this has to be resolved first.'
+                      : 'Each item below would stop this blast from reaching anyone, or get the sending number filtered by carriers.'}
+                </p>
+
+                <ul className="mt-3 space-y-2.5">
+                  {[...smsBlockers, ...smsWarnings].map((issue, i) => (
+                    <li key={`${issue.code}-${issue.accountKey}-${i}`} className="text-xs">
+                      <span
+                        className={`inline-block w-1.5 h-1.5 rounded-full mr-2 align-middle ${
+                          issue.severity === 'blocker' ? 'bg-red-400' : 'bg-amber-400'
+                        }`}
+                      />
+                      <span className="text-[var(--foreground)]">{issue.message}</span>{' '}
+                      <span className="text-[var(--muted-foreground)]">{issue.remedy}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {/* The one-click way out of a quiet-hours block. Only offered
+                    when quiet hours is actually what's blocking — the other
+                    blockers need a settings or copy change instead. */}
+                {quietHoursBlocking && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {preflight?.suggestedSendAt && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSendMode('later');
+                          setSendAtLocal(toLocalInputValue(preflight.suggestedSendAt!));
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 h-9 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
+                      >
+                        <ClockIcon className="w-3.5 h-3.5" />
+                        Move send to {formatDateTime(preflight.suggestedSendAt)}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={enableQuietHoursDeferral}
+                      className="inline-flex items-center gap-1.5 px-3 h-9 text-xs font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/15"
+                    >
+                      <PaperAirplaneIcon className="w-3.5 h-3.5" />
+                      Send each recipient at 8am their local time
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="fixed bottom-0 left-0 right-0 bg-[var(--card)]/80 backdrop-blur-md border-t border-[var(--border)] z-40">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
@@ -453,7 +650,11 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
               // Never send an arbitrary prefix of an over-limit audience.
               audienceTruncated ||
               recipients.length === 0 ||
-              !draft?.message?.trim()
+              !draft?.message?.trim() ||
+              // Compliance gate. The server enforces this too; disabling the
+              // button just avoids telling the user "no" only after they've
+              // committed to a send time.
+              smsPreflightBlocked
             }
           >
             <PaperAirplaneIcon className="w-4 h-4" />

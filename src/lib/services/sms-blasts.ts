@@ -6,6 +6,19 @@ import {
   TwilioError,
   type TwilioConfig,
 } from '@/lib/sending/twilio';
+import {
+  applyBlastMergetags,
+  buildBlastMergetagContext,
+  type BlastAccountData,
+  type BlastContactData,
+} from '@/lib/sending/blast-mergetags';
+import {
+  isWithinQuietHours,
+  nextPermittedInstant,
+  resolveRecipientZones,
+  MAX_DEFERRAL_MS,
+  QUIET_HOURS_START_HOUR,
+} from '@/lib/sending/sms-quiet-hours';
 
 type OutboundMessageChannel = 'SMS' | 'MMS';
 
@@ -234,18 +247,25 @@ function buildCampaignMetadata(input: CreateSmsBlastInput): string | null {
 function parseCampaignMetadata(raw: string | null | undefined): {
   channel: OutboundMessageChannel;
   mediaUrls: string[];
+  /**
+   * Set by the Schedule step's "send at 8am local time instead" option. When
+   * true, a recipient inside their quiet period is HELD rather than blocking
+   * the whole blast — see the send loop below.
+   */
+  deferOutsideQuietHours: boolean;
 } {
   if (!raw) {
-    return { channel: 'SMS', mediaUrls: [] };
+    return { channel: 'SMS', mediaUrls: [], deferOutsideQuietHours: false };
   }
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       channel: normalizeChannel(parsed.channel),
       mediaUrls: normalizeMediaUrls(parsed.mediaUrls),
+      deferOutsideQuietHours: Boolean(parsed.deferOutsideQuietHours),
     };
   } catch {
-    return { channel: 'SMS', mediaUrls: [] };
+    return { channel: 'SMS', mediaUrls: [], deferOutsideQuietHours: false };
   }
 }
 
@@ -764,6 +784,7 @@ async function summarizeCampaign(campaignId: string) {
   let pending = 0;
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
   let firstError = '';
 
   for (const row of recipients) {
@@ -771,6 +792,13 @@ async function summarizeCampaign(campaignId: string) {
     else if (row.status === 'failed') {
       failed += 1;
       if (!firstError && row.error) firstError = row.error;
+    } else if (row.status === 'skipped') {
+      // TERMINAL, not pending. A recipient who replied STOP is a decision, not
+      // unfinished work. Counting them as pending left the blast permanently
+      // un-completable: the sweep re-picked it every minute while its recipient
+      // query — which only loads status='pending' — came back empty. A blast
+      // whose whole audience had opted out looped forever.
+      skipped += 1;
     } else pending += 1;
   }
 
@@ -779,8 +807,124 @@ async function summarizeCampaign(campaignId: string) {
     pending,
     sent,
     failed,
+    skipped,
     firstError,
   };
+}
+
+interface SmsBlastCounts {
+  total: number;
+  pending: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  firstError: string;
+}
+
+/**
+ * Collapse recipient counts into the blast's status.
+ *
+ * `pending` still means "processing" — that is what keeps a quiet-hours-held
+ * blast in flight across the minutes or hours until its recipients' local
+ * windows open. `skipped` counts as work DONE, so an all-opted-out blast
+ * completes with zero sends instead of looping.
+ */
+function resolveSmsBlastStatus(counts: SmsBlastCounts): SmsBlastStatus {
+  if (counts.pending > 0) return 'processing';
+  if (counts.sent > 0 && counts.failed > 0) return 'partial';
+  if (counts.sent > 0) return 'completed';
+  if (counts.failed > 0) return 'failed';
+  if (counts.skipped > 0) return 'completed';
+  return 'completed';
+}
+
+/** Mergetag + opt-out data for one recipient, keyed `accountKey|contactId`. */
+type SmsContactRow = BlastContactData & { dndSms: boolean };
+
+/** Load merge data + SMS opt-out state for a batch in one query. */
+async function loadSmsContacts(
+  refs: { contactId: string; accountKey: string }[],
+): Promise<Map<string, SmsContactRow>> {
+  const map = new Map<string, SmsContactRow>();
+  const ids = [...new Set(refs.map((r) => r.contactId).filter(Boolean))];
+  if (ids.length === 0) return map;
+
+  const rows = await prisma.contact.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      accountKey: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+      email: true,
+      phone: true,
+      city: true,
+      state: true,
+      vehicleYear: true,
+      vehicleMake: true,
+      vehicleModel: true,
+      lastServiceDate: true,
+      nextServiceDate: true,
+      leaseEndDate: true,
+      purchaseDate: true,
+      customFields: true,
+      dnd: true,
+    },
+  });
+
+  for (const row of rows) {
+    let dndSms = false;
+    if (row.dnd && typeof row.dnd === 'object' && !Array.isArray(row.dnd)) {
+      dndSms = Boolean((row.dnd as Record<string, unknown>).sms);
+    }
+    map.set(`${row.accountKey}|${row.id}`, { ...row, dndSms });
+  }
+  return map;
+}
+
+/** `accountKey|phone` → suppression reason, for the whole batch in one query. */
+async function loadSmsSuppressionSet(
+  refs: { accountKey: string; phone: string | null }[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const accountKeys = [...new Set(refs.map((r) => r.accountKey).filter(Boolean))];
+  const phones = [...new Set(refs.map((r) => (r.phone || '').trim()).filter(Boolean))];
+  if (accountKeys.length === 0 || phones.length === 0) return map;
+
+  const rows = await prisma.smsSuppression.findMany({
+    where: { accountKey: { in: accountKeys }, phone: { in: phones } },
+    select: { accountKey: true, phone: true, reason: true },
+  });
+  for (const row of rows) {
+    map.set(`${row.accountKey}|${row.phone.trim()}`, row.reason);
+  }
+  return map;
+}
+
+/** Account-level values behind the {{location.*}} mergetags, plus timezone. */
+async function loadSmsAccountData(
+  accountKeys: string[],
+): Promise<Map<string, BlastAccountData & { timezone: string | null }>> {
+  const map = new Map<string, BlastAccountData & { timezone: string | null }>();
+  if (accountKeys.length === 0) return map;
+
+  const rows = await prisma.account.findMany({
+    where: { key: { in: accountKeys } },
+    select: {
+      key: true,
+      dealer: true,
+      phone: true,
+      address: true,
+      city: true,
+      state: true,
+      postalCode: true,
+      website: true,
+      timezone: true,
+    },
+  });
+  for (const row of rows) map.set(row.key, row);
+  return map;
 }
 
 export async function processSmsBlast(
@@ -793,7 +937,14 @@ export async function processSmsBlast(
     include: {
       recipients: {
         where: { status: 'pending' },
-        select: { id: true, contactId: true, accountKey: true, phone: true },
+        select: {
+          id: true,
+          contactId: true,
+          accountKey: true,
+          phone: true,
+          // Needed to cap how long a quiet-hours hold can last.
+          createdAt: true,
+        },
       },
     },
   });
@@ -804,14 +955,7 @@ export async function processSmsBlast(
   }
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
-    const status: SmsBlastStatus =
-      counts.sent > 0 && counts.failed > 0
-        ? 'partial'
-        : counts.sent > 0
-          ? 'completed'
-          : counts.failed > 0
-            ? 'failed'
-            : 'queued';
+    const status = resolveSmsBlastStatus(counts);
     const updated = await prisma.smsBlast.update({
       where: { id: campaign.id },
       data: {
@@ -819,7 +963,7 @@ export async function processSmsBlast(
         totalRecipients: counts.total,
         sentCount: counts.sent,
         failedCount: counts.failed,
-        completedAt: status === 'queued' ? null : new Date(),
+        completedAt: status === 'processing' ? null : new Date(),
         error: counts.firstError || null,
       },
     });
@@ -838,6 +982,30 @@ export async function processSmsBlast(
 
   const campaignMessageOptions = parseCampaignMetadata(campaign.metadata);
   const runtimeByAccount = new Map<string, ResolvedMessagingRuntime>();
+
+  const uniqueAccountKeys = [...new Set(campaign.recipients.map((r) => r.accountKey))];
+
+  // Batch the per-recipient data instead of querying inside the send loop.
+  const contactById = await loadSmsContacts(
+    campaign.recipients.map((r) => ({
+      contactId: r.contactId,
+      accountKey: r.accountKey,
+    })),
+  );
+
+  // Re-read suppressions HERE, not just at schedule time. A STOP reply is a
+  // legal opt-out; honouring it only as of the moment a blast was drafted means
+  // texting someone who told you to stop three days ago. The send is the only
+  // checkpoint that can be authoritative.
+  const suppressedAtSend = await loadSmsSuppressionSet(
+    campaign.recipients.map((r) => ({
+      accountKey: r.accountKey,
+      phone: r.phone,
+    })),
+  );
+
+  const accountDataByKey = await loadSmsAccountData(uniqueAccountKeys);
+  const sendInstant = new Date();
 
   async function resolveMessagingRuntime(accountKey: string): Promise<ResolvedMessagingRuntime> {
     const cached = runtimeByAccount.get(accountKey);
@@ -882,6 +1050,76 @@ export async function processSmsBlast(
   const tasks = campaign.recipients.map((recipient) => async () => {
     const { id, accountKey } = recipient;
 
+    // ── Opt-out re-checks, as of NOW ──
+    // Recorded as `skipped`, not `failed`: nothing went wrong, we deliberately
+    // did not send, and the two mean different things in the analytics.
+    const phoneKey = (recipient.phone || '').trim();
+    const suppressionReason = phoneKey
+      ? suppressedAtSend.get(`${accountKey}|${phoneKey}`)
+      : undefined;
+    if (suppressionReason) {
+      await prisma.smsBlastRecipient.update({
+        where: { id },
+        data: { status: 'skipped', error: `Suppressed (${suppressionReason})` },
+      });
+      return;
+    }
+
+    const contact = contactById.get(`${accountKey}|${recipient.contactId}`);
+
+    // Contact.dnd.sms is a hard, human-set opt-out. It was honoured only by the
+    // segment-eligibility helper behind the on-screen recipient count, never by
+    // the sender — so an opted-out contact in a posted recipient list went out.
+    if (contact?.dndSms) {
+      await prisma.smsBlastRecipient.update({
+        where: { id },
+        data: { status: 'skipped', error: 'Suppressed (contact opted out of SMS)' },
+      });
+      return;
+    }
+
+    const accountData = accountDataByKey.get(accountKey) || null;
+
+    // ── TCPA quiet hours ──
+    // The window is the recipient's local one, derived from their area code, so
+    // a single blast across four timezones has four different legal windows.
+    // Outside it we HOLD the row as pending rather than failing it: the sweep
+    // runs every minute, so each tranche goes out the moment its own window
+    // opens. That is what makes "schedule it, let it land at 8am" work.
+    const { zones } = resolveRecipientZones({
+      phone: recipient.phone,
+      accountTimezone: accountData?.timezone ?? null,
+    });
+    if (!isWithinQuietHours(sendInstant, zones)) {
+      const heldFor = sendInstant.getTime() - recipient.createdAt.getTime();
+      if (heldFor > MAX_DEFERRAL_MS) {
+        // Without this cap a row whose window somehow never opens would keep
+        // the blast in `processing` and re-swept forever.
+        await prisma.smsBlastRecipient.update({
+          where: { id },
+          data: {
+            status: 'failed',
+            error:
+              'Not sent: still inside TCPA quiet hours 48h after being queued. Reschedule this blast.',
+          },
+        });
+        return;
+      }
+
+      const resume = nextPermittedInstant(sendInstant, zones);
+      await prisma.smsBlastRecipient.update({
+        where: { id },
+        data: {
+          // Stays pending on purpose — this is a hold, not an outcome.
+          status: 'pending',
+          error: resume
+            ? `Holding until ${QUIET_HOURS_START_HOUR}am local (quiet hours) — next attempt ${resume.toISOString()}`
+            : 'Holding until local quiet hours end',
+        },
+      });
+      return;
+    }
+
     const runtime = await resolveMessagingRuntime(accountKey);
     if (runtime.kind === 'error') {
       await prisma.smsBlastRecipient.update({
@@ -904,6 +1142,22 @@ export async function processSmsBlast(
         return;
       }
       try {
+        // Per-recipient personalization. The body used to be passed straight
+        // through, so any {{contact.first_name}} a user carried over from the
+        // email editor shipped to the handset with its braces intact — while
+        // the same tag in a FLOW text personalized correctly.
+        const mergeCtx = buildBlastMergetagContext({
+          contact,
+          account: accountData,
+          recipientEmail: contact?.email ?? null,
+          // SMS opts out by replying STOP; there is no unsubscribe URL.
+          unsubscribeToken: '',
+        });
+        const personalizedBody = applyBlastMergetags(campaign.message, mergeCtx, {
+          // No HTML here — escaping would put &amp; on someone's phone.
+          escape: false,
+        });
+
         const sent = await sendSmsViaTwilio({
           accountSid: runtime.config.accountSid,
           authToken: runtime.config.authToken,
@@ -912,7 +1166,7 @@ export async function processSmsBlast(
             messagingServiceSid: runtime.config.messagingServiceSid,
           },
           to: recipient.phone,
-          body: campaign.message,
+          body: personalizedBody,
           mediaUrls: campaignMessageOptions.mediaUrls,
           // Status callback routes the accountKey through the URL so the
           // webhook handler can resolve the right per-sub-account Auth
@@ -948,16 +1202,7 @@ export async function processSmsBlast(
   await withConcurrencyLimit(tasks, concurrency);
 
   const counts = await summarizeCampaign(campaign.id);
-  const nextStatus: SmsBlastStatus =
-    counts.pending > 0
-      ? 'processing'
-      : counts.sent > 0 && counts.failed > 0
-        ? 'partial'
-        : counts.sent > 0
-          ? 'completed'
-          : counts.failed > 0
-            ? 'failed'
-            : 'queued';
+  const nextStatus = resolveSmsBlastStatus(counts);
 
   const updated = await prisma.smsBlast.update({
     where: { id: campaign.id },
@@ -966,7 +1211,7 @@ export async function processSmsBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
-      completedAt: nextStatus === 'processing' || nextStatus === 'queued' ? null : new Date(),
+      completedAt: nextStatus === 'processing' ? null : new Date(),
       error: counts.firstError || null,
     },
   });

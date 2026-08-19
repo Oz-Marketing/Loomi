@@ -1,4 +1,3 @@
-import nodemailer from 'nodemailer';
 import { prisma } from '@/lib/prisma';
 import {
   isLikelyDeliverableEmail,
@@ -7,6 +6,13 @@ import {
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
+import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
+import {
+  applyBlastMergetags,
+  buildBlastMergetagContext,
+  type BlastAccountData,
+  type BlastContactData,
+} from '@/lib/sending/blast-mergetags';
 
 /**
  * Run async tasks with a concurrency limit. Inlined here (was previously
@@ -235,20 +241,73 @@ function buildCampaignMetadata(input: CreateEmailBlastInput): string | null {
   return JSON.stringify(payload);
 }
 
-function parseCampaignMetadata(raw: string | null | undefined): {
+export interface BlastResendSettings {
+  enabled: boolean;
+  delayHours: number;
+  subject: string;
+}
+
+interface ParsedCampaignMetadata {
   sourceType: string;
-} {
-  if (!raw) {
-    return { sourceType: 'template-library' };
-  }
+  utm: BlastUtmSettings | null;
+  resend: BlastResendSettings | null;
+  /** Set on a follow-up blast; points at the blast it follows up on. */
+  resendOf: string;
+}
+
+/**
+ * Read the campaign metadata blob.
+ *
+ * This used to return ONLY sourceType and silently discard the rest, which
+ * meant the UTM settings and the "Resend to non-engaged" toggle — both
+ * faithfully saved by the Schedule step — had no effect whatsoever. The
+ * fields are parsed defensively because the blob is also written by the flow
+ * engine and the ad-generator automation.
+ */
+function parseCampaignMetadata(
+  raw: string | null | undefined,
+): ParsedCampaignMetadata {
+  const empty: ParsedCampaignMetadata = {
+    sourceType: 'template-library',
+    utm: null,
+    resend: null,
+    resendOf: '',
+  };
+  if (!raw) return empty;
 
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const utmRaw = parsed.utm as Record<string, unknown> | undefined;
+    const resendRaw = parsed.resend as Record<string, unknown> | undefined;
+
     return {
       sourceType: normalizeSourceType(String(parsed.sourceType || '')),
+      utm: utmRaw && typeof utmRaw === 'object'
+        ? {
+            enabled: Boolean(utmRaw.enabled),
+            source: String(utmRaw.source || ''),
+            medium: String(utmRaw.medium || ''),
+            campaign: String(utmRaw.campaign || ''),
+            term: String(utmRaw.term || ''),
+            content: String(utmRaw.content || ''),
+          }
+        : null,
+      resend: resendRaw && typeof resendRaw === 'object'
+        ? {
+            enabled: Boolean(resendRaw.enabled),
+            // Clamp to a sane window: under an hour isn't a follow-up, and
+            // past 30 days the offer is stale anyway.
+            delayHours: Math.max(
+              1,
+              Math.min(720, Number(resendRaw.delayHours) || 72),
+            ),
+            subject: String(resendRaw.subject || ''),
+          }
+        : null,
+      resendOf: String(parsed.resendOf || ''),
     };
   } catch {
-    return { sourceType: 'template-library' };
+    return empty;
   }
 }
 
@@ -342,49 +401,12 @@ interface AccountSenderIdentity {
   senderEmail: string | null;
   senderName: string | null;
   /** Decrypted SendGrid API key when this sub-account has one configured;
-   *  null = fall back to nodemailer SMTP. */
+   *  null = account can't send bulk email (preflight blocks this). */
   sendgridApiKey: string | null;
   /** Pre-built CAN-SPAM unsubscribe footer (HTML + text). Null when the
    *  account hasn't filled in any address/dealer info; the worker still
    *  sends in that case but skips the subscription_tracking block. */
   unsubscribeFooter: { html: string; text: string } | null;
-}
-
-/**
- * Resolve the SMTP transport when env vars are present. Returns null
- * when SMTP isn't configured so callers can route through SendGrid
- * exclusively if every sub-account has its own key. The worker only
- * errors out if BOTH SMTP and SendGrid are missing for a given
- * recipient's account.
- */
-function getTransporter(): {
-  defaultFrom: string;
-  transporter: nodemailer.Transporter;
-} | null {
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = Number(process.env.SMTP_PORT || '587');
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
-  const smtpFrom = process.env.SMTP_FROM || smtpUser;
-
-  if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
-    return null;
-  }
-
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: Number.isFinite(smtpPort) ? smtpPort : 587,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
-  });
-
-  return {
-    defaultFrom: smtpFrom,
-    transporter,
-  };
 }
 
 function formatFromHeader(email: string, name: string | null | undefined): string {
@@ -989,6 +1011,147 @@ export async function listEmailBlasts(options?: {
     .map(toSummary);
 }
 
+/**
+ * SendGrid's substitution tag for the hosted unsubscribe URL. This is what
+ * {{unsubscribe_link}} resolves to at send time, so an unsubscribe button a
+ * designer wired up in the template editor becomes a real, per-recipient,
+ * one-click unsubscribe link. Must match the `substitution_tag` we pass in
+ * lib/sending/sendgrid.ts and the token in lib/sending/unsubscribe-footer.ts.
+ */
+const SENDGRID_UNSUBSCRIBE_TAG = '[%unsubscribe_url%]';
+
+/** Mergetag + opt-out data for one recipient, keyed `accountKey|contactId`. */
+type BlastContactRow = BlastContactData & { dndEmail: boolean };
+
+/**
+ * Load the Contact rows behind a set of recipients in one query.
+ *
+ * Keyed on (accountKey, contactId): a contact id is only unique within its
+ * account, and a group blast spans several.
+ */
+async function loadBlastContacts(
+  refs: { contactId: string; accountKey: string }[],
+): Promise<Map<string, BlastContactRow>> {
+  const map = new Map<string, BlastContactRow>();
+  const ids = [...new Set(refs.map((r) => r.contactId).filter(Boolean))];
+  if (ids.length === 0) return map;
+
+  const rows = await prisma.contact.findMany({
+    where: { id: { in: ids } },
+    select: {
+      id: true,
+      accountKey: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+      email: true,
+      phone: true,
+      address1: true,
+      city: true,
+      state: true,
+      postalCode: true,
+      country: true,
+      vehicleYear: true,
+      vehicleMake: true,
+      vehicleModel: true,
+      vehicleVin: true,
+      vehicleMileage: true,
+      lastServiceDate: true,
+      nextServiceDate: true,
+      leaseEndDate: true,
+      warrantyEndDate: true,
+      purchaseDate: true,
+      dateOfBirth: true,
+      customFields: true,
+      dnd: true,
+    },
+  });
+
+  for (const row of rows) {
+    // dnd is a loose JSON blob: { email?: bool, sms?: bool }.
+    let dndEmail = false;
+    if (row.dnd && typeof row.dnd === 'object' && !Array.isArray(row.dnd)) {
+      dndEmail = Boolean((row.dnd as Record<string, unknown>).email);
+    }
+    map.set(`${row.accountKey}|${row.id}`, { ...row, dndEmail });
+  }
+
+  return map;
+}
+
+/** `accountKey|email` → suppression reason, for the whole batch in one query. */
+async function loadSuppressionSet(
+  refs: { accountKey: string; email: string }[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const accountKeys = [...new Set(refs.map((r) => r.accountKey).filter(Boolean))];
+  const emails = [
+    ...new Set(refs.map((r) => r.email.toLowerCase().trim()).filter(Boolean)),
+  ];
+  if (accountKeys.length === 0 || emails.length === 0) return map;
+
+  const rows = await prisma.emailSuppression.findMany({
+    where: { accountKey: { in: accountKeys }, email: { in: emails } },
+    select: { accountKey: true, email: true, reason: true },
+  });
+  for (const row of rows) {
+    map.set(`${row.accountKey}|${row.email.toLowerCase().trim()}`, row.reason);
+  }
+  return map;
+}
+
+/** Account-level values behind the {{location.*}} mergetags. */
+async function loadBlastAccountData(
+  accountKeys: string[],
+): Promise<Map<string, BlastAccountData>> {
+  const map = new Map<string, BlastAccountData>();
+  if (accountKeys.length === 0) return map;
+
+  const rows = await prisma.account.findMany({
+    where: { key: { in: accountKeys } },
+    select: {
+      key: true,
+      dealer: true,
+      senderEmail: true,
+      phone: true,
+      address: true,
+      city: true,
+      state: true,
+      postalCode: true,
+      website: true,
+    },
+  });
+  for (const row of rows) map.set(row.key, row);
+  return map;
+}
+
+interface BlastCounts {
+  total: number;
+  pending: number;
+  sent: number;
+  failed: number;
+  skipped: number;
+  firstError: string;
+}
+
+/**
+ * Collapse recipient counts into the blast's status.
+ *
+ * `skipped` counts as work DONE. A blast whose entire audience turned out to
+ * be suppressed is finished — 'completed' with zero sends — not stuck.
+ * Returning 'queued' there (the old behaviour) made the sweep re-pick it
+ * forever.
+ */
+function resolveBlastStatus(counts: BlastCounts): EmailBlastStatus {
+  if (counts.pending > 0) return 'processing';
+  if (counts.sent > 0 && counts.failed > 0) return 'partial';
+  if (counts.sent > 0) return 'completed';
+  if (counts.failed > 0) return 'failed';
+  if (counts.skipped > 0) return 'completed';
+  // Genuinely nothing to do — no recipients at all.
+  return 'completed';
+}
+
 async function summarizeCampaign(campaignId: string) {
   const recipients = await prisma.emailBlastRecipient.findMany({
     where: { campaignId },
@@ -998,6 +1161,7 @@ async function summarizeCampaign(campaignId: string) {
   let pending = 0;
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
   let firstError = '';
 
   for (const row of recipients) {
@@ -1005,6 +1169,14 @@ async function summarizeCampaign(campaignId: string) {
     else if (row.status === 'failed') {
       failed += 1;
       if (!firstError && row.error) firstError = row.error;
+    } else if (row.status === 'skipped') {
+      // TERMINAL, not pending. A suppressed/opted-out recipient is a
+      // decision, not unfinished work. Counting it as pending used to leave
+      // the blast permanently un-completable: the sweep re-picked it every
+      // minute (processing/queued are both processable) while its recipient
+      // query — which only ever loads status='pending' — came back empty, so
+      // it never advanced. A fully-suppressed blast looped forever.
+      skipped += 1;
     } else pending += 1;
   }
 
@@ -1013,8 +1185,211 @@ async function summarizeCampaign(campaignId: string) {
     pending,
     sent,
     failed,
+    skipped,
     firstError,
   };
+}
+
+// ─────────────────────────────────────────────────────
+// Resend to non-engaged
+// ─────────────────────────────────────────────────────
+//
+// The Schedule step has offered a "Resend to non-engaged" toggle for a while,
+// and it persisted cleanly into metadata.resend — but no worker ever read it
+// back, so the follow-up simply never happened. Anyone who enabled it got a
+// UI confirmation and silence.
+//
+// Shape of the implementation: when a blast finishes, we create a CHILD blast
+// scheduled for +delayHours, carrying `resendOf: <parentId>` in its metadata.
+// The child is created with NO recipients, because at that moment nobody has
+// had a chance to open anything yet — the non-engaged set doesn't exist until
+// the delay has elapsed. Recipients are materialized from the parent's
+// engagement just before the child sends. The child's own metadata has resend
+// disabled, so a follow-up never spawns a follow-up.
+
+/** Marks a blast as a follow-up to `parentId` inside its metadata blob. */
+function resendMetadata(sourceType: string, parentId: string): string {
+  return JSON.stringify({ sourceType, resendOf: parentId });
+}
+
+/**
+ * Queue the follow-up blast for a just-finished parent, if one is configured
+ * and doesn't already exist.
+ */
+export async function scheduleResendIfDue(campaignId: string): Promise<void> {
+  const parent = await prisma.emailBlast.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      name: true,
+      subject: true,
+      previewText: true,
+      htmlContent: true,
+      textContent: true,
+      sourceType: true,
+      accountKeys: true,
+      metadata: true,
+      sentCount: true,
+      createdByUserId: true,
+      createdByRole: true,
+      sourceAudienceId: true,
+      sourceFilter: true,
+      sourceListId: true,
+      sourceContactIds: true,
+    },
+  });
+  if (!parent) return;
+
+  const meta = parseCampaignMetadata(parent.metadata);
+  if (!meta.resend?.enabled) return;
+  // A follow-up never spawns its own follow-up.
+  if (meta.resendOf) return;
+  // Nothing was delivered, so there's no non-engaged audience to chase.
+  if (parent.sentCount <= 0) return;
+
+  // Idempotency: processEmailBlast can legitimately run more than once for
+  // one blast (a 'partial' result stays processable), and we must not stack a
+  // new follow-up each time. The marker lives in the child's metadata.
+  const marker = `"resendOf":"${parent.id}"`;
+  const existing = await prisma.emailBlast.findFirst({
+    where: { metadata: { contains: marker } },
+    select: { id: true },
+  });
+  if (existing) return;
+
+  const scheduledFor = new Date(Date.now() + meta.resend.delayHours * 3_600_000);
+
+  await prisma.emailBlast.create({
+    data: {
+      name: `${parent.name || 'Blast'} (follow-up)`,
+      subject: meta.resend.subject.trim() || parent.subject,
+      previewText: parent.previewText,
+      htmlContent: parent.htmlContent,
+      textContent: parent.textContent,
+      sourceType: parent.sourceType,
+      status: 'scheduled',
+      scheduledFor,
+      accountKeys: parent.accountKeys,
+      metadata: resendMetadata(parent.sourceType, parent.id),
+      createdByUserId: parent.createdByUserId,
+      createdByRole: parent.createdByRole,
+      // Audience provenance is carried over for display only — the actual
+      // recipients come from the parent's engagement, not a re-evaluation of
+      // the segment, so a contact who joined the segment after the original
+      // send isn't swept into the follow-up.
+      sourceAudienceId: parent.sourceAudienceId,
+      sourceFilter: parent.sourceFilter,
+      sourceListId: parent.sourceListId,
+      sourceContactIds: parent.sourceContactIds,
+      totalRecipients: 0,
+    },
+  });
+
+  console.log(
+    `[email-blasts] queued follow-up for ${parent.id} at ${scheduledFor.toISOString()} ` +
+      `(+${meta.resend.delayHours}h)`,
+  );
+}
+
+/**
+ * Fill in a follow-up blast's recipients from its parent's engagement.
+ *
+ * No-op for anything that isn't an unpopulated follow-up, so it's safe to
+ * call unconditionally at the top of processEmailBlast.
+ *
+ * "Non-engaged" = we successfully sent to them, and no open or click event
+ * has arrived since. Bounces and spam reports are excluded implicitly: those
+ * rows aren't status='sent' on the parent, and the sender re-checks the
+ * suppression list anyway.
+ */
+export async function materializeResendRecipients(campaignId: string): Promise<void> {
+  const blast = await prisma.emailBlast.findUnique({
+    where: { id: campaignId },
+    select: { id: true, metadata: true, status: true },
+  });
+  if (!blast) return;
+  if (TERMINAL_STATUSES.includes(blast.status as EmailBlastStatus)) return;
+
+  const meta = parseCampaignMetadata(blast.metadata);
+  if (!meta.resendOf) return;
+
+  // Already populated (or mid-send) — don't rebuild the audience.
+  const existingCount = await prisma.emailBlastRecipient.count({
+    where: { campaignId },
+  });
+  if (existingCount > 0) return;
+
+  const parentSends = await prisma.emailBlastRecipient.findMany({
+    where: { campaignId: meta.resendOf, status: 'sent' },
+    select: { contactId: true, accountKey: true, email: true, fullName: true },
+  });
+  if (parentSends.length === 0) {
+    // Parent delivered nothing; close the follow-up out rather than leaving
+    // it to be re-swept every minute forever.
+    await prisma.emailBlast.update({
+      where: { id: campaignId },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        totalRecipients: 0,
+        error: 'Follow-up skipped: the original blast had no successful sends.',
+      },
+    });
+    return;
+  }
+
+  // One query for every engaging recipient on the parent.
+  const engaged = await prisma.emailEvent.findMany({
+    where: {
+      campaignId: meta.resendOf,
+      eventType: { in: ['open', 'click'] },
+    },
+    select: { email: true },
+  });
+  const engagedEmails = new Set(
+    engaged
+      .map((e) => (e.email || '').toLowerCase().trim())
+      .filter(Boolean),
+  );
+
+  const targets = parentSends.filter((r) => {
+    const email = (r.email || '').toLowerCase().trim();
+    return email && !engagedEmails.has(email);
+  });
+
+  if (targets.length === 0) {
+    await prisma.emailBlast.update({
+      where: { id: campaignId },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        totalRecipients: 0,
+        error: 'Follow-up skipped: everyone opened or clicked the original.',
+      },
+    });
+    return;
+  }
+
+  await prisma.emailBlastRecipient.createMany({
+    data: targets.map((r) => ({
+      campaignId,
+      contactId: r.contactId,
+      accountKey: r.accountKey,
+      email: r.email,
+      fullName: r.fullName,
+      status: 'pending',
+      error: null,
+    })),
+  });
+  await prisma.emailBlast.update({
+    where: { id: campaignId },
+    data: { totalRecipients: targets.length },
+  });
+
+  console.log(
+    `[email-blasts] follow-up ${campaignId}: ${targets.length} non-engaged of ` +
+      `${parentSends.length} sent on ${meta.resendOf}`,
+  );
 }
 
 export async function processEmailBlast(
@@ -1022,12 +1397,26 @@ export async function processEmailBlast(
   options?: { concurrency?: number },
 ): Promise<EmailBlastSummary> {
   const concurrency = Math.max(1, Math.min(8, options?.concurrency ?? 3));
+
+  // A follow-up blast is created with an empty audience — its non-engaged set
+  // can't be known until the delay has elapsed. Build it now, just before the
+  // send. No-op for every other blast.
+  await materializeResendRecipients(campaignId);
+
   const campaign = await prisma.emailBlast.findUnique({
     where: { id: campaignId },
     include: {
       recipients: {
         where: { status: 'pending' },
-        select: { id: true, email: true, fullName: true, accountKey: true },
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          accountKey: true,
+          // Needed to load the Contact row behind each recipient: mergetag
+          // values, plus the `dnd` opt-out flag we re-check at send time.
+          contactId: true,
+        },
       },
     },
   });
@@ -1039,14 +1428,7 @@ export async function processEmailBlast(
 
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
-    const status: EmailBlastStatus =
-      counts.sent > 0 && counts.failed > 0
-        ? 'partial'
-        : counts.sent > 0
-          ? 'completed'
-          : counts.failed > 0
-            ? 'failed'
-            : 'queued';
+    const status = resolveBlastStatus(counts);
     const updated = await prisma.emailBlast.update({
       where: { id: campaign.id },
       data: {
@@ -1054,7 +1436,7 @@ export async function processEmailBlast(
         totalRecipients: counts.total,
         sentCount: counts.sent,
         failedCount: counts.failed,
-        completedAt: status === 'queued' ? null : new Date(),
+        completedAt: status === 'processing' ? null : new Date(),
         error: counts.firstError || null,
       },
     });
@@ -1071,13 +1453,44 @@ export async function processEmailBlast(
     },
   });
 
-  const smtp = getTransporter();
-  const defaultFrom = smtp?.defaultFrom || '';
   const uniqueAccountKeys = [...new Set(campaign.recipients.map((r) => r.accountKey))];
-  const senderByAccount = await buildSenderMap(uniqueAccountKeys, defaultFrom);
+  // No `defaultFrom`: bulk blasts are NOT allowed on the shared SMTP
+  // transport. See the dispatch block below for why.
+  const senderByAccount = await buildSenderMap(uniqueAccountKeys, '');
   const metadata = parseCampaignMetadata(campaign.metadata);
-  const html = withPreviewText(campaign.htmlContent, campaign.previewText || '');
-  const text = campaign.textContent?.trim() || stripHtml(campaign.htmlContent);
+
+  // Load the merge data + opt-out state for every recipient in one query
+  // rather than one-per-send. Keyed by (accountKey, contactId) because a
+  // contact id is only unique within its account.
+  const contactById = await loadBlastContacts(
+    campaign.recipients.map((r) => ({
+      contactId: r.contactId,
+      accountKey: r.accountKey,
+    })),
+  );
+
+  // Re-read suppressions HERE, not just at schedule time. A blast scheduled
+  // for next Tuesday is filtered when it's scheduled; anyone who
+  // unsubscribes in between would still be in the pending set. Honouring an
+  // opt-out only as of draft time is exactly the kind of thing that
+  // generates spam complaints, so the send is the authoritative checkpoint.
+  const suppressedAtSend = await loadSuppressionSet(
+    campaign.recipients.map((r) => ({
+      accountKey: r.accountKey,
+      email: r.email || '',
+    })),
+  );
+
+  const accountDataByKey = await loadBlastAccountData(uniqueAccountKeys);
+
+  // The base HTML, before per-recipient mergetag substitution. UTM tagging
+  // is applied once here since it rewrites campaign-level links, not
+  // per-recipient ones.
+  const baseHtml = applyUtmTags(
+    withPreviewText(campaign.htmlContent, campaign.previewText || ''),
+    metadata.utm,
+  );
+  const baseText = campaign.textContent?.trim() || stripHtml(campaign.htmlContent);
 
   const tasks = campaign.recipients.map((recipient) => async () => {
     const recipientEmail = normalizeEmailAddress(recipient.email || '');
@@ -1092,8 +1505,45 @@ export async function processEmailBlast(
       return;
     }
 
+    // Opt-out re-check, as of NOW. Both of these are recorded as `skipped`
+    // rather than `failed`: nothing went wrong, we deliberately didn't send,
+    // and the analytics treat the two differently.
+    const suppressionReason = suppressedAtSend.get(
+      `${recipient.accountKey}|${recipientEmail}`,
+    );
+    if (suppressionReason) {
+      await prisma.emailBlastRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status: 'skipped',
+          error: `Suppressed (${suppressionReason})`,
+        },
+      });
+      return;
+    }
+
+    const contact = contactById.get(
+      `${recipient.accountKey}|${recipient.contactId}`,
+    );
+
+    // Contact.dnd is a hard, human-set opt-out ("do not email this person").
+    // It was previously honoured only by the segment-eligibility helper that
+    // computes the on-screen sendable count — never by the sender — so a
+    // recipient list posted from the client could still carry an opted-out
+    // contact all the way to a send.
+    if (contact?.dndEmail) {
+      await prisma.emailBlastRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status: 'skipped',
+          error: 'Suppressed (contact opted out of email)',
+        },
+      });
+      return;
+    }
+
     const sender = senderByAccount.get(recipient.accountKey) || {
-      from: defaultFrom,
+      from: '',
       replyTo: null,
       senderEmail: null,
       senderName: null,
@@ -1101,72 +1551,88 @@ export async function processEmailBlast(
       unsubscribeFooter: null,
     };
 
-    // Dispatch: SendGrid first (per-sub-account API key), then SMTP fallback.
-    // If neither is configured for this account, fail the recipient with
-    // a clear message rather than throwing — keeps the rest of the batch
-    // alive and the user sees what went wrong on the failed row.
+    // Dispatch is SendGrid-only for bulk blasts.
+    //
+    // There used to be a nodemailer/SMTP fallback here, and it was a
+    // deliverability trap: it sent no unsubscribe footer, no
+    // List-Unsubscribe header, and no physical mailing address (the footer
+    // was built for both paths but only ever passed to SendGrid), and when
+    // an account had no senderEmail it used the SHARED transactional From
+    // address. A blast down that path is both a CAN-SPAM breach and a
+    // reputation hit against the transactional domain. Transactional email
+    // still uses SMTP elsewhere in the app — but blasts don't.
     const useSendGrid = Boolean(sender.sendgridApiKey && sender.senderEmail);
-
-    if (!useSendGrid && !smtp) {
+    if (!useSendGrid) {
       await prisma.emailBlastRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'failed',
           error:
-            'No sending transport configured for this account. Add a SendGrid API key in Sending settings, or set SMTP_* env vars for a fallback.',
+            'Account is not configured for bulk email. Add a SendGrid API key and a From address in Settings → Sending.',
         },
       });
       return;
     }
 
     try {
-      let messageId: string | null = null;
+      // Per-recipient personalization. This has to happen inside the loop:
+      // rendering once outside it is what previously shipped literal
+      // {{contact.first_name}} tokens to every inbox.
+      //
+      // {{unsubscribe_link}} resolves to SendGrid's own substitution tag, so
+      // a button the designer wired to that tag in the editor becomes a real
+      // per-recipient unsubscribe URL at delivery.
+      const mergeCtx = buildBlastMergetagContext({
+        contact,
+        account: accountDataByKey.get(recipient.accountKey) || null,
+        recipientEmail,
+        recipientFullName: recipient.fullName,
+        unsubscribeToken: SENDGRID_UNSUBSCRIBE_TAG,
+      });
 
-      if (useSendGrid) {
-        const result = await sendEmailViaSendGrid({
-          apiKey: sender.sendgridApiKey!,
-          from: { email: sender.senderEmail!, name: sender.senderName || undefined },
-          replyTo: sender.replyTo ? { email: sender.replyTo } : undefined,
-          to: { email: recipientEmail, name: recipient.fullName || undefined },
-          subject: campaign.subject,
-          html,
-          text,
-          categories: ['loomi', `campaign:${campaign.id}`],
-          // Carry these through to the Event webhook so we can correlate
-          // opens/clicks/bounces back to the originating row.
-          customArgs: {
-            campaignId: campaign.id,
-            recipientId: recipient.id,
-            accountKey: recipient.accountKey,
-          },
-          // CAN-SPAM: SendGrid appends an unsubscribe link + sets the
-          // List-Unsubscribe header. Footer copy is built per-account in
-          // buildSenderMap. Skipped when the account has no dealer name
-          // configured (extremely rare) — the worker still sends but the
-          // recipient won't see a Loomi-rendered footer (their template
-          // might already include one).
-          ...(sender.unsubscribeFooter
-            ? { unsubscribe: sender.unsubscribeFooter }
-            : {}),
-        });
-        messageId = result.messageId || null;
-      } else {
-        const info = await smtp!.transporter.sendMail({
-          from: sender.from,
-          ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
-          to: recipientEmail,
-          subject: campaign.subject,
-          html,
-          text,
-        });
-        messageId = info.messageId || null;
-      }
+      const personalizedHtml = applyBlastMergetags(baseHtml, mergeCtx, {
+        escape: true,
+      });
+      const personalizedText = applyBlastMergetags(baseText, mergeCtx, {
+        escape: false,
+      });
+      const personalizedSubject = applyBlastMergetags(
+        campaign.subject,
+        mergeCtx,
+        { escape: false },
+      );
+
+      const result = await sendEmailViaSendGrid({
+        apiKey: sender.sendgridApiKey!,
+        from: { email: sender.senderEmail!, name: sender.senderName || undefined },
+        replyTo: sender.replyTo ? { email: sender.replyTo } : undefined,
+        to: { email: recipientEmail, name: recipient.fullName || undefined },
+        subject: personalizedSubject,
+        html: personalizedHtml,
+        text: personalizedText,
+        categories: ['loomi', `campaign:${campaign.id}`],
+        // Carry these through to the Event webhook so we can correlate
+        // opens/clicks/bounces back to the originating row.
+        customArgs: {
+          campaignId: campaign.id,
+          recipientId: recipient.id,
+          accountKey: recipient.accountKey,
+        },
+        // CAN-SPAM: SendGrid appends an unsubscribe link + sets the
+        // List-Unsubscribe header. Footer copy is built per-account in
+        // buildSenderMap. Preflight blocks a send when the account has no
+        // complete mailing address, so by the time we get here the footer
+        // is populated.
+        ...(sender.unsubscribeFooter
+          ? { unsubscribe: sender.unsubscribeFooter }
+          : {}),
+      });
 
       await prisma.emailBlastRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'sent',
-          messageId,
+          messageId: result.messageId || null,
           sentAt: new Date(),
           error: null,
         },
@@ -1191,16 +1657,7 @@ export async function processEmailBlast(
   await withConcurrencyLimit(tasks, concurrency);
 
   const counts = await summarizeCampaign(campaign.id);
-  const nextStatus: EmailBlastStatus =
-    counts.pending > 0
-      ? 'processing'
-      : counts.sent > 0 && counts.failed > 0
-        ? 'partial'
-        : counts.sent > 0
-          ? 'completed'
-          : counts.failed > 0
-            ? 'failed'
-            : 'queued';
+  const nextStatus = resolveBlastStatus(counts);
 
   const updated = await prisma.emailBlast.update({
     where: { id: campaign.id },
@@ -1210,10 +1667,17 @@ export async function processEmailBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
-      completedAt: nextStatus === 'processing' || nextStatus === 'queued' ? null : new Date(),
+      completedAt: nextStatus === 'processing' ? null : new Date(),
       error: counts.firstError || null,
     },
   });
+
+  // Queue the follow-up now that the initial send has finished. Must come
+  // after the status update: scheduleResendIfDue reads sent counts to decide
+  // whether there's anything to follow up on.
+  if (nextStatus !== 'processing') {
+    await scheduleResendIfDue(campaign.id);
+  }
 
   return toSummary(updated);
 }

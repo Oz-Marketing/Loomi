@@ -7,7 +7,6 @@ import {
   BanknotesIcon,
   CalendarIcon,
   ChevronDownIcon,
-  ClipboardDocumentCheckIcon,
   CogIcon,
   MegaphoneIcon,
   PlusIcon,
@@ -16,7 +15,6 @@ import {
   UsersIcon,
   ViewColumnsIcon,
 } from '@heroicons/react/24/outline';
-import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
 import { appSurfacePrefix, normalizeAppPath } from '@/lib/app-surface-path';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
@@ -78,19 +76,6 @@ const NAV: NavEntry[] = [
   { key: 'my-work', label: 'My Work', href: '/projects/my-work', icon: UserCircleIcon },
   { key: 'calendar', label: 'Calendar', href: '/projects/calendar', icon: CalendarIcon },
   { key: 'budget', label: 'Budget', href: '/projects/budget', icon: BanknotesIcon },
-  // Playbooks — Phase 0 is the read-only coverage audit (docs/playbooks.md).
-  // Hidden until the env flag is on. Developers can still reach /playbooks
-  // directly; the server gate, not this list, is what grants access.
-  ...(PLAYBOOKS_ENABLED
-    ? [
-        {
-          key: 'playbooks',
-          label: 'Playbooks',
-          href: '/playbooks',
-          icon: ClipboardDocumentCheckIcon,
-        } as NavEntry,
-      ]
-    : []),
   // Ad Planning & Pacing — Meta and Google kept fully separate (different
   // specialists). Relocated from Studio /tools/*; the proxy rewrites those to
   // /app/tools/* on this host. Account-scoped by the global selector.

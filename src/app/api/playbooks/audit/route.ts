@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requirePermission } from '@/lib/permissions/require';
 import { filterAccountKeysByAccess } from '@/lib/roles';
@@ -9,12 +9,21 @@ import { buildAuditPayload } from '@/lib/playbooks/audit';
 /**
  * Playbook coverage audit — read-only (docs/playbooks.md §4).
  *
- * Returns the whole matrix in one payload: every account the caller may
- * see, scored against every playbook that applies to it, plus the per-check
- * rollup. It's a handful of batched queries and a few hundred pure functions,
- * so there's no pagination to design around.
+ * Returns the matrix in one payload: each account in scope, scored against every
+ * playbook that applies to it, plus the per-check rollup. It's a handful of
+ * batched queries and a few hundred pure functions, so there's no pagination to
+ * design around.
+ *
+ * SCOPE. `accountKeys` narrows the audit to the caller's current selection — one
+ * account, or a group and everything under it. Omitting it means the
+ * all-accounts overview (docs/account-scope.md).
+ *
+ * The requested keys are INTERSECTED with what the session may see, never
+ * trusted. Scope is a request input; access is not. This endpoint enumerates
+ * configuration for whatever it is handed, so a hand-written query must not be
+ * able to reach an account the caller otherwise couldn't.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   // The audit enumerates every account's configuration, so it reads as a
   // cross-rooftop admin view. `agency.subaccounts.view` maps to the `management`
   // legacy bucket, so this is the same set of roles `requireRole` allowed.
@@ -35,8 +44,20 @@ export async function GET() {
       session!.user.accountKeys ?? [],
     );
 
+    // Empty/absent means "everything I may see". A caller that wants a narrow
+    // scope always sends keys, so there is no ambiguity to resolve here — but
+    // the CLIENT must not send an empty list while its account context is still
+    // settling, or it would silently widen to the whole roster.
+    const requested = (req.nextUrl.searchParams.get('accountKeys') ?? '')
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean);
+    const inScope = requested.length
+      ? allowed.filter((key) => requested.includes(key))
+      : allowed;
+
     const now = new Date();
-    const contexts = await loadAuditContexts(allowed, { now });
+    const contexts = await loadAuditContexts(inScope, { now });
     return NextResponse.json(
       buildAuditPayload(contexts, { period: currentPeriod(now), generatedAt: now }),
     );

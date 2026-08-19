@@ -11,7 +11,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { PageHeader } from '@/components/page-header';
 import { HelpTip } from '@/components/ui/help-tip';
-import { getStudioUrl } from '@/lib/cross-site';
+import { getAppUrl } from '@/lib/cross-site';
+import { useAccount } from '@/contexts/account-context';
 import type {
   AccountCoverage,
   AuditPayload,
@@ -60,13 +61,39 @@ const SEVERITY_LABEL: Record<CheckSeverity, string> = {
 /** Resolve a check's fix link, which may point at the other host. */
 function fixHref(fix: NonNullable<CheckResult['fix']>, account: { accountKey: string; slug: string }) {
   const path = fix.path.replace('{key}', account.accountKey).replace('{slug}', account.slug);
-  // getStudioUrl returns null during SSR; the anchor renders unlinked until hydration.
-  return fix.surface === 'studio' ? getStudioUrl(path) : path;
+  // This page lives on STUDIO, so studio fixes are same-host links and it's the
+  // App ones (the pacer, the budget hub) that have to cross. Inverted when the
+  // page moved off the App surface — left as it was, every link would have
+  // pointed at the wrong host.
+  //
+  // getAppUrl returns null during SSR; the anchor renders unlinked until
+  // hydration, which is the same behaviour getStudioUrl had here before.
+  return fix.surface === 'app' ? getAppUrl(path) : path;
 }
 
 export function PlaybookAudit() {
+  const { isAllAccounts, scopedAccountKeys, accountsLoaded } = useAccount();
+
+  /**
+   * The audit follows the account selector (docs/account-scope.md): one account
+   * audits itself, a group audits its whole subtree, and All accounts audits
+   * everything the session may see.
+   *
+   * `null` until the account context has settled. The server reads "no keys" as
+   * "everything I may see", so firing early with an empty list would flash the
+   * entire roster at someone who has one account selected — and it would look
+   * like the scope simply doesn't work.
+   */
+  const auditKey = !accountsLoaded
+    ? null
+    : isAllAccounts
+      ? '/api/playbooks/audit'
+      : scopedAccountKeys.length
+        ? `/api/playbooks/audit?accountKeys=${encodeURIComponent(scopedAccountKeys.join(','))}`
+        : null;
+
   const { data, error, isLoading, mutate, isValidating } = useSWR<AuditPayload>(
-    '/api/playbooks/audit',
+    auditKey,
     fetcher,
     { revalidateOnFocus: false },
   );
@@ -93,7 +120,7 @@ export function PlaybookAudit() {
         title="Playbooks"
         subtitle={
           data
-            ? `Coverage audit across ${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
+            ? `${isAllAccounts ? 'All accounts' : 'Selected scope'} · ${data.accounts.length} account${data.accounts.length === 1 ? '' : 's'} · ${data.period}`
             : 'Coverage audit'
         }
         actions={

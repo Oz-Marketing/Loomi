@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
@@ -8,59 +9,145 @@ import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { SurfaceShell } from '@/components/surface-shell';
 import { useAccount } from '@/contexts/account-context';
+import {
+  BUILDER_STEPS,
+  builderBlastId,
+  builderChannel,
+  builderStep,
+  builderStepHref,
+  isBuilderPath,
+  reachableSteps,
+  stripBuilderPrefix,
+  type BuilderChannel,
+  type BuilderStepKey,
+} from '@/lib/messaging/blast-builder-steps';
 
-const BUILDER_STEPS = [
-  { key: 'recipients', label: 'Recipients' },
-  { key: 'message', label: 'Message' },
-  { key: 'schedule', label: 'Schedule' },
-] as const;
+/**
+ * Which builder steps the user may jump to.
+ *
+ * The rule is "you can revisit anything you've satisfied, plus the step
+ * you're standing on" — never a forward jump over an unfilled
+ * prerequisite, because the send itself is gated server-side on the same
+ * two facts (POST /api/blasts/email/[id]/schedule rejects a blast with no
+ * subject or no body). Letting someone reach Schedule early would only
+ * hand them a dead Send button.
+ *
+ * Fails OPEN: if the draft can't be read we unlock everything rather than
+ * trapping the user in step 1. The server gate is the real guarantee.
+ */
+function useBuilderReachableSteps(
+  channel: BuilderChannel,
+  id: string,
+): Set<BuilderStepKey> {
+  const [reachable, setReachable] = useState<Set<BuilderStepKey>>(
+    () => new Set(BUILDER_STEPS.map((s) => s.key)),
+  );
+  // Re-check on every step change: the user just saved the step they came
+  // from, so what's reachable has probably grown.
+  const pathname = usePathname();
 
-type BuilderStepKey = (typeof BUILDER_STEPS)[number]['key'];
+  useEffect(() => {
+    if (!id) return;
+    let canceled = false;
 
-function campaignBuilderStep(path: string): BuilderStepKey {
-  // Strip optional /subaccount/<slug> prefix so the regexes below match
-  // admin + sub-account routes with one set of patterns. The builder
-  // surfaces live under /messaging/blasts/ now (or
-  // /subaccount/<slug>/messaging/blasts/ for sub-accounts):
-  // Email: /messaging/blasts/[id]/(recipients|template|schedule)
-  // SMS:   /messaging/blasts/sms/[id]/(recipients|message|schedule)
-  // Multi: /messaging/blasts/multi/[id]/(recipients|message|schedule)
-  const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
-  const multiMatch = stripped.match(/^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
-  if (multiMatch) return multiMatch[1] as BuilderStepKey;
-  const smsMatch = stripped.match(/^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
-  if (smsMatch) return smsMatch[1] as BuilderStepKey;
-  const emailMatch = stripped.match(/^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
-  if (emailMatch) {
-    const raw = emailMatch[1];
-    return raw === 'template' ? 'message' : (raw as BuilderStepKey);
-  }
-  return 'recipients';
+    // Multi-channel drafts carry an email id, so they hydrate from the
+    // email endpoint; SMS-only drafts have their own.
+    const endpoint =
+      channel === 'sms'
+        ? `/api/blasts/sms/${encodeURIComponent(id)}`
+        : `/api/blasts/email/${encodeURIComponent(id)}`;
+
+    (async () => {
+      try {
+        const res = await fetch(endpoint);
+        if (!res.ok) return;
+        const data = await res.json();
+        const c = data?.campaign;
+        if (!c || canceled) return;
+
+        // Recipients is done once an audience has been saved. Every
+        // selection mode — including "All contacts", which deliberately
+        // clears the three source fields — stamps accountKeys.
+        const hasRecipients =
+          Array.isArray(c.accountKeys) && c.accountKeys.length > 0;
+        // Message is done when there is something to send. Mirrors the
+        // server-side gate exactly.
+        const hasMessage =
+          channel === 'sms'
+            ? Boolean(String(c.message || '').trim())
+            : Boolean(String(c.subject || '').trim())
+              && Boolean(String(c.htmlContent || '').trim());
+
+        setReachable(reachableSteps({ hasRecipients, hasMessage }));
+      } catch {
+        // Network hiccup — leave the permissive default in place.
+      }
+    })();
+
+    return () => {
+      canceled = true;
+    };
+  }, [channel, id, pathname]);
+
+  return reachable;
 }
 
-function campaignBuilderChannel(path: string): 'email' | 'sms' | 'multi' {
-  const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
-  if (/^\/messaging\/campaigns\/multi\//.test(stripped)) return 'multi';
-  if (/^\/messaging\/campaigns\/sms\//.test(stripped)) return 'sms';
-  return 'email';
-}
-
-function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
+function CampaignBuilderProgress({
+  current,
+  channel,
+  path,
+}: {
+  current: BuilderStepKey;
+  channel: BuilderChannel;
+  path: string;
+}) {
+  const router = useRouter();
+  const id = builderBlastId(path);
+  const reachable = useBuilderReachableSteps(channel, id);
   const activeIndex = BUILDER_STEPS.findIndex((s) => s.key === current);
+
   return (
     <nav className="hidden md:flex items-center gap-2" aria-label="Campaign builder progress">
       {BUILDER_STEPS.map((step, i) => {
         const isActive = i === activeIndex;
         const isDone = i < activeIndex;
+        const canVisit = reachable.has(step.key) && !isActive;
+        const locked = !reachable.has(step.key);
+
         return (
           <div key={step.key} className="flex items-center gap-2">
-            <div
+            <button
+              type="button"
+              disabled={!canVisit}
+              aria-current={isActive ? 'step' : undefined}
+              title={
+                locked
+                  ? step.key === 'message'
+                    ? 'Choose recipients first'
+                    : 'Add a subject and message first'
+                  : undefined
+              }
+              onClick={() => {
+                if (!canVisit) return;
+                // Flush a focused field's onBlur so the step we're
+                // leaving persists before the route changes — same
+                // reasoning as the exit button below.
+                const el = document.activeElement as HTMLElement | null;
+                if (el && typeof el.blur === 'function') el.blur();
+                router.push(builderStepHref(path, channel, step.key));
+              }}
               className={`flex items-center gap-2 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
                 isActive
                   ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
                   : isDone
                     ? 'text-[var(--foreground)]'
                     : 'text-[var(--muted-foreground)]'
+              } ${
+                canVisit
+                  ? 'hover:bg-[var(--muted)] cursor-pointer'
+                  : locked
+                    ? 'cursor-not-allowed opacity-60'
+                    : 'cursor-default'
               }`}
             >
               <span
@@ -75,7 +162,7 @@ function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
                 {i + 1}
               </span>
               {step.label}
-            </div>
+            </button>
             {i < BUILDER_STEPS.length - 1 && (
               <div className="w-6 h-px bg-[var(--border)]" />
             )}
@@ -113,16 +200,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // the logo and a back affordance — no sidebar, no top utility bar.
   // (The template editor at /templates/editor uses its own chrome via the
   // existing isTemplateEditor branch.)
-  const builderProbe = normalizedPath.replace(/^\/subaccount\/[^/]+/, '');
+  // Campaign builder steps run as a focused, full-screen flow with only the
+  // logo and a back affordance — no sidebar, no top utility bar.
   //
-  // NOTE the path segment: these were `/messaging/campaigns/...` until the
-  // Email/Text "Campaigns" → "Blasts" rename, which moved the routes and left
-  // these patterns matching nothing — so the builder silently fell back inside
-  // the app shell. Renaming a route means grepping for its path here.
-  const isCampaignBuilder =
-    /^\/messaging\/blasts\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/blasts\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/blasts\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
+  // The route patterns live in lib/messaging/blast-builder-steps.ts. They used
+  // to be inlined here AND in two helpers above, which is how the
+  // Campaigns → Blasts rename managed to fix one copy and leave the progress
+  // nav stuck on step 1.
+  const builderProbe = stripBuilderPrefix(normalizedPath);
+  const isCampaignBuilder = isBuilderPath(normalizedPath);
 
   // Flow builder owns its own chrome (its own top bar lives in
   // FlowBuilder.tsx) so we hide the sidebar + TopUtilityBar entirely.
@@ -150,6 +236,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // covers /media and /subaccount/<slug>/media alike.
   const isMediaLibrary = builderProbe === '/media';
 
+  // Docs — a full-viewport reference surface with its own top bar and side
+  // rail (src/app/docs/layout.tsx). Like the media library it is a BROWSING
+  // surface rather than a builder, so it carries its own way back to the app;
+  // unlike it, it is reached from all three hosts, and the host chrome is
+  // exactly what shouldn't follow you into a manual.
+  const isDocs = builderProbe === '/docs' || builderProbe.startsWith('/docs/');
+
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
   }
@@ -161,7 +254,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 
-  if (isFlowBuilder || isMediaLibrary) {
+  if (isFlowBuilder || isMediaLibrary || isDocs) {
     // Own their full canvas edge-to-edge — no shell padding, no sidebar.
     return <div className="flex-1 min-w-0">{children}</div>;
   }
@@ -174,8 +267,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (isCampaignBuilder) {
-    const step = campaignBuilderStep(normalizedPath);
-    const channel = campaignBuilderChannel(normalizedPath);
+    const step = builderStep(normalizedPath);
+    const channel = builderChannel(normalizedPath);
     const title =
       channel === 'multi'
         ? 'Create a Multi-Channel Campaign'
@@ -208,7 +301,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
               {title}
             </span>
           </div>
-          <CampaignBuilderProgress current={step} />
+          <CampaignBuilderProgress current={step} channel={channel} path={pathname} />
           <div />
         </header>
         <main className="flex-1 min-w-0">{children}</main>

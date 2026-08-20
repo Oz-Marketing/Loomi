@@ -63,6 +63,9 @@ export default function SegmentsPage() {
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
   const [loading, setLoading] = useState(true);
   const [memberCounts, setMemberCounts] = useState<Map<string, number>>(new Map());
+  // Per-segment count failures, keyed by segment id. Rendered distinctly from
+  // "no members" so an unavailable count never reads as a real zero.
+  const [countErrors, setCountErrors] = useState<Map<string, string>>(new Map());
   const [contactsLoading, setContactsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -119,6 +122,30 @@ export default function SegmentsPage() {
     };
   }, [isAccount, accountKey, accountData?.category]);
 
+  // ── Scope ────────────────────────────────────────────────────────
+  //
+  // /api/audiences returns everything the USER may see (by role/assignment),
+  // which is not the same as the currently-selected scope — so a roll-up would
+  // otherwise surface segments from outside it. Segments with no accountKey are
+  // shared/global and always show.
+  //
+  // Group is checked FIRST: a group account is also `isAccount`, so the
+  // single-account branch would otherwise win and never roll up.
+  //
+  // Deliberately separate from the search filter below: the counts request
+  // keys off this, and refetching every batch on each keystroke would be a
+  // request storm.
+  const scopedSegments = useMemo(() => {
+    if (isRollup) {
+      const allowed = new Set(scopedAccountKeys);
+      return savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
+    }
+    if (isAccount && accountKey) {
+      return savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
+    }
+    return savedSegments;
+  }, [savedSegments, isAccount, isRollup, accountKey, scopedAccountKeys]);
+
   // ── Member counts ────────────────────────────────────────────────
   //
   // Resolved by the server, one batched request for every visible
@@ -129,14 +156,21 @@ export default function SegmentsPage() {
   // Counts are per-account by definition — a segment is a filter, and an
   // org-wide filter has a different size in every sub-account — so the
   // roll-up scope has no single number to show.
+  //
+  // Keyed off the SCOPED set, not every segment the user can see: the route
+  // rejects any segment belonging to another account, so sending the unscoped
+  // list just bought a batch of `Forbidden` entries — and, worse, they counted
+  // against the route's MAX_IDS=100 cap, so on a large tenant an out-of-scope
+  // segment could push a real one out of the batch and blank its count.
   const segmentIdsKey = useMemo(
-    () => savedSegments.map((s) => s.id).sort().join(','),
-    [savedSegments],
+    () => scopedSegments.map((s) => s.id).sort().join(','),
+    [scopedSegments],
   );
 
   useEffect(() => {
     if (!isAccount || !accountKey || !segmentIdsKey) {
       setMemberCounts(new Map());
+      setCountErrors(new Map());
       setContactsLoading(false);
       return;
     }
@@ -152,15 +186,26 @@ export default function SegmentsPage() {
       .then((data) => {
         if (cancelled) return;
         const map = new Map<string, number>();
+        const errors = new Map<string, string>();
         for (const entry of Array.isArray(data?.counts) ? data.counts : []) {
-          if (typeof entry?.id === 'string' && typeof entry.count === 'number') {
+          if (typeof entry?.id !== 'string') continue;
+          if (typeof entry.count === 'number') {
             map.set(entry.id, entry.count);
+          } else if (typeof entry.error === 'string') {
+            // A segment that could NOT be counted is not a segment with zero
+            // members. Keep the two apart — silently dropping the error made a
+            // failed batch look like a set of empty segments.
+            errors.set(entry.id, entry.error);
           }
         }
         setMemberCounts(map);
+        setCountErrors(errors);
       })
       .catch(() => {
-        if (!cancelled) setMemberCounts(new Map());
+        if (!cancelled) {
+          setMemberCounts(new Map());
+          setCountErrors(new Map());
+        }
       })
       .finally(() => {
         if (!cancelled) setContactsLoading(false);
@@ -172,30 +217,16 @@ export default function SegmentsPage() {
   }, [isAccount, accountKey, segmentIdsKey]);
 
   // ── Search filtering ─────────────────────────────────────────────
+  // Scope already applied by `scopedSegments` above — this is search only.
   const visibleSavedSegments = useMemo(() => {
-    // Scope before search. /api/audiences returns everything the USER may see
-    // (by role/assignment), which isn't the same as the currently-selected
-    // scope — so a roll-up would otherwise surface segments from outside it.
-    // Segments with no accountKey are shared/global and always show.
-    //
-    // Group is checked FIRST: a group account is also `isAccount`, so the
-    // single-account branch would otherwise win and never roll up.
-    let scoped = savedSegments;
-    if (isRollup) {
-      const allowed = new Set(scopedAccountKeys);
-      scoped = savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
-    } else if (isAccount && accountKey) {
-      scoped = savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
-    }
-
     const q = search.trim().toLowerCase();
-    if (!q) return scoped;
-    return scoped.filter(
+    if (!q) return scopedSegments;
+    return scopedSegments.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
         (s.description || '').toLowerCase().includes(q),
     );
-  }, [savedSegments, search, isAccount, isRollup, accountKey, scopedAccountKeys]);
+  }, [scopedSegments, search]);
 
   // ── Actions ──────────────────────────────────────────────────────
   async function handleDelete(segment: SavedSegment) {
@@ -308,6 +339,7 @@ export default function SegmentsPage() {
             {visibleSavedSegments.map((segment) => {
               const definition = parseDefinition(segment.filters);
               const count = memberCounts.get(segment.id);
+              const countError = countErrors.get(segment.id);
               const dealer = segment.accountKey
                 ? accounts[segment.accountKey]?.dealer ?? segment.accountKey
                 : null;
@@ -404,14 +436,16 @@ export default function SegmentsPage() {
                       title={
                         !isAccount || !accountKey
                           ? 'Member counts are per account — switch scope to see this segment’s size'
-                          : undefined
+                          : countError ?? undefined
                       }
                     >
                       {contactsLoading
                         ? '…'
                         : count !== undefined
                           ? `${count.toLocaleString()} member${count === 1 ? '' : 's'}`
-                          : '—'}
+                          : countError
+                            ? 'Count unavailable'
+                            : '—'}
                     </span>
                     <span
                       className="inline-flex items-center gap-1 text-[10px] text-[var(--muted-foreground)] px-1.5 py-0.5 rounded border border-[var(--border)]/60"

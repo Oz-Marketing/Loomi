@@ -1,7 +1,5 @@
 import nodemailer, { type Transporter } from 'nodemailer';
 
-const APP_LOGO_LIGHT_URL =
-  'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6995362fd614c941e221bb2e.png';
 
 function escapeHtml(value: string): string {
   return value
@@ -92,6 +90,14 @@ function renderShellHtml(opts: {
   ctaHref?: string;
   ctaText?: string;
 }): string {
+  // Absolute, because a mail client cannot resolve a root-relative path — and
+  // self-hosted, because this used to hotlink a GoHighLevel CDN asset on a
+  // domain unrelated to the sender (a mild spam signal, on an account we no
+  // longer control). `/brand/*` is on the proxy's public passthrough list so it
+  // loads for a recipient with no session; PNG because Outlook cannot render
+  // WebP. See src/lib/users/transactional-email.ts, which does the same.
+  const logoUrl = `${getAppBaseUrl()}/brand/loomi-studio-black.png`;
+
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -107,7 +113,7 @@ function renderShellHtml(opts: {
           <table role="presentation" width="620" cellspacing="0" cellpadding="0" style="width:100%;max-width:620px;">
             <tr>
               <td style="padding:0 0 14px 0;text-align:center;">
-                <img src="${APP_LOGO_LIGHT_URL}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
+                <img src="${logoUrl}" alt="Loomi Studio" width="172" style="display:inline-block;border:0;outline:none;text-decoration:none;height:auto;max-width:172px;" />
               </td>
             </tr>
             <tr>

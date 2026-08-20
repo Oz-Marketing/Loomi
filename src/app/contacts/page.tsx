@@ -6,7 +6,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { ContactsTable } from '@/components/contacts/contacts-table';
 import type { Contact, ContactAccountRef } from '@/lib/contacts/types';
-import { normalisePhone } from '@/lib/contacts/normalize';
+import type { PagedSortKey } from '@/lib/contacts/queries';
 import { ContactsToolbar, ContactsAccountFilter } from '@/components/contacts/contacts-toolbar';
 import { AddContactModal } from '@/components/contacts/add-contact-modal';
 import {
@@ -21,26 +21,15 @@ interface SingleAccountResponse {
   meta: { total: number };
 }
 
-// Concurrency for per-account fan-out. Each account = one /api/contacts
-// call; 8 in flight keeps total round-trip time low even with 30+
-// sub-accounts without overwhelming the dev server or pg pool.
-const ADMIN_CONTACTS_FETCH_CONCURRENCY = 8;
-
-/**
- * Identity key used to deduplicate contacts that appear in multiple
- * sub-accounts (e.g. one shopper who's signed up at 3 dealers under the
- * same agency). Lowercase email wins when present — emails are the
- * cleanest unique handle. Falls back to E.164-normalised phone so we
- * still catch SMS-only contacts. Returns null when the row has neither;
- * those rows stay un-merged.
- */
-function contactIdentityKey(c: Contact): string | null {
-  const email = (c.email || '').trim().toLowerCase();
-  if (email) return `email:${email}`;
-  const phone = normalisePhone(c.phone || '');
-  if (phone) return `phone:${phone}`;
-  return null;
+/** GET /api/contacts/paged — one deduped page across several accounts. */
+interface PagedContactsResponse {
+  contacts: (Contact & { _accountKeys?: string[] })[];
+  meta?: { total?: number; page?: number; pageSize?: number; pageCount?: number };
 }
+
+// Rows per page in the group view. Matches the table's own PAGE_SIZE so the
+// pager's row-range label lines up with what the server actually returned.
+const CONTACTS_PAGE_SIZE = 50;
 
 /**
  * Pull the avatar-stack-relevant fields off the account-context dict
@@ -71,73 +60,6 @@ function buildAccountRef(
     state: acc.state ?? null,
     category: acc.category ?? null,
   };
-}
-
-/**
- * Collapse contacts that share an identity key (same email or phone)
- * across sub-accounts into a single row whose `_accounts` array carries
- * every sub-account membership. Single-membership contacts still get a
- * 1-element `_accounts` array so the contacts-table can render avatars
- * uniformly regardless of cardinality.
- *
- * For each merged group the first contact (fetch order) supplies the
- * primary row data; we sort `_accounts` alphabetically by dealer name
- * and set `_accountKey`/`_dealer` to the alphabetically-first one so
- * the table's existing sort-by-dealer column behaves predictably.
- */
-function mergeContactsByIdentity(
-  contacts: Contact[],
-  accountMap: Record<string, {
-  dealer?: string;
-  storefrontImage?: string | null;
-  logos?: { light?: string; dark?: string; white?: string; black?: string } | null;
-  city?: string | null;
-  state?: string | null;
-  category?: string | null;
-}>,
-): Contact[] {
-  const groups = new Map<string, Contact[]>();
-  const ungrouped: Contact[] = [];
-
-  for (const c of contacts) {
-    const k = contactIdentityKey(c);
-    if (!k) {
-      ungrouped.push(c);
-      continue;
-    }
-    const arr = groups.get(k);
-    if (arr) arr.push(c);
-    else groups.set(k, [c]);
-  }
-
-  const out: Contact[] = [];
-
-  for (const arr of groups.values()) {
-    const first = arr[0];
-    const seenKeys = new Set<string>();
-    const refs: ContactAccountRef[] = [];
-    for (const c of arr) {
-      const key = c._accountKey || '';
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      refs.push(buildAccountRef(key, accountMap));
-    }
-    refs.sort((a, b) => a.dealer.localeCompare(b.dealer));
-    out.push({
-      ...first,
-      _accountKey: refs[0]?.key || first._accountKey,
-      _dealer: refs[0]?.dealer || first._dealer,
-      _accounts: refs,
-    });
-  }
-
-  for (const c of ungrouped) {
-    const key = c._accountKey || '';
-    const refs = key ? [buildAccountRef(key, accountMap)] : undefined;
-    out.push({ ...c, _accounts: refs });
-  }
-
-  return out;
 }
 
 export default function ContactsPage() {
@@ -224,9 +146,10 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
   const requestedAccount = searchParams.get('account') || '';
 
   const [contacts, setContacts] = useState<Contact[]>([]);
-  // Sum of each fetched account's true server-side total (data.meta.total),
-  // which can exceed the loaded rows (capped at MAX_FETCH_ALL per account).
+  // Distinct PEOPLE matching the current scope + search, across every page —
+  // reported by the server, not derived from what's loaded.
   const [serverTotal, setServerTotal] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -263,27 +186,68 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
     [availableAccounts, requestedAccount],
   );
 
-  const filters = useContactFilters(contacts, presetAccountFilter);
+  // Search + account filter now drive a SERVER query, so they live here rather
+  // than in useContactFilters (which filters an in-memory array — still right
+  // for the single-account view below, whose set is bounded).
+  const [search, setSearch] = useState('');
+  const [accountFilters, setAccountFilters] = useState<string[]>(
+    presetAccountFilter ? [presetAccountFilter] : [],
+  );
+  const [page, setPage] = useState(0);
+  const [sortKey, setSortKey] = useState<PagedSortKey>('dateAdded');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  useEffect(() => {
+    if (!presetAccountFilter) return;
+    setAccountFilters((current) => (current.length > 0 ? current : [presetAccountFilter]));
+  }, [presetAccountFilter]);
+
+  // Typing shouldn't fire a query per character.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
   const accountKeysToFetch = useMemo(() => {
-    const selectedKeys = filters.accountFilters.length > 0
-      ? filters.accountFilters
+    const selectedKeys = accountFilters.length > 0
+      ? accountFilters
       : availableAccounts.map((account) => account.key);
     return [...new Set(selectedKeys)];
-  }, [availableAccounts, filters.accountFilters]);
+  }, [availableAccounts, accountFilters]);
 
-  // Guards against a slower, earlier fan-out overwriting a newer one. On first
+  const scopeKey = accountKeysToFetch.join(',');
+
+  // Any change to what's being asked for resets to the first page — otherwise
+  // a narrower filter can leave you stranded on page 40 of 3.
+  useEffect(() => {
+    setPage(0);
+  }, [scopeKey, debouncedSearch, sortKey, sortDir]);
+
+  // Guards against a slower, earlier request overwriting a newer one. On first
   // paint the scope hasn't resolved yet (context defaults to admin), so an
   // unrestricted fetch across every account can be in flight when the scoped
   // one starts — and being larger, it often lands last. Without this, a group
   // account would show contacts from outside the group.
   const fetchGenerationRef = useRef(0);
+  // Cancels the previous request when a newer one starts. The generation guard
+  // below already stops a late response from clobbering fresher state, but the
+  // request itself still ran — and in React's dev StrictMode (and on any fast
+  // filter change) that doubles the query load for a result nobody reads.
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(async () => {
     const generation = ++fetchGenerationRef.current;
     const isStale = () => generation !== fetchGenerationRef.current;
 
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     if (accountKeysToFetch.length === 0) {
       setContacts([]);
+      setServerTotal(0);
+      setPageCount(0);
       setFetchError('Select at least one account to load contacts.');
       setLoading(false);
       return;
@@ -292,72 +256,63 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
     setLoading(true);
     setFetchError(null);
 
-    // Fan out per-account fetches in chunks. The aggregate endpoint
-    // (/api/contacts/aggregate) is reachable but has been observed to
-    // return empty contacts arrays in the admin rollup case — until
-    // that's diagnosed, the per-account path is the reliable rollup
-    // mechanism. Each call uses ?all=true so we get every contact for
-    // each sub-account (capped at MAX_FETCH_ALL=5000 per account in
-    // listContactsForAccount, which is plenty for an agency tenant).
-    const nextContacts: Contact[] = [];
-    const failures: string[] = [];
-    let totalSum = 0;
-    for (let i = 0; i < accountKeysToFetch.length; i += ADMIN_CONTACTS_FETCH_CONCURRENCY) {
-      const chunk = accountKeysToFetch.slice(i, i + ADMIN_CONTACTS_FETCH_CONCURRENCY);
-      const settled = await Promise.allSettled(
-        chunk.map(async (key) => {
-          const res = await fetch(`/api/contacts?accountKey=${encodeURIComponent(key)}&all=true&includeMessaging=true`);
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            const message = typeof body.error === 'string' ? body.error : `Failed to fetch contacts for ${key}`;
-            throw new Error(message);
-          }
-          const data: SingleAccountResponse = await res.json();
+    // ONE request for ONE page, deduped across rooftops by the server.
+    //
+    // This used to fan out a `?all=true` request per account — up to 5,000
+    // contacts each, 8 concurrent — merge ~200k records in the browser, and
+    // then render 50 of them. It also built those payloads 8-at-a-time in a
+    // server process pm2 restarts at 512MB RSS, so opening this page at group
+    // scope could take the whole site down. See /api/contacts/paged.
+    try {
+      const params = new URLSearchParams({
+        accountKeys: accountKeysToFetch.join(','),
+        page: String(page),
+        pageSize: String(CONTACTS_PAGE_SIZE),
+        sort: sortKey,
+        dir: sortDir,
+      });
+      if (debouncedSearch) params.set('search', debouncedSearch);
+
+      const res = await fetch(`/api/contacts/paged?${params.toString()}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(typeof body.error === 'string' ? body.error : 'Failed to fetch contacts');
+      }
+      const data: PagedContactsResponse = await res.json();
+      if (isStale()) return;
+
+      // The server returns which accounts each person belongs to; the avatar
+      // stack needs the dealer names and logos, which only the client has.
+      setContacts(
+        (data.contacts || []).map((c) => {
+          const refs = (c._accountKeys || []).map((key) => buildAccountRef(key, accountMap));
+          refs.sort((a, b) => a.dealer.localeCompare(b.dealer));
           return {
-            key,
-            dealer: accountMap[key]?.dealer || key,
-            contacts: data.contacts || [],
-            total: data.meta?.total ?? (data.contacts?.length || 0),
+            ...c,
+            _accountKey: refs[0]?.key,
+            _dealer: refs[0]?.dealer,
+            _accounts: refs,
           };
         }),
       );
-
-      for (const result of settled) {
-        if (result.status === 'rejected') {
-          failures.push(result.reason instanceof Error ? result.reason.message : 'Failed to fetch contacts');
-          continue;
-        }
-
-        totalSum += result.value.total;
-        for (const contact of result.value.contacts) {
-          nextContacts.push({
-            ...contact,
-            _accountKey: result.value.key,
-            _dealer: result.value.dealer,
-          });
-        }
-      }
-    }
-    // A newer fan-out started while this one was in flight — drop these
-    // results rather than clobbering the newer (correctly-scoped) ones.
-    if (isStale()) return;
-
-    setServerTotal(totalSum);
-
-    // Dedupe contacts that exist in multiple sub-accounts (one shopper
-    // signed up at multiple rooftops). Merge their sub-account
-    // membership into `_accounts` so the table renders one row with a
-    // stacked avatar instead of N duplicate rows.
-    setContacts(mergeContactsByIdentity(nextContacts, accountMap));
-    if (failures.length === 0) {
+      setServerTotal(data.meta?.total ?? 0);
+      setPageCount(data.meta?.pageCount ?? 0);
       setFetchError(null);
-    } else if (failures.length === accountKeysToFetch.length) {
-      setFetchError(failures[0]);
-    } else {
-      setFetchError(`${failures.length} account fetches failed. Showing partial results.`);
+    } catch (err) {
+      // An abort is this component superseding itself, not a failure — leave
+      // the existing rows and the spinner to the request that replaced us.
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (isStale()) return;
+      setContacts([]);
+      setServerTotal(0);
+      setPageCount(0);
+      setFetchError(err instanceof Error ? err.message : 'Failed to fetch contacts');
+    } finally {
+      if (!isStale()) setLoading(false);
     }
-    setLoading(false);
-  }, [accountKeysToFetch, accountMap]);
+  }, [accountKeysToFetch, accountMap, page, sortKey, sortDir, debouncedSearch]);
 
   useEffect(() => {
     fetchData();
@@ -379,8 +334,8 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <ContactsAccountFilter
-              values={filters.accountFilters}
-              onChange={filters.setAccountFilters}
+              values={accountFilters}
+              onChange={setAccountFilters}
               accounts={accountOptions}
             />
             <Link
@@ -393,9 +348,9 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
             <button
               type="button"
               onClick={() => setShowAddModal(true)}
-              disabled={filters.accountFilters.length !== 1}
+              disabled={accountFilters.length !== 1}
               title={
-                filters.accountFilters.length === 1
+                accountFilters.length === 1
                   ? 'Add a single contact to this account'
                   : 'Filter to a single account to enable'
               }
@@ -409,31 +364,47 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
       </div>
 
       <ContactsToolbar
-        search={filters.search}
-        onSearchChange={filters.setSearch}
-        hasAccountFilter={filters.accountFilters.length > 1}
+        search={search}
+        onSearchChange={setSearch}
+        hasAccountFilter={accountFilters.length > 1}
         totalCount={serverTotal}
-        filteredCount={filters.filtered.length}
+        // Search and account filter are applied server-side now, so the
+        // "matching" count IS the server total — there is no separate
+        // client-filtered subset to report.
+        filteredCount={serverTotal}
         loading={loading}
         onRefresh={() => {
           setRefreshTick((value) => value + 1);
         }}
       />
 
-      {showAddModal && filters.accountFilters.length === 1 && (
+      {showAddModal && accountFilters.length === 1 && (
         <AddContactModal
-          accountKey={filters.accountFilters[0]}
+          accountKey={accountFilters[0]}
           onClose={() => setShowAddModal(false)}
           onCreated={() => setRefreshTick((value) => value + 1)}
         />
       )}
 
       <ContactsTable
-        contacts={filters.filtered}
+        contacts={contacts}
         loading={loading}
         error={fetchError}
         showAccountColumn
         onMutated={() => setRefreshTick((value) => value + 1)}
+        serverPagination={{
+          page,
+          pageSize: CONTACTS_PAGE_SIZE,
+          pageCount,
+          total: serverTotal,
+          sortKey,
+          sortDir,
+          onPageChange: setPage,
+          onSortChange: (key, dir) => {
+            setSortKey(key as PagedSortKey);
+            setSortDir(dir);
+          },
+        }}
       />
     </div>
   );

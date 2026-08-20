@@ -19,7 +19,7 @@ const MIME_TYPES: Record<string, string> = {
  * so this route handles local fallback logos.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   // Require authentication (logos are behind auth)
@@ -60,13 +60,37 @@ export async function GET(
   const ext = path.extname(fileName).slice(1).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
+  // Unlike avatars, logo filenames are STABLE — every account's light variant is
+  // `light.png` forever. The old header here was
+  // `public, max-age=31536000, immutable`, which told every browser that this
+  // exact URL would never change again: re-upload a rooftop's logo and nobody
+  // who had already loaded it would see the new one for a year, with no way to
+  // bust it short of renaming the file.
+  //
+  // So: revalidate every time, but make revalidating free. An ETag off the
+  // file's size and mtime turns the common case into a bodyless 304 instead of
+  // re-sending the image.
+  //
+  // `private` for the same reason as the avatars route — this response is
+  // behind a session check and must not land in a shared cache.
+  const stat = fs.statSync(resolvedPath);
+  const etag = `W/"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+  const cacheHeaders = {
+    'Cache-Control': 'private, max-age=0, must-revalidate',
+    ETag: etag,
+  };
+
+  if (req.headers.get('if-none-match') === etag) {
+    return new NextResponse(null, { status: 304, headers: cacheHeaders });
+  }
+
   const fileBuffer = fs.readFileSync(resolvedPath);
 
   return new NextResponse(fileBuffer, {
     status: 200,
     headers: {
       'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=31536000, immutable',
+      ...cacheHeaders,
     },
   });
 }

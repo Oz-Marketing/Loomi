@@ -92,3 +92,43 @@ export function visibleNav<T extends NavLike>(items: T[], allowed: Set<string> |
     return children.length === 0 ? [] : [{ ...item, children }];
   });
 }
+
+// ── Surface prefix ───────────────────────────────────────────────────
+//
+// The nav hrefs above are written bare (`/websites`), which is what the
+// browser URL looks like on reporting.loomilm.com — the proxy rewrites
+// `/websites` → `/reporting/websites` internally and the address bar never
+// shows the prefix.
+//
+// The SAME routes are also reachable on the Studio host under a literal
+// `/reporting/*` path (the GBP OAuth callback redirects there, and saved links
+// exist). There the address bar DOES carry the prefix, and a bare `/websites`
+// resolves against the root app tree — which has no such page. 17 of the 19
+// nav destinations have no root-level equivalent, so the whole sidebar 404s,
+// and Next prefetches each one on hover.
+//
+// Kept here rather than inline in the sidebar for the reason at the top of this
+// file: it can be tested without dragging in Next's client hooks.
+
+/** `/reporting` when the browser path carries the prefix, otherwise `''`. */
+export function surfacePrefixFor(browserPath: string): string {
+  return browserPath === '/reporting' || browserPath.startsWith('/reporting/')
+    ? '/reporting'
+    : '';
+}
+
+/** The nav href to actually render, given where the browser currently is. */
+export function withSurfacePrefix(browserPath: string, href: string): string {
+  return `${surfacePrefixFor(browserPath)}${href}`;
+}
+
+/**
+ * The browser path normalized back to bare, for active-state matching against
+ * the bare hrefs above. Without this, nothing ever highlights on the Studio
+ * host — `/reporting/executive`.startsWith('/executive') is false.
+ */
+export function navPathFor(browserPath: string): string {
+  const prefix = surfacePrefixFor(browserPath);
+  if (!prefix) return browserPath;
+  return browserPath.slice(prefix.length) || '/';
+}

@@ -6,6 +6,7 @@ import { AdminOnly } from '@/components/route-guard';
 import PrimaryButton from '@/components/primary-button';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useIndustries } from '@/lib/hooks/use-industries';
+import { AccountAvatar } from '@/components/account-avatar';
 
 interface ClientData {
   dealer: string;
@@ -169,13 +170,19 @@ export default function ClientsPage() {
             className="p-4 border border-[var(--border)] rounded-xl bg-[var(--card)]"
           >
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-lg bg-[var(--muted)] flex items-center justify-center overflow-hidden flex-shrink-0">
-                {client.logos?.light ? (
-                  <img src={client.logos.light} alt={client.dealer} className="max-w-full max-h-full object-contain p-1" />
-                ) : (
-                  <span className="text-xs text-[var(--muted-foreground)]">No logo</span>
-                )}
-              </div>
+              {/* AccountAvatar rather than a bare <img>: it already picks the
+                  theme-appropriate variant, falls back to the storefront photo
+                  and then to a generated mark, and — the reason this changed —
+                  treats a URL that fails to LOAD as absent. A plain <img> here
+                  rendered a broken-image icon for the 18 rooftops whose logo
+                  files were destroyed by a deploy before object storage. */}
+              <AccountAvatar
+                name={client.dealer}
+                accountKey={key}
+                logos={client.logos}
+                size={64}
+                className="rounded-lg flex-shrink-0"
+              />
 
               <div className="flex-1 grid grid-cols-3 gap-3">
                 <div>

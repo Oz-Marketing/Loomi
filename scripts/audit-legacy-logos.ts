@@ -22,9 +22,14 @@
  *
  *   ssh loomi-prod
  *   cd /var/www/loomi-studio/current
- *   DATABASE_URL="$(tr ' ' '\n' < /proc/$(pgrep -f 'next-server' | head -1)/environ \
+ *   PID=$(pgrep -f 'next-server' | head -1)
+ *   DATABASE_URL="$(tr '\\0' '\\n' < /proc/$PID/environ \
  *     | grep '^DATABASE_URL=' | cut -d= -f2-)" \
- *     npx tsx scripts/audit-legacy-logos.ts
+ *     NODE_ENV=production npx tsx scripts/audit-legacy-logos.ts
+ *
+ * (`/proc/PID/environ` is NUL-separated, not space-separated — splitting on
+ * spaces silently yields nothing and the script falls back to the localhost
+ * default, quietly auditing the wrong database.)
  *
  * Flags:
  *   --json          machine-readable output instead of the report

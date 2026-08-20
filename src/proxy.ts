@@ -164,6 +164,9 @@ function isGlobalAppPath(pathname: string): boolean {
     // bypass host rewriting so the next.config rewrite applies cleanly.
     pathname.startsWith('/avatars/') ||
     pathname.startsWith('/logos/') ||
+    // Loomi's own brand marks. Host-rewriting these would look for
+    // /reporting/brand/... and 404 the logo on every non-studio surface.
+    pathname.startsWith('/brand/') ||
     // Public media links. Shared outward to people with no Loomi account and no
     // idea which host they're on, so they must resolve identically everywhere —
     // exactly like /login. Host-rewriting one would 404 the recipient.
@@ -266,6 +269,12 @@ export async function proxy(request: NextRequest) {
     // /api/internal/ above, it must skip this gate or the proxy 401s the
     // signed links we put in lead emails before the route can check them.
     pathname === '/api/forms/files' ||
+    // Loomi's own logo files. Two callers have no session by definition: the
+    // login/reset pages render the wordmark before anyone has signed in, and
+    // transactional email embeds it for a recipient sitting in Gmail. Gating
+    // these turns both into broken images. They are our own brand marks —
+    // there is nothing here to protect.
+    pathname.startsWith('/brand/') ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/forgot-password') ||

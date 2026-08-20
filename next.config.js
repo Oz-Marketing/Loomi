@@ -78,6 +78,26 @@ const nextConfig = {
         source,
         headers: [{ key: 'Cache-Control', value: 'private, max-age=0, must-revalidate' }],
       })),
+      {
+        // Loomi's own brand marks — deliberately the OPPOSITE policy to the two
+        // above. Those are tenant data behind a session, so they must not enter
+        // a shared cache. These are the company logo: served to logged-out
+        // visitors on the login page and to email clients with no session at
+        // all, so shared caching is not a leak, it is the point.
+        //
+        // A day of freshness with a week of stale-while-revalidate: a rebrand
+        // reaches everyone within a day, and in the meantime nobody pays a
+        // round trip for a file that changes once a year. Not `immutable` —
+        // these paths are stable names, and that is exactly the trap that made
+        // re-uploaded account logos un-bustable for a year.
+        source: '/brand/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=86400, stale-while-revalidate=604800',
+          },
+        ],
+      },
     ];
   },
   async rewrites() {

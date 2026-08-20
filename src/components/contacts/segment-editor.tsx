@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
+  ArrowDownTrayIcon,
   ArrowLeftIcon,
   ArrowPathIcon,
   BookmarkSquareIcon,
@@ -23,6 +24,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
+import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 import type {
   FieldDefinition,
@@ -176,6 +178,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [description, setDescription] = useState(initial?.description ?? '');
   const [definition, setDefinition] = useState<FilterDefinition>(initialDef);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // ── Live preview ───────────────────────────────────────────
   //
@@ -401,6 +404,35 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     updateDef((prev) => ({ ...prev, logic: prev.logic === 'AND' ? 'OR' : 'AND' }));
   }
 
+  // ── Export ─────────────────────────────────────────────────
+  //
+  // Exports what the live preview beside it is counting: the conditions
+  // currently on screen, saved or not. Someone tuning a call list wants
+  // the CSV of the filter they're looking at, not of the last version
+  // they happened to save.
+  async function handleExport() {
+    if (!isAccount || !accountKey) {
+      toast.error(
+        'Switch to an account to export — a segment is a filter, so its members are per account.',
+      );
+      return;
+    }
+    if (cleaned.groups.length === 0) {
+      toast.error('Add at least one condition with a value before exporting.');
+      return;
+    }
+    setExporting(true);
+    try {
+      await exportSegmentCsv({
+        accountKeys: [accountKey],
+        definition: cleaned,
+        label: name.trim() || 'segment',
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // ── Save ───────────────────────────────────────────────────
   async function handleSave() {
     const trimmedName = name.trim();
@@ -460,6 +492,10 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   }
 
   // ── Render ─────────────────────────────────────────────────
+  // Export needs a single account to resolve against and at least one
+  // complete condition — the same two things the live preview needs.
+  const canExport = Boolean(isAccount && accountKey) && cleaned.groups.length > 0;
+
   const scopeLabel = initial?.accountKey
     ? accountData?.dealer ?? initial.accountKey
     : isAccount && accountKey
@@ -519,6 +555,24 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               )}
               {scopeLabel}
             </span>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={exporting || !canExport}
+              title={
+                !canExport
+                  ? isAccount && accountKey
+                    ? 'Add at least one condition with a value to export'
+                    : 'Switch to an account to export — a segment is sized per account'
+                  : preview.status === 'ready'
+                    ? `Download all ${preview.count.toLocaleString()} matching contacts as CSV`
+                    : 'Download every matching contact as CSV'
+              }
+              className="px-3 h-9 inline-flex items-center gap-1.5 text-sm rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ArrowDownTrayIcon className="w-4 h-4" />
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
             <Link
               href={segmentsHref}
               className="px-3 h-9 inline-flex items-center text-sm rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors"

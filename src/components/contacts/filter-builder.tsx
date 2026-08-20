@@ -350,7 +350,7 @@ export function FilterBuilder({
                 className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs rounded-xl text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)] transition-colors"
               >
                 <BookmarkIcon className="w-3.5 h-3.5" />
-                Save as Audience
+                Save as segment
               </button>
             ) : (
               <div className="flex items-center gap-2">
@@ -358,7 +358,7 @@ export function FilterBuilder({
                   type="text"
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
-                  placeholder="Audience name..."
+                  placeholder="Segment name…"
                   className="flex-1 px-3 py-2 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
                   autoFocus
                   onKeyDown={(e) => {

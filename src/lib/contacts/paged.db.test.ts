@@ -142,4 +142,57 @@ describe.skipIf(!RUN)('listContactsPaged', () => {
     const res = await listContactsPaged({ accountKeys: [A, B], pageSize: 50, search: '8015550100' });
     expect(res.contacts.some((c) => c.lastName === 'Phone')).toBe(true);
   });
+
+  // ── restrictIds: how a segment narrows this list ──────────────
+  //
+  // The Contacts page filters by segment by resolving membership in
+  // Postgres and handing the ids down here. The three cases below are
+  // the ones that would silently show the WRONG list rather than error.
+
+  it('restricts to the given ids and counts only those people', async () => {
+    const all = await listContactsPaged({ accountKeys: [A, B], pageSize: 50, search: SOURCE });
+    const ada = all.contacts.find((c) => c.lastName === 'Email')!;
+    const res = await listContactsPaged({
+      accountKeys: [A, B], pageSize: 50, search: SOURCE, restrictIds: [ada.id],
+    });
+    expect(res.total).toBe(1);
+    expect(res.contacts[0]?.lastName).toBe('Email');
+  });
+
+  it('treats an EMPTY restriction as an empty result, not as no restriction', async () => {
+    // Reading `[]` as "unrestricted" would show the whole roster for a
+    // segment that matched nobody — the worst possible way to be wrong.
+    const res = await listContactsPaged({
+      accountKeys: [A, B], pageSize: 50, search: SOURCE, restrictIds: [],
+    });
+    expect(res).toMatchObject({ contacts: [], total: 0 });
+  });
+
+  it('treats null/undefined as no restriction at all', async () => {
+    const res = await listContactsPaged({
+      accountKeys: [A, B], pageSize: 50, search: SOURCE, restrictIds: null,
+    });
+    expect(res.total).toBe(4);
+  });
+
+  it('applies the restriction ALONGSIDE search rather than replacing it', async () => {
+    const all = await listContactsPaged({ accountKeys: [A, B], pageSize: 50, search: SOURCE });
+    const ids = all.contacts.map((c) => c.id);
+    // Every person is in the restriction, but the search only matches Bo.
+    const res = await listContactsPaged({
+      accountKeys: [A, B], pageSize: 50, search: '8015550100', restrictIds: ids,
+    });
+    expect(res.contacts.every((c) => c.lastName === 'Phone')).toBe(true);
+  });
+
+  it('cannot reach outside the account scope via ids', async () => {
+    const all = await listContactsPaged({ accountKeys: [A, B], pageSize: 50, search: SOURCE });
+    const di = all.contacts.find((c) => c.firstName === 'Di')!;
+    // Di lives only in B; asking for her id while scoped to A must return
+    // nothing. The scope is a floor, not a hint.
+    const res = await listContactsPaged({
+      accountKeys: [A], pageSize: 50, search: SOURCE, restrictIds: [di.id],
+    });
+    expect(res.total).toBe(0);
+  });
 });

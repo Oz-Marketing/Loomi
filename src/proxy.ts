@@ -151,6 +151,10 @@ function isGlobalAppPath(pathname: string): boolean {
     pathname.startsWith('/_next/') ||
     pathname.startsWith('/__nextjs/') ||
     pathname === '/favicon.ico' ||
+    // The other two App Router icon conventions. Same reasoning as
+    // /favicon.ico: host-rewriting them looks for /reporting/icon.png.
+    pathname === '/icon.png' ||
+    pathname === '/apple-icon.png' ||
     pathname === '/robots.txt' ||
     pathname === '/sitemap.xml' ||
     pathname === '/lp-sitemap.xml' ||
@@ -291,7 +295,14 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/reset-password') ||
     pathname.startsWith('/marketing') ||
     pathname.startsWith('/_next') ||
+    // Every App Router icon convention, not just favicon.ico. A browser
+    // requests the <link rel="icon"> target on the LOGIN page, before
+    // anyone has a session, and iOS fetches apple-icon when a logged-out
+    // page is added to the home screen. Gating these redirects the image
+    // request to /login and the icon silently fails to render.
     pathname.startsWith('/favicon') ||
+    pathname === '/icon.png' ||
+    pathname === '/apple-icon.png' ||
     pathname.startsWith('/lp/') ||
     pathname.startsWith('/f/') ||
     // Public media links. The TOKEN is the credential — the route resolves it

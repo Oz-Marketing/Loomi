@@ -218,6 +218,43 @@ export function findUnknownMergetags(
   return [...unknown];
 }
 
+/** Collapse spelling variations so near-misses can be compared. */
+function normalizeTagKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * Best guess at the tag a user MEANT when they typed an unknown one.
+ *
+ * Exists because the preflight blocker used to say only "check the variable
+ * picker for the supported list", which is a scavenger hunt when the tag is
+ * one prefix away from correct. The common cases are a namespace that
+ * doesn't exist ({{email.unsubscribe_link}} → {{unsubscribe_link}}) and
+ * camelCase where the namespace is snake_case ({{contact.firstName}} →
+ * {{contact.first_name}}), so match on the last segment first and fall back
+ * to comparing the whole key with punctuation stripped.
+ *
+ * Returns null rather than a bad guess — a wrong suggestion is worse than
+ * none, because the user will try it.
+ */
+export function suggestMergetag(
+  unknownKey: string,
+  ctx: BlastMergetagContext,
+): string | null {
+  const validKeys = Object.keys(ctx);
+  const lastSegment = (key: string) => key.split('.').pop() || key;
+  const wantedTail = normalizeTagKey(lastSegment(unknownKey));
+  if (!wantedTail) return null;
+
+  const tailMatch = validKeys.find(
+    (key) => normalizeTagKey(lastSegment(key)) === wantedTail,
+  );
+  if (tailMatch) return tailMatch;
+
+  const wantedWhole = normalizeTagKey(unknownKey);
+  return validKeys.find((key) => normalizeTagKey(key) === wantedWhole) || null;
+}
+
 /** Every mergetag key referenced by `input`, known or not. */
 export function listMergetags(input: string): string[] {
   if (!input) return [];

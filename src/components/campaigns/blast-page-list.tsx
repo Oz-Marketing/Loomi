@@ -1264,7 +1264,7 @@ export function BlastPageList({
         const id = c.campaignId || c.id;
         const path = isLoomiEmail(c) ? 'email' : 'sms';
         try {
-          const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}/duplicate`, {
+          const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/duplicate`, {
             method: 'POST',
           });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1310,7 +1310,7 @@ export function BlastPageList({
     const id = campaign.campaignId || campaign.id;
     const path = isLoomiEmail(campaign) ? 'email' : 'sms';
     try {
-      const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}/archive`, {
+      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/archive`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -1333,7 +1333,7 @@ export function BlastPageList({
     const id = campaign.campaignId || campaign.id;
     const path = isLoomiEmail(campaign) ? 'email' : 'sms';
     try {
-      const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}/restore`, {
+      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/restore`, {
         method: 'POST',
       });
       if (!res.ok) {
@@ -1363,7 +1363,7 @@ export function BlastPageList({
     const id = campaign.campaignId || campaign.id;
     const path = isLoomiEmail(campaign) ? 'email' : 'sms';
     try {
-      const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}`, {
+      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       if (!res.ok) {
@@ -1397,7 +1397,7 @@ export function BlastPageList({
         const path = isLoomiEmail(c) ? 'email' : 'sms';
         try {
           const res = await fetch(
-            `/api/campaigns/${path}/${encodeURIComponent(id)}/restore`,
+            `/api/blasts/${path}/${encodeURIComponent(id)}/restore`,
             { method: 'POST' },
           );
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1444,7 +1444,7 @@ export function BlastPageList({
         const path = isLoomiEmail(c) ? 'email' : 'sms';
         try {
           const res = await fetch(
-            `/api/campaigns/${path}/${encodeURIComponent(id)}/archive`,
+            `/api/blasts/${path}/${encodeURIComponent(id)}/archive`,
             { method: 'POST' },
           );
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1490,19 +1490,30 @@ export function BlastPageList({
     });
     if (!confirmed) return;
     setBulkBusy(true);
-    const failed: string[] = [];
+    // Keep the server's reason with each failure — a bulk delete that only
+    // reports a count leaves the user with no way to tell a permission
+    // problem from an in-flight send.
+    const failed: { name: string; reason: string }[] = [];
     try {
       for (const c of targets) {
         const id = c.campaignId || c.id;
         const path = isLoomiEmail(c) ? 'email' : 'sms';
         try {
-          const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}`, {
+          const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}`, {
             method: 'DELETE',
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(
+              typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`,
+            );
+          }
         } catch (err) {
           console.error('Bulk delete failed for', c.name, err);
-          failed.push(c.name || '(Untitled)');
+          failed.push({
+            name: c.name || '(Untitled)',
+            reason: err instanceof Error ? err.message : 'Unknown error',
+          });
         }
       }
     } finally {
@@ -1514,7 +1525,11 @@ export function BlastPageList({
         title: 'Delete summary',
         message: [
           `${targets.length - failed.length} campaign${targets.length - failed.length === 1 ? '' : 's'} deleted.`,
-          failed.length > 0 ? `${failed.length} failed.` : '',
+          failed.length > 0
+            ? `${failed.length} failed:\n${failed
+                .map((f) => `• ${f.name} — ${f.reason}`)
+                .join('\n')}`
+            : '',
           skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped (managed by provider).` : '',
         ]
           .filter(Boolean)

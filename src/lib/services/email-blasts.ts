@@ -5,7 +5,11 @@ import {
 } from '@/lib/contact-hygiene';
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
-import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
+import {
+  injectUnsubscribeFooter,
+  UNSUBSCRIBE_TOKEN,
+  type UnsubscribeFooterInput,
+} from '@/lib/sending/unsubscribe-footer';
 import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
 import {
   applyBlastMergetags,
@@ -406,7 +410,8 @@ interface AccountSenderIdentity {
   /** Pre-built CAN-SPAM unsubscribe footer (HTML + text). Null when the
    *  account hasn't filled in any address/dealer info; the worker still
    *  sends in that case but skips the subscription_tracking block. */
-  unsubscribeFooter: { html: string; text: string } | null;
+  /** Account data the compliance footer is built from, per send. */
+  unsubscribeFooter: UnsubscribeFooterInput | null;
 }
 
 function formatFromHeader(email: string, name: string | null | undefined): string {
@@ -459,16 +464,17 @@ async function buildSenderMap(
       }
     }
 
-    // Build the unsubscribe footer once per account — same copy applies
-    // to every recipient in this batch.
-    const unsubscribeFooter = account
-      ? buildUnsubscribeFooter({
+    // Carry the raw address fields, not a prebuilt footer: whether the
+    // footer repeats the unsubscribe link depends on the rendered body,
+    // which we only have inside the per-recipient loop.
+    const unsubscribeFooter: UnsubscribeFooterInput | null = account
+      ? {
           dealer: account.dealer || '',
           address: account.address,
           city: account.city,
           state: account.state,
           postalCode: account.postalCode,
-        })
+        }
       : null;
 
     if (account?.senderEmail) {
@@ -1015,10 +1021,10 @@ export async function listEmailBlasts(options?: {
  * SendGrid's substitution tag for the hosted unsubscribe URL. This is what
  * {{unsubscribe_link}} resolves to at send time, so an unsubscribe button a
  * designer wired up in the template editor becomes a real, per-recipient,
- * one-click unsubscribe link. Must match the `substitution_tag` we pass in
- * lib/sending/sendgrid.ts and the token in lib/sending/unsubscribe-footer.ts.
+ * one-click unsubscribe link. Single-sourced from unsubscribe-footer.ts so
+ * the body, the footer, and the API payload can never drift apart.
  */
-const SENDGRID_UNSUBSCRIBE_TAG = '[%unsubscribe_url%]';
+const SENDGRID_UNSUBSCRIBE_TAG = UNSUBSCRIBE_TOKEN;
 
 /** Mergetag + opt-out data for one recipient, keyed `accountKey|contactId`. */
 type BlastContactRow = BlastContactData & { dndEmail: boolean };
@@ -1590,10 +1596,10 @@ export async function processEmailBlast(
         unsubscribeToken: SENDGRID_UNSUBSCRIBE_TAG,
       });
 
-      const personalizedHtml = applyBlastMergetags(baseHtml, mergeCtx, {
+      const mergedHtml = applyBlastMergetags(baseHtml, mergeCtx, {
         escape: true,
       });
-      const personalizedText = applyBlastMergetags(baseText, mergeCtx, {
+      const mergedText = applyBlastMergetags(baseText, mergeCtx, {
         escape: false,
       });
       const personalizedSubject = applyBlastMergetags(
@@ -1601,6 +1607,21 @@ export async function processEmailBlast(
         mergeCtx,
         { escape: false },
       );
+
+      // CAN-SPAM footer goes in AFTER mergetags: the injector decides
+      // whether to repeat the unsubscribe link by looking for the
+      // already-substituted [%unsubscribe_url%] the designer placed. It
+      // also lands after applyUtmTags(), which is what keeps UTM params
+      // off the unsubscribe URL.
+      const withFooter = sender.unsubscribeFooter
+        ? injectUnsubscribeFooter({
+            html: mergedHtml,
+            text: mergedText,
+            account: sender.unsubscribeFooter,
+          })
+        : { html: mergedHtml, text: mergedText };
+      const personalizedHtml = withFooter.html;
+      const personalizedText = withFooter.text;
 
       const result = await sendEmailViaSendGrid({
         apiKey: sender.sendgridApiKey!,
@@ -1618,13 +1639,13 @@ export async function processEmailBlast(
           recipientId: recipient.id,
           accountKey: recipient.accountKey,
         },
-        // CAN-SPAM: SendGrid appends an unsubscribe link + sets the
-        // List-Unsubscribe header. Footer copy is built per-account in
-        // buildSenderMap. Preflight blocks a send when the account has no
-        // complete mailing address, so by the time we get here the footer
-        // is populated.
+        // CAN-SPAM: the footer (link + postal address) is already in the
+        // body above. SendGrid's remaining job is to turn the tag into a
+        // real URL and set the List-Unsubscribe headers. Preflight blocks
+        // a send when the account has no complete mailing address, so by
+        // the time we get here the footer is populated.
         ...(sender.unsubscribeFooter
-          ? { unsubscribe: sender.unsubscribeFooter }
+          ? { unsubscribe: { substitutionTag: SENDGRID_UNSUBSCRIBE_TAG } }
           : {}),
       });
 

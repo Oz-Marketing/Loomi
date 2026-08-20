@@ -505,7 +505,12 @@ export default function MultiMessageStepPage({ params }: PageProps) {
                 <div className="text-[11px] text-[var(--muted-foreground)] border-t border-[var(--border)] pt-3">
                   Sender: <span className="text-[var(--foreground)] font-medium">{account?.senderName || account?.dealer || '—'}</span>
                   <br />
-                  {account?.senderEmail || 'Falls back to global SMTP_FROM'}
+                  {account?.senderEmail || (
+                    <span className="text-amber-400">
+                      No From address set — add one in Settings &rarr; Sending
+                      before scheduling
+                    </span>
+                  )}
                 </div>
               </div>
 

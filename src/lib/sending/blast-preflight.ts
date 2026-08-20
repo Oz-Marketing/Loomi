@@ -24,6 +24,7 @@ import {
   applyBlastMergetags,
   buildBlastMergetagContext,
   findUnknownMergetags,
+  suggestMergetag,
 } from '@/lib/sending/blast-mergetags';
 
 export type PreflightSeverity = 'blocker' | 'warning';
@@ -161,17 +162,27 @@ export async function preflightEmailBlast(
   ].filter((tag) => !tag.startsWith('custom_values.'));
 
   if (unknownTags.length > 0) {
+    const distinct = [...new Set(unknownTags)];
+    // Name the tag they probably meant. Without this the remedy is a
+    // scavenger hunt through the picker for what is usually a one-word typo.
+    const suggestions = distinct
+      .map((tag) => {
+        const guess = suggestMergetag(tag, sampleCtx);
+        return guess ? `{{${tag}}} → {{${guess}}}` : null;
+      })
+      .filter((line): line is string => line !== null);
+
     issues.push({
       severity: 'blocker',
       code: PREFLIGHT_CODES.UNKNOWN_MERGETAG,
       accountKey: '',
-      message: `Unrecognized merge tags would send as literal text: ${[
-        ...new Set(unknownTags),
-      ]
+      message: `Unrecognized merge tags would send as literal text: ${distinct
         .map((t) => `{{${t}}}`)
         .join(', ')}.`,
       remedy:
-        'Fix the spelling on the Message step, or remove the tag. Check the variable picker for the supported list.',
+        suggestions.length > 0
+          ? `Did you mean ${suggestions.join(', ')}? Fix the spelling on the Message step, or remove the tag.`
+          : 'Fix the spelling on the Message step, or remove the tag. Check the variable picker for the supported list.',
     });
   }
 

@@ -134,7 +134,7 @@ const PROVIDERS: ReportingProvider[] = [
   {
     value: 'gohighlevel',
     label: 'GoHighLevel',
-    blurb: 'Email campaign reporting — Private Integration token.',
+    blurb: 'Historical email stats from before Loomi sending — Private Integration token.',
     logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/0aae9fac5ab446939b4cb254004784e5/e3613822-6cb4-4e85-ba10-9abcb3782b6b.png',
     connectedKey: 'ghlConfigured',
     fields: [

@@ -1,6 +1,6 @@
 import type { AdData } from './types';
-import type { OfferType } from './offer-text';
 import { parseOfferNumber } from './numbers';
+import { OFFER_KINDS, kindForOfferType, offerKind, DEFAULT_OFFER_KIND } from './offer-kinds';
 
 /**
  * Disclaimer composition — the DETERMINISTIC, rule-based counterpart to the AI
@@ -11,53 +11,41 @@ import { parseOfferNumber } from './numbers';
  * code defaults are the fallback when no template matches the (make, type).
  */
 
-/** Recognized `{slug}` tokens → what they resolve to (mirrors ODT's SLUGS). */
-export const DISCLAIMER_SLUGS: Record<string, string> = {
-  vehicle: 'Vehicle (e.g. 2024 Toyota Camry SE)',
-  dealership_name: 'Dealership name',
-  msrp: 'MSRP — formatted with thousands separators',
-  monthly_payment: 'Lease / finance monthly payment — formatted',
-  due_at_signing: 'Lease due-at-signing amount — formatted',
-  lease_term: 'Lease term in months',
-  security_deposit: 'Lease security deposit — formatted ($0 renders as "$0")',
-  apr_rate: 'APR rate (e.g. 1.9)',
-  apr_term: 'APR term in months',
-  financial_institution: 'Finance institution (e.g. Toyota Financial)',
-  cost_per_thousand: 'Cost per $1,000 financed (e.g. 4.51)',
-  discount_amount: 'Discount / cash-back amount — formatted',
-  discount_source: 'Source of the discount (e.g. Dealer Discount)',
-  sale_price: 'Advertised sale price — formatted',
-  offer_end_date: 'Offer end date as entered',
-  vin: 'VIN — rendered uppercase',
-  stock_number: 'Stock number',
-  // ── Full-length OEM lease/finance language ────────────────────────────────
-  // Manufacturer disclaimers (Audi, VW, and the brands still to be transcribed)
-  // itemize the lease economics clause by clause. Without these the templates
-  // can only be stored with the fees hardcoded, which is how the seeded VW row
-  // ended up quoting a $699 acquisition fee at every dealer.
-  selling_price: 'Selling price / capitalized cost — formatted. NOT the MSRP.',
-  customer_down:
-    'Customer down payment — formatted. NOT `due_at_signing`, which also includes the first payment and the acquisition fee.',
-  acquisition_fee: 'Lease acquisition fee — formatted',
-  disposition_fee: 'Lease-end disposition fee — formatted',
-  overage_rate: 'Per-mile overage charge as entered (e.g. $0.20)',
-  miles_per_year: 'Permitted miles per year — thousands-separated',
-  amount_financed: 'Amount financed on an APR offer — formatted',
-  states: 'States / regions the offer is valid in, as entered',
-  dealer_code: 'Manufacturer-assigned dealer code',
-  // Derived — computed here, never typed. A human retyping either of these is a
-  // chance to get the arithmetic wrong in a legal document.
-  total_miles: 'DERIVED: miles per year × (term ÷ 12) — thousands-separated',
-  monthly_payments_total: 'DERIVED: monthly payment × term — formatted',
-  copyright_year:
-    'DERIVED: the year the disclaimer is composed, for the manufacturer copyright line (e.g. "©2026 Audi of America, Inc.")',
-};
+/**
+ * Every recognized `{slug}` token across every offer kind, for the disclaimer
+ * template editor's reference list.
+ *
+ * The per-KIND maps are the source of truth and live in `disclaimer-slugs.ts`; a
+ * template body is only ever composed for one kind, so use
+ * `offerKind(...).slugs` when you mean "the slugs valid HERE". This union exists
+ * because the editor lists what a body may contain without knowing which kind the
+ * author has in mind.
+ */
+export const DISCLAIMER_SLUGS: Record<string, string> = Object.assign(
+  {},
+  ...OFFER_KINDS.map((k) => k.slugs),
+);
 
-const DEALER_FEE_BOILERPLATE =
-  'Advertised price includes all dealer-imposed fees. Excludes tax, title, and registration.';
 
-/** Code-defined per-offer-type defaults — used when no DB template matches. */
-export const DEFAULT_DISCLAIMER_TEMPLATES: Record<OfferType, string> = {
+/**
+ * Code-defined per-offer-type defaults — used when no DB template matches.
+ *
+ * Keyed by offer type value across every kind (values are globally unique).
+ *
+ * ⚠️ A body here may only reference tokens the type's `required` fields
+ * guarantee. `substituteTokens` leaves an unresolved token as a LITERAL
+ * `{{token}}`, so an optional field in a default body prints raw markup into a
+ * legal line. (The `lease` body below has carried that risk since it was written:
+ * `due_at_signing` is not baseline-required. Left as-is rather than changed
+ * silently — it is real legal wording and a fix is the Co-op team's call.)
+ *
+ * The SERVICE bodies restate the offer and defer to the dealer, deliberately.
+ * The real per-brand fixed-ops wording is legal text and is not invented here —
+ * it arrives as `AdDisclaimerTemplate` rows from the Co-op team. See
+ * docs/ad-generator-offer-kinds.md §9.
+ */
+export const DEFAULT_DISCLAIMER_TEMPLATES: Record<string, string> = {
+  // ── vehicle ──
   lease:
     'Closed-end lease. {{monthly_payment}}/month for {{lease_term}} months, {{due_at_signing}} due at signing. With approved credit. See dealer for details.',
   apr: '{{apr_rate}} APR financing for {{apr_term}} months with approved credit. See dealer for details.',
@@ -65,13 +53,36 @@ export const DEFAULT_DISCLAIMER_TEMPLATES: Record<OfferType, string> = {
   sales_price:
     'Sale price {{sale_price}}. MSRP {{msrp}}. Plus tax, title, and license. See dealer for details.',
   custom: 'See dealer for complete details.',
+  // ── custom (service, parts, accessories) ──
+  flat_price: '{{offer_name}} for {{offer_price}}. See dealer for complete details.',
+  percent_off: '{{percent_off}}% off {{offer_name}}. See dealer for complete details.',
+  dollar_off: '{{dollar_off}} off {{offer_name}}. See dealer for complete details.',
+  other_offer: '{{offer_phrase}} on {{offer_name}}. See dealer for complete details.',
+  // A message-only ad has no offer to describe. Empty rather than "See dealer for
+  // complete details.", which would assert there are details to see.
+  no_offer: '',
 };
 
+/**
+ * Format a Number as USD.
+ *
+ * CENTS ARE PRESERVED WHEN PRESENT: an integer renders as `$299`, a non-integer
+ * as `$79.95`. Fixed-ops pricing is quoted in cents — the canonical oil-change
+ * price is $79.95 — and the old `maximumFractionDigits: 0` rounded that to `$80`,
+ * advertising a price the dealer does not charge.
+ *
+ * The same rule is applied by the offer engine and the disclaimer engine, and it
+ * has to stay that way: if only one rounded, the on-image price and the fine
+ * print would state different numbers, which is worse than both rounding.
+ */
 function money(v: string | undefined): string | null {
   if (v == null || String(v).trim() === '') return null;
   const n = Number(String(v).replace(/[^0-9.]/g, ''));
   if (!Number.isFinite(n)) return null;
-  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  // Integer → no decimals (so a vehicle payment stays `$299`, unchanged).
+  // Otherwise exactly two, because `$79.9` is not a way to write money.
+  const digits = Number.isInteger(n) ? 0 : 2;
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 function plain(v: string | undefined): string | null {
@@ -84,9 +95,11 @@ function plain(v: string | undefined): string | null {
  *  disclaimer about what a figure is — see numbers.ts. */
 const num = parseOfferNumber;
 
-/** Format a Number as whole dollars. */
+/** Format a Number as USD, preserving cents when present. Same rule as `money`
+ *  — a derived figure must be written the way the figures it came from are. */
 function fmtMoney(n: number): string {
-  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const digits = Number.isInteger(n) ? 0 : 2;
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 /** Format a Number as a whole-number count (miles, months — not money). */
@@ -140,6 +153,43 @@ export function deriveOfferFigures(data: AdData): Record<string, DerivedFigure> 
       math: `${fmtCount(perYear)}/yr × (${fmtCount(term)} ÷ 12)`,
     };
   }
+
+  // ── Service savings ──────────────────────────────────────────────────────
+  //
+  // The characteristic failure of a service coupon is a savings claim that does
+  // not subtract: "SAVE $50" printed over "$99 (reg. $139)". So there is no
+  // field for either of these — they are computed from the regular price and
+  // whichever figure this offer type advertises.
+  //
+  // Guarded on `regular > advertised`: a regular price at or below the
+  // advertised one is a data-entry error, and "SAVE $0" or a negative saving on
+  // an ad is worse than no savings line. It stays absent, so the disclaimer and
+  // the summary panel both simply have nothing to say.
+  const regular = num(data.regularPrice);
+  const advertised =
+    data.offerType === 'flat_price'
+      ? num(data.offerPrice)
+      : data.offerType === 'dollar_off' && regular != null
+        // A dollars-off offer states the DISCOUNT, not the price. Deriving the
+        // resulting price is what makes the same savings arithmetic apply.
+        ? (() => {
+            const off = num(data.dollarOff);
+            return off == null ? null : regular - off;
+          })()
+        : null;
+  if (regular != null && advertised != null && regular > advertised) {
+    const saved = regular - advertised;
+    out.savings_amount = {
+      label: 'You save',
+      value: fmtMoney(saved),
+      math: `${fmtMoney(regular)} − ${fmtMoney(advertised)}`,
+    };
+    out.savings_percent = {
+      label: 'Savings',
+      value: `${Math.round((saved / regular) * 100)}%`,
+      math: `${fmtMoney(saved)} ÷ ${fmtMoney(regular)}`,
+    };
+  }
   return out;
 }
 
@@ -163,6 +213,17 @@ function pct(v: string | undefined): string | null {
 export interface TokenOptions {
   /** Treated as "today" for the copyright year. Defaults to the current date. */
   now?: Date;
+  /**
+   * The offer KIND this disclaimer is being composed for.
+   *
+   * Only consulted when `data.offerType` is empty — which is the state a
+   * from-scratch ad is in before anyone picks a type. Without it the offer type
+   * falls back to `custom`, and `custom` belongs to the VEHICLE kind, so a
+   * custom-offer ad was composing a disclaimer that ended
+   * "Advertised price includes all dealer-imposed fees" — vehicle legal text on
+   * an oil-change coupon.
+   */
+  offerKind?: string;
 }
 
 /** Resolve `{slug}` values from the offer's structured fields (formatted). */
@@ -199,6 +260,31 @@ export function buildTokenValues(data: AdData, opts: TokenOptions = {}): Record<
   set('amount_financed', money(data.amountFinanced));
   set('states', plain(data.states));
   set('dealer_code', plain(data.dealerCode));
+
+  // ── custom (service, parts, accessories, message-only) ──
+  // The restriction fields are `plain`, not `money`: they are stated as entered
+  // ("up to 5 quarts", "most vehicles", "one per customer"). Only the figures go
+  // through the money formatter.
+  set('offer_name', plain(data.offerName));
+  set('offer_price', money(data.offerPrice));
+  set('regular_price', money(data.regularPrice));
+  set('percent_off', plain(data.percentOff));
+  set('dollar_off', money(data.dollarOff));
+  set('minimum_spend', money(data.minimumSpend));
+  set('applies_to', plain(data.appliesTo));
+  set('included_allowance', plain(data.includedAllowance));
+  set('exclusions', plain(data.exclusions));
+  set('part_number', plain(data.partNumber));
+  set('availability_note', plain(data.availabilityNote));
+  set('coupon_code', plain(data.couponCode));
+  set('redemption_limit', plain(data.redemptionLimit));
+  set('offer_phrase', plain(data.offerPhrase));
+  set('event_dates', plain(data.eventDates));
+  set('location', plain(data.location));
+  set('phone', plain(data.phone));
+  set('website_url', plain(data.websiteUrl));
+  // `savings_amount` / `savings_percent` are NOT set here — they come from
+  // `deriveOfferFigures` below, which is the only place that computes them.
 
   // ── derived ──
   // One source of truth, shared with the form's summary panel.
@@ -248,25 +334,59 @@ export function composeDisclaimer(
   opts: TokenOptions = {},
 ): string {
   const values = buildTokenValues(data, opts);
+  // Hoisted out of the else-branch: the boilerplate below is chosen from the
+  // offer type too, and it applies to a verbatim OEM body just as much as to a
+  // composed one.
+  // The type as ACTUALLY SET, kept apart from the defaulted one below. The
+  // difference matters: `custom` is the default, and `custom` is a real vehicle
+  // offer type — so a defaulted value is indistinguishable from a chosen one
+  // unless the raw value is kept.
+  const rawType = (data.offerType ?? '').trim();
+  const type = rawType || 'custom';
   let out: string;
   if (rawBody != null && rawBody.trim()) {
     out = rawBody.trim();
   } else {
-    const type = (data.offerType as OfferType) || 'custom';
+    // `??` semantics on PRESENCE, not truthiness: `no_offer`'s body is
+    // deliberately the empty string (a hiring ad has no offer to describe), and a
+    // `||` chain would fall straight through it to the generic "See dealer for
+    // complete details." — asserting there are details to see.
+    // Which type's default body to compose from.
+    //
+    // A CHOSEN type uses its own. An UNSET one uses the generic body of the kind
+    // being composed for — the first of that kind's types with no figures of its
+    // own (vehicle's `custom`, custom's `no_offer`). Defaulting straight to
+    // `custom` handed vehicle wording to every other kind, which is the same
+    // cross-kind leak as the fee boilerplate above.
+    const bodyType = rawType
+      ? type
+      : (offerKind(opts.offerKind ?? DEFAULT_OFFER_KIND).offerTypes.find((t) => !t.main)?.value ?? 'custom');
     const body =
       (templateBody && templateBody.trim()) ||
-      DEFAULT_DISCLAIMER_TEMPLATES[type] ||
-      DEFAULT_DISCLAIMER_TEMPLATES.custom;
+      (bodyType in DEFAULT_DISCLAIMER_TEMPLATES
+        ? DEFAULT_DISCLAIMER_TEMPLATES[bodyType]
+        : DEFAULT_DISCLAIMER_TEMPLATES.custom);
     out = substituteTokens(body, values).trim();
   }
 
-  // Only add the fee boilerplate when the body doesn't already speak to dealer
-  // fees. The test used to require the exact phrase "dealer-imposed fees", but
-  // manufacturer language says "and dealer fees" — so a full-length OEM body got
-  // the boilerplate appended and the disclaimer ended up asserting both that
-  // fees were INCLUDED and that they were EXCLUDED, in consecutive sentences.
-  if (!/dealer[-\s]?(imposed\s+)?fees?\b/i.test(out)) {
-    out = `${out} ${DEALER_FEE_BOILERPLATE}`;
+  // The fee boilerplate comes from the KIND that owns this offer type, because
+  // the vehicle sentence is a claim about an advertised VEHICLE price — appending
+  // it to an oil-change coupon states something untrue about the offer. A kind
+  // with an empty string appends nothing.
+  //
+  // Only added when the body doesn't already speak to dealer fees. The test used
+  // to require the exact phrase "dealer-imposed fees", but manufacturer language
+  // says "and dealer fees" — so a full-length OEM body got the boilerplate
+  // appended and the disclaimer ended up asserting both that fees were INCLUDED
+  // and that they were EXCLUDED, in consecutive sentences.
+  // Only ask which kind OWNS the type when a type was actually chosen. Asking
+  // for the defaulted `custom` always answers "vehicle", so the kind hint could
+  // never take effect and a brand-new custom-offer ad picked up vehicle wording.
+  const owningKind = rawType ? kindForOfferType(rawType) : undefined;
+  const boilerplate = (owningKind ?? offerKind(opts.offerKind ?? DEFAULT_OFFER_KIND))
+    .dealerFeeBoilerplate;
+  if (boilerplate && !/dealer[-\s]?(imposed\s+)?fees?\b/i.test(out)) {
+    out = `${out} ${boilerplate}`;
   }
   // Append the identifiers only when the body doesn't already carry them. Testing
   // the substituted VALUE rather than the token catches every phrasing — a

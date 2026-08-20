@@ -264,17 +264,16 @@ export function templateUsage(doc: Pick<TemplateDoc, 'usage'>): TemplateUsage {
   return doc.usage ?? 'both';
 }
 
-/** Can this template be used by unattended OEM generation? */
-export function usableByAutomation(doc: Pick<TemplateDoc, 'usage'>): boolean {
-  return templateUsage(doc) !== 'custom';
-}
+// `usableByAutomation` lives in `offer-kinds.ts`: the answer now depends on the
+// doc's offer kind as well as its usage, and this module sits BELOW the kind
+// registry (the registry reads `templateUsage` from here).
 
 /**
  * The field keys a template actually renders — every element's binding key.
  *
- * The system-field schema is fixed, so a doc carries all of them whether or not
- * it draws them. This is how a caller tells "the template has a Tagline" from
- * "the template merely inherits the Tagline field and never shows it".
+ * A doc carries its whole kind's schema whether or not it draws every field, so
+ * this is how a caller tells "the template has a Tagline" from "the template
+ * merely inherits the Tagline field and never shows it".
  */
 export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> {
   const keys = new Set<string>();
@@ -356,6 +355,21 @@ export interface TemplateDoc {
    * `templateUsage`.
    */
   usage?: TemplateUsage;
+  /**
+   * WHICH OFFER KIND this template is built against — `vehicle`, and later
+   * `service` / `parts` / `general`. Selects the field schema the designer binds
+   * to, the offer types the form offers, the disclaimer slugs available, and
+   * whether the automotive machinery (vehicle picker, manufacturer rules,
+   * unattended generation) applies at all.
+   *
+   * Undefined reads as `vehicle` — see {@link DEFAULT_OFFER_KIND}.
+   *
+   * ⚠️ Changing this on an existing template swaps the field schema out from
+   * under every binding it already has, so it must be a deliberate, warned
+   * action rather than an ordinary edit. A doc's `fields` are stamped at
+   * CREATION and read back by `adTemplateFromDoc`, so the two must agree.
+   */
+  offerKind?: string;
   /** Shared template taxonomy: a single category + freeform tags, used to
    *  organize/filter this template alongside every other kind on /templates. */
   category?: string;

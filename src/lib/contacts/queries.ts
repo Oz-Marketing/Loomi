@@ -331,6 +331,18 @@ export interface PagedContactsOptions {
   search?: string;
   sort?: PagedSortKey;
   dir?: 'asc' | 'desc';
+  /**
+   * Restrict the page to these contact ids, on top of the account scope
+   * and search. This is how a segment filters the Contacts list: the ids
+   * come from the segment resolver (see `@/lib/segments/resolve`), which
+   * already answered "who is in this segment?" exactly, and this query
+   * then does the dedupe, sort and paging it always did.
+   *
+   * An EMPTY array means "nothing matched", not "no restriction" — the
+   * distinction matters, because reading it the other way would show the
+   * whole roster for a segment with no members.
+   */
+  restrictIds?: string[] | null;
 }
 
 export interface PagedContactsResult {
@@ -369,6 +381,15 @@ export async function listContactsPaged(
   if (accountKeys.length === 0) {
     return { contacts: [], total: 0, page, pageSize };
   }
+
+  // `null`/`undefined` = unrestricted; an empty array = an empty result.
+  const restrictIds = opts.restrictIds ?? null;
+  if (restrictIds && restrictIds.length === 0) {
+    return { contacts: [], total: 0, page, pageSize };
+  }
+  const restrictSql = restrictIds
+    ? Prisma.sql`AND c."id" = ANY(${restrictIds})`
+    : Prisma.empty;
 
   const term = (opts.search ?? '').trim();
   // Mirrors `searchClause`, which the single-account path uses. Phone is
@@ -410,6 +431,7 @@ export async function listContactsPaged(
       FROM "Contact" c
       LEFT JOIN "Account" a ON a."key" = c."accountKey"
       WHERE c."accountKey" = ANY(${accountKeys})
+      ${restrictSql}
       ${searchSql}
     ),
     grouped AS (

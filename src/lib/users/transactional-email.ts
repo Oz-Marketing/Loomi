@@ -1,16 +1,33 @@
 import nodemailer from 'nodemailer';
 
 /**
- * Logo shown at the top of account-lifecycle mail. The default is a leftover
- * GoHighLevel CDN URL — a remote image on a domain unrelated to the sender,
- * which reads as a mild spam signal. Set EMAIL_LOGO_URL to a self-hosted asset
- * to replace it; the fallback keeps existing installs rendering until then.
+ * Logo shown at the top of account-lifecycle mail.
+ *
+ * This used to default to a GoHighLevel CDN URL — a remote image on a domain
+ * unrelated to the sender, which reads as a mild spam signal, and which we
+ * stopped controlling when GHL was retired. It is now served from our own
+ * origin, so the image and the sending domain finally agree.
+ *
+ * Mail clients cannot resolve a root-relative path, so this has to be absolute.
+ * `/brand/*` is on the proxy's public passthrough list precisely so the image
+ * loads for a recipient who has no session (see src/proxy.ts) — gate it and
+ * every logo in every email renders as a broken-image icon.
+ *
+ * PNG, not WebP: Outlook desktop does not render WebP.
+ *
+ * EMAIL_LOGO_URL still overrides, for an install that wants its own asset.
  */
-const FALLBACK_LOGO_URL =
-  'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6995362fd614c941e221bb2e.png';
+function appBaseUrl(): string {
+  return (
+    process.env.NEXTAUTH_URL ||
+    process.env.APP_BASE_URL ||
+    'https://studio.loomilm.com'
+  ).replace(/\/$/, '');
+}
 
 export function resolveEmailLogoUrl(): string {
-  return (process.env.EMAIL_LOGO_URL || '').trim() || FALLBACK_LOGO_URL;
+  const override = (process.env.EMAIL_LOGO_URL || '').trim();
+  return override || `${appBaseUrl()}/brand/loomi-studio-black.png`;
 }
 
 type SmtpCredentials = {

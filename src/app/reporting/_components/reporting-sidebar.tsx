@@ -28,7 +28,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
-import { visibleNav } from './nav-visibility';
+import { navPathFor, visibleNav, withSurfacePrefix } from './nav-visibility';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
@@ -51,9 +51,12 @@ import { visibleReports } from '../ads/_components/reports-config';
  *     on every surface. No swap, no back button; the rail IS the settings rail.
  *   • SUB-ACCOUNT SETTINGS — the nav swaps to SettingsNav with a back button.
  *
- * Hrefs are BROWSER-facing paths on `reporting.loomilm.com`; the proxy rewrites
- * `/ads/*` → `/reporting/ads/*`, and `usePathname()` returns the browser URL,
- * so active-state comparison uses the un-rewritten path.
+ * Hrefs below are written as BROWSER-facing paths on `reporting.loomilm.com`,
+ * where the proxy rewrites `/ads/*` → `/reporting/ads/*` internally and
+ * `usePathname()` returns the bare browser URL. The same routes are ALSO
+ * reachable on the Studio host under a literal `/reporting/*` prefix, so
+ * `withSurface()` re-adds that prefix to every outgoing href and the matching
+ * path is normalized back to bare — see ReportingSidebar.
  */
 
 type NavChild = {
@@ -167,9 +170,19 @@ function buildNav(isClient: boolean): NavItem[] {
 const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';
 
 export function ReportingSidebar() {
-  const pathname = usePathname();
+  const browserPath = usePathname();
   const { collapsed } = useSidebarCollapse();
   const { isAccount, accountKey, userRole } = useAccount();
+
+  // Apply the surface prefix to outgoing hrefs, and strip it from the path we
+  // match against so the bare-href comparisons below keep working on both hosts
+  // (active state was silently dead on Studio too). See nav-visibility.ts.
+  const pathname = navPathFor(browserPath);
+  const withSurface = useCallback(
+    (href: string) => withSurfacePrefix(browserPath, href),
+    [browserPath],
+  );
+
   // Agency-only reports drop out of the nav entirely for clients — see the
   // `internal` flag in reports-config.
   const NAV = useMemo(() => buildNav(userRole === 'client'), [userRole]);
@@ -178,8 +191,9 @@ export function ReportingSidebar() {
   // the shared sub-account detail page. Studio reaches it at
   // /subaccount/<slug>/settings; this surface has no such route tree, so it
   // uses the admin-browse shape (section in ?tab=) against the active account.
-  const subaccountSettingsHref =
-    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings';
+  const subaccountSettingsHref = withSurface(
+    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings',
+  );
 
   const isChildActive = useCallback(
     (c: NavChild) => !c.soon && pathname.startsWith(c.href),
@@ -258,7 +272,7 @@ export function ReportingSidebar() {
   return (
     <SidebarFrame
       brand={
-        <Link href="/" className="block">
+        <Link href={withSurface('/')} className="block">
           <div className="text-base font-semibold tracking-tight">
             loomi <span className="text-[var(--primary)]">reporting</span>
           </div>
@@ -293,7 +307,11 @@ export function ReportingSidebar() {
       }
     >
       {isSettingsPath(pathname) ? (
-        <SettingsNav backHref="/" backLabel="Back to Reporting" collapsed={collapsed} />
+        <SettingsNav
+          backHref={withSurface('/')}
+          backLabel="Back to Reporting"
+          collapsed={collapsed}
+        />
       ) : (
         nav.map((item) =>
           item.children ? (
@@ -304,10 +322,17 @@ export function ReportingSidebar() {
               open={!!open[item.key]}
               active={isGroupActive(item)}
               isChildActive={isChildActive}
+              withSurface={withSurface}
               onToggle={() => toggleGroup(item.key)}
             />
           ) : (
-            <LeafNav key={item.key} item={item} collapsed={collapsed} active={isLeafActive(item)} />
+            <LeafNav
+              key={item.key}
+              item={item}
+              collapsed={collapsed}
+              active={isLeafActive(item)}
+              withSurface={withSurface}
+            />
           ),
         )
       )}
@@ -317,10 +342,20 @@ export function ReportingSidebar() {
 
 // ── Leaf link ──
 
-function LeafNav({ item, collapsed, active }: { item: NavItem; collapsed: boolean; active: boolean }) {
+function LeafNav({
+  item,
+  collapsed,
+  active,
+  withSurface,
+}: {
+  item: NavItem;
+  collapsed: boolean;
+  active: boolean;
+  withSurface: (href: string) => string;
+}) {
   const link = (
     <Link
-      href={item.href!}
+      href={withSurface(item.href!)}
       className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
         active
           ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
@@ -342,6 +377,7 @@ function GroupNav({
   open,
   active,
   isChildActive,
+  withSurface,
   onToggle,
 }: {
   item: NavItem;
@@ -349,6 +385,7 @@ function GroupNav({
   open: boolean;
   active: boolean;
   isChildActive: (c: NavChild) => boolean;
+  withSurface: (href: string) => string;
   onToggle: () => void;
 }) {
   // Collapsed rail: icon trigger + hover flyout with the children.
@@ -371,7 +408,7 @@ function GroupNav({
               {item.label}
             </p>
             {item.children!.map((c) => (
-              <ChildLink key={c.href} child={c} active={isChildActive(c)} />
+              <ChildLink key={c.href} child={c} active={isChildActive(c)} withSurface={withSurface} />
             ))}
           </div>
         </div>
@@ -404,7 +441,7 @@ function GroupNav({
         <div className="overflow-hidden">
           <div className="my-0.5 ml-[1.15rem] space-y-0.5 pl-3">
             {item.children!.map((c) => (
-              <ChildLink key={c.href} child={c} active={isChildActive(c)} />
+              <ChildLink key={c.href} child={c} active={isChildActive(c)} withSurface={withSurface} />
             ))}
           </div>
         </div>
@@ -413,7 +450,15 @@ function GroupNav({
   );
 }
 
-function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
+function ChildLink({
+  child,
+  active,
+  withSurface,
+}: {
+  child: NavChild;
+  active: boolean;
+  withSurface: (href: string) => string;
+}) {
   if (child.soon) {
     return (
       <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-[var(--sidebar-muted-foreground)]/60">
@@ -429,7 +474,7 @@ function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
   }
   return (
     <Link
-      href={child.href}
+      href={withSurface(child.href)}
       className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
         active
           ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'

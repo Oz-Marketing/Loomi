@@ -79,6 +79,7 @@ export const LEGACY_GUARD: Record<Permission, LegacyBucket> = {
   'agency.markup.view': 'management',
   'agency.alerts.view': 'management',
   'agency.changelog.manage': 'management',
+  'agency.docs.manage': 'management',
   'agency.coop.manage': 'management',
 
   // ── Studio ── every surface is the same "are you staff?" check today.

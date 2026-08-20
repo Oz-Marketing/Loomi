@@ -7,6 +7,7 @@ import { signOut } from 'next-auth/react';
 import {
   ArrowRightStartOnRectangleIcon,
   BellIcon,
+  BookOpenIcon,
   BugAntIcon,
   ClockIcon,
   MagnifyingGlassIcon,
@@ -275,6 +276,18 @@ export function TopUtilityBar() {
                   )}
                   {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                 </button>
+                {/* Docs is a destination people come back to, so it gets a
+                    direct link as well as its place inside the help modal. The
+                    bug reporter deliberately doesn't — you file one from the
+                    screen it happened on, not from a menu. */}
+                <Link
+                  href="/docs"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                >
+                  <BookOpenIcon className="w-4 h-4" />
+                  Docs
+                </Link>
                 {/* Cross-surface jump lives in the sidebar's surface switcher,
                     which offers all three — a single "Reporting" link here was
                     a second, narrower door to the same place. */}

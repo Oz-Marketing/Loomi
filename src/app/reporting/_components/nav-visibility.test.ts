@@ -2,9 +2,14 @@ import { describe, it, expect } from 'vitest';
 import {
   AD_PLATFORM_TO_REPORT,
   HREF_TO_REPORT,
+  navPathFor,
   reportKeyForHref,
+  surfacePrefixFor,
   visibleNav,
+  withSurfacePrefix,
 } from './nav-visibility';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import { REPORTS } from '@/lib/permissions/reports';
 import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
 
@@ -98,5 +103,46 @@ describe('reporting nav visibility', () => {
   it('drops a group once every child is hidden', () => {
     const out = visibleNav(NAV, new Set(['contacts']));
     expect(keys(out)).not.toContain('local-presence');
+  });
+});
+
+describe('surface prefix', () => {
+  it('leaves hrefs bare on the reporting host, where the proxy rewrites', () => {
+    // Address bar reads `/executive`; the /reporting rewrite is internal.
+    expect(surfacePrefixFor('/executive')).toBe('');
+    expect(withSurfacePrefix('/executive', '/websites')).toBe('/websites');
+  });
+
+  it('prefixes hrefs when the browser path already carries /reporting', () => {
+    // Studio host: `/websites` would resolve against the ROOT tree and 404.
+    expect(surfacePrefixFor('/reporting/executive')).toBe('/reporting');
+    expect(withSurfacePrefix('/reporting/executive', '/websites')).toBe('/reporting/websites');
+  });
+
+  it('handles the bare /reporting root', () => {
+    expect(surfacePrefixFor('/reporting')).toBe('/reporting');
+    expect(withSurfacePrefix('/reporting', '/')).toBe('/reporting/');
+    expect(navPathFor('/reporting')).toBe('/');
+  });
+
+  it('does not claim a path that merely starts with the same letters', () => {
+    // `/reporting-archive` is not the reporting surface.
+    expect(surfacePrefixFor('/reporting-archive')).toBe('');
+  });
+
+  it('normalizes the path back to bare so active-state matching still works', () => {
+    expect(navPathFor('/reporting/ads/meta')).toBe('/ads/meta');
+    expect(navPathFor('/ads/meta')).toBe('/ads/meta');
+  });
+
+  // The bug this all exists for: every gated nav destination must resolve to a
+  // real page under app/reporting. A `/websites` entry pointing at a directory
+  // with no page.tsx is a 404 the nav prefetches on hover.
+  it('every gated nav href resolves to a real reporting page', () => {
+    const reportingDir = path.join(__dirname, '..');
+    const missing = Object.keys(HREF_TO_REPORT).filter(
+      (href) => !existsSync(path.join(reportingDir, href, 'page.tsx')),
+    );
+    expect(missing).toEqual([]);
   });
 });

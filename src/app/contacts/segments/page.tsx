@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
+  ArrowDownTrayIcon,
   ArrowPathIcon,
   DocumentDuplicateIcon,
   EllipsisHorizontalIcon,
@@ -18,6 +19,7 @@ import {
 import { useScopedHref } from '@/hooks/use-scoped-href';
 import { useAccount } from '@/contexts/account-context';
 import type { FilterDefinition } from '@/lib/smart-list-types';
+import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 
 interface SavedSegment {
@@ -69,6 +71,9 @@ export default function SegmentsPage() {
   const [contactsLoading, setContactsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  // Which segment is mid-export. A CSV of a large segment takes a few
+  // seconds to resolve, and without this the menu item just looked inert.
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   // ── Close action menu on outside click ───────────────────────────
   useEffect(() => {
@@ -145,6 +150,16 @@ export default function SegmentsPage() {
     }
     return savedSegments;
   }, [savedSegments, isAccount, isRollup, accountKey, scopedAccountKeys]);
+
+  // Which accounts an export resolves against. A group exports the union
+  // across its rooftops; a leaf account exports its own. With neither
+  // resolved there is no account to size the segment against, and the
+  // action says so instead of exporting an arbitrary one.
+  const exportAccountKeys = useMemo(() => {
+    if (isRollup) return scopedAccountKeys;
+    if (isAccount && accountKey) return [accountKey];
+    return [];
+  }, [isRollup, isAccount, accountKey, scopedAccountKeys]);
 
   // ── Member counts ────────────────────────────────────────────────
   //
@@ -252,6 +267,30 @@ export default function SegmentsPage() {
 
   function handleUsePreview(segmentId: string) {
     router.push(`${subHref('/contacts')}?segment=${encodeURIComponent(segmentId)}`);
+  }
+
+  // Export resolves server-side against the accounts in scope — the same
+  // ones the member count above was computed for, so the file has the
+  // number of rows the card says it will.
+  async function handleExport(segment: SavedSegment) {
+    const keys = exportAccountKeys;
+    if (keys.length === 0) {
+      toast.error(
+        'Switch to an account to export — a segment is a filter, so its members are per account.',
+      );
+      return;
+    }
+    setExportingId(segment.id);
+    try {
+      await exportSegmentCsv({
+        accountKeys: keys,
+        segmentId: segment.id,
+        label: segment.name,
+      });
+    } finally {
+      setExportingId(null);
+      setOpenMenuId(null);
+    }
   }
 
   // ── Render ───────────────────────────────────────────────────────
@@ -381,8 +420,14 @@ export default function SegmentsPage() {
                         <EllipsisHorizontalIcon className="w-4 h-4" />
                       </button>
                       {isMenuOpen && (
+                        // `glass-dropdown` is load-bearing, not cosmetic:
+                        // globals.css lifts `.glass-card:has(.glass-dropdown)`
+                        // above its grid siblings, without which the next
+                        // card in DOM order paints over this menu and clips
+                        // the lower items. Same rule the flows / templates
+                        // card grids rely on.
                         <div
-                          className="absolute right-0 top-7 z-20 w-40 rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg py-1 text-xs"
+                          className="glass-dropdown absolute right-0 top-7 z-40 w-44 bg-[var(--card)] py-1 text-xs"
                           onClick={(e) => e.stopPropagation()}
                         >
                           <Link
@@ -413,6 +458,23 @@ export default function SegmentsPage() {
                           >
                             <UsersIcon className="w-3.5 h-3.5" />
                             View contacts
+                          </button>
+                          <button
+                            type="button"
+                            disabled={exportingId === segment.id}
+                            title={
+                              exportAccountKeys.length === 0
+                                ? 'Switch to an account to export — a segment is sized per account'
+                                : 'Download every member of this segment as CSV'
+                            }
+                            // The menu stays open until the export
+                            // resolves — closing first hid the only
+                            // feedback a multi-second export had.
+                            onClick={() => handleExport(segment)}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)] text-left disabled:opacity-50"
+                          >
+                            <ArrowDownTrayIcon className="w-3.5 h-3.5" />
+                            {exportingId === segment.id ? 'Exporting…' : 'Export CSV'}
                           </button>
                           <div className="my-1 border-t border-[var(--border)]/60" />
                           <button

@@ -46,6 +46,12 @@ interface ContactsTableProps {
    */
   onMutated?: () => void;
   /**
+   * Why the list can be empty, so the empty state says the true thing.
+   * 'filtered' when a segment or ad-hoc filter is narrowing the view —
+   * the account may be full and simply have no members matching.
+   */
+  emptyReason?: 'unfiltered' | 'filtered';
+  /**
    * Opt in to SERVER-driven paging and sorting.
    *
    * Omit it and the table behaves exactly as it always has: it receives the
@@ -132,6 +138,7 @@ export function ContactsTable({
   accountKey,
   extraBulkActions,
   onMutated,
+  emptyReason = 'unfiltered',
   serverPagination,
 }: ContactsTableProps) {
   const server = serverPagination;
@@ -541,12 +548,21 @@ export function ContactsTable({
         </div>
       )}
 
-      {/* Empty */}
+      {/* Empty.
+          Two different facts, and they used to read as one: an account
+          with no contacts, and a filter that matched none of the ones it
+          has. "No contacts yet — import a CSV to get started" is alarming
+          and wrong when the account is full and the segment is simply
+          narrow. */}
       {!loading && !error && contacts.length === 0 && (
         <div className="text-center py-16 border border-dashed border-[var(--border)] rounded-xl">
-          <p className="text-[var(--muted-foreground)] text-sm font-medium">No contacts yet</p>
+          <p className="text-[var(--muted-foreground)] text-sm font-medium">
+            {emptyReason === 'filtered' ? 'No contacts match this filter' : 'No contacts yet'}
+          </p>
           <p className="text-[var(--muted-foreground)] text-xs mt-1">
-            Import a CSV from the toolbar to get started.
+            {emptyReason === 'filtered'
+              ? 'Adjust the conditions above, or clear the filter to see everyone.'
+              : 'Import a CSV from the toolbar to get started.'}
           </p>
         </div>
       )}

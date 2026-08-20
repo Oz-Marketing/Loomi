@@ -2,7 +2,11 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
-import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
+import {
+  injectUnsubscribeFooter,
+  UNSUBSCRIBE_TOKEN,
+  type UnsubscribeFooterInput,
+} from '@/lib/sending/unsubscribe-footer';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
@@ -2813,6 +2817,17 @@ async function executeEmailNode(
     },
   });
 
+  // Same CAN-SPAM footer contract as a blast — see
+  // injectUnsubscribeFooter(). Flows hit the identical SendGrid
+  // substitution_tag override, so the address only ships if we put it here.
+  const flowBody = sender.unsubscribeFooter
+    ? injectUnsubscribeFooter({
+        html,
+        text: stripHtml(html),
+        account: sender.unsubscribeFooter,
+      })
+    : { html, text: stripHtml(html) };
+
   try {
     const result = await sendEmailViaSendGrid({
       apiKey: sender.sendgridApiKey,
@@ -2820,8 +2835,8 @@ async function executeEmailNode(
       replyTo: sender.replyTo ? { email: sender.replyTo } : undefined,
       to: { email: recipientEmail, name: recipient.fullName || undefined },
       subject,
-      html,
-      text: stripHtml(html),
+      html: flowBody.html,
+      text: flowBody.text,
       categories: ['loomi', 'loomi-flow', `flow:${enrollment.flowId}`, `node:${node.id}`],
       customArgs: {
         flowId: enrollment.flowId,
@@ -2831,7 +2846,9 @@ async function executeEmailNode(
         recipientId: recipient.id,
         accountKey: contact.accountKey,
       },
-      ...(sender.unsubscribeFooter ? { unsubscribe: sender.unsubscribeFooter } : {}),
+      ...(sender.unsubscribeFooter
+        ? { unsubscribe: { substitutionTag: UNSUBSCRIBE_TOKEN } }
+        : {}),
     });
     await prisma.emailBlastRecipient.update({
       where: { id: recipient.id },
@@ -2993,7 +3010,8 @@ interface AccountSenderIdentity {
   senderEmail: string | null;
   senderName: string | null;
   sendgridApiKey: string | null;
-  unsubscribeFooter: { html: string; text: string } | null;
+  /** Account data the compliance footer is built from, per send. */
+  unsubscribeFooter: UnsubscribeFooterInput | null;
 }
 
 async function resolveSenderForAccount(
@@ -3027,13 +3045,13 @@ async function resolveSenderForAccount(
     }
   }
 
-  const unsubscribeFooter = buildUnsubscribeFooter({
+  const unsubscribeFooter: UnsubscribeFooterInput = {
     dealer: account.dealer || '',
     address: account.address,
     city: account.city,
     state: account.state,
     postalCode: account.postalCode,
-  });
+  };
 
   return {
     replyTo: account.replyToEmail || null,

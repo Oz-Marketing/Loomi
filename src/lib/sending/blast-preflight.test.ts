@@ -216,6 +216,41 @@ describe('preflightEmailBlast — content', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('names the intended tag when the namespace is wrong', async () => {
+    // The real report that prompted this: {{email.unsubscribe_link}} is a
+    // habit from other ESPs, and "check the variable picker" was not enough
+    // to find the fix.
+    findMany.mockResolvedValue([readyAccount()]);
+    const result = await preflightEmailBlast({
+      ...GOOD_CONTENT,
+      htmlContent: '<a href="{{email.unsubscribe_link}}">Unsub</a>',
+    });
+    expect(result.ok).toBe(false);
+    const issue = result.issues.find((i) => i.code === 'unknown_mergetag');
+    expect(issue?.remedy).toContain('{{email.unsubscribe_link}} → {{unsubscribe_link}}');
+  });
+
+  it('suggests the snake_case spelling for a camelCase tag', async () => {
+    findMany.mockResolvedValue([readyAccount()]);
+    const result = await preflightEmailBlast({
+      ...GOOD_CONTENT,
+      htmlContent: '<p>Hi {{contact.firstName}}</p>',
+    });
+    const issue = result.issues.find((i) => i.code === 'unknown_mergetag');
+    expect(issue?.remedy).toContain('{{contact.first_name}}');
+  });
+
+  it('falls back to generic advice when nothing is close', async () => {
+    findMany.mockResolvedValue([readyAccount()]);
+    const result = await preflightEmailBlast({
+      ...GOOD_CONTENT,
+      htmlContent: '<p>{{completely_made_up_thing}}</p>',
+    });
+    const issue = result.issues.find((i) => i.code === 'unknown_mergetag');
+    expect(issue?.remedy).not.toContain('Did you mean');
+    expect(issue?.remedy).toContain('variable picker');
+  });
+
   it('accepts the tags the editor advertises', async () => {
     findMany.mockResolvedValue([readyAccount()]);
     const result = await preflightEmailBlast({

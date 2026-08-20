@@ -60,7 +60,7 @@ import { serializeTemplate as serializeTemplateUnified } from "@/lib/template-se
 import { V2EditorShell } from "@/lib/email/editor/V2EditorShell";
 import {
   buildPreviewVariableMap,
-  findMissingPreviewVariables,
+  auditPreviewVariables,
   type PreviewContact,
 } from "@/lib/preview-variables";
 import {
@@ -6867,9 +6867,15 @@ export default function TemplateEditorPage() {
     [effectiveAccountData, selectedPreviewContact],
   );
 
-  const missingPreviewVars = useMemo(
-    () => findMissingPreviewVariables(code, previewVariableMap),
+  const previewVarAudit = useMemo(
+    () => auditPreviewVariables(code, previewVariableMap),
     [code, previewVariableMap],
+  );
+  // Invalid tokens first: they block the send, so they are the ones worth
+  // the user's attention. Blank ones are cosmetic by comparison.
+  const missingPreviewVars = useMemo(
+    () => [...previewVarAudit.invalid, ...previewVarAudit.blank],
+    [previewVarAudit],
   );
 
   const [showMissingVars, setShowMissingVars] = useState(false);
@@ -9843,8 +9849,16 @@ export default function TemplateEditorPage() {
                 <div className="relative ml-1">
                   <button
                     onClick={() => setShowMissingVars(!showMissingVars)}
-                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-lg text-amber-400 hover:bg-amber-500/10 transition-colors"
-                    title={`${missingPreviewVars.length} variable${missingPreviewVars.length === 1 ? "" : "s"} missing data`}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg transition-colors ${
+                      previewVarAudit.invalid.length > 0
+                        ? "text-red-400 hover:bg-red-500/10"
+                        : "text-amber-400 hover:bg-amber-500/10"
+                    }`}
+                    title={
+                      previewVarAudit.invalid.length > 0
+                        ? `${previewVarAudit.invalid.length} unrecognized variable${previewVarAudit.invalid.length === 1 ? "" : "s"} — this will block the send`
+                        : `${missingPreviewVars.length} variable${missingPreviewVars.length === 1 ? "" : "s"} missing data`
+                    }
                   >
                     <ExclamationTriangleIcon className="w-3.5 h-3.5" />
                     <span className="text-[10px] font-semibold">
@@ -9853,9 +9867,23 @@ export default function TemplateEditorPage() {
                   </button>
                   {showMissingVars && (
                     <div className="absolute left-0 top-full mt-1 z-50 w-72 glass-dropdown">
-                      <div className="px-3 py-2 border-b border-[var(--border)] bg-amber-500/5 flex items-center justify-between">
-                        <p className="text-xs font-semibold text-amber-400">
-                          Missing Preview Data
+                      <div
+                        className={`px-3 py-2 border-b border-[var(--border)] flex items-center justify-between ${
+                          previewVarAudit.invalid.length > 0
+                            ? "bg-red-500/5"
+                            : "bg-amber-500/5"
+                        }`}
+                      >
+                        <p
+                          className={`text-xs font-semibold ${
+                            previewVarAudit.invalid.length > 0
+                              ? "text-red-400"
+                              : "text-amber-400"
+                          }`}
+                        >
+                          {previewVarAudit.invalid.length > 0
+                            ? "Variable Problems"
+                            : "Missing Preview Data"}
                         </p>
                         <button
                           onClick={() => setShowMissingVars(false)}
@@ -9864,21 +9892,47 @@ export default function TemplateEditorPage() {
                           <XMarkIcon className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                      <div className="max-h-48 overflow-y-auto p-2 space-y-1">
-                        {missingPreviewVars.map((varName) => (
-                          <div
-                            key={varName}
-                            className="flex items-center gap-2 px-2 py-1 rounded-md bg-[var(--background)]"
-                          >
-                            <span className="text-[10px] font-mono text-amber-300">{`{{${varName}}}`}</span>
+                      <div className="max-h-48 overflow-y-auto p-2 space-y-2">
+                        {previewVarAudit.invalid.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-red-400">
+                              Not recognized
+                            </p>
+                            {previewVarAudit.invalid.map((varName) => (
+                              <div
+                                key={varName}
+                                className="flex items-center gap-2 px-2 py-1 rounded-md bg-[var(--background)]"
+                              >
+                                <span className="text-[10px] font-mono text-red-300">{`{{${varName}}}`}</span>
+                              </div>
+                            ))}
+                            <p className="px-1 pt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                              These send as literal text and will block the
+                              blast on the Schedule step. Fix the spelling with
+                              the variable picker, or delete the tag.
+                            </p>
                           </div>
-                        ))}
-                      </div>
-                      <div className="px-3 py-2 border-t border-[var(--border)] bg-[var(--muted)]/30">
-                        <p className="text-[10px] text-[var(--muted-foreground)]">
-                          These variables will show as blank in the email. Select
-                          a contact with this data or set values in Settings.
-                        </p>
+                        )}
+                        {previewVarAudit.blank.length > 0 && (
+                          <div className="space-y-1">
+                            <p className="px-1 text-[10px] font-semibold uppercase tracking-wide text-amber-400">
+                              No data yet
+                            </p>
+                            {previewVarAudit.blank.map((varName) => (
+                              <div
+                                key={varName}
+                                className="flex items-center gap-2 px-2 py-1 rounded-md bg-[var(--background)]"
+                              >
+                                <span className="text-[10px] font-mono text-amber-300">{`{{${varName}}}`}</span>
+                              </div>
+                            ))}
+                            <p className="px-1 pt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                              Valid variables with nothing to fill in. They
+                              render blank — pick a contact with this data or
+                              set values in Settings.
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

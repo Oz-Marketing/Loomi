@@ -159,7 +159,15 @@ export function SendingTab({ accountKey }: SendingTabProps) {
   }
 
   async function handleRemoveSendGridKey() {
-    if (!confirm('Remove the SendGrid API key? Sends will fall back to SMTP.')) return;
+    if (
+      !confirm(
+        'Remove the SendGrid API key? Email and text blasts for this account '
+        + 'will be blocked until a new key is added. Transactional mail '
+        + '(password resets, notifications, form alerts) is unaffected.',
+      )
+    ) {
+      return;
+    }
     setSgSaving(true);
     try {
       const res = await fetch(`/api/accounts/${accountKey}/sendgrid`, {
@@ -421,8 +429,10 @@ export function SendingTab({ accountKey }: SendingTabProps) {
               )}
             </div>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Optional — when set, this account&apos;s campaigns send through SendGrid. Leave blank
-              to fall back to the global SMTP transport.
+              Required to send blasts. Blasts go through this account&apos;s own
+              SendGrid key so a bad send can&apos;t damage the shared
+              transactional domain — without one, the Schedule step blocks the
+              send. Transactional mail still uses the global transport.
             </p>
           </div>
         </div>

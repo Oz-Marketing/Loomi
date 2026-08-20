@@ -36,17 +36,24 @@ export interface SendGridSendInput {
    *  event to its EmailBlastRecipient row without a second lookup. */
   customArgs?: Record<string, string>;
   /**
-   * CAN-SPAM / RFC 8058 compliance. When provided, SendGrid injects an
-   * unsubscribe link into the rendered HTML + sets the
-   * List-Unsubscribe + List-Unsubscribe-Post headers so Gmail/Apple
-   * one-click unsubscribe works. Skip for transactional sends like
-   * "Send test from editor" by omitting this field.
+   * CAN-SPAM / RFC 8058 compliance. When provided, SendGrid replaces every
+   * occurrence of `substitutionTag` in the body with a real per-recipient
+   * unsubscribe URL, and sets the List-Unsubscribe (+ List-Unsubscribe-Post,
+   * when enabled account-side) headers for Gmail/Apple one-click unsubscribe.
+   *
+   * The CALLER is responsible for putting the tag and the sender's postal
+   * address in the body — see injectUnsubscribeFooter() in
+   * lib/sending/unsubscribe-footer.ts. We deliberately do NOT pass
+   * subscription_tracking's `text`/`html` append fields: SendGrid documents
+   * `substitution_tag` as overriding both, so passing them only creates the
+   * illusion of a footer that never ships.
+   *
+   * Skip for transactional sends like "Send test from editor" by omitting
+   * this field.
    */
   unsubscribe?: {
-    /** Footer line + sender physical address baked into the HTML. */
-    html: string;
-    /** Plaintext equivalent for the text/plain part. */
-    text: string;
+    /** Tag to swap for the hosted URL; must appear in the body. */
+    substitutionTag: string;
   };
 }
 
@@ -61,6 +68,8 @@ export class SendGridError extends Error {
     message: string,
     public readonly status: number,
     public readonly body?: unknown,
+    /** Raw Retry-After header, when SendGrid sent one (429s). */
+    public readonly retryAfter: string | null = null,
   ) {
     super(message);
     this.name = 'SendGridError';
@@ -69,7 +78,10 @@ export class SendGridError extends Error {
 
 /**
  * Resolve a sub-account's SendGrid config from the Account row. Returns
- * null when the key isn't set — callers fall back to nodemailer SMTP.
+ * null when the key isn't set. Transactional callers (form alerts, lead
+ * emails, the editor's test send) then fall back to nodemailer SMTP; BLASTS
+ * do not — blast-preflight.ts blocks them outright, because the fallback is
+ * what once put a full blast on the shared transactional domain.
  *
  * The key is encrypted at rest (AES-256-GCM via @/lib/crypto/encryption);
  * we decrypt on the worker as needed. Encryption fails throw — we'd
@@ -116,6 +128,34 @@ export async function setSendGridFromDomain(
   });
 }
 
+/** Attempts, including the first. Small: the worker retries the blast too. */
+const MAX_SEND_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 500;
+
+/**
+ * Is this failure worth another attempt?
+ *
+ * Only for responses that PROVE SendGrid did not accept the message: 429
+ * (rate limited) and 5xx (their side). Deliberately NOT for timeouts or
+ * network errors — those are ambiguous, SendGrid may have queued the mail
+ * before the connection dropped, and a retry would double-send to a real
+ * customer. A duplicate blast is worse than a failed row the user can see
+ * and re-run.
+ */
+function isRetryableSendStatus(status: number): boolean {
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function retryDelayMs(attempt: number, retryAfterHeader: string | null): number {
+  const retryAfter = Number(retryAfterHeader);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, 30_000);
+  }
+  return RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Fire a single email through SendGrid v3 mail/send. Returns the
  * X-Message-Id from the response headers; throws SendGridError on
@@ -126,8 +166,36 @@ export async function setSendGridFromDomain(
  * personalizations[], but keeping it 1:1 with EmailBlastRecipient
  * means a single failed send doesn't poison a whole batch and we can
  * update the row status atomically.
+ *
+ * Retries 429s and 5xxs (see isRetryableSendStatus) so one rate-limit
+ * blip mid-blast doesn't permanently mark a batch of recipients failed.
  */
 export async function sendEmailViaSendGrid(
+  input: SendGridSendInput,
+): Promise<SendGridSendResult> {
+  let lastError: SendGridError | null = null;
+
+  for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt += 1) {
+    try {
+      return await attemptSendEmailViaSendGrid(input);
+    } catch (err) {
+      if (
+        !(err instanceof SendGridError)
+        || !isRetryableSendStatus(err.status)
+        || attempt === MAX_SEND_ATTEMPTS
+      ) {
+        throw err;
+      }
+      lastError = err;
+      await sleep(retryDelayMs(attempt, err.retryAfter));
+    }
+  }
+
+  // Unreachable: the final attempt either returns or throws above.
+  throw lastError ?? new SendGridError('SendGrid send failed', 0);
+}
+
+async function attemptSendEmailViaSendGrid(
   input: SendGridSendInput,
 ): Promise<SendGridSendResult> {
   const body = {
@@ -154,15 +222,16 @@ export async function sendEmailViaSendGrid(
     // Trail SendGrid's tracking on by default — opens via pixel, clicks
     // via link rewrites. Bounces + spam reports come through regardless.
     //
-    // subscription_tracking handles CAN-SPAM compliance: when enabled,
-    // SendGrid injects an unsubscribe link into the HTML at the
-    // <% %> substitution_tag location, sets the List-Unsubscribe
-    // header, and AND (when configured at the SendGrid account level)
-    // includes the List-Unsubscribe-Post header for RFC 8058 one-click
-    // unsubscribe in Gmail/Apple. Recipients who click the link land
-    // on SendGrid's hosted unsubscribe page; the unsubscribe event
-    // fires through to our /api/webhooks/sendgrid/events endpoint and
-    // becomes an EmailSuppression row.
+    // subscription_tracking does two things for us: it swaps
+    // substitution_tag for the recipient's hosted unsubscribe URL, and it
+    // sets the List-Unsubscribe header (plus List-Unsubscribe-Post, when
+    // one-click is enabled account-side) for RFC 8058. Recipients who
+    // click land on SendGrid's hosted page; the unsubscribe event reaches
+    // /api/webhooks/sendgrid/events and becomes an EmailSuppression row.
+    //
+    // `text`/`html` are intentionally absent: SendGrid overrides both
+    // whenever substitution_tag is set, so the footer has to be in the
+    // body before we get here.
     tracking_settings: {
       click_tracking: { enable: true, enable_text: false },
       open_tracking: { enable: true },
@@ -170,12 +239,7 @@ export async function sendEmailViaSendGrid(
         ? {
             subscription_tracking: {
               enable: true,
-              text: input.unsubscribe.text,
-              html: input.unsubscribe.html,
-              // Token SendGrid replaces with the actual unsubscribe URL.
-              // The token appears verbatim in our HTML so the rest of
-              // the body renders unchanged in preview.
-              substitution_tag: '[%unsubscribe_url%]',
+              substitution_tag: input.unsubscribe.substitutionTag,
             },
           }
         : {}),
@@ -214,7 +278,12 @@ export async function sendEmailViaSendGrid(
       (payload && Array.isArray((payload as { errors?: { message?: string }[] }).errors) &&
         (payload as { errors: { message?: string }[] }).errors[0]?.message) ||
       `SendGrid send failed (${res.status})`;
-    throw new SendGridError(errMessage, res.status, payload);
+    throw new SendGridError(
+      errMessage,
+      res.status,
+      payload,
+      res.headers.get('retry-after'),
+    );
   }
 
   const messageId = res.headers.get('x-message-id') || '';

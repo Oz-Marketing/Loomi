@@ -212,22 +212,39 @@ export function buildPreviewVariableMap(
   return values;
 }
 
+export interface PreviewVariableAudit {
+  /**
+   * Tokens no namespace recognizes — a typo like {{email.unsubscribe_link}}
+   * or a token from another ESP. These ship to the inbox as literal
+   * `{{...}}` text and preflight BLOCKS the send over them, so they are a
+   * different problem from a blank value and have to read differently.
+   */
+  invalid: string[];
+  /**
+   * Real tokens the current preview context has no value for. These render
+   * as an empty string — a send-safe, fixable-with-data situation.
+   */
+  blank: string[];
+}
+
 /**
- * Scan template HTML for {{...}} tokens that are NOT covered by the
- * preview variable map — i.e. tokens that will render as raw mustache
- * text in the final email.
+ * Classify the {{...}} tokens in a template against the preview map.
  *
- * Returns a deduplicated, sorted list of missing variable names
- * (without the {{ }} wrappers).
+ * These two cases used to be merged into one "Missing Preview Data" list
+ * whose copy told the user to "select a contact with this data" — advice
+ * that can never fix a misspelled token. The typo then sailed through the
+ * editor and only surfaced as a hard blocker on the Schedule step, which is
+ * the worst possible place to learn about it.
  */
-export function findMissingPreviewVariables(
+export function auditPreviewVariables(
   templateHtml: string,
   previewValues: Record<string, string>,
-): string[] {
+): PreviewVariableAudit {
   // Match all {{...}} tokens (non-greedy, single-line)
   const tokenRegex = /\{\{([^}]+)\}\}/g;
   const seen = new Set<string>();
-  const missing: string[] = [];
+  const invalid: string[] = [];
+  const blank: string[] = [];
 
   let match: RegExpExecArray | null;
   while ((match = tokenRegex.exec(templateHtml)) !== null) {
@@ -240,11 +257,38 @@ export function findMissingPreviewVariables(
     seen.add(varName);
 
     const value = previewValues[tokenKey];
-    // Missing if: not in map at all, or empty string
-    if (value === undefined || value === '') {
-      missing.push(varName);
+    if (value === undefined) {
+      // custom_values.* is per-account/per-contact and the preview map
+      // can't enumerate every one, so treat it as valid-but-unknown here.
+      // blast-preflight.ts exempts the same prefix for the same reason.
+      if (varName.startsWith('custom_values.')) {
+        blank.push(varName);
+      } else {
+        invalid.push(varName);
+      }
+    } else if (value === '') {
+      blank.push(varName);
     }
   }
 
-  return missing.sort();
+  return { invalid: invalid.sort(), blank: blank.sort() };
+}
+
+/**
+ * Scan template HTML for {{...}} tokens that are NOT covered by the
+ * preview variable map — i.e. tokens that will render as raw mustache
+ * text in the final email.
+ *
+ * Returns a deduplicated, sorted list of missing variable names
+ * (without the {{ }} wrappers).
+ *
+ * @deprecated Prefer auditPreviewVariables(), which separates a misspelled
+ * token (blocks the send) from a real one with no data (renders blank).
+ */
+export function findMissingPreviewVariables(
+  templateHtml: string,
+  previewValues: Record<string, string>,
+): string[] {
+  const { invalid, blank } = auditPreviewVariables(templateHtml, previewValues);
+  return [...invalid, ...blank].sort();
 }

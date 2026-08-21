@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
-import { accountSettingsHref } from '@/lib/account-settings-href';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { BlastPageList, type AccountMeta } from '@/components/campaigns/blast-page-list';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
@@ -291,12 +290,13 @@ function AccountCampaignsPage() {
             {/* Create Blast lives on the list view; analytics is read-only. */}
             {activeTab !== 'analytics' && (
               <>
-                {/* Cog → this account's Email settings (sender identity,
-                    SendGrid key). It used to point into a messaging-scoped
-                    settings tree; those screens are tabs on the account now,
-                    which is the only place an account is configured. */}
+                {/* Cog → messaging-scoped settings (sender identity,
+                    SendGrid, suppressions). Lives inside /messaging so
+                    these surfaces stay close to the surface that uses
+                    them, rather than buried in the global account
+                    settings page. */}
                 <Link
-                  href={accountSettingsHref(accountKey ?? '', 'email')}
+                  href={subHref('/settings/email-texts?section=sending')}
                   aria-label="Email settings"
                   title="Email settings"
                   className="inline-flex items-center justify-center h-10 w-10 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] transition-colors"

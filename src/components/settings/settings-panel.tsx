@@ -3,6 +3,9 @@
 import type { ReactNode } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { AccountsList } from '@/components/accounts-list';
+import { AccountSettingsTab } from '@/components/settings/account-settings-tab';
+import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
+import { IntegrationsTab } from '@/components/settings/integrations-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { ClientReportsTab } from '@/components/settings/client-reports-tab';
@@ -66,6 +69,9 @@ export function SettingsPanel({
   const { isGroup, scopedAccountKeys } = useAccount();
 
   const panels: Record<SettingsTabKey, () => ReactNode> = {
+    subaccount: () => <AccountSettingsTab />,
+    'contact-fields': () => <CustomFieldsTab />,
+    integrations: () => <IntegrationsTab />,
     subaccounts: () => (
       <AccountsList
         listPath="/settings/subaccounts"
@@ -115,6 +121,9 @@ export function SettingsPanel({
  */
 export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'subaccounts',
+  'subaccount',
+  'contact-fields',
+  'integrations',
   'users',
   'client-users',
   'teams',

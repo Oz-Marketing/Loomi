@@ -6,15 +6,14 @@ import { useAccount } from '@/contexts/account-context';
 import { CogIcon } from '@heroicons/react/24/outline';
 import { AccountAvatar } from '@/components/account-avatar';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
-import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 import { SettingsPanel } from '@/components/settings/settings-panel';
 
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  // No role facts read here any more. Which tabs exist is the registry's
-  // answer (`useSettingsTabs`), and what each one renders is settings-panel's —
-  // this page only resolves the active tab from the URL and draws the header.
+  // No role facts read here any more: which tabs exist is the registry's
+  // answer, and what each renders is settings-panel's. This page resolves the
+  // active tab from the URL and draws the header.
   const { isAdmin, isAccount, isGroup, initialized, accountsLoaded, userRole, accountKey, accountData } =
     useAccount();
   const router = useRouter();
@@ -22,9 +21,6 @@ export default function SettingsPage() {
 
   // Role-gated tabs (shared with the sidebar's settings nav).
   const tabs = useSettingsTabs();
-  // Host-derived, so null for the first render. The tab set depends on it, so
-  // the canonical-route redirect below must not run until it's known.
-  const surface = useCurrentSurface();
 
   // Active tab from the path (handles admin `/settings/<tab>` + sub-account
   // `/…/settings/<tab>`).
@@ -47,18 +43,12 @@ export default function SettingsPage() {
   // is in an OEM industry, which isn't known until the account list arrives. Without
   // this the tab is briefly absent, the redirect fires, and a deep link to it lands
   // on Sub-Accounts instead — which is exactly what happened the first time.
-  //
-  // And wait for `surface`, the third instance of the same bug. It's derived
-  // from the host after mount, and `useSettingsScope` treats the null window as
-  // Studio — so on Projects the first render has no Markup/Channels/Alerts tab,
-  // the redirect fires, and a deep link to one bounces to the Studio default a
-  // tick before the surface resolves. That bounce is the routing jitter.
   useEffect(() => {
-    if (!initialized || !accountsLoaded || surface === null || tabs.length === 0) return;
+    if (!initialized || !accountsLoaded || tabs.length === 0) return;
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [initialized, accountsLoaded, surface, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
+  }, [initialized, accountsLoaded, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
@@ -122,9 +112,10 @@ export default function SettingsPage() {
 
       {/* One line, because the panel behind each tab is defined once in
           settings-panel. The guards that used to live here duplicated the
-          registry's `visible` predicates by hand and drifted from them. */}
+          registry's `visible` predicates by hand and drifted from them: the
+          rail would render a row whose panel was gated off, which is how Markup
+          and Channels shipped invisible. */}
       <SettingsPanel tab={activeTab} />
     </div>
   );
 }
-

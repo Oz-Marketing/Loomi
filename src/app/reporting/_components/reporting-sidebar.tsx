@@ -192,8 +192,7 @@ export function ReportingSidebar() {
   // /subaccount/<slug>/settings; this surface has no such route tree, so it
   // uses the admin-browse shape (section in ?tab=) against the active account.
   const subaccountSettingsHref = withSurface(
-    // No ?tab= — see the note in app-sidebar; 'general' moved to Agency Settings.
-    isAccount && accountKey ? `/settings/subaccounts/${accountKey}` : '/settings',
+    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings',
   );
 
   const isChildActive = useCallback(
@@ -279,18 +278,7 @@ export function ReportingSidebar() {
           </div>
         </Link>
       }
-      account={
-        // No switcher in settings: the rail IS the settings nav here, and the
-        // sections it lists belong to whichever account you arrived from —
-        // leaving a picker above them invites changing account mid-edit, which
-        // silently repoints the form. Dropping it also lifts "Back to <sector>"
-        // to the top, which is the way out of this mode.
-        isSettingsPath(pathname) ? null : collapsed ? (
-          <AccountSwitcher compact />
-        ) : (
-          <AccountSwitcher />
-        )
-      }
+      account={collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
       bottom={
         <>
           {/* Quick switch between Studio · Reporting · Projects. */}

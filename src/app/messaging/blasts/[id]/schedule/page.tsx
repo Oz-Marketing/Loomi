@@ -19,7 +19,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import { accountSettingsHref } from '@/lib/account-settings-href';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import {
   audienceSelectionFromDraft,
   type RecipientRow,
@@ -181,6 +181,8 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
+  const sendingSettingsHref = subHref('/settings/email-texts?section=sending');
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
@@ -332,9 +334,6 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
   const accountKey = draft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // The blast's own account, not the ambient one — its Email tab is where
-  // sender identity and the SendGrid key live now.
-  const sendingSettingsHref = accountSettingsHref(accountKey, 'email');
   // Resolved SERVER-side, over the whole contact roster.
   //
   // This used to filter `contacts`, which is the 5,000 most-recently-added

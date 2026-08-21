@@ -13,7 +13,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { usedFontFamilies } from '@/lib/ad-generator/fonts';
-import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
+import { resolveTemplate, resolveTemplateDoc } from '@/lib/ad-generator/resolve-template';
+import { stillRenderFor } from '@/lib/ad-generator/posterize';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { renderAd } from '@/lib/ad-generator/render';
@@ -65,7 +66,15 @@ export async function POST(req: NextRequest) {
   const googleCss = await googleFontFaceCss(usedGoogle);
   if (googleCss) data.fontFaceCss = `${data.fontFaceCss ?? ''}\n${googleCss}`;
 
-  const html = template.render({ ...template.defaults, ...data }, size);
+  // A clip is swapped for its poster frame before Chromium sees it: production's
+  // headless browser has no H.264 decoder, so a video layer would rasterise as a
+  // hole. A still ad, or a server with no encoder, renders exactly as before.
+  const still = await stillRenderFor({
+    template,
+    doc: snapshot ?? (await resolveTemplateDoc(body.templateId ?? '')),
+    data: { ...template.defaults, ...data },
+  });
+  const html = still.template.render(still.data, size);
 
   try {
     const png = await renderAd({ html, width: size.width, height: size.height });

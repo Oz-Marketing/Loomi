@@ -5,8 +5,10 @@ import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
+  type UnsubscribeFooterConfig,
   type UnsubscribeFooterInput,
 } from '@/lib/sending/unsubscribe-footer';
+import { resolveAccountFooter } from '@/lib/sending/account-footer';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
@@ -2825,6 +2827,7 @@ async function executeEmailNode(
         html,
         text: stripHtml(html),
         account: sender.unsubscribeFooter,
+        config: sender.footerConfig,
       })
     : { html, text: stripHtml(html) };
 
@@ -3012,6 +3015,8 @@ interface AccountSenderIdentity {
   sendgridApiKey: string | null;
   /** Account data the compliance footer is built from, per send. */
   unsubscribeFooter: UnsubscribeFooterInput | null;
+  /** Resolved footer styling — this account's, or an ancestor's. */
+  footerConfig: UnsubscribeFooterConfig | null;
 }
 
 async function resolveSenderForAccount(
@@ -3053,12 +3058,17 @@ async function resolveSenderForAccount(
     postalCode: account.postalCode,
   };
 
+  // Same inheritance as a blast: this account's footer styling, or the
+  // nearest ancestor's.
+  const { config: footerConfig } = await resolveAccountFooter(accountKey);
+
   return {
     replyTo: account.replyToEmail || null,
     senderEmail: account.senderEmail || null,
     senderName: account.senderName || null,
     sendgridApiKey,
     unsubscribeFooter,
+    footerConfig,
   };
 }
 

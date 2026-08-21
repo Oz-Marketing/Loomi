@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { getTemplate } from './templates';
+import { getTemplate, getTemplateDoc } from './templates';
 import { adTemplateFromDoc } from './doc-template';
 import type { AdTemplate } from './types';
 import type { TemplateDoc } from './doc-types';
@@ -21,6 +21,29 @@ export async function resolveTemplate(id: string): Promise<AdTemplate | null> {
     const doc = JSON.parse(row.doc) as TemplateDoc;
     if (!doc || !Array.isArray(doc.sizes) || !Array.isArray(doc.elements) || !doc.layouts) return null;
     return adTemplateFromDoc(row.id, doc);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a template id to the TemplateDoc itself, for callers that must inspect
+ * the design rather than just render it (video export, motion detection).
+ *
+ * Returns null for the two retired hand-written templates, which have no doc —
+ * so an ad built on one of those can't be exported as video, which is correct:
+ * it has no layer to put a clip in.
+ */
+export async function resolveTemplateDoc(id: string): Promise<TemplateDoc | null> {
+  if (!id) return null;
+  const code = getTemplateDoc(id);
+  if (code) return code;
+  try {
+    const row = await prisma.adTemplateDoc.findUnique({ where: { id } });
+    if (!row) return null;
+    const doc = JSON.parse(row.doc) as TemplateDoc;
+    if (!doc || !Array.isArray(doc.sizes) || !Array.isArray(doc.elements) || !doc.layouts) return null;
+    return { ...doc, id: row.id };
   } catch {
     return null;
   }

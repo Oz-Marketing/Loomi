@@ -3,6 +3,7 @@ import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } fro
 import { logoVariantDataKey } from './brand-logos';
 import { effectiveElements } from './size-scope';
 import { cssSafeFamily } from './fonts';
+import { motionKind } from './motion';
 
 /**
  * The data-driven renderer: interprets a TemplateDoc into a full HTML document
@@ -20,7 +21,11 @@ function esc(v: string | undefined): string {
     .replace(/"/g, '&quot;');
 }
 
-function resolveBinding(b: Binding | undefined, data: AdData): string {
+/** What an element's binding resolves to, for this data. Exported because the
+ *  motion planner has to ask the same question the renderer asks — "what URL is
+ *  actually in this slot?" — and a second copy of that rule is how a video
+ *  arriving through a template default would get missed. */
+export function resolveBinding(b: Binding | undefined, data: AdData): string {
   if (!b) return '';
   switch (b.kind) {
     case 'static':
@@ -231,7 +236,22 @@ interface RenderCtx {
   dimOffType: boolean;
   /** Keys of number-typed fields — their values render with thousands commas. */
   numberKeys: Set<string>;
+  /** How a motion layer (video / animated GIF source) renders. `live` emits the
+   *  real clip — it plays in the builder and a browser preview, and the exporter
+   *  freezes it at `trimStart` for a still. `omit` drops it, leaving the hole the
+   *  MP4 compositor fills with the actual clip. */
+  motion: MotionRenderMode;
+  /** MP4 compositing only: for a `background` element, render just this part of
+   *  it, so its base fill can sit UNDER the clip and its fade overlay OVER it.
+   *  Absent = the element renders whole, as it always has. */
+  bgParts?: Record<string, BackgroundPart>;
 }
+
+/** See {@link RenderCtx.motion}. */
+export type MotionRenderMode = 'live' | 'omit';
+
+/** Which slice of a `background` element to draw — see {@link RenderCtx.bgParts}. */
+export type BackgroundPart = 'base' | 'overlay';
 
 /**
  * Conditional visibility (`visibleWhen`): the element shows only when the gating
@@ -244,6 +264,31 @@ interface RenderCtx {
 export function isElementVisibleFor(el: DocElement, data: AdData): boolean {
   if (!el.visibleWhen) return true;
   return el.visibleWhen.in.includes(String(data[el.visibleWhen.field] ?? ''));
+}
+
+/**
+ * The inner media tag for an image slot — a `<video>` when the source is a clip,
+ * an `<img>` otherwise.
+ *
+ * ONE tag serves the builder canvas, the browser preview AND the still export.
+ * It autoplays muted (which is the only autoplay a browser allows, and what a
+ * feed does anyway), and carries `data-still-at` so the PNG exporter can pause
+ * and seek it to a known frame instead of screenshotting whichever frame the
+ * decoder happened to be on — that non-determinism is the whole reason the
+ * attribute exists.
+ *
+ * An animated GIF stays an `<img>`: it animates natively, and promoting it to a
+ * video element would change how every existing texture renders.
+ */
+function mediaTag(url: string, el: DocElement, inner: string): string {
+  if (motionKind(url) !== 'video') {
+    return `<img src="${url}" alt="" style="${inner}" />`;
+  }
+  const stillAt = Math.max(0, el.trimStart ?? 0);
+  return (
+    `<video src="${url}" autoplay muted loop playsinline preload="auto"` +
+    ` data-motion data-still-at="${stillAt}" style="${inner}"></video>`
+  );
 }
 
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
@@ -275,28 +320,46 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   if (el.type === 'background') {
     // Unified full-bleed background: composite base fill → texture → fade overlay
     // inside one element. Replaces the old doc-level canvas fill + bg image.
+    //
+    // When the texture is a CLIP, the MP4 compositor needs those three layers
+    // pulled apart — the fill belongs under the video and the fade over it — so a
+    // plate render asks for one `part` at a time. Absent (every other caller) the
+    // element draws whole, exactly as before.
+    const part = ctx.bgParts?.[el.id];
     const layers: string[] = [];
     // 1. Base fill (solid or gradient).
     const baseGrad = normalizeGradient(el);
     const baseBg = baseGrad ? buildGradientCss(baseGrad, brand) : el.fill ? esc(resolveColor(el.fill, brand, brand)) : '';
-    if (baseBg) layers.push(`<div style="position:absolute;inset:0;background:${baseBg};"></div>`);
-    // 2. Texture image (cover / contain / tile), with its own opacity.
+    if (baseBg && part !== 'overlay') layers.push(`<div style="position:absolute;inset:0;background:${baseBg};"></div>`);
+    // 2. Texture (image or clip), with its own opacity. Dropped entirely on a
+    //    plate render: a plate exists to leave room for the real clip.
     const texUrl = esc(resolveBinding(el.binding, data));
-    if (texUrl) {
+    const texIsMotion = motionKind(texUrl) !== null;
+    const skipTexture = part != null || (texIsMotion && ctx.motion === 'omit');
+    if (texUrl && !skipTexture) {
       const texOp = el.bgImageOpacity != null && el.bgImageOpacity < 100 ? `opacity:${clamp01(el.bgImageOpacity / 100)};` : '';
-      if ((el.fit ?? 'cover') === 'tile') {
+      if ((el.fit ?? 'cover') === 'tile' && !texIsMotion) {
         const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
         layers.push(`<div style="position:absolute;inset:0;${texOp}background-image:url(${texUrl});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`);
       } else {
         const objPos = box.objectX != null || box.objectY != null ? `${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%` : 'center';
-        layers.push(`<div style="position:absolute;inset:0;overflow:hidden;${texOp}"><img src="${texUrl}" alt="" style="width:100%;height:100%;object-fit:${el.fit ?? 'cover'};object-position:${objPos};" /></div>`);
+        // Crop zoom, same as a plain cover image. A background could always carry
+        // a per-size focal point but never a zoom, so on a board whose aspect
+        // ratio differed sharply from the photo's there was no way to scale the
+        // image up and choose what the crop kept. Per size, like the focal point
+        // it pivots on.
+        const bgScale = (el.fit ?? 'cover') === 'cover' && box.objectScale && box.objectScale > 1 ? box.objectScale : 1;
+        const bgZoom = bgScale > 1 ? `transform:scale(${bgScale});transform-origin:${objPos};` : '';
+        const inner = `width:100%;height:100%;object-fit:${el.fit === 'tile' ? 'cover' : (el.fit ?? 'cover')};object-position:${objPos};${bgZoom}`;
+        layers.push(`<div style="position:absolute;inset:0;overflow:hidden;${texOp}">${mediaTag(texUrl, el, inner)}</div>`);
       }
     }
     // 3. Fade / overlay gradient on top.
-    if (el.overlay) {
+    if (el.overlay && part !== 'base') {
       const ov = normalizeGradient({ gradientFill: el.overlay });
       if (ov) layers.push(`<div style="position:absolute;inset:0;background:${buildGradientCss(ov, brand)};"></div>`);
     }
+    if (!layers.length) return '';
     const radius = borderRadiusCss(el);
     return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${layers.join('')}</div>`;
   }
@@ -321,6 +384,9 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   if (el.type === 'image' || el.type === 'logo') {
     const url = esc(resolveBinding(el.binding, data));
     const minEdge = Math.min(box.w * width, box.h * height);
+    // A clip on a plate render: leave the hole. The compositor puts the real
+    // frames here, cropped by the same numbers this element would have used.
+    if (ctx.motion === 'omit' && motionKind(url) !== null) return '';
     if (!url) {
       // Empty image slot: nothing on export (an empty slot shouldn't leave a
       // dashed box in the finished ad — same as empty text). In the builder it's
@@ -332,7 +398,10 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       const phFont = Math.min(minEdge * 0.14, 40);
       return `<div${idAttr} style="${dim}${fx}${pos}display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;border-radius:${phRadius}px;color:#94a3b8;font-size:${phFont}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
-    const fit = el.fit ?? 'contain';
+    // A clip has no tiled form (a repeating video is a different feature), so it
+    // fills its box like `cover` rather than rendering as a single frozen frame.
+    const isClip = motionKind(url) === 'video';
+    const fit = isClip && el.fit === 'tile' ? 'cover' : (el.fit ?? 'contain');
     // Tile fill: repeat the image to fill the box (seamless textures/patterns).
     // Tile width is a fraction of the box width so density is size-independent.
     if (fit === 'tile') {
@@ -357,7 +426,8 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       cropScale > 1
         ? `transform:scale(${cropScale});transform-origin:${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%;`
         : '';
-    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}" /></div>`;
+    const inner = `width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}`;
+    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${mediaTag(url, el, inner)}</div>`;
   }
 
   // text
@@ -430,12 +500,55 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   return `<div${idAttr} ${marker} style="${dim}${fx}${styles}">${inner}</div>`;
 }
 
+/**
+ * The elements this size actually draws, in paint order.
+ *
+ * Exported because the MP4 compositor has to split the SAME ordered list this
+ * renderer walks — a plate that disagreed with the render about z-order or about
+ * which layers are hidden would composite the design in the wrong sequence.
+ */
+export function visibleLayers(doc: TemplateDoc, sizeId: string): { el: DocElement; box: DocLayoutBox }[] {
+  const layout = doc.layouts[sizeId] ?? {};
+  return effectiveElements(doc, sizeId)
+    .map((el) => ({ el, box: layout[el.id] }))
+    // Eye-hidden elements are removed from the artboard in BOTH preview and
+    // export — hiding a layer takes it off the canvas, not just dims it. Elements
+    // dragged fully off the artboard are "detached" (a canvas-only parking spot
+    // in the builder) — never part of the rendered ad, so drop them here too.
+    .filter(
+      (x): x is { el: DocElement; box: DocLayoutBox } =>
+        Boolean(x.box) && !x.box!.hidden && !isBoxDetached(x.box!),
+    )
+    .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0));
+}
+
+export interface RenderDocOptions {
+  preview?: boolean;
+  dimOffType?: boolean;
+  /** How motion layers render. Default `live` — the clip is in the markup, which
+   *  is what a browser and the still exporter both want. */
+  motion?: MotionRenderMode;
+  /**
+   * MP4 compositing: render this design as a flat PLATE — only the named
+   * elements, on a transparent canvas, with motion layers omitted. The exporter
+   * renders one plate per run of static layers between clips, then ffmpeg stacks
+   * plate → clip → plate in the same order.
+   */
+  plate?: {
+    ids: string[];
+    bgParts?: Record<string, BackgroundPart>;
+    /** The BOTTOM plate, which paints the canvas fill + accent bar. Every plate
+     *  above a clip is transparent instead, or it would hide the video. */
+    canvas?: boolean;
+  };
+}
+
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
 export function renderDoc(
   doc: TemplateDoc,
   data: AdData,
   size: AdSize,
-  opts?: { preview?: boolean; dimOffType?: boolean },
+  opts?: RenderDocOptions,
 ): string {
   const { width, height } = size;
   const brand = (data.brandColor && esc(data.brandColor)) || '#4f46e5';
@@ -460,24 +573,17 @@ export function renderDoc(
     preview: opts?.preview ?? false,
     dimOffType: opts?.dimOffType ?? false,
     numberKeys,
+    // A plate never carries the clip: that is the point of a plate.
+    motion: opts?.plate ? 'omit' : (opts?.motion ?? 'live'),
+    bgParts: opts?.plate?.bgParts,
   };
 
-  const layout = doc.layouts[size.id] ?? {};
-  // Per-size style overrides are merged here, so every downstream read (fit
-  // markers, colours, image fit) sees the element as THIS size renders it.
-  const body = effectiveElements(doc, size.id)
-    .map((el) => ({ el, box: layout[el.id] }))
-    // Eye-hidden elements are removed from the artboard in BOTH preview and
-    // export — hiding a layer takes it off the canvas, not just dims it. Elements
-    // dragged fully off the artboard are "detached" (a canvas-only parking spot
-    // in the builder) — never part of the rendered ad, so drop them here too.
-    .filter(
-      (x): x is { el: DocElement; box: DocLayoutBox } =>
-        Boolean(x.box) &&
-        !x.box!.hidden &&
-        !isBoxDetached(x.box!),
-    )
-    .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))
+  // Per-size style overrides are merged inside `visibleLayers`, so every
+  // downstream read (fit markers, colours, image fit) sees the element as THIS
+  // size renders it.
+  const plateIds = opts?.plate ? new Set(opts.plate.ids) : null;
+  const body = visibleLayers(doc, size.id)
+    .filter(({ el }) => !plateIds || plateIds.has(el.id))
     .map(({ el, box }) => renderElement(el, box, data, ctx))
     .join('\n');
 
@@ -486,12 +592,19 @@ export function renderDoc(
   // doc-level field — so it flows through renderElement like everything else.
   const bg = doc.background;
   const bgGrad = normalizeGradient(bg);
-  const bgCss = bgGrad
-    ? buildGradientCss(bgGrad, brand)
-    : bg?.color
-      ? esc(bg.color)
-      : '#ffffff';
-  const accentBar = bg?.accentBar
+  // A plate paints no canvas fill: it is stacked OVER the clip (and over the
+  // base plate, which is the one render that does carry the fill), so an opaque
+  // white ground here would hide the video completely.
+  const bgCss = opts?.plate && !opts.plate.canvas
+    ? 'transparent'
+    : bgGrad
+      ? buildGradientCss(bgGrad, brand)
+      : bg?.color
+        ? esc(bg.color)
+        : '#ffffff';
+  // The accent bar is canvas chrome, not an element, so it rides with the canvas
+  // fill: on the normal render, and on the base plate (whose id list is empty).
+  const accentBar = bg?.accentBar && (!opts?.plate || opts.plate.canvas)
     ? `<div style="position:absolute;top:0;left:0;right:0;height:${Math.max(4, Math.min(width, height) / 80)}px;background:${brand};"></div>`
     : '';
 

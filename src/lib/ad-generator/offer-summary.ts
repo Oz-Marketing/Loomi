@@ -26,8 +26,15 @@ export type CalculatedRow = DerivedFigure;
  */
 export function calculatedRows(data: AdData): CalculatedRow[] {
   const figures = deriveOfferFigures(data);
-  // Payments total first: it's the number a reader is most likely to check, and
-  // the one that was silently wrong in the seeded VW template.
-  const order = ['monthly_payments_total', 'total_miles'];
+  // A flat order works because the two groups are DISJOINT per offer type: a
+  // lease derives payments and mileage, a service coupon derives savings. So
+  // whichever group applies is the one that appears, and it appears first.
+  //
+  // Vehicle first within the list — the payments total is the number a reader is
+  // most likely to check, and the one that was silently wrong in the seeded VW
+  // template. For a service offer the savings figure plays that role: "SAVE $50"
+  // over a price that does not subtract to $50 is the textbook FTC problem, and
+  // this panel is where someone catches it.
+  const order = ['monthly_payments_total', 'total_miles', 'savings_amount', 'savings_percent'];
   return order.map((k) => figures[k]).filter((f): f is CalculatedRow => f != null);
 }

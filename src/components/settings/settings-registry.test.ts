@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   agencySettingsNavForScope,
   canonicalSubaccountSection,
-  sectorSettingsTabsForScope,
   settingsTabsForScope,
+  subaccountSectionsForScope,
   type SettingsScope,
 } from './settings-registry';
 
@@ -42,146 +42,37 @@ const keysOf = (s: SettingsScope) => settingsTabsForScope(s).map((t) => t.key);
 const navKeysOf = (s: SettingsScope) =>
   agencySettingsNavForScope(s).flatMap((g) => g.items.map((i) => i.key));
 /**
- * The tabs that BELONG in the agency rail — everything the registry returns
- * minus the sector-owned ones, which render in their sector's own settings
- * panel and never in the modal.
+ * What BELONGS in the agency rail — everything visible minus the sector-owned
+ * entries, which render in their own sector's settings panel and never in the
+ * modal. Agency Settings is platform config; anything that drives one sector
+ * belongs to that sector.
  */
 const agencyOwnedKeysOf = (s: SettingsScope) =>
   settingsTabsForScope(s)
     .filter((t) => t.rail !== 'sector')
     .map((t) => t.key);
 
-/** Agency View, elevated, on the Projects surface. */
-const AGENCY_ELEVATED_APP = scope({
-  isAdmin: true,
-  hasAdminAccess: true,
-  isElevated: true,
-  oemRelevant: true,
-  surface: 'app',
-});
-
-describe('one entry, one rail', () => {
-  const sectorKeys = (surface: SettingsScope['surface']) =>
-    sectorSettingsTabsForScope(scope({ ...AGENCY_ELEVATED, surface })).map((t) => t.key);
-
-  it('never lists the same tab on both rails', () => {
-    for (const surface of ['studio', 'reporting', 'app'] as const) {
-      const s = scope({ ...AGENCY_ELEVATED, surface });
-      const overlap = navKeysOf(s).filter((k) => sectorKeys(surface).includes(k));
-      expect(overlap, surface).toEqual([]);
-    }
-  });
-
-  it('keeps Appearance out of every sector: it is personal, not sector config', () => {
-    // Theme, accent, font, density and the reduce-motion prefs follow the USER.
-    // It used to appear on all three sector rails as well as in the modal.
-    for (const surface of ['studio', 'reporting', 'app'] as const) {
-      expect(sectorKeys(surface), surface).not.toContain('appearance');
-    }
-    expect(navKeysOf(AGENCY_ELEVATED)).toContain('appearance');
-  });
-
-  it('gives Reporting something of its own now that Appearance has gone', () => {
-    // An empty settings panel reads as broken, and "who sees which reports" is
-    // the question you arrive at Reporting settings with.
-    expect(sectorKeys('reporting')).toContain('client-reports');
-    expect(sectorKeys('studio')).not.toContain('client-reports');
-    expect(sectorKeys('app')).not.toContain('client-reports');
-  });
-
-  it('keeps Notifications on the sector rail, not the agency one', () => {
-    expect(navKeysOf(AGENCY_ELEVATED)).not.toContain('notifications');
-    expect(sectorKeys('studio')).toContain('notifications');
-    // Reporting has no notification categories of its own.
-    expect(sectorKeys('reporting')).not.toContain('notifications');
-  });
-});
-
-describe('the client roster', () => {
-  it('sits in Agency Settings, next to Users', () => {
-    const keys = keysOf(AGENCY_ELEVATED);
-    expect(keys).toContain('client-users');
-    expect(keys.indexOf('client-users')).toBe(keys.indexOf('users') + 1);
-  });
-
-  it('shows on every surface — clients are not a sector concern', () => {
-    for (const surface of ['studio', 'reporting', 'app'] as const) {
-      expect(keysOf(scope({ ...AGENCY_ELEVATED, surface })), surface).toContain('client-users');
-    }
-  });
-
-  it('needs admin access, like the agency roster', () => {
-    expect(keysOf(scope({ isAdmin: true, hasAdminAccess: false }))).not.toContain('client-users');
-  });
-});
-
-describe('budget config is Projects-sector', () => {
-  it('shows Markup and Channels only on the Projects surface', () => {
-    // Budgets live in Projects — the hub, intake and the Ad Pacer are the only
-    // readers of markup, rate cards and channels. Same treatment as Sending/SMS
-    // (Studio-only) and Report Access (Reporting-only).
-    for (const key of ['markup', 'budget-channels']) {
-      expect(keysOf(AGENCY_ELEVATED_APP), key).toContain(key);
-      expect(keysOf(AGENCY_ELEVATED), key).not.toContain(key);
-      expect(keysOf(scope({ ...AGENCY_ELEVATED, surface: 'reporting' })), key).not.toContain(key);
-    }
-  });
-
-  it('reaches the Projects settings PANEL, not just the cog modal', () => {
-    // The bug this pins: gating on `isAdmin` confined them to the modal, which
-    // forces `isAdmin: true`. In the app shell `isAdmin` means the retired
-    // "Agency View" and is effectively never true — so the panel showed only
-    // Notifications and Appearance.
-    const panelScope = scope({ isElevated: true, hasAdminAccess: true, surface: 'app' });
-    expect(panelScope.isAdmin).toBe(false);
-    expect(keysOf(panelScope)).toContain('markup');
-    expect(keysOf(panelScope)).toContain('budget-channels');
-  });
-
-  it('still gates them on an elevated role, not just the surface', () => {
-    // Markup is margin. Being on Projects is not a permission.
-    const plainAdminOnApp = scope({
-      isAdmin: true,
-      hasAdminAccess: true,
-      surface: 'app',
-    });
-    expect(keysOf(plainAdminOnApp)).not.toContain('markup');
-    expect(keysOf(plainAdminOnApp)).not.toContain('budget-channels');
-  });
-
-  it('is reachable from the Projects panel and absent from the agency rail', () => {
-    // Both halves matter: present where it lives, gone from where it doesn't.
-    for (const key of ['markup', 'budget-channels', 'alerts']) {
-      expect(keysOf(AGENCY_ELEVATED_APP), key).toContain(key);
-      expect(navKeysOf(AGENCY_ELEVATED_APP), key).not.toContain(key);
-    }
-  });
-});
-
 describe('settings registry', () => {
   it('gives every agency-owned tab a rail row, and vice versa', () => {
     // The original failure this file exists for: a tab that renders with no way
-    // to navigate to it. Sector-owned entries are excluded on both sides — they
-    // have a row in their sector's panel instead, asserted separately below.
-    for (const s of [AGENCY_ELEVATED, AGENCY_ADMIN, AGENCY_ELEVATED_APP]) {
+    // to navigate to it. Sector-owned entries are excluded on both sides.
+    for (const s of [AGENCY_ELEVATED, AGENCY_ADMIN]) {
       expect(navKeysOf(s)).toEqual(agencyOwnedKeysOf(s));
     }
   });
 
-  it('keeps sector-owned config out of the agency rail entirely', () => {
-    // Agency Settings is platform config. Anything that drives ONE sector —
-    // budget channels, pacing alerts, markup, OEM co-op, contact blueprints —
-    // belongs to that sector, on every surface, including its own.
+  it('keeps sector-owned config out of the agency rail, on every surface', () => {
     for (const surface of ['studio', 'reporting', 'app'] as const) {
-      const railKeys = navKeysOf(scope({ ...AGENCY_ELEVATED, surface }));
-      for (const sectorOwned of [
+      const rail = navKeysOf(scope({ ...AGENCY_ELEVATED, surface }));
+      for (const owned of [
         'markup',
         'budget-channels',
         'alerts',
         'coop-guidelines',
         'contact-field-blueprints',
+        'client-reports',
       ]) {
-        expect(railKeys, `${surface}/${sectorOwned}`).not.toContain(sectorOwned);
+        expect(rail, `${surface}/${owned}`).not.toContain(owned);
       }
     }
   });
@@ -189,6 +80,8 @@ describe('settings registry', () => {
   it('keeps the Agency-View rail in Manage-then-Configure order', () => {
     const groups = agencySettingsNavForScope(AGENCY_ELEVATED);
     expect(groups.map((g) => g.label)).toEqual(['Manage', 'Configure']);
+    // Field Blueprints left for Studio, Markup/Alerts for Projects, Co-op for
+    // Studio; Clients joined next to Users.
     expect(groups[0].items.map((i) => i.key)).toEqual([
       'subaccounts',
       'users',
@@ -196,10 +89,11 @@ describe('settings registry', () => {
       'teams',
       'knowledge',
     ]);
-    // Markup, Channels, Alerts, Co-op Guidelines and Notifications are all
-    // sector-owned now — what's left under Configure is platform-wide, plus
-    // Appearance, which is personal and follows the user across surfaces.
-    expect(groups[1].items.map((i) => i.key)).toEqual(['industries', 'appearance']);
+    expect(groups[1].items.map((i) => i.key)).toEqual([
+      'industries',
+      'notifications',
+      'appearance',
+    ]);
   });
 
   it('points rail hrefs at the browser-facing /settings path', () => {
@@ -226,26 +120,28 @@ describe('settings registry', () => {
 
   it('keeps agency-only platform config out of an account', () => {
     const keys = keysOf(SUBACCOUNT_ADMIN);
-    for (const agencyOnly of ['subaccounts', 'users', 'teams', 'knowledge', 'industries']) {
+    for (const agencyOnly of [
+      'subaccounts',
+      'users',
+      'teams',
+      'contact-field-blueprints',
+      'knowledge',
+      'industries',
+      'markup',
+      'alerts',
+      'coop-guidelines',
+    ]) {
       expect(keys).not.toContain(agencyOnly);
     }
-    // Nothing per-ACCOUNT is left in this list either: General, Integrations
-    // and Custom Fields are tabs on the account itself now (Agency Settings →
-    // Accounts). What remains is sector-owned or personal, and stays visible
-    // whatever the account scope — the picker is hidden inside settings, so
-    // gating these by scope would make them unreachable.
-    expect(keys).toEqual(['contact-field-blueprints', 'notifications', 'appearance']);
+    expect(keys).toEqual(['subaccount', 'integrations', 'contact-fields', 'notifications', 'appearance']);
   });
 
-  it('keeps Field Blueprints to Studio', () => {
-    // Custom Fields moved onto the account (see TABS in subaccount-detail);
-    // what this list still carries is the global blueprint library, Studio's.
-    for (const surface of ['app', 'reporting'] as const) {
-      expect(keysOf(scope({ ...SUBACCOUNT_ADMIN, surface }))).not.toContain(
-        'contact-field-blueprints',
-      );
-    }
-    expect(keysOf(SUBACCOUNT_ADMIN)).toContain('contact-field-blueprints');
+  it('keeps Custom Fields to Studio', () => {
+    expect(keysOf(scope({ ...SUBACCOUNT_ADMIN, surface: 'app' }))).not.toContain('contact-fields');
+    expect(keysOf(scope({ ...SUBACCOUNT_ADMIN, surface: 'reporting' }))).not.toContain(
+      'contact-fields',
+    );
+    expect(keysOf(SUBACCOUNT_ADMIN)).toContain('contact-fields');
   });
 
   it('offers Notifications everywhere but Reporting, which has no categories', () => {
@@ -272,16 +168,88 @@ describe('settings registry', () => {
   });
 });
 
-// The sub-account section suite lived here. It tested `subaccountSectionsForScope`
-// and the "Account Settings" / "<Sector> Settings" grouping — a per-sector tab
-// list for the app-shell variant of an account's settings, both deleted with
-// that variant. An account's tabs are now the `TABS` list in
-// subaccount-detail, rendered the one way.
+// The sub-account tier is CORE + SECTOR: the same five sections wherever you
+// are, plus whatever that sector owns.
 
-describe('legacy section keys', () => {
+const CORE = ['general', 'users', 'branding', 'integrations', 'appearance'];
+
+const sectionKeys = (surface: 'studio' | 'reporting' | 'app') =>
+  subaccountSectionsForScope(scope({ isAccount: true, hasAdminAccess: true, surface })).map(
+    (s) => s.key,
+  );
+
+describe('account settings sections', () => {
+  it('offers the same core sections in every sector', () => {
+    for (const surface of ['studio', 'reporting', 'app'] as const) {
+      for (const key of CORE) {
+        expect(sectionKeys(surface)).toContain(key);
+      }
+    }
+  });
+
+  it('keeps Domains and Custom Fields to Studio', () => {
+    expect(sectionKeys('studio')).toContain('domains');
+    expect(sectionKeys('studio')).toContain('contact-fields');
+    for (const surface of ['reporting', 'app'] as const) {
+      expect(sectionKeys(surface)).not.toContain('domains');
+      expect(sectionKeys(surface)).not.toContain('contact-fields');
+    }
+  });
+
+  it('keeps Email & Texts to Studio', () => {
+    // Reporting and Projects don't send anything, so a SendGrid key or a
+    // suppression list there would be a dead panel.
+    expect(sectionKeys('studio')).toContain('email-texts');
+    for (const surface of ['reporting', 'app'] as const) {
+      expect(sectionKeys(surface)).not.toContain('email-texts');
+    }
+  });
+
+  it('exposes email settings as ONE nav entry, not four', () => {
+    // Email identity, SMS, the footer, and suppressions are sub-tabs of
+    // Email & Texts. Four sibling entries read as four unrelated pages.
+    const keys = sectionKeys('studio');
+    for (const retired of ['sending', 'sms', 'email-footer', 'suppressions']) {
+      expect(keys).not.toContain(retired);
+    }
+    expect(keys[keys.indexOf('contact-fields') + 1]).toBe('email-texts');
+  });
+
+  it('offers Notifications everywhere but Reporting', () => {
+    expect(sectionKeys('studio')).toContain('notifications');
+    expect(sectionKeys('app')).toContain('notifications');
+    expect(sectionKeys('reporting')).not.toContain('notifications');
+  });
+
+  it('gives Reporting the core plus Reports, and nothing else', () => {
+    expect(sectionKeys('reporting')).toEqual([
+      'general',
+      'users',
+      'branding',
+      'integrations',
+      // Which reports this sub-account's client users see — see
+      // components/settings/report-access-tab.
+      'reports',
+      'appearance',
+    ]);
+  });
+
+  it('keeps Reports out of the other sectors', () => {
+    expect(sectionKeys('studio')).not.toContain('reports');
+    expect(sectionKeys('app')).not.toContain('reports');
+  });
+
+  // It edits what CLIENTS are shown and is guarded by `reporting.configure`,
+  // which no client role carries. Rendering it for someone who can't save
+  // would be a dead panel at best.
+  it('hides Reports from users without admin access', () => {
+    const keys = subaccountSectionsForScope(
+      scope({ isAccount: true, hasAdminAccess: false, surface: 'reporting' }),
+    ).map((s) => s.key);
+    expect(keys).not.toContain('reports');
+  });
+
   it('reads the legacy `company` key as `general`', () => {
-    // Still live: old bookmarks and the redirect from the retired
-    // /subaccount/<slug>/settings routes both carry `company`.
     expect(canonicalSubaccountSection('company')).toBe('general');
     expect(canonicalSubaccountSection('general')).toBe('general');
     expect(canonicalSubaccountSection('branding')).toBe('branding');

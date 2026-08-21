@@ -49,3 +49,22 @@ describe('calculatedRows', () => {
     expect(rows[0].math).toBe('$549 × 60 mo');
   });
 });
+
+describe('service savings rows', () => {
+  it('shows the savings with the subtraction that produced it', () => {
+    const rows = calculatedRows({ offerType: 'flat_price', offerPrice: '79.95', regularPrice: '109' });
+    expect(rows.map((r) => r.label)).toEqual(['You save', 'Savings']);
+    expect(rows[0]).toEqual({ label: 'You save', value: '$29.05', math: '$109 − $79.95' });
+    expect(rows[1].value).toBe('27%');
+  });
+
+  it('shows nothing when the savings can\'t be derived', () => {
+    expect(calculatedRows({ offerType: 'flat_price', offerPrice: '79.95' })).toEqual([]);
+    expect(calculatedRows({ offerType: 'percent_off', percentOff: '15' })).toEqual([]);
+  });
+
+  it('keeps the vehicle rows working, and never mixes the two groups', () => {
+    const lease = calculatedRows({ offerType: 'lease', monthlyPayment: '389', leaseTerm: '36', milesPerYear: '10000' });
+    expect(lease.map((r) => r.label)).toEqual(['Monthly payments total', 'Total lease miles']);
+  });
+});

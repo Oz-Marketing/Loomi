@@ -214,6 +214,7 @@ type DisclaimerTemplateOption = {
 export function DisclaimerField({
   field,
   renderData,
+  offerKind,
   make,
   value,
   onChange,
@@ -222,6 +223,9 @@ export function DisclaimerField({
 }: {
   field: FieldSpec;
   renderData: AdData;
+  /** The doc's offer kind — decides the fee boilerplate and the fallback body
+   *  while `renderData.offerType` is still empty. See `TokenOptions.offerKind`. */
+  offerKind?: string;
   /** OEM/make (vehicle make → account OEM) so make-specific disclaimer
    *  templates (e.g. Subaru, Kia) surface in the picker alongside the globals. */
   make?: string;
@@ -263,7 +267,7 @@ export function DisclaimerField({
   // `_oemDisclaimerText` — used verbatim (boilerplate + VIN/Stock still appended)
   // unless the user overrides by picking a template.
   const oemRaw = renderData._oemDisclaimer && !override ? renderData._oemDisclaimerText || undefined : undefined;
-  const composed = composeDisclaimer(renderData, tmpl?.body, oemRaw);
+  const composed = composeDisclaimer(renderData, tmpl?.body, oemRaw, { offerKind });
 
   // When a new OEM offer is applied (`_oemDisclaimer` changes), let its disclaimer
   // take over again — drop any prior template override / manual-edit opt-out.

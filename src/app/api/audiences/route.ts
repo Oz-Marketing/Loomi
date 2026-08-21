@@ -1,3 +1,4 @@
+import { withRouteErrors } from '@/lib/api-errors';
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as audienceService from '@/lib/services/audiences';
@@ -11,7 +12,7 @@ import {
  * GET /api/audiences
  * List audiences accessible to the current user.
  */
-export async function GET() {
+async function handleGet() {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -30,7 +31,7 @@ export async function GET() {
  * POST /api/audiences
  * Create a new audience.
  */
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -90,3 +91,8 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ audience }, { status: 201 });
 }
+
+// Wrapped so an unhandled throw returns the JSON error envelope instead of
+// a 500 with an empty body, which a caller cannot parse or report.
+export const GET = withRouteErrors(handleGet, 'audiences');
+export const POST = withRouteErrors(handlePost, 'audiences');

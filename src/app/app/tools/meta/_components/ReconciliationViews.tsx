@@ -69,12 +69,17 @@ interface ReconMonth {
     klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
     settlesThisMonth?: boolean;
   }[];
-  // Cross-month spend chain (spec §2): raw is the immutable anchor, counted is
-  // derived as raw − out + in, and every adjustment is its own visible column.
+  // Cross-month spend chain: Raw (what the account spent, from Meta) and
+  // Counted (what the pacer rows carry, billed basis) are sourced independently,
+  // and `tieOut` reconciles one against the other. `residual` is the gap.
   rawSpend: number;
+  rawSource: 'account' | 'backfill' | 'rows';
   crossMonthOut: number;
   crossMonthIn: number;
+  tieOut: number;
   countedSpend: number;
+  residual: number;
+  residualChecked: boolean;
   pendingForward: number;
   crossMonthLines: CrossMonthLine[];
 }
@@ -106,11 +111,30 @@ interface CrossMonthFlight {
   runEnd: string | null;
   billedMonth: string;
   flightTotal: number;
+  originTotal: number;
   status: 'pending' | 'settled';
+  fromSnapshot: boolean;
+  /** Pulled OUT of auto-reconciliation — its numbers need a human (§8). */
+  needsReview: boolean;
+  reviewReason:
+    | 'missing_run_spend'
+    | 'unsplittable_span'
+    | 'billed_month_has_no_row'
+    | null;
   budgetCap: number | null;
   exceedsBudgetCap: boolean;
   runSpendMismatch: number | null;
 }
+
+/** Why a flight was excluded, in the language of the person who has to fix it. */
+const REVIEW_REASON_TEXT: Record<string, string> = {
+  missing_run_spend:
+    "Meta hasn't reported a full-run spend for this flight, so the months it delivered in can't be worked out. Re-sync the account, or unmark the cross-month billing until it does.",
+  unsplittable_span:
+    'This flight ran across three or more months, and its rows don’t say how much landed in each. Rather than post the whole amount to one month, it’s left out — split it by hand or bill it in the month it ran.',
+  billed_month_has_no_row:
+    'The month this flight bills in has no ad row, so nothing there can carry the run. Add the ad to that month, or bill it in a month that has one.',
+};
 interface CarryoverApplication {
   id: string;
   sourceMonth: string;
@@ -134,9 +158,14 @@ interface ReconData {
   appliedThisMonth: { base: number; added: number; total: number };
   // §5: individual ledger entries, newest first — powers both-ends provenance.
   applications: CarryoverApplication[];
-  // Cross-month spend spec §3/§5: the per-flight ledger and the trust check.
+  // The per-flight ledger and the trust check.
   crossMonthFlights?: CrossMonthFlight[];
   conservation?: ConservationCheck;
+  // The tie-out: Σ (Raw − Out + In − Counted) over months whose Raw is
+  // independent, and the months carrying a gap. Nonzero blocks the apply.
+  residualTotal?: number;
+  residualMonths?: string[];
+  rawSpendAvailable?: boolean;
 }
 
 /** "→ Jul 2026" for the pending-forward hint: where these dollars will land. */
@@ -290,16 +319,23 @@ export function ReconciliationPanel({
         ? { text: `${fmt(v)} over`, color: COLORS.warn }
         : { text: `${fmt(-v)} under`, color: COLORS.lifetime };
 
-  // The cross-month columns only appear when this year actually has a flight
-  // that invoices outside the month it delivered in — most accounts have none,
-  // and three empty columns would be pure noise.
+  // Raw · Out · In · Counted render on every account, every year — no gate. Raw
+  // is a standing cross-check against what Meta says the account spent, whether
+  // or not any flight moved; on an account with no cross-month flights Out/In
+  // are simply blank, which is the answer, not noise.
   const flights = data?.crossMonthFlights ?? [];
-  const hasCrossMonth = flights.length > 0;
-  const colCount = hasCrossMonth ? 8 : 5;
+  const reviewFlights = flights.filter((f) => f.needsReview);
+  const colCount = 8;
   const conservation = data?.conservation;
   const net = data?.ytdUnapplied ?? 0;
   const netReconciled = Math.abs(net) < 0.005;
-  const canApply = !!data?.targetPeriod && !netReconciled;
+  // The tie-out gate. While the account's own spend doesn't reconcile to what
+  // Loomi tracked, the over/under isn't a number to act on — applying it would
+  // roll a data gap into next month's budget. Resolve the gap, then apply.
+  const residualMonths = data?.residualMonths ?? [];
+  const residualTotal = data?.residualTotal ?? 0;
+  const tieOutBlocked = residualMonths.length > 0;
+  const canApply = !!data?.targetPeriod && !netReconciled && !tieOutBlocked;
   // §4: name the settled months still carrying unapplied over/under.
   const unappliedMonthsLabel = monthRangeLabel(data?.unappliedMonths ?? []);
   // Reconcilable months whose spend can still move (an unsettled cross-month
@@ -463,6 +499,21 @@ export function ReconciliationPanel({
                   early isn't wrong (nothing double-counts — the ledger entry
                   keeps its amount and the delta comes back), but it means a
                   second pass, so say so before they click. */}
+              {/* The apply gate. A clean tie-out is the precondition for
+                  trusting the carryover: while the account's own spend doesn't
+                  reconcile to what Loomi tracked, applying would roll a data gap
+                  into next month's budget. */}
+              {tieOutBlocked && (
+                <Tooltip label="Meta says the account spent a different amount than the ads tracked here account for. Until that's resolved, the over/under isn't a number to act on — applying it would carry the gap into the live month's budget.">
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-right"
+                    style={{ color: COLORS.warn }}
+                  >
+                    <ExclamationTriangleIcon className="h-3 w-3 flex-shrink-0" />
+                    {monthRangeLabel(residualMonths)} don&apos;t tie out — resolve first
+                  </span>
+                </Tooltip>
+              )}
               {pendingMonths.length > 0 && (
                 <Tooltip label="A cross-month flight hasn't settled yet, so these months' spend can still change. Applying now is safe — the difference just comes back as unapplied when it settles — but you'll reconcile them twice.">
                   <span
@@ -494,33 +545,25 @@ export function ReconciliationPanel({
                   <th className="text-left font-semibold px-3 py-2.5">Month</th>
                   <th className="text-right font-semibold px-3 py-2.5">Spend Target</th>
                   <th className="text-right font-semibold px-3 py-2.5">
-                    {hasCrossMonth ? (
-                      <Tooltip label="Raw Meta spend, dated to the day of delivery. Immutable — pulled from Meta and never adjusted. Every other number is checked against it.">
-                        <span className="border-b border-dotted border-current">Raw Spend</span>
-                      </Tooltip>
-                    ) : (
-                      'Actual'
-                    )}
+                    <Tooltip label="What the whole ad account spent this month, straight from Meta and dated to the day of delivery. Pulled independently of the ads tracked here, which is what lets the two be checked against each other.">
+                      <span className="border-b border-dotted border-current">Raw Spend</span>
+                    </Tooltip>
                   </th>
-                  {hasCrossMonth && (
-                    <>
-                      <th className="text-right font-semibold px-3 py-2.5">
-                        <Tooltip label="Origin-month dollars LEAVING this month because their flight invoices in a later month. Settled flights only. Click a figure for the flights behind it.">
-                          <span className="border-b border-dotted border-current">Cross-Month Out (−)</span>
-                        </Tooltip>
-                      </th>
-                      <th className="text-right font-semibold px-3 py-2.5">
-                        <Tooltip label="Dollars ARRIVING here from earlier months, because this is the month their flight invoices in. Settled flights only.">
-                          <span className="border-b border-dotted border-current">Cross-Month In (+)</span>
-                        </Tooltip>
-                      </th>
-                      <th className="text-right font-semibold px-3 py-2.5">
-                        <Tooltip label="Raw − Out + In. Derived, never entered — this is the spend the over/under is measured against.">
-                          <span className="border-b border-dotted border-current">Counted Spend</span>
-                        </Tooltip>
-                      </th>
-                    </>
-                  )}
+                  <th className="text-right font-semibold px-3 py-2.5">
+                    <Tooltip label="Dollars LEAVING this month because their flight invoices in a different month. Settled flights only. Click a figure for the flights behind it.">
+                      <span className="border-b border-dotted border-current">Cross-Month Out (−)</span>
+                    </Tooltip>
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2.5">
+                    <Tooltip label="Dollars ARRIVING here from another month, because this is the month their flight invoices in. Settled flights only.">
+                      <span className="border-b border-dotted border-current">Cross-Month In (+)</span>
+                    </Tooltip>
+                  </th>
+                  <th className="text-right font-semibold px-3 py-2.5">
+                    <Tooltip label="What the ads tracked here spent, counting each cross-month flight once in the month it bills. This is the spend the over/under is measured against. Raw − Out + In should land on the same number — when it doesn't, the gap is shown as a flagged line.">
+                      <span className="border-b border-dotted border-current">Counted Spend</span>
+                    </Tooltip>
+                  </th>
                   <th className="text-right font-semibold px-3 py-2.5">Over / Under</th>
                   <th className="text-right font-semibold px-3 py-2.5 w-[200px]">Reconcile</th>
                 </tr>
@@ -661,9 +704,29 @@ export function ReconciliationPanel({
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-[var(--foreground)]">
-                        {m.hasActual ? (
+                        {/* Raw shows whenever Meta has an account figure, even
+                            for a month the pacer never tracked — "the account
+                            spent this, Loomi counted nothing here" is exactly
+                            what a reader needs to see to go and backfill it. */}
+                        {m.hasActual || m.rawSource === 'account' ? (
                           <>
-                            <div>{fmt(hasCrossMonth ? m.rawSpend : m.actual)}</div>
+                            <div>{fmt(m.rawSpend)}</div>
+                            {/* Raw that isn't the independent account pull can't
+                                prove anything — say so rather than letting a
+                                row-summed figure pass as Meta's own number. */}
+                            {m.rawSource !== 'account' && (
+                              <Tooltip
+                                label={
+                                  m.rawSource === 'backfill'
+                                    ? "Backfilled from Meta's account total for a month the pacer didn't track."
+                                    : "Meta's account total isn't available for this month, so this is the tracked ads added up. It can't be cross-checked against the account until the next successful sync."
+                                }
+                              >
+                                <div className="text-[9px] text-[var(--muted-foreground)]">
+                                  {m.rawSource === 'backfill' ? 'backfilled' : 'from tracked ads'}
+                                </div>
+                              </Tooltip>
+                            )}
                             {/* Pending Forward (spec §2 col 10): informational —
                                 these dollars are still counted HERE until the
                                 flight settles, so the month never looks light
@@ -686,8 +749,7 @@ export function ReconciliationPanel({
                           <span className="text-[var(--muted-foreground)]">—</span>
                         )}
                       </td>
-                      {hasCrossMonth && (
-                        <>
+                      <>
                           <td className="px-3 py-2.5 text-right tabular-nums">
                             {Math.abs(m.crossMonthOut ?? 0) >= 0.005 ? (
                               <button
@@ -718,13 +780,38 @@ export function ReconciliationPanel({
                           </td>
                           <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[var(--foreground)]">
                             {m.hasActual ? (
-                              fmt(m.countedSpend)
+                              <>
+                                <div>{fmt(m.countedSpend)}</div>
+                                {/* The tie-out. Raw restated onto the billed
+                                    basis should land exactly on Counted; the
+                                    difference is spend the account made that
+                                    Loomi never tracked (or a flight billed to
+                                    the wrong month). It is a data gap to close,
+                                    not an over/under to carry forward. */}
+                                {m.residualChecked &&
+                                  Math.abs(m.residual) >= 0.005 && (
+                                    <Tooltip
+                                      label={
+                                        m.residual > 0
+                                          ? `The account spent ${fmt(m.residual)} more this month than the ads tracked here account for. Usually an ad running in Meta that was never added to the pacer. Add it (or turn it off), then reconcile.`
+                                          : `The ads tracked here account for ${fmt(-m.residual)} more than the account actually spent this month. Usually a cross-month flight billed to the wrong month, or a duplicated row.`
+                                      }
+                                    >
+                                      <div
+                                        className="text-[9px] font-semibold"
+                                        style={{ color: COLORS.warn }}
+                                      >
+                                        {m.residual > 0 ? '+' : '−'}
+                                        {fmt(Math.abs(m.residual))} in account, not in Loomi
+                                      </div>
+                                    </Tooltip>
+                                  )}
+                              </>
                             ) : (
                               <span className="text-[var(--muted-foreground)]">—</span>
                             )}
                           </td>
                         </>
-                      )}
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {noData || !m.hasTarget || !m.hasActual ? (
                           <span className="text-[var(--muted-foreground)]">—</span>
@@ -935,13 +1022,81 @@ export function ReconciliationPanel({
               </tbody>
             </table>
           </div>
-          {/* Spec §5 — the trust check. Σ Out must equal Σ In (± the window's
+          {/* The tie-out, for the whole window. This is the headline proof:
+              Raw comes from the account, Counted from the rows, and they are
+              restated onto the same basis and compared. Clean means every dollar
+              the account spent is in a number the pacer tracked. */}
+          {(data.rawSpendAvailable ?? false) && (
+            <div
+              className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-[11px] ${
+                tieOutBlocked
+                  ? 'border-red-500/40 bg-red-500/10 text-red-400'
+                  : 'border-[var(--border)] bg-[var(--muted)]/30 text-[var(--muted-foreground)]'
+              }`}
+            >
+              {tieOutBlocked ? (
+                <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              ) : (
+                <CheckIcon
+                  className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                  style={{ color: COLORS.success }}
+                />
+              )}
+              <span>
+                {tieOutBlocked ? (
+                  <>
+                    <span className="font-semibold">
+                      {residualTotal > 0
+                        ? `In account, not in Loomi: ${fmt(residualTotal)}`
+                        : `Tracked here but not in the account: ${fmt(-residualTotal)}`}{' '}
+                      ({monthRangeLabel(residualMonths)}).
+                    </span>{' '}
+                    {residualTotal > 0
+                      ? "Meta reports more account spend than the ads tracked here add up to — usually an ad running in Meta that was never added to the pacer. It isn't an over/under to carry forward; add or turn off the ad, then reconcile."
+                      : 'The ads tracked here add up to more than the account actually spent — usually a cross-month flight billed to the wrong month, or a duplicated row.'}{' '}
+                    Applying is held until it&apos;s resolved.
+                  </>
+                ) : (
+                  <>
+                    Every dollar the account spent is accounted for: Meta&apos;s
+                    account total, restated for cross-month billing, matches what
+                    Loomi counted in every month checked.
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+          {/* Flights held out of auto-reconciliation. Rare by design: the
+              subtraction gives one lump for the months outside the billed one,
+              and when it can't be placed honestly the flight raises its hand
+              instead of posting a wrong number to a month. */}
+          {reviewFlights.length > 0 && (
+            <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2 text-[11px] text-[var(--muted-foreground)] space-y-1">
+              {reviewFlights.map((f) => (
+                <div key={`review-${f.flightId}`} className="flex items-start gap-2">
+                  <ExclamationTriangleIcon
+                    className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                    style={{ color: COLORS.warn }}
+                  />
+                  <span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {f.flightName || 'Untitled flight'}
+                    </span>{' '}
+                    needs a manual review and is left out of the columns above.{' '}
+                    {REVIEW_REASON_TEXT[f.reviewReason ?? ''] ??
+                      'Its cross-month numbers cannot be worked out from the data on hand.'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* The conservation check. Σ Out must equal Σ In (± the window's
               carry-in/carry-out). If it doesn't, a slice is orphaned or double
               counted and the reconciliation is FLAGGED rather than silently
               passed: this check is the answer to "can I trust the counted
               number". Shown as a quiet confirmation when it balances, because a
               proof nobody can see is not a proof. */}
-          {hasCrossMonth && conservation && (
+          {flights.length > 0 && conservation && (
             <div
               className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-[11px] ${
                 conservation.balanced

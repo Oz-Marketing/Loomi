@@ -1,5 +1,6 @@
 import type { AdData } from './types';
-import type { OfferType } from './offer-text';
+import { ALL_OFFER_TYPE_SPECS } from './offer-text';
+import { OFFER_KINDS } from './offer-kinds';
 
 /**
  * Offer compliance — which fields must be filled before an ad can be exported.
@@ -8,17 +9,50 @@ import type { OfferType } from './offer-text';
  * to render). Pure + testable; the generator blocks export while any are empty.
  */
 
-/** Baseline required fields per offer type — always required, any make. */
-export const BASELINE_REQUIRED: Record<OfferType, string[]> = {
-  lease: ['monthlyPayment', 'leaseTerm'],
-  apr: ['aprRate', 'aprTerm'],
-  discount: ['discountAmount'],
-  sales_price: ['salePrice'],
-  custom: [],
-};
+/**
+ * Baseline required fields per offer type — always required, any make.
+ *
+ * DERIVED from the offer type specs (`OfferTypeSpec.required`) rather than
+ * hand-maintained, so each kind's types carry their own requirements and a new
+ * kind can't be added with its baseline silently empty. Keyed by offer type
+ * value across every kind, which is sound because those values are unique.
+ *
+ * An unlisted type (or one with no `required`) resolves to `[]` — nothing
+ * intrinsically required, which is right for a free-text offer.
+ */
+export const BASELINE_REQUIRED: Record<string, string[]> = Object.fromEntries(
+  ALL_OFFER_TYPE_SPECS.map((t) => [t.value, t.required ?? []]),
+);
 
-/** Human labels for field keys, for the "missing required" message. */
+/**
+ * Short display labels for field keys — the "missing required" message and the
+ * OEM rules editor's chips.
+ *
+ * Two layers, and the order matters:
+ *
+ *  1. DERIVED from every registered kind's field schema, so a service or general
+ *     field gets its real label. The hand map below covered vehicle fields only,
+ *     and every reader falls back to the raw key — so a gap was invisible until a
+ *     form showed a dealer "servicePrice".
+ *  2. The hand-written SHORT forms on top, because these read in a sentence
+ *     ("Required before export for Subaru: …") where a spec label carrying its
+ *     input unit does not: "Lease term", not "Lease term (months)".
+ *
+ * A key declared by several kinds takes the first kind's label (registry order),
+ * which is what keeps the shared `expiration` / `disclaimer` consistent.
+ */
+const DERIVED_FIELD_LABELS: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const kind of OFFER_KINDS) {
+    for (const f of kind.fields) {
+      if (!(f.key in out) && f.label) out[f.key] = f.label;
+    }
+  }
+  return out;
+})();
+
 export const FIELD_LABELS: Record<string, string> = {
+  ...DERIVED_FIELD_LABELS,
   vehicleName: 'Vehicle',
   offerLabel: 'Offer label',
   monthlyPayment: 'Monthly payment',
@@ -37,6 +71,13 @@ export const FIELD_LABELS: Record<string, string> = {
   vin: 'VIN',
   stockNumber: 'Stock #',
   disclaimer: 'Disclaimer',
+  // Custom-offer short forms, same reason as the vehicle ones above.
+  offerName: 'What’s on offer',
+  offerPrice: 'Price',
+  regularPrice: 'Regular price',
+  percentOff: 'Percent off',
+  dollarOff: 'Dollars off',
+  minimumSpend: 'Minimum spend',
 };
 
 export interface OemOfferRule {
@@ -126,7 +167,7 @@ export function applyOemDefaults(
 
 /** Required field keys for an offer type: baseline ∪ the OEM rule's list. */
 export function requiredFieldsFor(offerType: string, rule?: OemOfferRule | null): string[] {
-  const baseline = BASELINE_REQUIRED[offerType as OfferType] ?? [];
+  const baseline = BASELINE_REQUIRED[offerType] ?? [];
   const oem = rule?.requiredFields?.[offerType] ?? [];
   return Array.from(new Set([...baseline, ...oem]));
 }

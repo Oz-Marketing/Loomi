@@ -10,6 +10,7 @@ import {
 import { isValidSlug, slugify } from '@/lib/forms/schemas';
 import { parseNotificationEmails } from '@/lib/forms/notify';
 import { readSubmissionMetadata } from '@/lib/forms/embed-params';
+import { VEHICLE_CONTEXTS, type VehicleContext } from '@/lib/integrations/crm/adf';
 
 export type FormStatus = 'draft' | 'published';
 
@@ -72,6 +73,10 @@ export interface FormDetail extends FormSummary {
   /** Comma-separated email address(es) notified on each new submission.
    *  Empty string when unset — no lead notification email is sent. */
   notificationEmail: string;
+  /** What this form's vehicle fields describe, for the ADF <vehicle>
+   *  block: 'interest' (a car they want) or 'trade' (the car they own).
+   *  Empty string when unset — no <vehicle> is sent. */
+  crmVehicleContext: string;
   /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
   /** All embed variants — UI shows both with their own copy buttons. */
@@ -212,6 +217,7 @@ function toDetail(row: {
   notificationEmail: string | null;
   listId: string | null;
   forwardToCrm: boolean;
+  crmVehicleContext: string | null;
   submissionCount: number;
   createdByUserId: string | null;
   publishedAt: Date | null;
@@ -227,6 +233,7 @@ function toDetail(row: {
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
     leadSource: row.leadSource ?? '',
     notificationEmail: row.notificationEmail ?? '',
+    crmVehicleContext: row.crmVehicleContext ?? '',
     embedSnippet: snippets.script,
     embedSnippets: snippets,
   };
@@ -550,6 +557,7 @@ export async function updateForm(
     notificationEmail?: unknown;
     listId?: unknown;
     forwardToCrm?: unknown;
+    crmVehicleContext?: unknown;
     category?: unknown;
     tags?: unknown;
   },
@@ -680,6 +688,22 @@ export async function updateForm(
       throw new FormServiceError('forwardToCrm must be a boolean');
     }
     data.forwardToCrm = patch.forwardToCrm;
+  }
+
+  if (patch.crmVehicleContext !== undefined) {
+    // '' / null both clear the setting back to "send no <vehicle>".
+    if (patch.crmVehicleContext === null || patch.crmVehicleContext === '') {
+      data.crmVehicleContext = null;
+    } else if (
+      typeof patch.crmVehicleContext !== 'string' ||
+      !VEHICLE_CONTEXTS.includes(patch.crmVehicleContext as VehicleContext)
+    ) {
+      throw new FormServiceError(
+        `crmVehicleContext must be one of ${VEHICLE_CONTEXTS.join(', ')} (or empty)`,
+      );
+    } else {
+      data.crmVehicleContext = patch.crmVehicleContext;
+    }
   }
 
   const updated = await prisma.form.update({ where: { id }, data });

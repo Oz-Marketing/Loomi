@@ -221,7 +221,7 @@ export async function preflightSmsBlast(
         code: SMS_PREFLIGHT_CODES.NO_TWILIO,
         accountKey: key,
         message: `${label} has no Twilio credentials, so it cannot send SMS at all.`,
-        remedy: `Add the Account SID and Auth Token under Messaging Settings → SMS for ${label}.`,
+        remedy: `Add the Account SID and Auth Token under Settings → Email & Texts → Sending Config for ${label}.`,
       });
     } else {
       try {
@@ -233,7 +233,7 @@ export async function preflightSmsBlast(
           code: SMS_PREFLIGHT_CODES.BAD_TWILIO,
           accountKey: key,
           message: `${label}'s stored Twilio credentials can't be decrypted.`,
-          remedy: `Re-enter them under Messaging Settings → SMS for ${label}.`,
+          remedy: `Re-enter them under Settings → Email & Texts → Sending Config for ${label}.`,
         });
       }
     }
@@ -244,7 +244,7 @@ export async function preflightSmsBlast(
         code: SMS_PREFLIGHT_CODES.NO_SENDER,
         accountKey: key,
         message: `${label} has no sending number or Messaging Service.`,
-        remedy: `Set a phone number or Messaging Service SID under Messaging Settings → SMS for ${label}.`,
+        remedy: `Set a phone number or Messaging Service SID under Settings → Email & Texts → Sending Config for ${label}.`,
       });
     } else if (!account.twilioMessagingServiceSid) {
       // A2P 10DLC registration attaches to a Messaging Service, not to a bare

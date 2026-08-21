@@ -815,7 +815,22 @@ function ContactRow({
     <tr
       onClick={() => {
         if (!detailAccountKey) return;
-        router.push(`/contacts/${encodeURIComponent(contact.id)}?accountKey=${encodeURIComponent(detailAccountKey)}`);
+        // Carry where we came from. The detail route renders as a
+        // full-screen modal and closes by returning here, and `?segment=`
+        // / search / paging all live in this URL — so without `from` a
+        // close would drop the user on the unfiltered list.
+        //
+        // Deliberately NOT router.back(): history is not a reliable way
+        // to close a modal. A refresh, a bookmark, a back/forward shuffle
+        // or an entry pointing at the same contact all make back() go
+        // somewhere other than the list — including straight back into
+        // the modal that was just closed.
+        const from = `${window.location.pathname}${window.location.search}`;
+        router.push(
+          `/contacts/${encodeURIComponent(contact.id)}` +
+            `?accountKey=${encodeURIComponent(detailAccountKey)}` +
+            `&from=${encodeURIComponent(from)}`,
+        );
       }}
       className={`border-b border-[var(--border)] transition-colors ${
         isSelected ? 'bg-[var(--primary)]/8' : ''

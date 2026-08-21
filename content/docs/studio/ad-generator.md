@@ -54,6 +54,34 @@ for that brand. An unverified brand warns rather than blocking — it is telling
 you it cannot confirm, which is different from telling you it's fine.
 :::
 
+# Video ads
+
+An ad moves when one of its layers is a video clip or an animated GIF — usually
+the background. Nothing about the ad changes otherwise: the headline, the offer
+and the disclaimer sit on top of the clip exactly where the designer placed them.
+
+An ad like that gives you two exports:
+
+- **The stills**, as always. They are frozen on the clip's poster frame, so a
+  motion ad still has artwork for placements that don't take video.
+- **Export video (MP4)**, which appears next to the download buttons only when
+  something in the ad actually moves. One size gives you an `.mp4`; several give
+  you a zip of MP4s, each with its matching poster frame.
+
+The poster frame and the video's first frame are always the same picture. That
+matters when publishing: Meta asks for a thumbnail alongside a video ad, and this
+is where it comes from.
+
+:::note
+Video ads have no sound. Feeds autoplay muted, so the audio track is dropped on
+purpose — never rely on a voiceover.
+:::
+
+Launching a moving ad to Meta from Loomi uploads the video and its thumbnail for
+you, as a video ad rather than an image one. If the ad is a video and the server
+has no video encoder installed, the launch is refused up front and says so —
+before it creates anything on Meta.
+
 # Sizes are not crops
 
 Each size is laid out, not scaled. A headline that fits a landscape banner may
@@ -68,3 +96,5 @@ say so rather than exporting the set and hoping.
 - The expiration date, against the actual offer window
 - The vehicle image is the right model and trim
 - Every size, not just the first one
+- On a video ad, that the poster frame is a frame you'd be happy to show as a
+  still — it's the thumbnail, not just the first frame

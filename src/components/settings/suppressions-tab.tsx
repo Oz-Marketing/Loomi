@@ -9,6 +9,11 @@
 //
 // Removing a suppression is a trust call — it doesn't audit-trail. If
 // that becomes a need we can layer in a SuppressionEvent table later.
+//
+// Removal clears BOTH sides: the local EmailSuppression row and the
+// address on SendGrid's own suppression list. Clearing only ours left
+// SendGrid silently dropping every message, so the report read "sent"
+// while the customer received nothing.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -189,11 +194,22 @@ export function SuppressionsTab({ accountKey }: SuppressionsTabProps) {
         `/api/accounts/${accountKey}/suppressions/${row.id}`,
         { method: 'DELETE' },
       );
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         throw new Error(body?.error || 'Failed to remove');
       }
-      toast.success(`Removed ${row.email}`);
+      // The local row is gone either way. If SendGrid's own list still
+      // holds the address it will keep dropping the mail, so say so —
+      // a plain success toast here would be actively misleading.
+      if (body?.sendgridCleared === false) {
+        toast.error(
+          `Removed ${row.email} from Loomi, but SendGrid's suppression list `
+          + 'could not be cleared. Remove it in SendGrid → Suppressions or '
+          + 'mail to this address will keep being dropped.',
+        );
+      } else {
+        toast.success(`Removed ${row.email}`);
+      }
       void reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to remove');

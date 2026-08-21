@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildBlockPayload, insertBlockIntoDoc } from './blocks';
+import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind } from './blocks';
+import { offerKind } from './offer-kinds';
 import type { TemplateDoc } from './doc-types';
 
 /** A minimal two-size doc with an offer block (main/label/terms) + a logo. */
@@ -159,5 +160,94 @@ describe('insertBlockIntoDoc', () => {
     const outer = next.groups!.find((g) => g.name === 'Outer')!;
     expect(inner.parentId).toBe(outer.id); // nesting remapped to the new outer id
     expect(next.elements.find((e) => e.id === newIds[0])!.groupId).toBe(inner.id);
+  });
+});
+
+
+describe('a block may never widen the doc schema past its offer kind', () => {
+  /**
+   * A vehicle offer block: carries the offer kit AND vehicle required fields.
+   *
+   * Deliberately a DUAL kit. A `single` kit is invisible on a vehicle doc — those
+   * fields are already in the schema, so the merge is a no-op and the test
+   * couldn't tell "merged" from "skipped". The `o2_*` fields only arrive via the
+   * kit, which makes the merge observable either way.
+   */
+  function vehicleBlock() {
+    const doc = makeDoc();
+    doc.elements.push({ id: 'text-o2', type: 'text', binding: { kind: 'field', key: '_o2_offerMain' } });
+    doc.layouts.s1['text-o2'] = { x: 0.1, y: 0.8, w: 0.4, h: 0.1, z: 5 };
+    const payload = buildBlockPayload(doc, ['text-main', 'text-label', 'text-o2'], 's1')!;
+    expect(payload.offerKit).toBe('dual');
+    payload.requiredFields = [
+      { key: 'msrp', label: 'MSRP', type: 'text' },
+      { key: 'vin', label: 'VIN', type: 'text' },
+    ];
+    payload.requiredDefaults = { msrp: '34000', vin: '' };
+    return payload;
+  }
+
+  it('refuses to graft the vehicle schema onto a custom offer', () => {
+    // The seeded "Lease" / "APR offer" / "Vehicle offer block" rows all carry
+    // `offerKit: 'single'` plus vehicle required fields. Before offer kinds
+    // existed every doc had the vehicle schema anyway, so this merge was free;
+    // now it would corrupt a custom-offer template.
+    const custom: TemplateDoc = {
+      ...makeDoc(),
+      offerKind: 'custom',
+      fields: offerKind('custom').fields,
+      defaults: {},
+    };
+    const { doc: next, newIds } = insertBlockIntoDoc(custom, vehicleBlock(), (t) => `${t}-new`);
+    const keys = next.fields.map((f) => f.key);
+    expect(keys).not.toContain('msrp');
+    expect(keys).not.toContain('vin');
+    expect(keys).not.toContain('monthlyPayment');
+    expect(keys).not.toContain('o2_offerType'); // the offer kit was skipped too
+    // `offerType` IS legitimately in the custom schema — the kind has offer types
+    // of its own. What must not arrive is the VEHICLE offer's fields.
+    expect(keys).toContain('offerType');
+    expect(next.defaults.msrp).toBeUndefined();
+    // The ELEMENTS still insert — a blank binding is visible and fixable, a
+    // silently mutated schema is neither.
+    expect(newIds.length).toBe(3);
+    expect(next.elements.length).toBe(custom.elements.length + 3);
+  });
+
+  it('still merges both on a vehicle doc, exactly as before', () => {
+    const vehicle: TemplateDoc = {
+      ...makeDoc(),
+      offerKind: 'vehicle',
+      fields: offerKind('vehicle').fields,
+      defaults: {},
+    };
+    const { doc: next } = insertBlockIntoDoc(vehicle, vehicleBlock(), (t) => `${t}-new`);
+    const keys = next.fields.map((f) => f.key);
+    expect(keys).toContain('msrp'); // already in the vehicle schema
+    expect(keys).toContain('offerType');
+    expect(keys).toContain('o2_offerType'); // the dual kit the block asked for
+  });
+
+  it('treats a doc with no offerKind as vehicle, so nothing regresses', () => {
+    const legacy = { ...makeDoc(), fields: offerKind('vehicle').fields, defaults: {} };
+    const { doc: next } = insertBlockIntoDoc(legacy, vehicleBlock(), (t) => `${t}-new`);
+    expect(next.fields.map((f) => f.key)).toContain('o2_offerType');
+  });
+});
+
+describe('blockFitsKind', () => {
+  it('keeps a vehicle offer block out of the list for the custom kind', () => {
+    const payload = buildBlockPayload(makeDoc(), ['text-main'], 's1')!;
+    expect(blockFitsKind(payload, offerKind('vehicle'))).toBe(true);
+    expect(blockFitsKind(payload, offerKind('custom'))).toBe(false); // carries offerKit
+  });
+
+  it('rejects a block needing a field the kind never declares', () => {
+    const payload = buildBlockPayload(makeDoc(), ['logo-1'], 's1')!;
+    payload.offerKit = null; // a plain logo block — nothing offer-shaped
+    expect(blockFitsKind(payload, offerKind('custom'))).toBe(true);
+    payload.requiredFields = [{ key: 'msrp', label: 'MSRP', type: 'text' }];
+    expect(blockFitsKind(payload, offerKind('custom'))).toBe(false);
+    expect(blockFitsKind(payload, offerKind('vehicle'))).toBe(true);
   });
 });

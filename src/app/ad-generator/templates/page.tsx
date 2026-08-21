@@ -8,16 +8,16 @@
  * the /ad-generator layout; admin-only here.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
 import { roleGrants } from '@/lib/permissions/client';
-import { Select } from '@/components/select';
-import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
-import { DISCLAIMER_SLUGS } from '@/lib/ad-generator/disclaimer';
+import { Select, type SelectOption } from '@/components/select';
+import { OFFER_KINDS, kindForOfferType, offerKind, DEFAULT_OFFER_KIND } from '@/lib/ad-generator/offer-kinds';
+
 
 interface Template {
   id: string;
@@ -40,7 +40,22 @@ interface Draft {
 }
 
 const EMPTY: Draft = { make: '', offerType: 'lease', name: '', body: '', isDefault: false, isActive: true };
-const OFFER_TYPE_LABEL = Object.fromEntries(OFFER_TYPES.map((o) => [o.value, o.label]));
+/**
+ * Every offer type a disclaimer body can be written for, grouped by offer kind —
+ * so the picker offers a vehicle Lease and a service Flat price side by side,
+ * clearly labelled which is which.
+ *
+ * `AdDisclaimerTemplate` keys on `offerType` alone and needs no `offerKind`
+ * column: offer type values are globally unique across kinds, so the type
+ * already identifies the kind. A second column would be a second source of
+ * truth that could disagree with the first.
+ */
+const ALL_OFFER_TYPE_OPTIONS: SelectOption[] = OFFER_KINDS.flatMap((k) =>
+  k.offerTypes.map((t) => ({ value: t.value, label: t.label, group: k.label })),
+);
+const OFFER_TYPE_LABEL = Object.fromEntries(
+  ALL_OFFER_TYPE_OPTIONS.map((o) => [o.value, o.label]),
+);
 
 // Split keeping the whole `{{slug}}` / `{slug}` token; test matches one exactly.
 const TOKEN_SPLIT = /(\{\{?[a-z_]+\}\}?)/g;
@@ -315,6 +330,14 @@ function TemplateForm({
   const input =
     'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // The tokens this body may actually contain — the slugs of the KIND that owns
+  // the selected offer type, not every slug in the app. A vehicle template's
+  // {{msrp}} resolves to nothing on a service coupon and would render as literal
+  // markup in a legal line, so it shouldn't be offered there at all.
+  const draftSlugs = useMemo(
+    () => (kindForOfferType(draft.offerType) ?? offerKind(DEFAULT_OFFER_KIND)).slugs,
+    [draft.offerType],
+  );
   // Insert a {token} into the body at the cursor (or replacing the selection),
   // then restore focus + cursor right after it — so building a template is
   // click-to-insert instead of remembering + typing slug names.
@@ -348,7 +371,7 @@ function TemplateForm({
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">Offer type</label>
-          <Select value={draft.offerType} onChange={(v) => setDraft({ ...draft, offerType: v })} options={OFFER_TYPES} previewFont={false} />
+          <Select value={draft.offerType} onChange={(v) => setDraft({ ...draft, offerType: v })} options={ALL_OFFER_TYPE_OPTIONS} previewFont={false} />
         </div>
         <div className="flex items-center gap-5 pb-1.5">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--foreground)]">
@@ -370,7 +393,7 @@ function TemplateForm({
           Click to insert a token <span className="font-normal">— it fills from the offer at render time:</span>
         </p>
         <div className="flex flex-wrap gap-1">
-          {Object.keys(DISCLAIMER_SLUGS).map((s) => (
+          {Object.keys(draftSlugs).map((s) => (
             <button
               key={s}
               type="button"

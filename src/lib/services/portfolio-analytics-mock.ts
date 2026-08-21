@@ -5,7 +5,6 @@
 // shape so every widget renders with realistic-looking content — useful
 // for screenshots, demos, and design QA without seeding the dev DB.
 
-import { accountSettingsHref } from '@/lib/account-settings-href';
 import type {
   AccountHealthRow,
   ActivityEntry,
@@ -432,7 +431,7 @@ function buildAnomalies(): AnomalyAlert[] {
       detail: '86 new suppressions in 7d (0.6% of list).',
       accountKey: 'bmwSaltlake',
       dealer: 'BMW of Salt Lake',
-      href: accountSettingsHref('bmwSaltlake', 'suppressions'),
+      href: '/settings/email-texts?section=suppressions',
       timestamp: now,
     },
     {

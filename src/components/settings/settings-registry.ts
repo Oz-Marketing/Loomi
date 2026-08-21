@@ -9,7 +9,6 @@ import {
   SparklesIcon,
   BellIcon,
   GlobeAltIcon,
-  PaintBrushIcon,
   TagIcon,
   Squares2X2Icon,
   BriefcaseIcon,
@@ -36,6 +35,8 @@ export type SettingsTabKey =
   | 'integrations'
   | 'client-reports'
   | 'notifications'
+  | 'reporting-notifications'
+  | 'reporting-alerts'
   | 'appearance';
 
 /**
@@ -69,6 +70,12 @@ export type SettingsTab = {
   label: string;
   /** Defaults to 'agency' when absent. */
   rail?: SettingsRail;
+  /**
+   * Scoped but not built. The rail renders it disabled and never links to it,
+   * so a sector's settings can say what's coming instead of looking finished.
+   * A `soon` entry has no panel — see settings-panel.
+   */
+  soon?: boolean;
   /** Label for the Agency rail, where the row sits among non-settings nav and
    *  a bare "Users" would be ambiguous. Defaults to `label`. */
   navLabel?: string;
@@ -209,9 +216,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     titleLabel: 'Contact Field Blueprints',
     group: 'manage',
     icon: Squares2X2Icon,
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'studio' && s.hasAdminAccess && !s.isAccount,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
     rail: 'sector',
   },
   {
@@ -240,9 +245,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     // effectively never true in the app shell, so gating on it confined this to
     // the cog modal. `isElevated` is what protects it — markup is margin, and
     // being on a surface is not a permission.
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'app' && s.isElevated && !s.isAccount,
+    visible: (s) => s.surface === 'app' && s.isElevated,
     rail: 'sector',
   },
   {
@@ -253,9 +256,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     titleLabel: 'Budget Channels',
     group: 'configure',
     icon: Squares2X2Icon,
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'app' && s.isElevated && !s.isAccount,
+    visible: (s) => s.surface === 'app' && s.isElevated,
     rail: 'sector',
   },
   {
@@ -268,9 +269,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     // Projects, so it sits with Projects rather than reading as a platform-wide
     // notification setting.
     icon: ExclamationTriangleIcon,
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'app' && s.isElevated && !s.isAccount,
+    visible: (s) => s.surface === 'app' && s.isElevated,
     rail: 'sector',
   },
   // ── Co-op guidelines ──
@@ -295,9 +294,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     // lib/ad-generator — preflight, template approval, launch kits, OEM assets.
     // Still global data (one library per make), which is why it's sector-level
     // and not per-account.
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'studio' && s.hasAdminAccess && s.oemRelevant && !s.isAccount,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess && s.oemRelevant,
     rail: 'sector',
   },
   // Notifications are surface-scoped by category (NOTIFICATION_CATEGORY_SURFACE
@@ -313,9 +310,7 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     titleLabel: 'Client Report Access',
     group: 'configure',
     icon: ChartBarIcon,
-    // `!isAccount` like the other platform entries: a rail scoped to one
-    // account should offer that account's settings, not global config.
-    visible: (s) => s.surface === 'reporting' && s.hasAdminAccess && !s.isAccount,
+    visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
     rail: 'sector',
   },
   {
@@ -324,7 +319,43 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     titleLabel: 'Notification Settings',
     group: 'configure',
     icon: BellIcon,
+    // Sector rail: the categories it lists ARE this sector's, per
+    // NOTIFICATION_CATEGORY_SURFACE. Reporting has none of its own yet — see
+    // the `soon` entries below.
     visible: (s) => s.surface !== 'reporting',
+    rail: 'sector',
+  },
+  // ── Reporting: scoped, not built ──
+  //
+  // Rendered as disabled rows so the sector's settings say what's coming
+  // rather than looking finished. Neither has a panel, and `soon` is what
+  // stops the rail linking to one.
+  //
+  // They are genuinely different from their Projects namesakes: Projects'
+  // alerts are about PACING (thresholds on live spend), where Reporting's
+  // would be about results and data health — "leads down 40% month over
+  // month", "GA4 stopped reporting three days ago". The second is the
+  // valuable half, because a silent data-source failure currently shows a
+  // client an empty page and nobody finds out.
+  {
+    key: 'reporting-notifications',
+    label: 'Notifications',
+    titleLabel: 'Reporting Notifications',
+    group: 'configure',
+    icon: BellIcon,
+    visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
+    rail: 'sector',
+    soon: true,
+  },
+  {
+    key: 'reporting-alerts',
+    label: 'Alerts',
+    titleLabel: 'Reporting Alerts',
+    group: 'configure',
+    icon: ExclamationTriangleIcon,
+    visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
+    rail: 'sector',
+    soon: true,
   },
   {
     key: 'appearance',
@@ -383,12 +414,17 @@ type SubaccountEntry = SubaccountSection & {
  * carrying a comment saying it "mirrors" the latter. Both render from here now.
  */
 const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
-  // ── Sub-Account Settings — the account's own config ──
-  { key: 'general', label: 'General', group: 'account', icon: BuildingStorefrontIcon, visible: () => true },
-  // Scoped to this sub-account, and to its children when it's an organization.
-  { key: 'users', label: 'Users', group: 'account', icon: UsersIcon, visible: () => true },
-  { key: 'branding', label: 'Branding', group: 'account', icon: PaintBrushIcon, visible: () => true },
-  { key: 'integrations', label: 'Integrations', group: 'account', icon: PuzzlePieceIcon, visible: () => true },
+  // ── No 'account' group any more ──
+  //
+  // General, Users, Branding and Integrations used to head this rail under an
+  // "Account Settings" heading, which put an ACCOUNT's own config inside a
+  // SECTOR's settings panel. They live on the account now — Agency Settings →
+  // Accounts → the account — where the drill-in's own TABS render the same
+  // screens (see subaccount-detail). The per-account user list is covered by
+  // the agency-level Users and Clients tabs, which answer "who can log in"
+  // across every rooftop instead of one at a time.
+  //
+  // What's left here is only what a SECTOR adds to an account.
   // ── <Sector> Settings — what this sector adds, and your view of it ──
   //
   // Domains and Custom Fields are Studio's, not the account's: they exist only
@@ -446,7 +482,10 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
     icon: BellIcon,
     visible: (s) => s.surface !== 'reporting',
   },
-  { key: 'appearance', label: 'Appearance', group: 'sector', icon: SwatchIcon, visible: () => true },
+  // Appearance is NOT here: theme, accent, font, density and the reduce-motion
+  // preferences follow the USER across all three surfaces, so it isn't a
+  // sector's setting and certainly not an account's. It lives in Agency
+  // Settings, and the user menu carries the light/dark toggle on its own.
 ];
 
 /** The sub-account sections visible in a given scope, in registry order. */
@@ -509,6 +548,21 @@ export function canonicalSubaccountSection(key: string | undefined): string | un
  * the table above. Used by the settings-panel parity test.
  */
 export const SETTINGS_TAB_KEYS: SettingsTabKey[] = SETTINGS_REGISTRY.map((e) => e.key);
+
+/**
+ * What a SECTOR's settings panel shows — its own config, nothing platform-wide
+ * and nothing belonging to a single account.
+ *
+ * The mirror of `agencySettingsNavForScope`, which takes the other half. This is
+ * the list the settings rail renders on every surface: an ACCOUNT's own settings
+ * are reached through Agency Settings → Accounts → the account, so they are
+ * deliberately absent here. Without this split the rail showed the account's
+ * sections instead, and a sector's own screens — Markup, Channels, Alerts,
+ * Client Reports — were unreachable from the surface that owns them.
+ */
+export function sectorSettingsTabsForScope(scope: SettingsScope): SettingsTab[] {
+  return settingsTabsForScope(scope).filter((t) => t.rail === 'sector');
+}
 
 /** The settings entries visible in a given scope, in registry order. */
 export function settingsTabsForScope(scope: SettingsScope): SettingsTab[] {

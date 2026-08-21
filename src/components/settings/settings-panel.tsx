@@ -59,6 +59,19 @@ export type SettingsPanelProps = {
   restrictAccountsToScope?: boolean;
 };
 
+/** The panel behind a `soon` registry entry: scoped, not built. */
+function Planned({ what, children }: { what: string; children: React.ReactNode }) {
+  return (
+    <div className="max-w-xl rounded-xl border border-dashed border-[var(--border)] p-6">
+      <p className="text-sm font-semibold text-[var(--foreground)]">{what}</p>
+      <p className="mt-1.5 text-xs leading-relaxed text-[var(--muted-foreground)]">{children}</p>
+      <p className="mt-3 text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
+        Not built yet
+      </p>
+    </div>
+  );
+}
+
 export function SettingsPanel({
   tab,
   onOpenAccount,
@@ -108,6 +121,22 @@ export function SettingsPanel({
     'contact-field-blueprints': () => <CustomFieldBlueprintsTab />,
     'client-reports': () => <ClientReportsTab />,
     notifications: () => <NotificationsTab />,
+    // `soon` entries: the rail renders these disabled and never links to them,
+    // but a deep link or an old bookmark still has to land somewhere honest.
+    'reporting-notifications': () => (
+      <Planned what="Reporting notifications">
+        Which reporting events raise a notification — a report finishing, a
+        data source going quiet. Projects notifications are live today under
+        Projects settings.
+      </Planned>
+    ),
+    'reporting-alerts': () => (
+      <Planned what="Reporting alerts">
+        Alerts on results and data health — a drop in leads month over month,
+        or a data source that stopped reporting. Distinct from the Projects
+        alert engine, which watches paced media spend.
+      </Planned>
+    ),
     appearance: () => <AppearanceTab />,
   };
 
@@ -136,5 +165,7 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'contact-field-blueprints',
   'client-reports',
   'notifications',
+  'reporting-notifications',
+  'reporting-alerts',
   'appearance',
 ];

@@ -17,7 +17,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { appSurfacePrefix, normalizeAppPath } from '@/lib/app-surface-path';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
-import { useAccount } from '@/contexts/account-context';
 import { useIsMobile } from '@/hooks/use-is-mobile';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
@@ -103,20 +102,18 @@ export function AppSidebar() {
   const prefix = appSurfacePrefix(rawPath);
   const pathname = normalizeAppPath(rawPath);
   const { collapsed } = useSidebarCollapse();
-  const { isAccount, accountKey } = useAccount();
   const isMobile = useIsMobile();
   // The icon-rail collapse is desktop-only; the mobile drawer always renders
   // nav items expanded regardless of the persisted collapse preference.
   const showCollapsed = collapsed && !isMobile;
   const settingsActive = pathname.startsWith('/settings');
-  // Sub-account settings render the SAME sector-gated sections as Studio, via
-  // the shared sub-account detail page. Studio reaches it at
-  // /subaccount/<slug>/settings; this surface has no such route tree, so it
-  // uses the admin-browse shape (section in ?tab=) against the active account.
-  const subaccountSettingsHref =
-    isAccount && accountKey
-      ? `${prefix}/settings/subaccounts/${accountKey}?tab=general`
-      : `${prefix}/settings`;
+  // The footer Settings link goes to THIS SECTOR's settings, never to one
+  // account's. An account's own configuration lives on the account (Agency
+  // Settings → Accounts → the account); pointing here at
+  // /settings/subaccounts/<key> is what made the sector's own screens —
+  // Markup, Channels, Alerts, Client Reports — unreachable from the surface
+  // that owns them.
+  const subaccountSettingsHref = `${prefix}/settings`;
 
   return (
     <SidebarFrame
@@ -125,7 +122,18 @@ export function AppSidebar() {
           <LoomiWordmark className="h-8 w-auto" />
         </Link>
       }
-      account={showCollapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
+      account={
+        // No switcher in settings: the rail IS the settings nav here, and the
+        // sections it lists belong to whichever account you arrived from —
+        // leaving a picker above them invites changing account mid-edit, which
+        // silently repoints the form. Dropping it also lifts "Back to <sector>"
+        // to the top, which is the way out of this mode.
+        isSettingsPath(pathname) ? null : showCollapsed ? (
+          <AccountSwitcher compact />
+        ) : (
+          <AccountSwitcher />
+        )
+      }
       bottom={
         <>
           {/* Quick switch between Projects (App) and Studio. */}

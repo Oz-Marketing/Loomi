@@ -6,6 +6,7 @@ import { useAccount } from '@/contexts/account-context';
 import { CogIcon } from '@heroicons/react/24/outline';
 import { AccountAvatar } from '@/components/account-avatar';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
+import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 import { SettingsPanel } from '@/components/settings/settings-panel';
 
 type Tab = SettingsTabKey;
@@ -20,6 +21,7 @@ export default function SettingsPage() {
   const pathname = usePathname();
 
   // Role-gated tabs (shared with the sidebar's settings nav).
+  const surface = useCurrentSurface();
   const tabs = useSettingsTabs();
 
   // Active tab from the path (handles admin `/settings/<tab>` + sub-account
@@ -27,7 +29,9 @@ export default function SettingsPage() {
   const settingsIdx = pathname.indexOf('/settings');
   const base = settingsIdx >= 0 ? pathname.slice(0, settingsIdx + '/settings'.length) : '/settings';
   const routeTab = pathname.slice(base.length).split('/').filter(Boolean)[0];
-  const defaultTab = tabs[0]?.key || 'appearance';
+  // Never default onto a `soon` tab: it has no real panel, so landing there
+  // would make a sector's settings look empty on arrival.
+  const defaultTab = (tabs.find((t) => !t.soon) ?? tabs[0])?.key || 'appearance';
   const defaultTabPath = `${base}/${defaultTab}`;
   const activeTab = tabs.some(t => t.key === routeTab)
     ? (routeTab as Tab)
@@ -44,11 +48,15 @@ export default function SettingsPage() {
   // this the tab is briefly absent, the redirect fires, and a deep link to it lands
   // on Sub-Accounts instead — which is exactly what happened the first time.
   useEffect(() => {
-    if (!initialized || !accountsLoaded || tabs.length === 0) return;
+    // Wait for `surface` too. It's host-derived and null until hydration, and
+    // the tab list defaults that window to Studio — so redirecting before it
+    // resolves pins a STUDIO tab into the URL on Reporting and Projects. That
+    // bounce is the routing jitter.
+    if (!initialized || !accountsLoaded || surface === null || tabs.length === 0) return;
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [initialized, accountsLoaded, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
+  }, [initialized, accountsLoaded, surface, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;

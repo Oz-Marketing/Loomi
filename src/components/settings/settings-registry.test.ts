@@ -71,6 +71,10 @@ describe('settings registry', () => {
         'coop-guidelines',
         'contact-field-blueprints',
         'client-reports',
+        'ad-sizes',
+        'ad-disclaimers',
+        'ad-oem-rules',
+        'ad-automation',
       ]) {
         expect(rail, `${surface}/${owned}`).not.toContain(owned);
       }
@@ -154,6 +158,23 @@ describe('settings registry', () => {
       'contact-fields',
     );
     expect(keysOf(SUBACCOUNT_ADMIN)).toContain('contact-fields');
+  });
+
+  it("keeps the Ad Generator's config on Studio, and admin-only", () => {
+    // These four were a cog menu on the generator's own header. They belong to
+    // Studio: nothing on Reporting or Projects reads a disclaimer template or
+    // an ad size, and offering them there would be four dead rows.
+    const AD_TABS = ['ad-sizes', 'ad-disclaimers', 'ad-oem-rules', 'ad-automation'];
+    for (const key of AD_TABS) {
+      expect(keysOf(SUBACCOUNT_ADMIN), key).toContain(key);
+      for (const surface of ['reporting', 'app'] as const) {
+        expect(keysOf(scope({ ...SUBACCOUNT_ADMIN, surface })), `${surface}/${key}`).not.toContain(
+          key,
+        );
+      }
+      // A client role holds no admin access, so the rail offers none of them.
+      expect(keysOf(scope({ isAccount: true })), `client/${key}`).not.toContain(key);
+    }
   });
 
   it('offers Notifications everywhere but Reporting, which has no categories', () => {

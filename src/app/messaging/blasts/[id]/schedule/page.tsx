@@ -182,7 +182,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const { id } = use(params);
   const { accounts } = useAccount();
   const subHref = useSubaccountHref();
-  const sendingSettingsHref = subHref('/messaging/settings/sending');
+  const sendingSettingsHref = subHref('/settings/sending');
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);

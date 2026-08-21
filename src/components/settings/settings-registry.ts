@@ -15,6 +15,10 @@ import {
   CalculatorIcon,
   PuzzlePieceIcon,
   ShieldCheckIcon,
+  PaperAirplaneIcon,
+  ChatBubbleLeftRightIcon,
+  NoSymbolIcon,
+  DocumentTextIcon,
 } from '@heroicons/react/24/outline';
 
 export type SettingsTabKey =
@@ -252,6 +256,10 @@ export type SubaccountSectionKey =
   | 'integrations'
   | 'domains'
   | 'contact-fields'
+  | 'sending'
+  | 'email-footer'
+  | 'sms'
+  | 'suppressions'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -311,6 +319,41 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
     label: 'Custom Fields',
     group: 'sector',
     icon: TagIcon,
+    visible: (s) => s.surface === 'studio',
+  },
+
+  // Email + SMS sending config. These lived under /messaging/settings on the
+  // grounds that they're coupled to the send engine — but they're per-account
+  // configuration a user goes looking for in Settings, and splitting them out
+  // meant the preflight remedies ("Settings → Sending") pointed somewhere
+  // Settings didn't actually contain. Studio-only: Reporting and Projects
+  // don't send anything.
+  {
+    key: 'sending',
+    label: 'Email',
+    group: 'sector',
+    icon: PaperAirplaneIcon,
+    visible: (s) => s.surface === 'studio',
+  },
+  {
+    key: 'email-footer',
+    label: 'Email Footer',
+    group: 'sector',
+    icon: DocumentTextIcon,
+    visible: (s) => s.surface === 'studio',
+  },
+  {
+    key: 'sms',
+    label: 'SMS',
+    group: 'sector',
+    icon: ChatBubbleLeftRightIcon,
+    visible: (s) => s.surface === 'studio',
+  },
+  {
+    key: 'suppressions',
+    label: 'Suppressions',
+    group: 'sector',
+    icon: NoSymbolIcon,
     visible: (s) => s.surface === 'studio',
   },
 

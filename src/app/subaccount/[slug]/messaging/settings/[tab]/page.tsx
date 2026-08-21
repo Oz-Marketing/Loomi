@@ -1,19 +1,18 @@
-'use client';
-
-import { use } from 'react';
-import { notFound } from 'next/navigation';
-import { MessagingSettingsPage, type MessagingSettingsTab } from '@/components/messaging/messaging-settings-page';
-
-const VALID_TABS = new Set<MessagingSettingsTab>(['sending', 'sms', 'suppressions']);
+import { redirect } from 'next/navigation';
 
 interface PageProps {
   params: Promise<{ slug: string; tab: string }>;
 }
 
-export default function SubaccountMessagingSettingsTab({ params }: PageProps) {
-  const { tab } = use(params);
-  if (!VALID_TABS.has(tab as MessagingSettingsTab)) {
-    notFound();
-  }
-  return <MessagingSettingsPage tab={tab as MessagingSettingsTab} />;
+/**
+ * Email/SMS/Suppressions settings moved back into Settings → Studio Settings
+ * (2026-08-20). Bounce so bookmarks and any link we missed keep working.
+ *
+ * The reverse redirect in ../../settings/[tab] was removed in the same change;
+ * both directions at once is an infinite loop.
+ */
+export default async function LegacyMessagingSettingsTab({ params }: PageProps) {
+  const { slug, tab } = await params;
+  const known = new Set(['sending', 'sms', 'suppressions']);
+  redirect(`/subaccount/${slug}/settings/${known.has(tab) ? tab : 'sending'}`);
 }

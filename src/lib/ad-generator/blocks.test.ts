@@ -96,6 +96,103 @@ describe('insertBlockIntoDoc', () => {
     expect(next.layouts.s1[mainId].z).toBeGreaterThan(4);
   });
 
+  it('holds the lockup together — internal gaps scale with the block, not the board', () => {
+    // THE bug this exists for. Every member's `y` used to be copied as a fraction
+    // of its own board's HEIGHT, so on a taller board they drifted apart and on a
+    // squat one they collided. Measured on the shipped "Sale Price" block from one
+    // insert: 43px between the price and the MSRP line on a 1080×1080, 261px on a
+    // 1080×1920, and −1px (overlapping) on a 300×250.
+    const payload = buildBlockPayload(makeDoc(), ['text-main', 'text-label', 'text-terms'], 's1')!;
+    const target: TemplateDoc = {
+      ...makeDoc(),
+      sizes: [
+        { id: 'sq', label: 'Square', width: 1080, height: 1080 },
+        { id: 'story', label: 'Story', width: 1080, height: 1920 },
+        { id: 'med', label: 'Medium', width: 300, height: 250 },
+      ],
+      layouts: { sq: {}, story: {}, med: {} },
+    };
+    let n = 0;
+    const { doc: next, newIds } = insertBlockIntoDoc(target, payload, (t) => `${t}-n${n++}`);
+    const [mainId, , termsId] = newIds;
+
+    // The gap between the price and its terms, in px, per board.
+    const gap = (sid: string, h: number) => {
+      const main = next.layouts[sid][mainId];
+      const terms = next.layouts[sid][termsId];
+      return terms.y * h - (main.y + main.h) * h;
+    };
+    const px = (sid: string, id: string, w: number) => next.layouts[sid][id].w * w;
+
+    // Same width → the block is the same size, so the gap is IDENTICAL (not 6×).
+    expect(gap('story', 1920)).toBeCloseTo(gap('sq', 1080), 4);
+    expect(px('story', mainId, 1080)).toBeCloseTo(px('sq', mainId, 1080), 4);
+    // Quarter the width → everything, gap included, is a quarter the size.
+    const k = 300 / 1080;
+    expect(gap('med', 250)).toBeCloseTo(gap('sq', 1080) * k, 4);
+    expect(px('med', mainId, 300)).toBeCloseTo(px('sq', mainId, 1080) * k, 4);
+    // The invariant that matters to a designer: the gap is the same multiple of
+    // the type size on every board.
+    const ratio = (sid: string, h: number) => gap(sid, h) / next.layouts[sid][mainId].fontSize!;
+    expect(ratio('story', 1920)).toBeCloseTo(ratio('sq', 1080), 1);
+    expect(ratio('med', 250)).toBeCloseTo(ratio('sq', 1080), 1);
+  });
+
+  it('shrinks a lockup that would not fit, rather than letting it run off', () => {
+    // Type and panels: overflow here is a CUT, not a crop. A block authored down
+    // the full height of a square has to come in to land on a leaderboard.
+    const src = makeDoc();
+    src.layouts.s1['text-main'] = { x: 0.1, y: 0.05, w: 0.5, h: 0.4, z: 2, fontSize: 80 };
+    src.layouts.s1['text-terms'] = { x: 0.1, y: 0.55, w: 0.6, h: 0.4, z: 4, fontSize: 20 };
+    const payload = buildBlockPayload(src, ['text-main', 'text-terms'], 's1')!;
+    const target: TemplateDoc = {
+      ...makeDoc(),
+      sizes: [{ id: 'lb', label: 'Leaderboard', width: 728, height: 90 }],
+      layouts: { lb: {} },
+    };
+    let n = 0;
+    const { doc: next, newIds } = insertBlockIntoDoc(target, payload, (t) => `${t}-n${n++}`);
+    for (const id of newIds) {
+      const b = next.layouts.lb[id];
+      expect(b.y).toBeGreaterThanOrEqual(0);
+      expect(b.y + b.h).toBeLessThanOrEqual(1.0001);
+    }
+    // Uniform: the block kept its shape on the way down.
+    const [mainId] = newIds;
+    const srcBox = src.layouts.s1['text-main'];
+    const out = next.layouts.lb[mainId];
+    expect((out.w * 728) / (out.h * 90)).toBeCloseTo((srcBox.w * 1080) / (srcBox.h * 1080), 4);
+  });
+
+  it('leaves scenery out of the lockup — a bleeding backdrop still fills the board', () => {
+    const src = makeDoc();
+    src.elements.push({ id: 'img-bg', type: 'image', fit: 'cover' });
+    src.layouts.s1['img-bg'] = { x: 0, y: 0, w: 1, h: 1, z: 0 };
+    const payload = buildBlockPayload(src, ['img-bg', 'text-main', 'text-terms'], 's1')!;
+    const target: TemplateDoc = {
+      ...makeDoc(),
+      sizes: [{ id: 'story', label: 'Story', width: 1080, height: 1920 }],
+      layouts: { story: {} },
+    };
+    let n = 0;
+    const { doc: next, newIds } = insertBlockIntoDoc(target, payload, (t) => `${t}-n${n++}`);
+    // Payload order follows the DOC's element order, and the backdrop was pushed
+    // on last — so it's the last new id, not the first.
+    const bg = next.layouts.story[newIds[newIds.length - 1]];
+    // Edge to edge, un-nudged: it's scenery, not a member holding a position.
+    expect(bg.x).toBe(0);
+    expect(bg.w).toBe(1);
+    // …and the two text members still sit tight to each other, not spread over
+    // the whole (now full-canvas) bounding box.
+    const main = next.layouts.story[newIds[0]];
+    const terms = next.layouts.story[newIds[1]];
+    expect(main.y).toBeLessThan(0.5);
+    // The gap between them is the source gap (same width), not stretched over the
+    // full canvas the backdrop covers.
+    const srcGap = (0.62 - (0.4 + 0.2)) * 1080;
+    expect(terms.y * 1920 - (main.y + main.h) * 1920).toBeCloseTo(srcGap, 3);
+  });
+
   it('re-seeds the offer field kit so bindings resolve in a blank doc', () => {
     const payload = buildBlockPayload(makeDoc(), ['text-main', 'text-label', 'text-terms'], 's1')!;
     const blank: TemplateDoc = {

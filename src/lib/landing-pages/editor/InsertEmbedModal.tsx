@@ -518,10 +518,11 @@ function MediaTile({
         title={isEditing ? undefined : `Insert ${file.name}`}
       >
         <div className="aspect-square bg-[var(--muted)] overflow-hidden">
-          {isImage && file.url ? (
+          {/* Thumbnail only, never the original. See media/page.tsx. */}
+          {isImage && file.thumbnailUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
-              src={file.thumbnailUrl || file.url}
+              src={file.thumbnailUrl}
               alt={file.altText || file.name}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
               loading="lazy"

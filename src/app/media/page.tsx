@@ -406,9 +406,14 @@ function MediaCard({
         className="h-[140px] bg-[var(--muted)] relative overflow-hidden rounded-t-xl cursor-pointer"
         onClick={onPreview}
       >
-        {isImage && f.url ? (
+        {/* thumbnailUrl only — NEVER the original. `thumbnailUrl || url` meant a
+            tile with no thumbnail downloaded the full-size asset to fill 140px;
+            on production that was 809 images and 420MB of originals. Above the
+            thumbnail size cap the icon is the honest answer, and the preview
+            pane still opens the real thing. */}
+        {isImage && f.thumbnailUrl ? (
           <img
-            src={f.thumbnailUrl || f.url}
+            src={f.thumbnailUrl}
             alt={f.name}
             className="w-full h-full object-cover"
             loading="lazy"
@@ -588,8 +593,9 @@ function MediaListRow({
         className="w-10 h-10 rounded-lg bg-[var(--muted)] overflow-hidden flex-shrink-0 cursor-pointer"
         onClick={onPreview}
       >
-        {isImage && f.url ? (
-          <img src={f.thumbnailUrl || f.url} alt={f.name} className="w-full h-full object-cover" loading="lazy" />
+        {/* Same rule as the grid tile above: thumbnail or icon, never the original. */}
+        {isImage && f.thumbnailUrl ? (
+          <img src={f.thumbnailUrl} alt={f.name} className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <div className="flex items-center justify-center h-full">
             <PhotoIcon className="w-5 h-5 text-[var(--muted-foreground)] opacity-30" />

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { headS3Object } from '@/lib/s3';
+import { buildThumbnailKey, downloadFromS3, headS3Object, uploadToS3 } from '@/lib/s3';
 import { checkAnyUploadSize } from '@/lib/media-limits';
+import { generateThumbnail, shouldThumbnailOnFinalize } from '@/lib/media-thumbnails';
 import {
   buildAssetMetadata,
   canAccessAsset,
@@ -29,11 +30,18 @@ import {
  *
  * ── What direct upload gives up ──
  *
- * No contentHash and no generated thumbnail. Both need the bytes server-side, and
- * fetching a multi-gigabyte object back just to hash it would reintroduce exactly
- * the memory problem this path exists to avoid. So: no duplicate detection for
- * these, and no thumbnail (the grid falls back to a file-type icon). Stated on the
- * row by leaving contentHash null rather than filling it with something unverified.
+ * No contentHash. It needs the bytes server-side, and fetching a multi-gigabyte
+ * object back just to hash it would reintroduce exactly the memory problem this
+ * path exists to avoid. So: no duplicate detection for these, stated on the row
+ * by leaving contentHash null rather than filling it with something unverified.
+ *
+ * A thumbnail IS generated, for images under THUMBNAIL_SOURCE_MAX. That memory
+ * argument is sound for a video or a layered PSD and simply does not apply to a
+ * logo: measured against production, 809 of the 940 images in the library had no
+ * thumbnail, and the LARGEST of them was 5MB. Skipping the whole class to protect
+ * against a case none of them are meant the grid rendered a megabyte-plus
+ * original into a 140px tile, 809 times over. Above the cap it still skips, and
+ * the grid falls back to an icon.
  */
 export async function POST(req: NextRequest) {
   const { session, error } = await requireAuth();
@@ -94,6 +102,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: metadata.error }, { status: 400 });
   }
 
+  // Thumbnail, for images small enough that pulling the object back is cheap.
+  // Best-effort on purpose: a failure here must not fail an upload whose bytes
+  // are already safely in the bucket — the row is still correct without it, and
+  // the backfill script can pick it up later.
+  let thumbnailKey: string | null = null;
+  let thumbDims: { width: number; height: number } | null = null;
+  const mimeType = head.contentType || body?.contentType || 'application/octet-stream';
+  if (shouldThumbnailOnFinalize(mimeType, head.size)) {
+    try {
+      const bytes = await downloadFromS3(key);
+      const thumb = await generateThumbnail(bytes, mimeType);
+      if (thumb) {
+        thumbnailKey = buildThumbnailKey(accountKey, assetId);
+        await uploadToS3(thumbnailKey, thumb.buffer, 'image/webp');
+        thumbDims = { width: thumb.originalWidth, height: thumb.originalHeight };
+      }
+    } catch (err) {
+      thumbnailKey = null;
+      console.warn(`[media/finalize] thumbnail failed for ${key}:`, err);
+    }
+  }
+
   // Idempotent: a client that retries finalize after a timeout must not create a
   // second row for one object. The s3Key is unique, so the upsert settles it.
   const asset = await prisma.mediaAsset.upsert({
@@ -103,14 +133,21 @@ export async function POST(req: NextRequest) {
       accountKey,
       s3Key: key,
       filename,
-      mimeType: head.contentType || body?.contentType || 'application/octet-stream',
+      mimeType,
       size: head.size,
+      thumbnailKey,
+      ...(thumbDims ?? {}),
       category: typeof body?.category === 'string' ? body.category : 'general',
       uploadedBy: session!.user.id,
       altText: typeof body?.altText === 'string' && body.altText.trim() ? body.altText.trim() : null,
       ...metadata.data,
     },
-    update: { size: head.size },
+    update: {
+      size: head.size,
+      // A retry can supply what a previous attempt failed to produce; never
+      // clear one that already exists.
+      ...(thumbnailKey ? { thumbnailKey, ...(thumbDims ?? {}) } : {}),
+    },
   });
 
   return NextResponse.json({ file: serializeMediaAsset(asset) }, { status: 201 });

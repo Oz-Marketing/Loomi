@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { buildS3Key, buildThumbnailKey, uploadToS3 } from '@/lib/s3';
 import { generateThumbnail } from '@/lib/media-thumbnails';
+import { generateVideoThumbnail } from '@/lib/media-video-thumbnail';
 import { checkUploadSize } from '@/lib/media-limits';
 import {
   buildAssetMetadata,
@@ -311,7 +312,12 @@ export async function POST(req: NextRequest) {
     let width: number | null = null;
     let height: number | null = null;
 
-    const thumbResult = await generateThumbnail(buffer, mimeType);
+    // Images resize the bytes we hold; a video has its poster frame pulled out by
+    // ffmpeg instead. Same result shape, so the row is written identically —
+    // including width/height, which for a clip is its real pixel size.
+    const thumbResult =
+      (await generateThumbnail(buffer, mimeType)) ??
+      (await generateVideoThumbnail({ buffer }, mimeType));
     if (thumbResult) {
       thumbnailKey = buildThumbnailKey(accountKey, assetId);
       await uploadToS3(thumbnailKey, thumbResult.buffer, 'image/webp');

@@ -35,6 +35,22 @@ editable only in the account's branding settings.
 That is on purpose: the logo has one source of truth, and a copy edited in the
 library would drift from it silently.
 
+# Video files
+
+Video uploads sit in the library alongside images, and the tile shows a frame from
+about a second in rather than a generic icon — so you can tell one clip from
+another without opening anything. Tiles are labelled **Video**, because a poster
+frame looks exactly like a photograph.
+
+Clips are what the Ad Generator uses for a motion background, and they're offered
+in the ad builder's picker for that. Everywhere else — emails, landing pages — the
+picker still offers images only, since those surfaces show a still.
+
+:::note
+A clip uploaded before this existed has no poster yet, and shows a film icon
+until someone regenerates it. New uploads get one automatically.
+:::
+
 # Sharing across accounts
 
 Three scopes:

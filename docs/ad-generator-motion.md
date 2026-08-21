@@ -96,6 +96,23 @@ the decoder happened to be on would make the same ad export a different PNG twic
 | Meta launch | Uploads the video + poster and builds a `video_data` creative. Refused up front if the server has no encoder. |
 | Unattended generation | Stills only, on purpose — see the note at the bottom of `render-motion.ts`. |
 
+## Media library: video posters
+
+A video asset gets a poster thumbnail on upload (`lib/media-video-thumbnail.ts`),
+taken a second in — video very often opens on black, and a library of black tiles
+is no more use than a library of film icons. It falls back to frame zero for a
+clip shorter than that, and to no thumbnail at all when ffmpeg is missing or the
+file is unreadable; an upload never fails over a thumbnail.
+
+The source is read IN PLACE: ffmpeg is pointed at a presigned URL and fetches only
+the range around the frame it wants, so a 200MB clip costs what a 2MB one does.
+That's why videos are exempt from `THUMBNAIL_SOURCE_MAX`, which exists to stop the
+image path pulling a whole object back into memory.
+
+Clips already in the library predate this. `scripts/backfill-video-thumbnails.ts`
+fills them in (`--apply`; dry-run by default) and is deliberately NOT wired into
+the deploy — its cost is unbounded, and the deploy's SSH step dies at 15 minutes.
+
 ## Operations
 
 **ffmpeg is required, and resolved in this order:** `FFMPEG_PATH` → the

@@ -33,7 +33,8 @@
  */
 import * as budget from '@/lib/services/budget';
 import { prisma } from '@/lib/prisma';
-import { channelLabel, channelCategory } from '@/lib/budget/channels';
+import { channelRegistry } from '@/lib/services/budget-channels';
+import type { ChannelRegistry } from '@/lib/budget/channel-registry';
 
 export interface BudgetChannelRow {
   channel: string;
@@ -160,6 +161,9 @@ export function indexActuals(
  * remember.
  */
 export function toClientBudgetView(
+  // Passed in rather than loaded here so this stays pure and synchronous —
+  // which is the property the margin-leak tests rely on.
+  ch: ChannelRegistry,
   accountKey: string,
   summary: budget.BudgetSummary,
   actuals: ActualsIndex,
@@ -170,8 +174,8 @@ export function toClientBudgetView(
       // `channelLabel` answers "Unassigned" for an unknown key, which is right
       // for a null channel but wrong for a real key the registry hasn't caught
       // up with — show the key itself so it's diagnosable rather than hidden.
-      label: channelCategory(c.channel) ? channelLabel(c.channel) : c.channel,
-      category: channelCategory(c.channel) ?? 'Other',
+      label: ch.category(c.channel) ? ch.label(c.channel) : c.channel,
+      category: ch.category(c.channel) ?? 'Other',
       // `c.amount` only. `c.spendTarget` is deliberately NOT carried over —
       // see the file header.
       amount: round2(c.amount),
@@ -253,9 +257,10 @@ export async function getReportingBudget(
   accountKey: string,
   year: number,
 ): Promise<ClientBudgetView> {
-  const [summary, actuals] = await Promise.all([
+  const [summary, actuals, ch] = await Promise.all([
     budget.getAccountSummary(accountKey, year),
     loadActuals(accountKey, year),
+    channelRegistry(),
   ]);
-  return toClientBudgetView(accountKey, summary, actuals);
+  return toClientBudgetView(ch, accountKey, summary, actuals);
 }

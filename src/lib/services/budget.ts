@@ -3,18 +3,12 @@ import { Prisma } from '@prisma/client';
 import { accountMarginSetting, isValidMarkup } from '@/lib/ad-pacer/markup';
 import { getBillingMarkups, getGlobalDefaultMarkup } from '@/lib/services/markup';
 import {
-  channelBillingCategory,
-  channelCategory,
-  channelLineType,
-  channelPacerPlatform,
-  channelsForPlatform,
-  isBudgetChannel,
-  type BudgetLineType,
-  type PacerPlatform,
   isBudgetLineType,
-  isPacedChannel,
-  channelLabel,
+  type BudgetLineType,
+  type ChannelRegistry,
+  type PacerPlatform,
 } from '@/lib/budget/channels';
+import { channelRegistry } from '@/lib/services/budget-channels';
 import { isValidPeriod as isValidPeriodPure, periodOf, resolveYear } from '@/lib/budget/period';
 import { splitFlight } from '@/lib/budget/flight';
 import {
@@ -129,6 +123,7 @@ export async function resolveMarkup(
   year: number,
   channel?: string | null,
 ): Promise<number> {
+  const ch = await channelRegistry();
   const [agreement, account, globalDefault, rateCards] = await Promise.all([
     // The budget covering this year wins, when one sets a markup. A client can
     // negotiate a rate for a term without it becoming a permanent default.
@@ -154,7 +149,7 @@ export async function resolveMarkup(
   }
   if (isValidMarkup(account?.markup)) return account.markup;
 
-  const billing = channelBillingCategory(channel);
+  const billing = ch.billingCategory(channel);
   const cardRate = billing == null ? null : rateCards[billing];
   if (isValidMarkup(cardRate)) return cardRate;
 
@@ -504,12 +499,13 @@ function parseDate(iso: string, field: string): Date {
 }
 
 export async function createAgreement(input: AgreementInput, userId: string | null = null) {
+  const ch = await channelRegistry();
   const startDate = parseDate(input.startDate, 'startDate');
   const endDate = parseDate(input.endDate, 'endDate');
   if (endDate < startDate) throw new Error('endDate cannot be before startDate');
   if (input.committedAmount != null) assertAmount(input.committedAmount, 'committedAmount');
   for (const f of input.fees ?? []) {
-    if (!isBudgetChannel(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
+    if (!ch.has(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
     assertAmount(f.monthlyAmount, 'monthlyAmount');
   }
 
@@ -593,6 +589,7 @@ export async function updateAgreement(
   id: string,
   input: Partial<AgreementInput>,
 ): Promise<AgreementDTO | null> {
+  const ch = await channelRegistry();
   const existing = await prisma.clientAgreement.findUnique({ where: { id } });
   if (!existing) return null;
 
@@ -605,7 +602,7 @@ export async function updateAgreement(
   // through the UI for no real benefit at this size.
   if (input.fees) {
     for (const f of input.fees) {
-      if (!isBudgetChannel(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
+      if (!ch.has(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
       assertAmount(f.monthlyAmount, 'monthlyAmount');
     }
     await prisma.agreementFee.deleteMany({ where: { agreementId: id } });
@@ -702,6 +699,7 @@ export interface CreateLineInput {
  * channel: "Meta Base", "Google Base".
  */
 export function feeLineLabel(
+  ch: ChannelRegistry,
   feeLabel: string | null | undefined,
   channel: string,
   agreementName: string | null,
@@ -710,7 +708,7 @@ export function feeLineLabel(
   if (own) return own;
   const named = agreementName?.trim();
   if (named) return named;
-  return isPacedChannel(channel) ? `${channelLabel(channel)} Base` : channelLabel(channel);
+  return ch.isPaced(channel) ? `${ch.label(channel)} Base` : ch.label(channel);
 }
 
 /**
@@ -725,8 +723,12 @@ export function feeLineLabel(
  * A named one is an event or a push, which is what "added" means. Overridable
  * per line in the panel, because a rule this convenient will be wrong sometimes.
  */
-export function defaultBucketFor(channel: string, agreementName: string | null): 'base' | 'added' {
-  if (!isPacedChannel(channel)) return 'base';
+export function defaultBucketFor(
+  ch: ChannelRegistry,
+  channel: string,
+  agreementName: string | null,
+): 'base' | 'added' {
+  if (!ch.isPaced(channel)) return 'base';
   return agreementName?.trim() ? 'added' : 'base';
 }
 
@@ -752,6 +754,7 @@ export async function createLines(
   userId: string | null,
   opts: { batchId?: string; groupId?: string } = {},
 ): Promise<BudgetLineDTO[]> {
+  const ch = await channelRegistry();
   if (inputs.length === 0) return [];
 
   const batchId = opts.batchId ?? crypto.randomUUID();
@@ -773,7 +776,7 @@ export async function createLines(
     assertAmount(input.amount);
     const year = resolveYear(input.period, input.year);
     const channel = input.channel ?? null;
-    if (channel != null && !isBudgetChannel(channel)) {
+    if (channel != null && !ch.has(channel)) {
       throw new Error(`Unknown budget channel "${channel}"`);
     }
     let markup = input.markup ?? null;
@@ -816,13 +819,13 @@ export async function createLines(
         year,
         period: input.period ?? null,
         channel,
-        category: channelCategory(channel),
+        category: ch.category(channel),
         amount: decimal(input.amount),
         markupSnapshot: markup,
         source,
         status: input.status ?? 'planned',
         bucket: input.bucket ?? defaultBucket(source),
-        lineType: input.lineType ?? channelLineType(channel),
+        lineType: input.lineType ?? ch.lineType(channel),
         cost: input.cost == null ? null : decimal(input.cost),
         agreementId,
         initiativeId: input.initiativeId ?? null,
@@ -935,6 +938,7 @@ export async function updateLine(
   input: UpdateLineInput,
   userId: string | null,
 ): Promise<BudgetLineDTO | null> {
+  const ch = await channelRegistry();
   const existing = await prisma.budgetLine.findUnique({ where: { id } });
   if (!existing) return null;
 
@@ -966,11 +970,11 @@ export async function updateLine(
     });
   }
   if (input.channel !== undefined && input.channel !== existing.channel) {
-    if (input.channel != null && !isBudgetChannel(input.channel)) {
+    if (input.channel != null && !ch.has(input.channel)) {
       throw new Error(`Unknown budget channel "${input.channel}"`);
     }
     data.channel = input.channel;
-    data.category = channelCategory(input.channel);
+    data.category = ch.category(input.channel);
     events.push({
       field: 'channel',
       from: existing.channel ?? '',
@@ -1110,6 +1114,7 @@ export async function allocateFromLine(
   input: { amount: number; period?: string | null; channel?: string | null; taskId?: string | null; initiativeId?: string | null; label?: string | null; notes?: string | null },
   userId: string | null,
 ): Promise<{ source: BudgetLineDTO; allocated: BudgetLineDTO } | null> {
+  const ch = await channelRegistry();
   assertAmount(input.amount);
   const src = await prisma.budgetLine.findUnique({ where: { id: sourceId } });
   if (!src) return null;
@@ -1121,7 +1126,7 @@ export async function allocateFromLine(
     );
   }
   const channel = input.channel ?? src.channel;
-  if (channel != null && !isBudgetChannel(channel)) {
+  if (channel != null && !ch.has(channel)) {
     throw new Error(`Unknown budget channel "${channel}"`);
   }
   const period = input.period ?? src.period;
@@ -1139,7 +1144,7 @@ export async function allocateFromLine(
       year,
       period,
       channel,
-      category: channelCategory(channel),
+      category: ch.category(channel),
       amount: decimal(input.amount),
       markupSnapshot: src.markupSnapshot,
       source: src.source,
@@ -1147,7 +1152,7 @@ export async function allocateFromLine(
       bucket: src.bucket,
       // A split inherits what kind of money it is; changing channel can change
       // it, so re-derive when the child lands somewhere different.
-      lineType: channel === src.channel ? src.lineType : channelLineType(channel),
+      lineType: channel === src.channel ? src.lineType : ch.lineType(channel),
       initiativeId: input.initiativeId ?? src.initiativeId,
       taskId: input.taskId ?? src.taskId,
       batchId: src.batchId,
@@ -1353,6 +1358,7 @@ export async function getAccountSummary(
   accountKey: string,
   year: number,
 ): Promise<BudgetSummary> {
+  const ch = await channelRegistry();
   const [agreements, lines] = await Promise.all([
     prisma.clientAgreement.findMany({
       where: {
@@ -1448,7 +1454,7 @@ export async function getAccountSummary(
   // nothing outside Meta/Google/YouTube reads it — counting a radio buy as
   // "base" padded the split with money the pacer will never see and made the
   // percentages describe something that doesn't exist.
-  const paced = lines.filter((l) => l.channel != null && isPacedChannel(l.channel));
+  const paced = lines.filter((l) => l.channel != null && ch.isPaced(l.channel));
   const baseTotal = paced
     .filter((l) => l.bucket === 'base')
     .reduce((sum, l) => sum + toNumber(l.amount), 0);
@@ -1505,12 +1511,13 @@ export async function getPacerBudgetGoals(
   period: string,
   platform: PacerPlatform,
 ): Promise<{ base: number; added: number; lineCount: number }> {
+  const ch = await channelRegistry();
   if (!isValidPeriodPure(period)) throw new Error(`Invalid period "${period}"`);
   const lines = await prisma.budgetLine.findMany({
     where: {
       spendAccountKey,
       period,
-      channel: { in: channelsForPlatform(platform) },
+      channel: { in: ch.forPlatform(platform) },
       status: { in: ['committed', 'live'] },
       ...NOT_ARCHIVED,
     },
@@ -1539,6 +1546,7 @@ export async function generateAgreementFeeLines(
   year: number,
   userId: string | null = null,
 ): Promise<BudgetLineDTO[]> {
+  const ch = await channelRegistry();
   const agreement = await prisma.clientAgreement.findUnique({
     where: { id: agreementId },
     include: { fees: true },
@@ -1563,7 +1571,7 @@ export async function generateAgreementFeeLines(
 
   const inputs: CreateLineInput[] = [];
   for (const fee of agreement.fees) {
-    const label = feeLineLabel(fee.label, fee.channel, agreement.name);
+    const label = feeLineLabel(ch, fee.label, fee.channel, agreement.name);
     for (const m of months) {
       const period = periodOf(year, m);
       if (taken.has(`${fee.channel}|${period}|${label}`)) continue;
@@ -1577,7 +1585,7 @@ export async function generateAgreementFeeLines(
         status: 'committed',
         agreementId,
         label,
-        bucket: defaultBucketFor(fee.channel, agreement.name),
+        bucket: defaultBucketFor(ch, fee.channel, agreement.name),
       });
     }
   }
@@ -1733,10 +1741,11 @@ export async function createFlight(
   input: FlightInput,
   userId: string | null = null,
 ): Promise<BudgetLineDTO[]> {
+  const ch = await channelRegistry();
   const start = parseDate(input.startDate, 'startDate');
   const end = parseDate(input.endDate, 'endDate');
   if (end < start) throw new Error('The flight ends before it starts');
-  if (!isBudgetChannel(input.channel)) throw new Error(`Unknown budget channel "${input.channel}"`);
+  if (!ch.has(input.channel)) throw new Error(`Unknown budget channel "${input.channel}"`);
   assertAmount(input.amount);
 
   // A flight crossing the new year is legitimate — a December-into-January buy
@@ -2061,10 +2070,11 @@ export async function syncPacerForPlacements(
   }[],
   authorUserId: string | null = null,
 ): Promise<void> {
+  const ch = await channelRegistry();
   const seen = new Set<string>();
   for (const p of placements) {
     if (!p.period || !p.channel) continue; // pool money reaches no pacer
-    const platform = channelPacerPlatform(p.channel);
+    const platform = ch.pacerPlatform(p.channel);
     if (!platform) continue; // radio/print/etc. settle by hand
     const key = `${p.spendAccountKey}|${p.period}|${platform}`;
     if (seen.has(key)) continue;
@@ -2186,6 +2196,7 @@ export async function settlePlatformPeriod(
   userId: string | null = null,
   opts: { force?: boolean } = {},
 ): Promise<SettlementResult> {
+  const ch = await channelRegistry();
   if (!isValidPeriodPure(period)) throw new Error(`Invalid period "${period}"`);
 
   const empty: SettlementResult = { settled: 0, attributed: 0, orphaned: 0 };
@@ -2230,7 +2241,7 @@ export async function settlePlatformPeriod(
     where: {
       spendAccountKey,
       period,
-      channel: { in: channelsForPlatform(platform) },
+      channel: { in: ch.forPlatform(platform) },
       status: { in: ['committed', 'live'] },
       ...NOT_ARCHIVED,
     },
@@ -2393,6 +2404,7 @@ export async function unsettleLine(
 export async function settleClosedMonths(
   lookbackMonths = 3,
 ): Promise<{ accounts: number; settled: number; orphaned: number; errors: string[] }> {
+  const ch = await channelRegistry();
   const errors: string[] = [];
   let accounts = 0;
   let settled = 0;
@@ -2400,7 +2412,7 @@ export async function settleClosedMonths(
 
   // Candidate (account, period) pairs: anything still committed on a paced
   // channel, old enough to be closed.
-  const pacedChannels = [...channelsForPlatform('meta'), ...channelsForPlatform('google')];
+  const pacedChannels = [...ch.forPlatform('meta'), ...ch.forPlatform('google')];
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - lookbackMonths);
   const cutoffPeriod = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}`;
@@ -2419,7 +2431,7 @@ export async function settleClosedMonths(
   // Collapse to (account, period, platform) — google and youtube share one.
   const targets = new Map<string, { key: string; period: string; platform: PacerPlatform }>();
   for (const row of pending) {
-    const platform = channelPacerPlatform(row.channel);
+    const platform = ch.pacerPlatform(row.channel);
     if (!platform || !row.period) continue;
     targets.set(`${row.spendAccountKey}|${row.period}|${platform}`, {
       key: row.spendAccountKey,
@@ -2473,6 +2485,7 @@ export async function upsertImportedLines(
   archivedExternalIds: string[] = [],
   userId: string | null = null,
 ): Promise<ImportResult> {
+  const ch = await channelRegistry();
   const result: ImportResult = { created: 0, updated: 0, archived: 0, rejected: [] };
   const placements: { spendAccountKey: string; period: string | null; channel: string | null }[] = [];
 
@@ -2483,7 +2496,7 @@ export async function upsertImportedLines(
   for (const input of inputs) {
     try {
       const year = resolveYear(input.period, input.year);
-      if (input.channel != null && !isBudgetChannel(input.channel)) {
+      if (input.channel != null && !ch.has(input.channel)) {
         throw new Error(`Unknown budget channel "${input.channel}"`);
       }
       assertAmount(input.amount);
@@ -2504,13 +2517,13 @@ export async function upsertImportedLines(
         year,
         period: input.period ?? null,
         channel: input.channel ?? null,
-        category: channelCategory(input.channel ?? null),
+        category: ch.category(input.channel ?? null),
         amount: decimal(input.amount),
         markupSnapshot: markup,
         source,
         status: input.status ?? 'committed',
         bucket: input.bucket ?? defaultBucket(source),
-        lineType: input.lineType ?? channelLineType(input.channel ?? null),
+        lineType: input.lineType ?? ch.lineType(input.channel ?? null),
         cost: input.cost == null ? null : decimal(input.cost),
         batchId: input.batchId ?? null,
         label: input.label ?? null,

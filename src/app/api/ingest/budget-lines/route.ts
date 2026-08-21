@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { prisma } from '@/lib/prisma';
-import { channelFromOzId, isBudgetChannel } from '@/lib/budget/channels';
+import { channelRegistry } from '@/lib/services/budget-channels';
 import { isValidPeriod, periodOf } from '@/lib/budget/period';
 import { upsertImportedLines } from '@/lib/services/budget';
 
@@ -67,6 +67,8 @@ export async function POST(req: NextRequest) {
   if (!presented || !timingSafeCompare(presented, expected)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const ch = await channelRegistry();
 
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -140,8 +142,8 @@ export async function POST(req: NextRequest) {
     // Oz allows channel_id 0/NULL and has ids with no Loomi home. Both get
     // reported with their dollar weight rather than dropped into a catch-all —
     // guessing here is how money quietly lands in the wrong place.
-    const channel = channelFromOzId(l.ozChannelId ?? null);
-    if (!channel || !isBudgetChannel(channel)) {
+    const channel = ch.fromExternalId(l.ozChannelId ?? null);
+    if (!channel || !ch.has(channel)) {
       const id = l.ozChannelId ?? 0;
       const prev = unmappedChannels.get(id) ?? { lines: 0, dollars: 0 };
       unmappedChannels.set(id, { lines: prev.lines + 1, dollars: prev.dollars + amount });

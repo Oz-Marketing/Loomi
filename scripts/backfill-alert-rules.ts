@@ -42,7 +42,7 @@ const SEEDS: Seed[] = [
     key: 'meta-account-monthly-pace',
     name: 'Account pacing off-target',
     description:
-      'Live-month account pace is outside the 85–110% band of expected-to-date (the §7 pacing rollup, eligible ads only).',
+      'This month\u2019s spend is off the 85\u2013110% band for where it should be by now, across the account\u2019s eligible ads.',
     channel: 'meta',
     metric: 'account_monthly_pace',
     resource: 'account',
@@ -59,7 +59,7 @@ const SEEDS: Seed[] = [
     key: 'meta-campaign-budget-burn',
     name: 'Campaign budget burning early',
     description:
-      'A campaign has spent ≥90% of its monthly allocation with more than 5 flight-days left, so it may exhaust early.',
+      'A campaign has spent 90% or more of its monthly budget with over 5 days of flight left, so it may run dry early.',
     channel: 'meta',
     metric: 'campaign_budget_burn',
     resource: 'campaign',
@@ -81,7 +81,7 @@ const SEEDS: Seed[] = [
     key: 'google-account-monthly-pace',
     name: 'Google account pacing off-target',
     description:
-      'Live-month Google account pace is outside the 85–110% band of expected-to-date (Google lines only). Disabled until the Google Ads API is connected (§8).',
+      'This month\u2019s Google spend is off the 85\u2013110% band for where it should be by now. Runs once Google Ads is connected.',
     channel: 'google',
     metric: 'account_monthly_pace',
     resource: 'account',
@@ -98,7 +98,7 @@ const SEEDS: Seed[] = [
     key: 'google-campaign-budget-burn',
     name: 'Google campaign budget burning early',
     description:
-      'A Google campaign has spent ≥90% of its monthly allocation with more than 5 flight-days left. Disabled until the Google Ads API is connected (§8).',
+      'A Google campaign has spent 90% or more of its monthly budget with over 5 days of flight left. Runs once Google Ads is connected.',
     channel: 'google',
     metric: 'campaign_budget_burn',
     resource: 'campaign',

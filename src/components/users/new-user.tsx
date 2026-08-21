@@ -5,6 +5,9 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ElevatedOnly } from '@/components/route-guard';
 import { AccountAssignmentManager } from '@/components/account-assignment-manager';
+import { Select } from '@/components/select';
+import { Checkbox } from '@/components/ui/checkbox';
+import { platformRoleOptions } from '@/components/users/platform-role-options';
 import { useAccount } from '@/contexts/account-context';
 import { SectorRoleManager } from '@/components/settings/sector-role-manager';
 import { legacySectorRolesFor, legacyTierFor } from '@/lib/permissions/legacy';
@@ -199,16 +202,16 @@ function NewUserContent({
             </div>
             <div>
               <label className={labelClass}>Department</label>
-              <select
+              <Select
                 value={department}
-                onChange={e => setDepartment(e.target.value)}
-                className={inputClass}
-              >
-                <option value="">— No department —</option>
-                {DEPARTMENTS.map(d => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
+                onChange={setDepartment}
+                options={[
+                  { value: '', label: '— No department —' },
+                  ...DEPARTMENTS.map((d) => ({ value: d, label: d })),
+                ]}
+                previewFont={false}
+                ariaLabel="Department"
+              />
             </div>
             <div>
               <label className={labelClass}>Email</label>
@@ -216,20 +219,20 @@ function NewUserContent({
             </div>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)] p-3.5">
               <label className={`${labelClass} mb-2`}>Onboarding</label>
-              <label className="flex items-start gap-2.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={sendInvite}
-                  onChange={(e) => setSendInvite(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-[var(--border)] bg-[var(--input)]"
-                />
-                <span className="text-[var(--foreground)]">
-                  Send invite email so the user creates their own password
-                  <span className="block text-xs text-[var(--muted-foreground)] mt-0.5">
-                    Recommended for team onboarding.
+              <Checkbox
+                checked={sendInvite}
+                onChange={setSendInvite}
+                size="lg"
+                className="gap-2.5"
+                label={
+                  <span className="text-sm">
+                    Send invite email so the user creates their own password
+                    <span className="mt-0.5 block text-xs text-[var(--muted-foreground)]">
+                      Recommended for team onboarding.
+                    </span>
                   </span>
-                </span>
-              </label>
+                }
+              />
             </div>
             {!sendInvite && (
               <div>
@@ -252,12 +255,13 @@ function NewUserContent({
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Role</label>
-              <select value={role} onChange={e => handleRoleChange(e.target.value)} className={inputClass}>
-                {userRole === 'developer' && <option value="developer">Developer</option>}
-                <option value="super_admin">Super Admin</option>
-                <option value="admin">Admin</option>
-                <option value="client">Client</option>
-              </select>
+              <Select
+                value={role}
+                onChange={handleRoleChange}
+                options={platformRoleOptions(userRole)}
+                previewFont={false}
+                ariaLabel="Platform role"
+              />
             </div>
 
             <div>

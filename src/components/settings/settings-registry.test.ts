@@ -41,29 +41,56 @@ const SUBACCOUNT_ADMIN = scope({ isAccount: true, hasAdminAccess: true });
 const keysOf = (s: SettingsScope) => settingsTabsForScope(s).map((t) => t.key);
 const navKeysOf = (s: SettingsScope) =>
   agencySettingsNavForScope(s).flatMap((g) => g.items.map((i) => i.key));
+/**
+ * What BELONGS in the agency rail — everything visible minus the sector-owned
+ * entries, which render in their own sector's settings panel and never in the
+ * modal. Agency Settings is platform config; anything that drives one sector
+ * belongs to that sector.
+ */
+const agencyOwnedKeysOf = (s: SettingsScope) =>
+  settingsTabsForScope(s)
+    .filter((t) => t.rail !== 'sector')
+    .map((t) => t.key);
 
 describe('settings registry', () => {
-  it('gives every visible Agency-View tab a rail row, and vice versa', () => {
+  it('gives every agency-owned tab a rail row, and vice versa', () => {
+    // The original failure this file exists for: a tab that renders with no way
+    // to navigate to it. Sector-owned entries are excluded on both sides.
     for (const s of [AGENCY_ELEVATED, AGENCY_ADMIN]) {
-      expect(navKeysOf(s)).toEqual(keysOf(s));
+      expect(navKeysOf(s)).toEqual(agencyOwnedKeysOf(s));
+    }
+  });
+
+  it('keeps sector-owned config out of the agency rail, on every surface', () => {
+    for (const surface of ['studio', 'reporting', 'app'] as const) {
+      const rail = navKeysOf(scope({ ...AGENCY_ELEVATED, surface }));
+      for (const owned of [
+        'markup',
+        'budget-channels',
+        'alerts',
+        'coop-guidelines',
+        'contact-field-blueprints',
+        'client-reports',
+      ]) {
+        expect(rail, `${surface}/${owned}`).not.toContain(owned);
+      }
     }
   });
 
   it('keeps the Agency-View rail in Manage-then-Configure order', () => {
     const groups = agencySettingsNavForScope(AGENCY_ELEVATED);
     expect(groups.map((g) => g.label)).toEqual(['Manage', 'Configure']);
+    // Field Blueprints left for Studio, Markup/Alerts for Projects, Co-op for
+    // Studio; Clients joined next to Users.
     expect(groups[0].items.map((i) => i.key)).toEqual([
       'subaccounts',
       'users',
+      'client-users',
       'teams',
-      'contact-field-blueprints',
       'knowledge',
     ]);
     expect(groups[1].items.map((i) => i.key)).toEqual([
       'industries',
-      'markup',
-      'alerts',
-      'coop-guidelines',
       'notifications',
       'appearance',
     ]);

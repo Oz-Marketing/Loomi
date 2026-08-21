@@ -6,7 +6,7 @@ import { XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { BUDGET_CHANNELS } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { periodOf } from '@/lib/budget/period';
 import { splitFlight } from '@/lib/budget/flight';
 import { MONTH_ABBR, usd0 } from './budget-shared';
@@ -43,8 +43,11 @@ export function BudgetAddLineModal({
   onAddFlight: (body: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const [mode, setMode] = useState<'month' | 'flight'>('month');
-  const [channel, setChannel] = useState(BUDGET_CHANNELS[0]!.key);
+  // Empty until the channel list arrives — the picker's own effect selects the
+  // first one, because there's nothing sensible to default to before then.
+  const [channel, setChannel] = useState('');
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
   const [startDate, setStartDate] = useState(`${year}-01-01`);
   const [endDate, setEndDate] = useState(`${year}-03-31`);
@@ -66,6 +69,13 @@ export function BudgetAddLineModal({
   }, [mode, startDate, endDate, amount]);
 
   useEffect(() => setMounted(true), []);
+
+  // Select the first channel once the list lands. Not a lazy useState default:
+  // the list arrives after the first render now, so there's nothing to default
+  // to at mount.
+  useEffect(() => {
+    if (!channel && ch.active.length > 0) setChannel(ch.active[0]!.key);
+  }, [channel, ch.active]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -168,7 +178,7 @@ export function BudgetAddLineModal({
                   value={channel}
                   onChange={setChannel}
                   searchable={false}
-                  options={BUDGET_CHANNELS.map((c) => ({
+                  options={ch.active.map((c) => ({
                     value: c.key,
                     label: c.label,
                     icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,

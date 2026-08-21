@@ -6,7 +6,8 @@ import { CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { LINE_TYPES, channelLabel } from '@/lib/budget/channels';
+import { LINE_TYPES } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { jsonFetcher } from './fetcher';
 import { usd0 } from './budget-shared';
 
@@ -47,6 +48,7 @@ export function BudgetCategorizeModal({
   onChanged: () => void;
   onClose: () => void;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const [groups, setGroups] = useState<Group[] | null>(null);
   const [done, setDone] = useState<Record<string, { lineType: string; lines: number }>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -171,7 +173,7 @@ export function BudgetCategorizeModal({
                         <div className="min-w-0">
                           <p className="flex items-center gap-1.5 text-sm font-medium text-[var(--foreground)]">
                             <ChannelIcon channel={g.channel} className="h-4 w-4 flex-shrink-0" />
-                            {g.channel ? channelLabel(g.channel) : 'No channel'}
+                            {g.channel ? ch.label(g.channel) : 'No channel'}
                           </p>
                           <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                             {g.lines} line{g.lines === 1 ? '' : 's'} · {usd0(g.amount)}

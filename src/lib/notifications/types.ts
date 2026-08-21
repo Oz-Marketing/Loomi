@@ -127,7 +127,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     type: 'alert_account_pace',
     label: 'Account pacing off-target (alert engine)',
     description:
-      'The account is pacing outside its target band (e.g. over 110% / under 85% of expected-to-date) for the live month. Fired by the §9 alert-rule engine.',
+      'The account is pacing outside its target band (over 110% or under 85% of expected-to-date) for the live month. Thresholds are yours to set under Alerts.',
     category: 'Meta Ads Planner',
     channel: 'digest',
     defaultEnabled: true,
@@ -136,7 +136,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     type: 'alert_budget_burn',
     label: 'Budget burning early (alert engine)',
     description:
-      'A campaign has spent most of its monthly allocation with several flight-days still to go, so it may exhaust early. Fired by the §9 alert-rule engine.',
+      'A campaign has spent most of its monthly budget with several flight-days still to go, so it may run dry early. Thresholds are yours to set under Alerts.',
     category: 'Meta Ads Planner',
     channel: 'digest',
     defaultEnabled: true,

@@ -6,6 +6,7 @@ import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { UnsavedChangesProvider } from '@/contexts/unsaved-changes-context';
 import { LoomiDialogProvider } from '@/contexts/loomi-dialog-context';
 import { SidebarCollapseProvider } from '@/contexts/sidebar-collapse-context';
+import { BudgetChannelsProvider } from '@/contexts/budget-channels-context';
 import { Toaster } from 'sonner';
 import { AiBubble } from '@/components/ai-bubble';
 import { SupportModal } from '@/components/support-modal';
@@ -54,15 +55,19 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <UnsavedChangesProvider>
             <LoomiDialogProvider>
               <SidebarCollapseProvider>
-                {children}
-                <ThemedToaster />
-                {/* Deliberately OUTSIDE NonClientOnly: clients get no sidebar
-                    and no utility bar, so the help desk is the one dev-facing
-                    affordance they must still be able to reach. */}
-                <SupportModal />
-                <NonClientOnly>
-                  <AiBubble />
-                </NonClientOnly>
+                {/* Fetches nothing until a budget screen actually asks — see
+                    the note in budget-channels-context. */}
+                <BudgetChannelsProvider>
+                  {children}
+                  <ThemedToaster />
+                  {/* Deliberately OUTSIDE NonClientOnly: clients get no sidebar
+                      and no utility bar, so the help desk is the one dev-facing
+                      affordance they must still be able to reach. */}
+                  <SupportModal />
+                  <NonClientOnly>
+                    <AiBubble />
+                  </NonClientOnly>
+                </BudgetChannelsProvider>
               </SidebarCollapseProvider>
             </LoomiDialogProvider>
           </UnsavedChangesProvider>

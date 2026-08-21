@@ -487,6 +487,15 @@ body {
   background: transparent;
 }
 
+/* How far down a sibling must stick to clear the docked header.
+   `.page-sticky-header`'s padding is deliberately CONSTANT (see the note in its
+   rule below), so its height is stable and a single offset works — the value is
+   that height plus a small gap. Anything that sticks alongside the header, like
+   the sub-account rail, reads this rather than guessing its own number. */
+:root {
+  --page-header-offset: 5.5rem;
+}
+
 .page-sticky-header {
   position: sticky;
   top: 0;

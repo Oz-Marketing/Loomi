@@ -126,8 +126,13 @@ export function NotificationsTab() {
     }
   };
 
-  // Only this surface's notification categories (Studio vs App), plus the
-  // `both` categories that aren't owned by either side.
+  // Only this surface's notification categories, plus the `both` ones.
+  //
+  // `both` is exactly one category — Product Updates — and it stays everywhere
+  // on purpose: the changelog panel is in the top bar on every surface, so the
+  // opt-out has to be reachable from wherever you are when you decide you've
+  // had enough. Every OTHER category is owned by one sector and shows only
+  // there, which is what makes this list the current sector's.
   const surfaceItems = useMemo(() => {
     if (effSurface === null) return [];
     return items.filter((i) => {
@@ -136,7 +141,7 @@ export function NotificationsTab() {
     });
   }, [items, effSurface]);
 
-  // Group the surface's items by category — each becomes a tab.
+  // Group the surface's items by category — each becomes a section.
   const byCategory = useMemo(() => {
     return surfaceItems.reduce<Record<string, PreferenceItem[]>>((acc, item) => {
       (acc[item.category] ??= []).push(item);
@@ -152,9 +157,6 @@ export function NotificationsTab() {
     }
   }, [categories, activeCat]);
 
-  const activeItems = activeCat ? byCategory[activeCat] ?? [] : [];
-  const activeEnabled = activeItems.filter((i) => i.enabled).length;
-  const activeEmailed = activeItems.filter((i) => i.emailEnabled).length;
 
   // Surface unknown (pre-hydration) or still fetching → loading.
   if (loading || effSurface === null) {
@@ -183,127 +185,115 @@ export function NotificationsTab() {
         inbox. The two are independent — you can keep an alert in the panel without the email.
       </p>
 
-      {/* Category tabs */}
-      <div className="flex flex-wrap items-center gap-1 border-b border-[var(--border)]">
+      {/* One section per category, no tab strip.
+          The strip made you click through three collapsed lists to answer "am I
+          getting emailed about this", and on a sector with two categories it was
+          two tabs over four rows. Sections show everything at once. */}
+      <div className="max-w-3xl space-y-8">
         {categories.map((cat) => {
-          const isActive = cat === activeCat;
-          const on = byCategory[cat].filter((i) => i.enabled).length;
+          const catItems = byCategory[cat];
+          const on = catItems.filter((i) => i.enabled).length;
+          const emailed = catItems.filter((i) => i.emailEnabled).length;
           return (
-            <button
-              key={cat}
-              type="button"
-              onClick={() => setActiveCat(cat)}
-              className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'border-[var(--primary)] text-[var(--foreground)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              {cat}
-              <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">
-                {on}/{byCategory[cat].length}
-              </span>
-            </button>
+            <section key={cat}>
+              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border)] pb-2">
+                <h3 className="text-sm font-semibold text-[var(--foreground)]">{cat}</h3>
+                <span className="mr-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                  {on} of {catItems.length} in-app · {emailed} by email
+                </span>
+                {(
+                  [
+                    { channel: 'enabled', label: 'in-app' },
+                    { channel: 'emailEnabled', label: 'email' },
+                  ] as Array<{ channel: Channel; label: string }>
+                ).map(({ channel, label }) => (
+                  <span key={channel} className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setAll(channel, true, catItems)}
+                      className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                    >
+                      All {label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAll(channel, false, catItems)}
+                      className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                      aria-label={`Turn off all ${label} notifications in ${cat}`}
+                    >
+                      None
+                    </button>
+                  </span>
+                ))}
+              </div>
+
+              <div className="space-y-3">
+          {byCategory[cat].map((item) => (
+                  <div
+                    key={item.type}
+                    className="flex items-start justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-[var(--foreground)]">{item.label}</span>
+                        <span
+                          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
+                          style={{
+                            background:
+                              item.channel === 'immediate'
+                                ? 'rgba(56,189,248,0.18)'
+                                : 'rgba(167,139,250,0.18)',
+                            color: item.channel === 'immediate' ? '#7dd3fc' : '#c4b5fd',
+                          }}
+                          title={
+                            item.channel === 'immediate'
+                              ? 'Sent right away'
+                              : 'Bundled into the daily 8am digest'
+                          }
+                        >
+                          {item.channel === 'immediate' ? (
+                            <BoltIcon className="h-3 w-3" />
+                          ) : (
+                            <ClockIcon className="h-3 w-3" />
+                          )}
+                          {item.channel === 'immediate' ? 'Immediate' : 'Daily digest'}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{item.description}</p>
+                    </div>
+                    <div className="flex flex-shrink-0 items-center gap-4">
+                      {(
+                        [
+                          { channel: 'enabled', label: 'In-app', on: item.enabled },
+                          { channel: 'emailEnabled', label: 'Email', on: item.emailEnabled },
+                        ] as Array<{ channel: Channel; label: string; on: boolean }>
+                      ).map(({ channel, label, on }) => (
+                        <label key={channel} className="flex flex-col items-center gap-1">
+                          <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+                            {label}
+                          </span>
+                          <ToggleSwitch
+                            checked={on}
+                            onChange={(next) => updateOne(item.type, channel, next)}
+                            disabled={saving === item.type}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
           );
         })}
       </div>
 
-      {/* Active category */}
-      <div className="mt-5 max-w-3xl">
-        <div className="mb-3 flex flex-wrap items-center justify-end gap-x-2 gap-y-1.5">
-          <span className="mr-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
-            {activeEnabled} of {activeItems.length} in-app · {activeEmailed} by email
-          </span>
-          {(
-            [
-              { channel: 'enabled', label: 'in-app' },
-              { channel: 'emailEnabled', label: 'email' },
-            ] as Array<{ channel: Channel; label: string }>
-          ).map(({ channel, label }) => (
-            <span key={channel} className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setAll(channel, true, activeItems)}
-                className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-              >
-                All {label}
-              </button>
-              <button
-                type="button"
-                onClick={() => setAll(channel, false, activeItems)}
-                className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                aria-label={`Turn off all ${label} notifications in this category`}
-              >
-                None
-              </button>
-            </span>
-          ))}
-        </div>
-
-        <div className="space-y-3">
-          {activeItems.map((item) => (
-            <div
-              key={item.type}
-              className="flex items-start justify-between gap-4 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-[var(--foreground)]">{item.label}</span>
-                  <span
-                    className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider"
-                    style={{
-                      background:
-                        item.channel === 'immediate'
-                          ? 'rgba(56,189,248,0.18)'
-                          : 'rgba(167,139,250,0.18)',
-                      color: item.channel === 'immediate' ? '#7dd3fc' : '#c4b5fd',
-                    }}
-                    title={
-                      item.channel === 'immediate'
-                        ? 'Sent right away'
-                        : 'Bundled into the daily 8am digest'
-                    }
-                  >
-                    {item.channel === 'immediate' ? (
-                      <BoltIcon className="h-3 w-3" />
-                    ) : (
-                      <ClockIcon className="h-3 w-3" />
-                    )}
-                    {item.channel === 'immediate' ? 'Immediate' : 'Daily digest'}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">{item.description}</p>
-              </div>
-              <div className="flex flex-shrink-0 items-center gap-4">
-                {(
-                  [
-                    { channel: 'enabled', label: 'In-app', on: item.enabled },
-                    { channel: 'emailEnabled', label: 'Email', on: item.emailEnabled },
-                  ] as Array<{ channel: Channel; label: string; on: boolean }>
-                ).map(({ channel, label, on }) => (
-                  <label key={channel} className="flex flex-col items-center gap-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
-                      {label}
-                    </span>
-                    <ToggleSwitch
-                      checked={on}
-                      onChange={(next) => updateOne(item.type, channel, next)}
-                      disabled={saving === item.type}
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <p className="mt-6 text-[11px] text-[var(--muted-foreground)]">
-          In-app notifications appear in the bell-icon panel in the top-right.
-          With Email on, immediate alerts are mailed in real time and daily-digest
-          alerts are bundled into a single 8am email. Turning In-app off stops
-          both — there is nothing to email if the alert is never raised.
-        </p>
-      </div>
+      <p className="mt-6 text-[11px] text-[var(--muted-foreground)]">
+        In-app notifications appear in the bell-icon panel in the top-right. With Email on,
+        immediate alerts are mailed in real time and daily-digest alerts are bundled into a single
+        8am email. Turning In-app off stops both — there is nothing to email if the alert is never
+        raised.
+      </p>
     </div>
   );
 }

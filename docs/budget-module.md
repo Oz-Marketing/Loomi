@@ -193,6 +193,18 @@ and `User` (event author).
 
 ### Channel constants
 
+> **Superseded (2026-08-20).** The channel list is a TABLE now — `BudgetChannel`,
+> managed in Agency Settings → Channels. The constant below became
+> `SEED_CHANNELS` in [`budget/channel-registry.ts`](../src/lib/budget/channel-registry.ts),
+> which is what a fresh install starts with and nothing reads at runtime.
+> Lookups moved to a `ChannelRegistry` built per request:
+> `channelRegistry()` on the server, `useBudgetChannels()` on the client.
+> Rate cards moved the same way — see `BillingCategory`. The reason: every one
+> of these values is an agency's naming and pricing choice, and the list below
+> mirrored Oz Reports' own `channels` table down to its numeric ids, so Loomi's
+> budget taxonomy was Oz Marketing's. Kept here because the shape and the
+> "no IDs, no literals in calc code" rule are both still right.
+
 New `src/lib/budget/channels.ts`, in the shape of
 [`ad-pacer/constants.ts`](../src/lib/ad-pacer/constants.ts). No IDs, no
 literals in calc code:
@@ -291,7 +303,10 @@ taking manual control of one month doesn't affect Google or any other month.
 | File | What |
 |---|---|
 | [`prisma/schema.prisma`](../prisma/schema.prisma) | `ClientAgreement`, `AgreementFee`, `BudgetLine`, `BudgetLineEvent` + relations |
-| [`src/lib/budget/channels.ts`](../src/lib/budget/channels.ts) | The channel registry + pacer-platform mapping |
+| [`src/lib/budget/channel-registry.ts`](../src/lib/budget/channel-registry.ts) | The registry lookups (pure, universal) + the seed list. `ChannelRegistry` is built from a channel list; it does not know where the list comes from |
+| [`src/lib/services/budget-channels.ts`](../src/lib/services/budget-channels.ts) | Server access + CRUD. `channelRegistry()` is the one way server code gets lookups — load once per service call, pass the registry down |
+| [`src/contexts/budget-channels-context.tsx`](../src/contexts/budget-channels-context.tsx) | The same list for client components, fetched lazily on first use |
+| [`src/lib/budget/channels.ts`](../src/lib/budget/channels.ts) | Now just the rate-card seed (`BILLING_CATEGORIES`) + re-exports |
 | [`src/lib/budget/period.ts`](../src/lib/budget/period.ts) | Period helpers + `resolveYear` (the year/period invariant). Prisma-free so routes can validate without pulling in a DB client |
 | [`src/lib/budget/term.ts`](../src/lib/budget/term.ts) | Agreement term arithmetic — `termMonths`, `monthsInYear`, `commitmentForYear`. Prisma-free, so the pro-rating that decides a client's target is unit-tested without a database |
 | [`src/lib/budget/flight.ts`](../src/lib/budget/flight.ts) | Flight splitting — `flightMonths`, `splitFlight`. Day-weighted, exact to the cent. Prisma-free, so the modal previews with the same code the server writes with |
@@ -304,7 +319,7 @@ taking manual control of one month doesn't affect Google or any other month.
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
 | [`scripts/migrate-budget-plans-to-agreements.ts`](../scripts/migrate-budget-plans-to-agreements.ts) | Deploy precursor: carries `BudgetPlan` rows into agreements and drops the table, because `db push` runs without `--accept-data-loss` and would otherwise fail the whole push |
 
-Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`,
+Tests: `budget/period.test.ts`, `budget/channel-registry.test.ts`, `budget/term.test.ts`,
 `budget/flight.test.ts` and `budget/settlement.test.ts` run always (71 cases);
 `services/budget.db.test.ts` (72 cases — ledger arithmetic, agreements, flights,
 categorizing, the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`,
@@ -437,7 +452,7 @@ dealer_map       ┘   ?dry_run=1 ?dealer=KEY ?year=N     ▼
 
 **About half the money isn't media.** Contribution, Data Feed, Managed
 Marketing Services, Lead Provider, Management Fee and friends account for
-roughly $5.7M of the $11.4M. That's why `BUDGET_CHANNELS` mirrors all 44 Oz
+roughly $5.7M of the $11.4M. That's why the seed mirrors all 44 Oz
 channels rather than the media-only set the module started with: a hub showing
 half a client's budget is worse than one showing none, because the first time
 anyone reconciles against Oz Reports the number stops being trusted.

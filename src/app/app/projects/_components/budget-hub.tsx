@@ -10,12 +10,8 @@ import {
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { AccountAvatar } from '@/components/account-avatar';
-import {
-  channelLabel,
-  BUDGET_CHANNELS,
-  LINE_TYPES,
-  isPacedChannel,
-} from '@/lib/budget/channels';
+import { LINE_TYPES } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { Collapse } from '@/components/ui/collapse';
 import { periodOf } from '@/lib/budget/period';
@@ -44,6 +40,7 @@ export function BudgetHub() {
   // Two selectors for the same thing is a trap: whichever you didn't touch is
   // silently wrong, and there's no way to tell which one the page is obeying.
   const { accountKey, accountData, initialized } = useAccount();
+  const { channels: ch } = useBudgetChannels();
   const [year, setYear] = useState(() => new Date().getFullYear());
 
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -112,7 +109,7 @@ export function BudgetHub() {
     }
     // Registry order, so the grid reads the same way every time rather than in
     // whatever order money happened to be entered.
-    return BUDGET_CHANNELS.filter((c) => byChannel.has(c.key)).map((c) => ({
+    return ch.all.filter((c) => byChannel.has(c.key)).map((c) => ({
       channel: c.key,
       label: c.label,
       category: c.category,
@@ -248,7 +245,7 @@ export function BudgetHub() {
       const line = activeLines.find((l) => l.id === id);
       if (line) {
         setActiveGroup({
-          title: line.label || line.taskTitle || channelLabel(line.channel),
+          title: line.label || line.taskTitle || ch.label(line.channel),
           lineIds: [id],
         });
       }
@@ -809,7 +806,7 @@ export function BudgetHub() {
                               className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
                             />
                             <span className="text-[var(--foreground)]">{row.label}</span>
-                            {isPacedChannel(row.channel) && (
+                            {ch.isPaced(row.channel) && (
                               <span
                                 className="text-[10px] text-[var(--muted-foreground)]"
                                 title="Feeds the Ad Pacer when the month is budget-managed"
@@ -1077,6 +1074,7 @@ function LineList({
   onOpen: (id: string) => void;
   onOpenGroup: (title: string, rows: BudgetLine[]) => void;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setOpen((prev) => {
@@ -1151,10 +1149,10 @@ function LineList({
                           className="h-3.5 w-3.5 flex-shrink-0 text-[var(--muted-foreground)]"
                         />
                         <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--foreground)]">
-                          {r.label || channelLabel(r.channel)}
+                          {r.label || ch.label(r.channel)}
                         </span>
                         <span className="flex-shrink-0 text-[11px] text-[var(--muted-foreground)]">
-                          {channelLabel(r.channel)}
+                          {ch.label(r.channel)}
                         </span>
                         <span className="flex-shrink-0 text-[13px] tabular-nums text-[var(--foreground)]">
                           {usd2(r.amount)}

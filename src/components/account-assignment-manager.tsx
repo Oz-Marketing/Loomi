@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AccountData } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
+import { Checkbox } from '@/components/ui/checkbox';
 import { formatAccountCityState } from '@/lib/account-resolvers';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
@@ -273,11 +274,16 @@ export function AccountAssignmentManager({
 
       {open && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[190] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-overlay-in"
+          // z-[260] is the drill-in layer: this picker opens from inside the
+          // Agency Settings modal (z-[200]), so anything lower renders behind
+          // it. Matches the other settings drill-ins (teams, field editor).
+          className="fixed inset-0 z-[260] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-overlay-in"
           onClick={() => setOpen(false)}
         >
+          {/* -solid on top of glass-modal: at 0.86 alpha the user form behind
+              this reads straight through the account table. */}
           <div
-            className="glass-modal w-full max-w-5xl max-h-[86vh] flex flex-col"
+            className="glass-modal glass-modal-solid w-full max-w-5xl max-h-[86vh] flex flex-col"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3 p-5 border-b border-[var(--border)]">
@@ -306,15 +312,13 @@ export function AccountAssignmentManager({
                 />
               </div>
 
-              <label className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] px-2.5 py-1.5 bg-[var(--input)] text-xs text-[var(--muted-foreground)]">
-                <input
-                  type="checkbox"
-                  checked={showAssignedOnly}
-                  onChange={(event) => setShowAssignedOnly(event.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-[var(--border)] bg-[var(--card)]"
-                />
-                Show assigned only
-              </label>
+              <Checkbox
+                checked={showAssignedOnly}
+                onChange={setShowAssignedOnly}
+                size="sm"
+                label="Show assigned only"
+                className="items-center rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-1.5 text-[var(--muted-foreground)]"
+              />
 
               <button
                 type="button"
@@ -419,13 +423,14 @@ export function AccountAssignmentManager({
                                 <span className="text-xs font-mono text-[var(--muted-foreground)]">{row.key}</span>
                               </td>
                               <td className="px-3 py-2 align-middle text-right">
-                                <input
-                                  type="checkbox"
+                                <Checkbox
                                   checked={selected}
-                                  onClick={(event) => event.stopPropagation()}
                                   onChange={() => toggleAccount(row.key)}
                                   disabled={disabled}
-                                  className="h-4 w-4 rounded border-[var(--border)] bg-[var(--card)]"
+                                  // The row itself toggles on click; without
+                                  // this the box's own click toggles it back.
+                                  stopPropagation
+                                  aria-label={`Assign ${row.dealer}`}
                                 />
                               </td>
                             </tr>

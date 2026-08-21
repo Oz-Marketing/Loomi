@@ -1,3 +1,4 @@
+import { withRouteErrors } from '@/lib/api-errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
@@ -27,7 +28,7 @@ function toPrefs(row: {
  * "no row yet" means seed the server from this browser's cookie, whereas an
  * existing row is the cross-device truth and overwrites local state.
  */
-export async function GET() {
+async function handleGet() {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -48,7 +49,7 @@ export async function GET() {
  * preset catalog, so an unknown accent/font/density falls back to its default
  * instead of persisting a value no CSS block can render.
  */
-export async function PUT(req: NextRequest) {
+async function handlePut(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -71,3 +72,8 @@ export async function PUT(req: NextRequest) {
 
   return NextResponse.json({ stored: true, appearance: toPrefs(row) });
 }
+
+// Wrapped so an unhandled throw returns the JSON error envelope instead of
+// a 500 with an empty body, which a caller cannot parse or report.
+export const GET = withRouteErrors(handleGet, 'appearance');
+export const PUT = withRouteErrors(handlePut, 'appearance');

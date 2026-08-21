@@ -38,6 +38,8 @@ import { Select, type SelectOption } from '@/components/select';
 import { isFieldVisible, isClientField, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { OfferCard, type VehicleSlot } from '@/components/ad-generator/client-form/offer-card';
+import { offerKind, offerKindForDoc, composesDisclaimer, DEFAULT_OFFER_KIND } from '@/lib/ad-generator/offer-kinds';
+import { isNoOfferType } from '@/lib/ad-generator/offer-text';
 import { OfferSummaryCard } from '@/components/ad-generator/client-form/offer-summary-card';
 import { CoopStanding } from '@/components/ad-generator/client-form/coop-standing';
 import { CompliancePanel } from '@/components/ad-generator/client-form/compliance-panel';
@@ -353,6 +355,24 @@ export default function AdGeneratorPage() {
     };
   }, [docSnapshot, sizeId, brandColor, selectedFontFamily]);
   const renderData = useMemo(() => ({ ...data, ...brandingData }), [data, brandingData]);
+  /**
+   * Data for evaluating `visibleWhen` only — the template's defaults UNDER the
+   * ad's own values.
+   *
+   * A from-scratch ad's `data` starts empty, so `data.offerType` was unset while
+   * the Offer-type SELECT already displayed the template's default. Every field
+   * gated on it therefore hid, and a whole form section (Terms) vanished — which
+   * reads as a bug, because the user can see a type selected.
+   *
+   * Deliberately NOT merged into `renderData`: that feeds `missingRequired` and
+   * the preview, and folding placeholder defaults like `offerPrice: 'XX.XX'` in
+   * there would satisfy required-field checks with scaffolding and let a
+   * placeholder reach an export.
+   */
+  const visibilityData = useMemo(
+    () => ({ ...template.defaults, ...data }),
+    [template.defaults, data],
+  );
 
   // Which of the template's sizes this ad includes (multi-select, persisted in
   // data._sizes; defaults to all). The preview pages through these; the ZIP
@@ -380,18 +400,32 @@ export default function AdGeneratorPage() {
     setSizeId(selectedSizeIds[(sizeIndex + dir + n) % n]);
   };
 
-  // Industry-aware tooling. The ad generator supports any industry/ad type via
-  // data-driven templates; the automotive helpers (OEM incentive lookup, EVOX
-  // vehicle picker) appear whenever the TEMPLATE is a vehicle offer (has an
-  // offerType / vehicleImageUrl field) — regardless of the active account, so a
-  // vehicle-offer template always gets the modern OEM UI (even in admin/global
-  // context, with no account selected). Non-vehicle templates (events, grand
-  // openings) still fall to the clean generic form.
-  const isVehicleOffer = useMemo(
-    () => template.fields.some((f) => f.key === 'offerType' || f.key === 'vehicleImageUrl'),
-    [template],
+  // The offer kind this template is built against. A code template (no doc
+  // snapshot) is always a vehicle offer — the only ones in code are the
+  // vehicle-offer plates.
+  const kind = useMemo(
+    () => (docSnapshot ? offerKindForDoc(docSnapshot) : offerKind(DEFAULT_OFFER_KIND)),
+    [docSnapshot],
   );
-  const showAutomotiveTools = isVehicleOffer;
+
+  // Automotive tooling — the vehicle picker, EVOX paint swatches, and with them
+  // the make that drives the disclaimer, the OEM required fields and every co-op
+  // lookup. Two conditions, and both are needed:
+  //
+  //   MAY   the kind opt into vehicle tooling at all, and
+  //   DOES  this particular template actually carry the vehicle/offer fields.
+  //
+  // The field check alone was the old test, and it is still load-bearing: a
+  // legacy doc predating the fixed schema carries neither field and must keep
+  // falling to the clean generic form. The capability alone would show a vehicle
+  // picker on it. Deliberately independent of the active ACCOUNT, so a
+  // vehicle-offer template gets the OEM UI even in admin/global context.
+  const showAutomotiveTools = useMemo(
+    () =>
+      kind.capabilities.vehiclePicker &&
+      template.fields.some((f) => f.key === 'offerType' || f.key === 'vehicleImageUrl'),
+    [kind, template],
+  );
 
   // A template shows two offers when it carries o2_ fields (a "dual" template) —
   // that's a property of the template's design, not a client choice. Reps only
@@ -414,7 +448,22 @@ export default function AdGeneratorPage() {
   // are still empty. Export is gated on this. Prefer the make of the offer's own
   // vehicle (set by an OEM incentive or the YMM picker) so a Subaru offer inside a
   // multi-make account validates against Subaru's rule, not the account default.
-  const oemMake = data._vehMake?.trim() || accountData?.oem || accountData?.oems?.[0] || '';
+  //
+  // Gated on the kind's `manufacturerRules`, NOT on `vehiclePicker`: a SERVICE
+  // offer has a make but no vehicle, and manufacturer service co-op is keyed by
+  // brand — so fixed-ops ads need this checking without a YMM picker. The
+  // account-OEM fallback below is what supplies the make in that case.
+  // ...and only when this AD actually advertises something. `manufacturerRules`
+  // is a property of the KIND, but "no offer" is a property of the ad: a Now
+  // Hiring ad built on the custom kind makes no manufacturer claim, so there is
+  // nothing for an OEM required-field rule or a co-op pack to check. Suppressing
+  // it here rather than splitting the kind is what lets one Custom kind carry
+  // both an oil-change coupon and a job posting.
+  const advertisesOffer = !isNoOfferType(data.offerType);
+  const oemMake =
+    kind.capabilities.manufacturerRules && advertisesOffer
+      ? data._vehMake?.trim() || accountData?.oem || accountData?.oems?.[0] || ''
+      : '';
   useEffect(() => {
     if (!oemMake) {
       setOemRule(null);
@@ -499,7 +548,7 @@ export default function AdGeneratorPage() {
     for (const f of applyFieldPrefs(template.fields, hiddenFields, oemRule, data.offerType)) {
       // Skip fields hidden by the current data (e.g. APR fields when the
       // offer type is Lease). Recomputes as the user changes the offer type.
-      if (!isFieldVisible(f, data)) continue;
+      if (!isFieldVisible(f, visibilityData)) continue;
       const g = f.group || 'General';
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push(f);
@@ -509,7 +558,7 @@ export default function AdGeneratorPage() {
     const order = docSnapshot?.fieldGroups ?? [];
     const rank = (g: string) => { const i = order.indexOf(g); return i < 0 ? order.length + 1 : i; };
     return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
-  }, [template, data, docSnapshot, hiddenFields, oemRule]);
+  }, [template, data, visibilityData, docSnapshot, hiddenFields, oemRule]);
 
   const set = (key: string, value: string) => setData((d) => ({ ...d, [key]: value }));
 
@@ -1071,12 +1120,20 @@ export default function AdGeneratorPage() {
                 )}
                 <div className="space-y-4">
                   {shown.map((f) => {
-                    if (f.key === 'disclaimer') {
+                    // The composing disclaimer field — template picker, token
+                    // substitution, dealer-fee boilerplate, VIN/Stock append —
+                    // only where there are offer figures to compose FROM. On a
+                    // kind with no offer types it would pick the `custom` code
+                    // default and append "Advertised price includes all
+                    // dealer-imposed fees" to a Now Hiring ad. Those kinds get a
+                    // plain textarea and type their own fine print.
+                    if (f.key === 'disclaimer' && composesDisclaimer(kind)) {
                       return (
                         <DisclaimerField
                           key={f.key}
                           field={f}
                           renderData={renderData}
+                          offerKind={kind.id}
                           make={oemMake}
                           value={data.disclaimer ?? ''}
                           onChange={(v) => set('disclaimer', v)}
@@ -1110,19 +1167,34 @@ export default function AdGeneratorPage() {
               );
             })}
 
-          {/* The arithmetic behind the disclaimer. Manual entry only: an applied
-              OEM incentive carries the manufacturer's own fine print verbatim, so
-              there's no derivation of ours for anyone to check. */}
-          <CompliancePanel
-            accountKey={accountKey}
-            templateId={templateId}
-            doc={docSnapshot}
-            data={renderData}
-            sizeIds={selectedSizeIds}
-            onBlockingChange={setCoopBlocking}
-          />
+          {/* Manufacturer compliance — co-op rules plus the arithmetic behind the
+              disclaimer. Gated on the KIND rather than on `showAutomotiveTools`:
+              every rule here is looked up by vehicle MAKE, and the capability is
+              precisely "a make means something for this kind". Using
+              `showAutomotiveTools` would also drop the panel from a legacy vehicle
+              doc that happens to carry neither `offerType` nor `vehicleImageUrl`,
+              which would be a real regression rather than a fix.
 
-          {showAutomotiveTools && <OfferSummaryCard data={renderData} />}
+              `manufacturerRules`, not `vehiclePicker`: a service coupon carries
+              manufacturer claims and prohibited language without carrying a
+              vehicle. */}
+          {kind.capabilities.manufacturerRules && advertisesOffer && (
+            <CompliancePanel
+              accountKey={accountKey}
+              templateId={templateId}
+              doc={docSnapshot}
+              data={renderData}
+              sizeIds={selectedSizeIds}
+              onBlockingChange={setCoopBlocking}
+            />
+          )}
+
+          {/* The arithmetic behind the disclaimer. Gated on whether the kind
+              composes one at all — NOT on `showAutomotiveTools`, which is about
+              the vehicle picker. A service coupon's derived savings is the single
+              most checkable claim on the ad, so this is exactly where it has to
+              show. The card self-hides when nothing has been derived yet. */}
+          {composesDisclaimer(kind) && <OfferSummaryCard data={renderData} />}
         </div>
 
         {/* Preview + export */}
@@ -1130,8 +1202,10 @@ export default function AdGeneratorPage() {
           <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
             {/* Co-op standing for the plate this ad is built from — shown next to
                 export, because "the design moved since the OEM saw it" needs to
-                land before the ad ships, not when the claim is rejected weeks on. */}
-            {showAutomotiveTools && oemMake && (
+                land before the ad ships, not when the claim is rejected weeks on.
+                Keyed on `manufacturerRules` — a service ad's co-op standing
+                matters just as much, and it has no vehicle picker. */}
+            {kind.capabilities.manufacturerRules && advertisesOffer && oemMake && (
               <div className="mb-3">
                 <CoopStanding templateId={templateId} make={oemMake} />
               </div>

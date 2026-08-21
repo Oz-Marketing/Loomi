@@ -291,6 +291,89 @@ async function attemptSendEmailViaSendGrid(
 }
 
 /**
+ * Clear an address from SendGrid's own suppression lists.
+ *
+ * WHY THIS EXISTS
+ * ───────────────
+ * Deleting our EmailSuppression row only tells the Loomi worker it may
+ * send again. SendGrid keeps its own lists and silently drops mail to
+ * anything on them, so a support rep who removed the row in Loomi would
+ * watch the blast report say "sent" while the customer received nothing.
+ * Re-enabling a recipient has to clear both sides.
+ *
+ * SendGrid splits these across three endpoints by kind, so map from the
+ * row's reason rather than shotgunning all three:
+ *   unsubscribe → /asm/suppressions/global/{email}
+ *   bounce      → /suppression/bounces/{email}
+ *   spamreport  → /suppression/spam_reports/{email}
+ *
+ * A `manual` row has no SendGrid counterpart — it only ever existed on
+ * our side — so it resolves to an empty list and makes no API call.
+ *
+ * Best-effort by design: returns what happened instead of throwing, so a
+ * SendGrid outage can't block the local removal the operator asked for.
+ */
+export type SuppressionReason = 'unsubscribe' | 'bounce' | 'spamreport' | 'manual';
+
+export interface ClearSuppressionResult {
+  /** Endpoints we called and SendGrid accepted (204, or 404 = already gone). */
+  cleared: string[];
+  /** Human-readable failures; empty when everything worked. */
+  errors: string[];
+}
+
+function suppressionPathsFor(reason: string): string[] {
+  switch (reason) {
+    case 'unsubscribe':
+      return ['/asm/suppressions/global'];
+    case 'bounce':
+      return ['/suppression/bounces'];
+    case 'spamreport':
+      return ['/suppression/spam_reports'];
+    default:
+      // 'manual' and anything unrecognized: nothing to clear upstream.
+      return [];
+  }
+}
+
+export async function clearSendGridSuppression(input: {
+  apiKey: string;
+  email: string;
+  reason: string;
+}): Promise<ClearSuppressionResult> {
+  const cleared: string[] = [];
+  const errors: string[] = [];
+  const paths = suppressionPathsFor(input.reason);
+
+  for (const path of paths) {
+    const url = `${SENDGRID_BASE}${path}/${encodeURIComponent(input.email)}`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${input.apiKey}` },
+        signal: controller.signal,
+      });
+      // 204 = removed. 404 = not on that list, which is the same end state.
+      if (res.status === 204 || res.status === 404) {
+        cleared.push(path);
+      } else {
+        errors.push(`${path} returned HTTP ${res.status}`);
+      }
+    } catch (err) {
+      errors.push(
+        `${path}: ${err instanceof Error && err.name === 'AbortError' ? 'timed out' : err instanceof Error ? err.message : 'unknown error'}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return { cleared, errors };
+}
+
+/**
  * Verify an API key by pinging GET /scopes — returns 200 + an array of
  * the key's permitted scopes if valid, 401 if not. Cheap and side-effect
  * free, so safe to call from settings UI.

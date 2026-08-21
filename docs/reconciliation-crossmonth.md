@@ -7,9 +7,9 @@
 
 ## 1. Design principle (non-negotiable)
 
-1. **Raw Meta spend is immutable.** Pull it from Meta and never overwrite it. It is the anchor every other number is checked against.
+1. **Raw Meta spend is immutable.** Pull it from Meta — at the **account** level, independently of the ad rows — and never overwrite it.
 2. **Every adjustment is its own visible line**, not a silent edit to the raw number.
-3. **Counted spend is derived**, never entered.
+3. **Raw and Counted are independently sourced, then reconciled.** Raw is the account's spend; Counted is the tracked rows on a billed basis. Neither is computed from the other — that is what makes `Raw − Out + In == Counted` a check with teeth instead of an identity. (Superseded the original "Counted is derived from Raw"; see §11.)
 4. **Adjustments post in atomic pairs** — a dollar leaving one month and the same dollar arriving in another are one event, posted together, never independently. This is what guarantees no orphaned or double-counted dollars.
 
 ---
@@ -24,20 +24,22 @@ Order preserves Loomi's existing rollover columns (`Budget`, `Payable (Expected)
 | 2 | `Budget` | currency | client monthly budget | input |
 | 3 | `Payable (Expected)` | currency | budget × (1 − margin) | derived |
 | 4 | `Adjusted Payable` | currency | `Payable + prior month's Variance/Carryforward` | derived |
-| 5 | `Raw Meta Spend` | currency | Meta API, Amount Spent, dated to day of delivery — **immutable** | no (system) |
+| 5 | `Raw Meta Spend` | currency | Meta API **account-level** monthly spend, dated to day of delivery — **immutable**, and independent of the tracked rows | no (system) |
 | 6 | `Cross-Month Out (−)` | currency | Σ of settled origin-month slices leaving this month | derived (from flight ledger) |
-| 7 | `Cross-Month In (+)` | currency | Σ of settled slices arriving this month from earlier months | derived (from flight ledger) |
-| 8 | `Counted Spend` | currency | `Raw Meta Spend − Cross-Month Out + Cross-Month In` | no |
+| 7 | `Cross-Month In (+)` | currency | Σ of settled slices arriving this month from another month | derived (from flight ledger) |
+| 8 | `Counted Spend` | currency | Σ `effectiveActual` over the tracked rows — each cross-month run once, in its billed month | no |
+| 8b | *(residual)* | currency | `(Raw − Out + In) − Counted`, shown only when nonzero, as **"in account, not in Loomi"** | no |
 | 9 | `Variance / Carryforward` | currency | `Adjusted Payable − Counted Spend` | no |
 | 10 | `Pending Forward` | currency + flag | Σ of *unsettled* cross-month slices sitting in this month's raw that will leave at settlement (informational only — does **not** affect Counted yet) | no |
 
-**Counted formula (the one that matters):**
+**The tie-out (the one that matters):**
 
 ```
-Counted Spend = Raw Meta Spend − Cross-Month Out + Cross-Month In
+tieOut   = Raw Meta Spend − Cross-Month Out + Cross-Month In
+residual = tieOut − Counted Spend          // 0 = clean
 ```
 
-Raw stays sacred. Out removes origin-month dollars of a flight billed in a later month. In receives those dollars in the billed month. July's Raw already holds the July-delivered portion, so once In posts the origin slice, the full flight is counted exactly once, in the billed month.
+Raw stays sacred. Out removes origin-month dollars of a flight billed in another month. In receives those dollars in the billed month. The billed month's Raw already holds its own delivered portion, so once In posts the origin lump, the full flight is accounted for exactly once, in the billed month — and `tieOut` should land precisely on `Counted`, which was summed from the rows without ever consulting Raw. When it doesn't, the gap is real and is surfaced rather than absorbed (§11).
 
 **Sign convention (match existing rollover):** `Variance = Adjusted Payable − Counted`, so **negative = overspent**, positive = underspent, and the value rolls forward into next month's `Adjusted Payable`. (Note this is the *opposite* sign of the H1 audit spreadsheet, which uses `Actual − Planned` where positive = over. Same magnitude, flipped sign — worth a tooltip so nobody trips on it.)
 
@@ -115,7 +117,7 @@ Example expansion of Jun 2026 `Cross-Month Out`:
 
 ## 7. Edge cases
 
-- **Three-plus-month flight.** Multiple origin slices, one billed month. Out posts on each origin month; In on the billed month equals the sum of all slices. Invariant still holds (Σ slice Outs = In).
+- **Three-plus-month flight.** One billed month, more than one origin month. The row subtraction yields a single lump for all of them together, so the split comes from the flight's own month rows when they cover every origin month and add up to that lump; otherwise the flight is flagged **needs manual review** and left out of the columns entirely rather than posting the lump to a guessed month (§11).
 - **Multiple cross-month flights in one month.** Out/In/Pending are sums; drill-down lists each flight separately.
 - **Flight billed in its own final run month with no later spill.** Not cross-month — `cross-month` flag is false, no ledger record, Out/In = 0.
 - **Cross-month but not lifetime (or vice versa).** Independent flags. This logic keys only on `cross-month`; `lifetime` is irrelevant here.
@@ -237,7 +239,7 @@ These event budgets are funded *inside* the $1,540 monthly, not additive. So the
 A reconciliation is trustworthy when all hold:
 
 1. `Raw Meta Spend` equals the Meta export to the cent for every month (no drift, no overwrite).
-2. `Counted = Raw − Out + In` in every row.
+2. `Raw − Out + In` lands on `Counted` in every row — with the two sides sourced independently, so the equality is evidence rather than arithmetic.
 3. `Σ Out == Σ In` (± carry-in/carry-out at the window boundary).
 4. Every cross-month flight is counted in exactly one month = its `billed_month`, and only after settlement.
 5. No month shows Out without a matching settled In somewhere, and vice versa.
@@ -248,17 +250,31 @@ A reconciliation is trustworthy when all hold:
 
 ## 10. Implementation notes (as built)
 
-**Everything is derived.** The only stored intent is each flight's billed month —
-`MetaAdsPacerAd.fullRunAppliedToMonth` ("count this run in month X"). Slice
-amounts, `pending`/`settled` status, the Out/In/Pending rollups and the
-conservation check are all recomputed on read by
-`src/lib/ad-pacer/cross-month-ledger.ts`. There is no second copy of the truth to
-drift out of sync, and no migration.
+**Two independently-sourced totals, reconciled.**
 
-This also makes §1.4 (atomic paired posting) structural rather than
-transactional: Out and In are computed from the same ledger entry in one pass, so
-they cannot disagree through a partial write. `checkConservation` then verifies
-the arithmetic end to end.
+| Quantity | Where it comes from |
+|---|---|
+| **Raw** | `fetchAccountMonthlySpend` — the ad ACCOUNT's monthly spend from Meta (`time_increment=monthly`). Includes ads that were never linked in Loomi. Stored per month on `MetaAdsPacerPeriodBudget.metaAccountSpend`. |
+| **Counted** | Σ `effectiveActual` over the month's pacer rows — each cross-month run counted once, in its billed month. This is also the base the over/under measures against, unchanged. |
+| **Out / In** | Per flight: `runSpend − billedDelivery`, from the flight's own row (§11). |
+
+`variance` is **unchanged**: `Counted − Target`. It never touches Raw. Raw + Out/In
+is the parallel number that verifies Counted.
+
+**Raw is stored, not fetched per page load.** `loadAccountRawSpend` refreshes the
+window in one Graph call when a month is missing or the last two months are older
+than six hours, and writes each month back to the period-budget row. Every failure
+path is swallowed: no Meta connection, no linked ad account, expired token, Graph
+down — the page renders on the stored anchor, and a month with nothing stored
+falls back to the row sum, is labeled as such in the UI, and is **excluded from
+the tie-out** rather than reported as a phantom gap. Google has no equivalent
+account-level pull, so its months always take the row-sum path and never tie out.
+
+**Base/Added is not a Raw concern.** Raw is a single account-level total per
+month, by design. The account only ever spent one total; Base and Added are how
+the TARGET is sliced, and they sum to that same total. The split lives on the
+target and the carryover apply (carryover lands in Base, as today) and never
+touches the Raw-vs-Counted tie-out. Do not attempt to bucket-split Raw.
 
 **Field mapping.**
 
@@ -266,9 +282,10 @@ the arithmetic end to end.
 |------|-------|
 | `flight_id` | `groupFlightRuns` key — the linked Meta ad-set id, else the `linkedPrevAdId` chain root |
 | `billed_month` | `fullRunAppliedToMonth` (set via `POST …/resolve-cross-month`, action `apply_full_run`, `month`) |
-| `origin_slices[].dated_spend` | each pre-bill month row's `pacerActual` |
-| `flight_total` | Σ the run's month slices (Meta's own `pacerRunSpend` is cross-checked, not trusted over the slices) |
+| `origin_total` | `pacerRunSpend − pacerActual` on the billed-month row, or the settlement snapshot once frozen |
+| `flight_total` | `pacerRunSpend` — Meta's all-time run figure. The month rows are cross-checked against it (`runSpendMismatch`), not trusted over it |
 | `status` | derived: `run_end` passed AND `billed_month` reached |
+| settlement snapshot | `settledRunSpend`, `settledBilledDelivery`, `settledAt` |
 | lifetime cap (§8a adherence) | `metaLifetimeBudget` |
 
 **Keyed on cross-month, not lifetime** (§3, §7). The ledger reads
@@ -277,14 +294,11 @@ identically to a lifetime one.
 
 **No lifetime hold-out.** A running lifetime ad is not excluded from its month's
 over/under. It spends close to its set budget whether or not the run has closed,
-so its spend counts the whole time it is live, like a daily line (which is also
-only part-delivered mid-month — elapsed-time pacing, not exclusion, accounts for
-that). The genuine case that motivated the old hold-out — a budget deliberately
-spread across two months that Meta under-delivers in the first — is handled by
-the split-run settlement and by this ledger, both keyed on an explicit user mark
-rather than on "is it still running". That matters here: an exclusion keyed on
-run state silently dropped real spend out of a month's variance, and a run whose
-status never flipped dropped it forever.
+so its spend counts the whole time it is live, like a daily line. The genuine
+case that motivated the old hold-out — a budget deliberately spread across two
+months that Meta under-delivers in the first — is handled by the split-run
+settlement and by this ledger, both keyed on an explicit user mark rather than on
+"is it still running".
 
 **Precedence against the split mechanism.** A run marked "split across months"
 settles by the *other* mechanism (once on its final month, against
@@ -292,42 +306,124 @@ settles by the *other* mechanism (once on its final month, against
 settlement mechanisms must never both move the same flight's dollars.
 
 **Regression.** `src/lib/ad-pacer/cross-month-ledger.test.ts` encodes §8a: the
-counted table to the cent, net +$12.80, the Mar row at −3.16, and the
-naive-vs-correct gap of exactly $8.58 (acceptance check 7).
+counted table to the cent, net +$12.80, the Mar row at −3.16, the naive-vs-correct
+gap of exactly $8.58 (acceptance check 7) — and now a residual of zero in every
+row, which is the check that the old build could not fail.
 
-### Carryover interaction
+---
 
-The two systems are orthogonal by construction: `Out`/`In` move dollars on the
-SPEND side, an applied carryover moves dollars on the TARGET side
+## 11. The rebuild — independent totals, row subtraction, settlement snapshot
+
+Supersedes the sibling-row origin-slice logic and the "Counted is derived from
+Raw" formula.
+
+### 11.1 The inversion
+
+The pipeline used to define Counted *from* Raw: `rawSpend` was Σ the same pacer
+rows, and `countedSpend = rawSpend − out + in`. Because both sides came from one
+source, `Raw − Out + In == Counted` was true **by construction** — nothing was
+being checked, and an ad spending in the account that was never linked in Loomi
+was invisible. Raw now comes from the account and Counted from the rows, and the
+old formula becomes an audit value (`tieOut`) compared against Counted.
+
+### 11.2 Out / In by row subtraction
+
+For a cross-month flight:
+
+```
+originTotal = pacerRunSpend − pacerActual   // full run − the billed month's own slice
+Out = originTotal, in the origin month(s)
+In  = originTotal, in the billed month
+```
+
+`pacerRunSpend` is the ad set's all-time full-run spend and sits on **every** row
+of the flight, so the origin total is knowable from the billed-month row alone —
+which matters, because a two-month straddle frequently has no row in its origin
+month at all. The old sibling-row logic saw nothing in that case.
+
+**Direction-agnostic.** The subtraction never compares "earlier vs later", so a
+flight that delivers early and bills late (Out earlier, In later) and one that
+delivers late and bills early (Out later, In earlier) come out of the same
+formula with no branch on month order. The second case was previously invisible.
+
+**Placing the lump.** One origin month: the lump *is* that month. Two or more
+origin months: the flight's own rows place it, but only when they exist for every
+origin month and sum to the lump within a cent — corroborated data, not a guess.
+Otherwise the flight is flagged `unsplittable_span` and excluded. (This is not
+the daily-series split the original spec defers; that remains unbuilt.)
+
+**Never a silent zero.** No full-run figure and no snapshot → flagged
+`missing_run_spend`, never `originTotal = 0`. A billed month with no ad row to
+carry the run → flagged `billed_month_has_no_row`. A flagged flight moves no
+dollars at all; the residual it leaves is what raises the hand.
+
+### 11.3 Settlement snapshot
+
+At settlement, the two inputs are frozen onto the billed-month row
+(`settledRunSpend`, `settledBilledDelivery`, `settledAt`) and Out/In read from
+them thereafter. This matters because `MetaAdsPacerDailySpend` is a rolling
+120-day window and a later re-sync can move the live fields. Settlement always
+happens days after run end, deep inside that window, so the first read after
+settlement always captures fresh data. Both inputs are persisted, not just the
+derived Out, so the split and the tie-out stay auditable.
+
+### 11.4 Pending flights do not enter the tie-out
+
+Counted places a marked run in its billed month the moment the mark is made,
+while Out/In deliberately wait for settlement (§4). The tie-out nets the pending
+pair back out (`counted + pendingOut − pendingIn`), so a flight still in the air
+reads as clean at both ends instead of as a gap at both ends. Once it settles,
+Out/In post, the pending pair goes to zero, and the identity is unchanged.
+
+### 11.5 The residual, and the apply gate
+
+`residual = tieOut − Counted`. Nonzero is surfaced on its own line —
+**"in account, not in Loomi: $X"**. Positive means the account spent more than
+the tracked rows account for (an unlinked ad, or a flight marked to the wrong
+month). It is **not** a budget variance to carry forward; it is a data gap to
+resolve.
+
+While any in-window month carries a residual, **Apply is blocked** in the UI with
+the reason shown. The gate is deliberately client-side: the API stays permissive
+so nobody is locked out of reconciling when Meta is unreachable, and a month
+whose Raw could not be verified is excluded from the check rather than counted as
+a gap.
+
+### 11.6 The billing mark spans the whole flight
+
+`POST …/resolve-cross-month` (`apply_full_run`) now writes
+`fullRunAppliedToMonth` to **every row of the flight**, not just the row that was
+clicked. `effectiveActual` reads that mark to place the run: an origin row
+contributes 0 and the billed row contributes the full run. Marking only the row
+in hand — usually the ORIGIN row, since that is the month the straddle is noticed
+in — left the billed row unmarked, so it kept counting its own slice and the rest
+of the run was counted in no month at all. Nothing surfaced that before, because
+Counted was derived from Raw; the tie-out would now flag it on a completely
+ordinary click. `clear` clears the mark flight-wide for the same reason (the
+split/link fields stay per-row — unlinking a chain is a different intent).
+
+### 11.7 Carryover interaction
+
+The two systems remain orthogonal: `Out`/`In` move dollars on the SPEND side, an
+applied carryover moves dollars on the TARGET side
 (`adjustedSpendTarget = spendTarget + appliedIn`, and `variance` nets `appliedIn`
-out). Nothing in the ledger feeds `variance` today, so applying over/under
-behaves exactly as it did before this change.
+out).
 
-One property worth knowing: a month's `unapplied` is `carryover − appliedOut`,
-where `carryover` is recomputed live and `appliedOut` is the fixed dollar amount
-of the ledger entry. So if a month's spend changes AFTER its over/under was
-applied — a cross-month flight settles, or one gets marked — the difference
-resurfaces as unapplied on that month rather than being silently lost. Nothing
-double-counts; you just reconcile that month twice. The `Pending Forward` column
-and the "not final yet" caution on Apply exist so this is a choice rather than a
-surprise.
+A month's `unapplied` is `carryover − appliedOut`, where `carryover` is recomputed
+live and `appliedOut` is the fixed dollar amount of the ledger entry. So if a
+month's spend changes AFTER its over/under was applied — a cross-month flight
+settles, or one gets marked — the difference resurfaces as unapplied on that
+month rather than being silently lost. Nothing double-counts; you just reconcile
+that month twice. The `Pending Forward` column and the "not final yet" caution on
+Apply exist so this is a choice rather than a surprise.
 
-### Not yet done
+### 11.8 Not yet done
 
-`Variance / Carryforward` still measures against the pre-existing base
-(Σ `effectiveActual`, less the §3 lifetime hold-out and split-run exclusions),
-NOT against `Counted Spend`. For a settled flight with consistent Meta data the
-two are equal, so the columns above are a faithful decomposition of the number
-already in use. They diverge in exactly two cases, both of which the columns now
-make visible:
-
-1. a **pending** flight — §4 says its slice stays counted in its origin month,
-   where the old code moved it immediately; and
-2. Meta's `pacerRunSpend` disagreeing with the summed month slices (the old code
-   trusted `pacerRunSpend`, and silently counted nothing at all when it was
-   unsynced).
-
-Switching the variance basis to `countedSpend` touches three interacting
-settlement mechanisms (the §3 lifetime hold-out, split-run settlement, and this
-ledger), so it wants its own change with the two numbers visible side by side
-first — hence `rawSpend`/`countedSpend` and `actual` all being on screen.
+- The **daily-series split** for a 3+ month flight whose own rows can't place the
+  lump. Flagged for manual review instead.
+- A **refresh control** for Raw. It refreshes on read when stale; there is no
+  button to force it.
+- The settlement snapshot is captured on the first reconciliation READ after
+  settlement. If nobody opens the tab for months, the freeze happens later than
+  it should and could catch restated figures. Moving the capture into the Meta
+  sync would close that window.

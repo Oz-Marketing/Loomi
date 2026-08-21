@@ -39,6 +39,8 @@ import { TemplateFilterRail } from '@/components/templates/template-filter-rail'
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { OFFER_KINDS } from '@/lib/ad-generator/offer-kinds';
+import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
@@ -236,7 +238,13 @@ export function AdTemplatesTab({
       setBusy(false);
     }
   };
-  const startBlank = () => void createAndOpen('Untitled template', blankTemplateDoc(`tmpl-${Date.now()}`, 'Untitled template'));
+  // One starting point per offer KIND — the kind decides the field schema baked
+  // into the doc (a general ad asks for a headline and a CTA, a vehicle offer for
+  // payments, terms and a VIN), and it can't be changed afterwards without
+  // orphaning every binding. So it has to be chosen here rather than in the
+  // builder. Driven off the registry, so a new kind appears without editing this.
+  const startBlank = (kind: string) =>
+    void createAndOpen('Untitled template', blankTemplateDoc(`tmpl-${Date.now()}`, 'Untitled template', undefined, kind));
   const startFrom = (t: DocTemplate) => t.doc && void createAndOpen(`${t.name} copy`, structuredClone(t.doc));
 
   // A scheduled template is only "live" within its window (inclusive, local
@@ -466,6 +474,11 @@ export function AdTemplatesTab({
                     })()}
                     badges={
                       <>
+                        {/* First badge: what KIND of ad this template builds. It
+                            decides the whole form a user will fill, and it can't
+                            be changed after creation — so it belongs on the card
+                            rather than only inside the builder. */}
+                        <OfferKindBadge doc={t.doc} />
                         {/* Sharing is invisible otherwise — you'd have to open the
                             modal on every card to find out who has a template. */}
                         {t.sharedAccountKeys.length > 0 && (
@@ -629,7 +642,7 @@ export function AdTemplatesTab({
             <div className="mb-4 flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-sm font-bold text-[var(--foreground)]">New template</h2>
-                <p className="text-xs text-[var(--muted-foreground)]">Start from a blank artboard, or duplicate a published template as a starting point.</p>
+                <p className="text-xs text-[var(--muted-foreground)]">Pick what kind of ad it is — that sets the questions the form asks — or duplicate a published template.</p>
               </div>
               <button onClick={() => setNewOpen(false)} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
                 <XMarkIcon className="h-5 w-5" />
@@ -637,19 +650,24 @@ export function AdTemplatesTab({
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <button
-                onClick={startBlank}
-                disabled={busy}
-                className="mb-4 flex w-full items-center gap-3 rounded-xl border border-dashed border-[var(--border)] p-4 text-left transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40 disabled:opacity-50"
-              >
-                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-                  <PlusIcon className="h-5 w-5" />
-                </span>
-                <span>
-                  <span className="block text-sm font-semibold text-[var(--foreground)]">Start from scratch</span>
-                  <span className="block text-[11px] text-[var(--muted-foreground)]">An empty artboard — add your own elements.</span>
-                </span>
-              </button>
+              <div className="mb-4 space-y-2">
+                {OFFER_KINDS.map((k) => (
+                  <button
+                    key={k.id}
+                    onClick={() => startBlank(k.id)}
+                    disabled={busy}
+                    className="flex w-full items-center gap-3 rounded-xl border border-dashed border-[var(--border)] p-4 text-left transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40 disabled:opacity-50"
+                  >
+                    <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+                      <PlusIcon className="h-5 w-5" />
+                    </span>
+                    <span>
+                      <span className="block text-sm font-semibold text-[var(--foreground)]">Blank {k.label.toLowerCase()}</span>
+                      <span className="block text-[11px] text-[var(--muted-foreground)]">{k.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
 
               {publishedTemplates.length > 0 && (
                 <>

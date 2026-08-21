@@ -27,6 +27,7 @@ import { UsersTab } from '@/components/settings/users-tab';
 import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
+import { EmailTextsTab } from '@/components/settings/email-texts-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import {
   canonicalSubaccountSection,
@@ -35,7 +36,8 @@ import {
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
-// Sending + Suppressions tabs now live under /messaging/settings.
+// Email & Texts renders below in settings mode — sending identity, SMS,
+// the compliance footer, and suppressions, all behind one nav entry.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -94,6 +96,7 @@ type DetailTab =
   | 'domains'
   | 'integrations'
   | 'users'
+  | 'email-texts'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -118,10 +121,11 @@ const TABS: TabDef[] = [
 // settings nav and gates each section by sector. The two lists used to be
 // hand-synced copies.
 //
-// Sending + Suppressions used to live here but moved into the
-// messaging-scoped settings page at /subaccount/<slug>/messaging/settings
-// since they're tightly coupled to the email engine. Legacy URLs are
-// redirected from the [tab] page below.
+// Sending / SMS / Suppressions briefly lived at /messaging/settings on the
+// grounds that they're coupled to the send engine. They're back here, merged
+// into a single "Email & Texts" section with sub-tabs: they're per-account
+// config people look for under Settings, and four sibling nav entries read as
+// four unrelated pages. The messaging URLs now redirect here.
 
 // Settings mode lives at two URL shapes:
 //   • Studio scoped:  /subaccount/<slug>/settings/<tab>            (section in path)
@@ -1671,8 +1675,13 @@ export function SubAccountDetailPage({
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}
 
-        {/* Sending + Suppressions tabs moved to /messaging/settings — see
-            the route at src/app/subaccount/[slug]/messaging/settings. */}
+        {/* ════════════ EMAIL & TEXTS TAB (settings mode only) ════════════
+            Sending identity + SMS, the CAN-SPAM footer, and the suppression
+            list, behind sub-tabs. Every field under Sending Config is a hard
+            preflight blocker, so this is where a blocked send sends you. */}
+        {settingsMode && activeTab === 'email-texts' && key && (
+          <EmailTextsTab accountKey={key} />
+        )}
 
         </div>{/* end tab content */}
         </div>{/* end flex sidebar+content */}

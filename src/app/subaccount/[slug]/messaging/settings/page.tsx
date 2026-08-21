@@ -4,9 +4,8 @@ interface PageProps {
   params: Promise<{ slug: string }>;
 }
 
-// /subaccount/<slug>/messaging/settings → bounce to the sending tab.
-// Mirrors the existing /settings → /settings/company default-tab pattern.
-export default async function SubaccountMessagingSettingsRedirect({ params }: PageProps) {
+/** Moved into Settings → Studio Settings → Email & Texts (2026-08-20). */
+export default async function LegacyMessagingSettingsIndex({ params }: PageProps) {
   const { slug } = await params;
-  redirect(`/subaccount/${slug}/messaging/settings/sending`);
+  redirect(`/subaccount/${slug}/settings/email-texts?section=sending`);
 }

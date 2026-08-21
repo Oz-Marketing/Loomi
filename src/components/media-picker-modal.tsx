@@ -9,6 +9,7 @@ import {
   ArrowUpTrayIcon,
   ChevronRightIcon,
   SparklesIcon,
+  FilmIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { MEDIA_CATEGORIES } from '@/lib/media-categories';
@@ -393,20 +394,28 @@ export function MediaPickerModal({
                 ].filter(Boolean).join(' · ')}
               >
                 <div className="relative h-[120px] bg-[var(--muted)] overflow-hidden">
-                  {isClipFile(f) && f.url ? (
-                    <video
-                      src={f.url}
-                      muted
-                      loop
-                      playsInline
-                      // Autoplaying the grid is the point: which take is which is
-                      // not a question a filename answers.
-                      autoPlay
-                      className={`w-full h-full object-cover ${outOfLicence ? 'opacity-40 grayscale' : ''}`}
-                    />
-                  ) : isImageFile(f) && f.url ? (
+                  {/* Thumbnail only, never the original — a 120px picker tile
+                      must not pull a multi-megabyte asset. See media/page.tsx.
+                      That rule is why a clip tile shows its poster rather than
+                      the clip: autoplaying a grid of MP4s is the same mistake in
+                      a worse unit. */}
+                  {isClipFile(f) ? (
+                    f.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={f.thumbnailUrl}
+                        alt={f.name}
+                        className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicence ? "opacity-40 grayscale" : ""}`}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <FilmIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-40" />
+                      </div>
+                    )
+                  ) : isImageFile(f) && f.thumbnailUrl ? (
                     <img
-                      src={f.thumbnailUrl || f.url}
+                      src={f.thumbnailUrl}
                       alt={f.name}
                       // Desaturated rather than hidden: still selectable, but it
                       // can't be mistaken for cleared creative at a glance.

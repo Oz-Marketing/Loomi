@@ -18,6 +18,13 @@ import {
 
 export interface AccountData {
   slug?: string;
+  /**
+   * When Loomi's lifecycle segments were bootstrapped into this account, or
+   * null if never. The API has always sent it; declaring it here lets the
+   * segments page tell "needs seeding" from "already seeded" WITHOUT posting a
+   * write on every page view to find out.
+   */
+  lifecyclePresetsSeededAt?: string | null;
   dealer: string;
   category?: string;
   oem?: string;

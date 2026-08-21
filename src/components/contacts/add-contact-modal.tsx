@@ -124,14 +124,21 @@ export function AddContactModal({ accountKey, onClose, onCreated }: AddContactMo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
       onClick={onClose}
     >
+      {/* Three bands: a fixed header, a scrolling middle, a pinned footer.
+          The form used to be one block that simply grew — an account with
+          a few custom fields pushed Cancel / Add Contact off the bottom of
+          the viewport with no way to reach them. `max-h` + `min-h-0` is
+          what actually lets the middle band scroll: without min-h-0 a flex
+          child refuses to shrink below its content and the overflow never
+          engages. */}
       <div
-        className="glass-card rounded-2xl border border-[var(--border)] w-full max-w-md mx-4 p-5"
+        className="glass-card rounded-2xl border border-[var(--border)] w-full max-w-md max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center justify-between gap-3 px-5 pt-5 pb-4 flex-shrink-0">
           <h3 className="text-lg font-semibold">Add Contact</h3>
           <button
             type="button"
@@ -142,141 +149,149 @@ export function AddContactModal({ accountKey, onClose, onCreated }: AddContactMo
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="First name">
+        {/* The form wraps BOTH bands so the footer's submit still belongs
+            to it once the fields are in their own scroll container. */}
+        <form onSubmit={handleSubmit} className="flex flex-col min-h-0 flex-1">
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="First name">
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+                />
+              </Field>
+              <Field label="Last name">
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+                />
+              </Field>
+            </div>
+
+            <Field label="Email">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); setEmailError(null); }}
+                onBlur={(e) => setEmailError(validateEmail(e.target.value))}
+                placeholder="name@example.com"
+                className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] bg-[var(--card)] ${emailError ? 'border-red-400' : 'border-[var(--border)]'}`}
+              />
+              {emailError && <p className="text-xs text-red-400 mt-1">{emailError}</p>}
+            </Field>
+
+            <Field label="Phone">
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => { setPhone(e.target.value); setPhoneError(null); }}
+                onBlur={(e) => setPhoneError(validatePhone(e.target.value))}
+                placeholder="(555) 123-4567"
+                className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] bg-[var(--card)] ${phoneError ? 'border-red-400' : 'border-[var(--border)]'}`}
+              />
+              {phoneError && <p className="text-xs text-red-400 mt-1">{phoneError}</p>}
+            </Field>
+            <Field label="Vehicle Make">
               <input
                 type="text"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                value={vMake}
+                onChange={(e) => setVMake(e.target.value)}
+                placeholder="Ford"
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
               />
             </Field>
-            <Field label="Last name">
+            <Field label="Vehicle Model">
               <input
                 type="text"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                value={vModel}
+                onChange={(e) => setVModel(e.target.value)}
+                placeholder="F-150"
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
               />
             </Field>
+            <Field label="Vehicle Year">
+              <input
+                type="text"
+                value={vYear}
+                onChange={(e) => setVYear(e.target.value)}
+                placeholder="2023"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+              />
+            </Field>
+            <Field label="Source">
+              <input
+                type="text"
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                placeholder="Website, walk-in, referral, …"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+              />
+            </Field>
+            <Field label="Tags">
+              <input
+                type="text"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+                onBlur={() => {
+                  const deduped = [...new Set(tags.split(',').map((t) => t.trim()).filter(Boolean))];
+                  setTags(deduped.join(', '));
+                }}
+                placeholder="Spring Sale, VIP, …"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+              />
+            </Field>
+
+            {declaredCustomFields.length > 0 && (
+              <div className="pt-2 border-t border-[var(--border)]/70">
+                <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
+                  Custom fields
+                </p>
+                <div className="space-y-3">
+                  {declaredCustomFields.map((cf) => (
+                    <Field key={cf.id} label={cf.label}>
+                      <CustomFieldInput
+                        field={cf}
+                        value={customValues[cf.key]}
+                        onChange={(v) => setCustomValue(cf.key, v)}
+                      />
+                      {cf.description && (
+                        <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
+                          {cf.description}
+                        </p>
+                      )}
+                    </Field>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-[11px] text-[var(--muted-foreground)] pb-1">
+              At minimum, provide email or phone. The contact will be deduped against existing rows on those keys.
+            </p>
           </div>
 
-          <Field label="Email">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => { setEmail(e.target.value); setEmailError(null); }}
-              onBlur={(e) => setEmailError(validateEmail(e.target.value))}
-              placeholder="name@example.com"
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] bg-[var(--card)] ${emailError ? 'border-red-400' : 'border-[var(--border)]'}`}
-            />
-            {emailError && <p className="text-xs text-red-400 mt-1">{emailError}</p>}
-          </Field>
-
-          <Field label="Phone">
-            <input
-              type="tel"
-              value={phone}
-              onChange={(e) => { setPhone(e.target.value); setPhoneError(null); }}
-              onBlur={(e) => setPhoneError(validatePhone(e.target.value))}
-              placeholder="(555) 123-4567"
-              className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] bg-[var(--card)] ${phoneError ? 'border-red-400' : 'border-[var(--border)]'}`}
-            />
-            {phoneError && <p className="text-xs text-red-400 mt-1">{phoneError}</p>}
-          </Field>
-          <Field label="Vehicle Make">
-            <input
-              type="text"
-              value={vMake}
-              onChange={(e) => setVMake(e.target.value)}
-              placeholder="Ford"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
-            />
-          </Field>
-          <Field label="Vehicle Model">
-            <input
-              type="text"
-              value={vModel}
-              onChange={(e) => setVModel(e.target.value)}
-              placeholder="F-150"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
-            />
-          </Field>
-          <Field label="Vehicle Year">
-            <input
-              type="text"
-              value={vYear}
-              onChange={(e) => setVYear(e.target.value)}
-              placeholder="2023"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
-            />
-          </Field>
-          <Field label="Source">
-            <input
-              type="text"
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              placeholder="Website, walk-in, referral, …"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
-            />
-          </Field>
-          <Field label="Tags">
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              onBlur={() => {
-                const deduped = [...new Set(tags.split(',').map((t) => t.trim()).filter(Boolean))];
-                setTags(deduped.join(', '));
-              }}
-              placeholder="Spring Sale, VIP, …"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
-            />
-          </Field>
-
-          {declaredCustomFields.length > 0 && (
-            <div className="pt-2 border-t border-[var(--border)]/70">
-              <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
-                Custom fields
-              </p>
-              <div className="space-y-3">
-                {declaredCustomFields.map((cf) => (
-                  <Field key={cf.id} label={cf.label}>
-                    <CustomFieldInput
-                      field={cf}
-                      value={customValues[cf.key]}
-                      onChange={(v) => setCustomValue(cf.key, v)}
-                    />
-                    {cf.description && (
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
-                        {cf.description}
-                      </p>
-                    )}
-                  </Field>
-                ))}
-              </div>
+          {/* Pinned. The error sits here rather than in the scroll area so
+              a validation failure is visible without scrolling back to
+              find it. */}
+          <div className="flex-shrink-0 border-t border-[var(--border)]/70 px-5 py-4 space-y-2">
+            {error && <p className="text-xs text-red-300">{error}</p>}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={saving}
+                className="px-3 h-9 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              >
+                Cancel
+              </button>
+              <PrimaryButton type="submit" disabled={!canSubmit || saving}>
+                {saving ? 'Saving…' : 'Add Contact'}
+              </PrimaryButton>
             </div>
-          )}
-
-          <p className="text-[11px] text-[var(--muted-foreground)]">
-            At minimum, provide email or phone. The contact will be deduped against existing rows on those keys.
-          </p>
-
-          {error && <p className="text-xs text-red-300">{error}</p>}
-
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={saving}
-              className="px-3 h-9 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-            >
-              Cancel
-            </button>
-            <PrimaryButton type="submit" disabled={!canSubmit || saving}>
-              {saving ? 'Saving…' : 'Add Contact'}
-            </PrimaryButton>
           </div>
         </form>
       </div>

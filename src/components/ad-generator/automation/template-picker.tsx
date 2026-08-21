@@ -4,7 +4,8 @@ import { useMemo } from 'react';
 import { CheckCircleIcon, ExclamationTriangleIcon } from '@heroicons/react/24/solid';
 import { AdPreviewThumb } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
-import { usableByAutomation, type TemplateDoc } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { usableByAutomation } from '@/lib/ad-generator/offer-kinds';
 import { SYSTEM_FIELD_DEFAULTS } from '@/lib/ad-generator/system-fields';
 import type { AdData } from '@/lib/ad-generator/types';
 

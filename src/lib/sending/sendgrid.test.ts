@@ -6,7 +6,11 @@ vi.mock('@/lib/crypto/encryption', () => ({
   encryptToken: (v: string) => v,
 }));
 
-import { sendEmailViaSendGrid, SendGridError } from './sendgrid';
+import {
+  clearSendGridSuppression,
+  sendEmailViaSendGrid,
+  SendGridError,
+} from './sendgrid';
 import { UNSUBSCRIBE_TOKEN } from './unsubscribe-footer';
 
 const BASE = {
@@ -159,5 +163,99 @@ describe('sendEmailViaSendGrid — retries', () => {
     await vi.advanceTimersByTimeAsync(200);
     await promise;
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('clearSendGridSuppression', () => {
+  // Deleting only the local row left SendGrid still dropping the mail, so
+  // the operator saw "sent" while the customer got nothing.
+  function noContent() {
+    return { status: 204, headers: new Headers(), json: async () => ({}) } as unknown as Response;
+  }
+
+  function calledUrl(call = 0) {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    return fetchMock.mock.calls[call][0] as string;
+  }
+
+  it('clears the global list for an unsubscribe', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(noContent());
+
+    const out = await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'unsubscribe',
+    });
+
+    expect(out.errors).toEqual([]);
+    expect(calledUrl()).toContain('/asm/suppressions/global/buyer%40example.com');
+  });
+
+  it('clears the bounces list for a bounce', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(noContent());
+
+    await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'bounce',
+    });
+
+    expect(calledUrl()).toContain('/suppression/bounces/');
+  });
+
+  it('clears the spam_reports list for a spam report', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(noContent());
+
+    await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'spamreport',
+    });
+
+    expect(calledUrl()).toContain('/suppression/spam_reports/');
+  });
+
+  it('makes no call for a manual row — it never existed upstream', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+
+    const out = await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'manual',
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(out.errors).toEqual([]);
+  });
+
+  it('treats 404 as already-cleared, not an error', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(failure(404));
+
+    const out = await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'unsubscribe',
+    });
+
+    expect(out.errors).toEqual([]);
+    expect(out.cleared).toHaveLength(1);
+  });
+
+  it('reports an error instead of throwing, so the local removal survives', async () => {
+    const fetchMock = global.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue(failure(500));
+
+    const out = await clearSendGridSuppression({
+      apiKey: 'SG.x',
+      email: 'buyer@example.com',
+      reason: 'unsubscribe',
+    });
+
+    expect(out.cleared).toEqual([]);
+    expect(out.errors[0]).toContain('500');
   });
 });

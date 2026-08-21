@@ -15,6 +15,7 @@ import {
   CalculatorIcon,
   PuzzlePieceIcon,
   ShieldCheckIcon,
+  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
 
 export type SettingsTabKey =
@@ -252,6 +253,7 @@ export type SubaccountSectionKey =
   | 'integrations'
   | 'domains'
   | 'contact-fields'
+  | 'email-texts'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -311,6 +313,24 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
     label: 'Custom Fields',
     group: 'sector',
     icon: TagIcon,
+    visible: (s) => s.surface === 'studio',
+  },
+
+  // Everything about sending email and text: identity, the compliance
+  // footer, and the suppression list.
+  //
+  // ONE nav entry, tabs inside. This started as four sibling sections and
+  // that read as four unrelated settings pages — Email/Email Footer/SMS/
+  // Suppressions are one job. The sub-tabs live in email-texts-tab.tsx and
+  // are addressable via ?section=, so a "fix this in settings" link can
+  // still deep-link to the right one.
+  //
+  // Studio-only: Reporting and Projects don't send anything.
+  {
+    key: 'email-texts',
+    label: 'Email & Texts',
+    group: 'sector',
+    icon: PaperAirplaneIcon,
     visible: (s) => s.surface === 'studio',
   },
 

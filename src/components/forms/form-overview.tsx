@@ -460,6 +460,11 @@ function EmbedPopup({ onClose }: { onClose: () => void }) {
                 <li><strong>Iframe</strong> — fixed height. Use when the host page strips <code>&lt;script&gt;</code> tags.</li>
                 <li><strong>Direct link</strong> — share the hosted form URL anywhere.</li>
               </ol>
+              <p>
+                Reach for the script tag unless you truly can&rsquo;t: a fixed-height iframe
+                leaves empty space under a short form, and it can&rsquo;t grow when a
+                validation message appears.
+              </p>
             </HelpTip>
           </div>
           <button
@@ -498,7 +503,14 @@ function EmbedPopup({ onClose }: { onClose: () => void }) {
               onFocus={(e) => e.currentTarget.select()}
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
             />
-            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">Auto-resizes to fit your form&apos;s content. Best on most sites.</p>
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+              Auto-resizes to fit your form&apos;s content. Best on most sites. To tag the
+              leads with a campaign, add{' '}
+              <code className="rounded bg-[var(--muted)] px-1 py-0.5">
+                data-params=&quot;utm_source=&hellip;&amp;utm_campaign=&hellip;&quot;
+              </code>{' '}
+              to the tag — UTMs already on the visitor&apos;s URL are picked up on their own.
+            </p>
           </div>
 
           {/* Iframe */}

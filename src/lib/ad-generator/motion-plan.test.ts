@@ -115,15 +115,22 @@ describe('planMotionComposite', () => {
     expect(planMotionComposite(d, {}, SQUARE).clips[0].placement.radii).toBeUndefined();
   });
 
-  it('ignores crop zoom on a background clip, because the still ignores it too', () => {
-    // The background element's texture has no zoom transform in CSS. Honouring
-    // objectScale here would crop the MP4 tighter than the PNG of the same ad.
+  it('takes crop zoom from a cover background, which the still zooms too', () => {
     const d = doc([{ id: 'bg', type: 'background', binding: { kind: 'static', value: '/a.mp4' } }], {
       bg: { ...FULL, objectScale: 1.6, objectX: 0.2 },
     });
     const [clip] = planMotionComposite(d, {}, SQUARE).clips;
-    expect(clip.placement.zoom).toBeUndefined();
+    expect(clip.placement.zoom).toBe(1.6);
     expect(clip.placement.focalX).toBe(0.2);
+  });
+
+  it('ignores crop zoom on a TILED background, matching the CSS exactly', () => {
+    // The still only zooms a background texture on a plain cover fit. Zooming
+    // here would crop the MP4 tighter than the PNG of the same ad.
+    const d = doc([{ id: 'bg', type: 'background', fit: 'tile', binding: { kind: 'static', value: '/a.mp4' } }], {
+      bg: { ...FULL, objectScale: 1.6 },
+    });
+    expect(planMotionComposite(d, {}, SQUARE).clips[0].placement.zoom).toBeUndefined();
   });
 
   it('ignores crop zoom on a contained clip, which has no crop to zoom', () => {

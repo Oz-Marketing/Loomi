@@ -41,14 +41,73 @@ describe('addSizesToDoc', () => {
     expect(new Set(next.sizes.map((s) => s.id)).size).toBe(next.sizes.length);
   });
 
-  it('gives each new board its own layout, seeded from the source size', () => {
+  it('gives each new board its own layout, re-fitted from the source size', () => {
     const { doc: next, addedIds } = addSizesToDoc(doc(), STORY_SIZES, '1080x1080');
 
     for (const id of addedIds) {
-      expect(next.layouts[id]).toEqual(next.layouts['1080x1080']);
       // Its OWN copy — editing one board must not move the others.
       expect(next.layouts[id]).not.toBe(next.layouts['1080x1080']);
+      // 540×216 on the square stays 540×216 on the story: `w` holds as a fraction
+      // of width, `h` is re-derived. Cloning the fractions gave 540×384.
+      const box = next.layouts[id].headline;
+      expect(box.w * 1080).toBeCloseTo(540, 4);
+      expect(box.h * 1920).toBeCloseTo(216, 4);
     }
+  });
+
+  it('holds a FIXED element to its pixels on a board of a different width', () => {
+    const d = doc({
+      elements: [{ id: 'badge', type: 'shape', sizeMode: 'fixed' }],
+      sizes: [{ id: '500x500', label: 'Square 500×500', width: 500, height: 500 }],
+      layouts: { '500x500': { badge: { x: 0.1, y: 0.1, w: 0.4, h: 0.4 } } },
+    } as Partial<TemplateDoc>);
+
+    const { doc: next, addedIds } = addSizesToDoc(d, [{ label: 'Wide', width: 2000, height: 500 }], '500x500');
+    const box = next.layouts[addedIds[0]].badge;
+
+    // 200×200 on the 500×500 — still 200×200 on the 2000×500, not 800×500.
+    expect(box.w * 2000).toBeCloseTo(200, 4);
+    expect(box.h * 500).toBeCloseTo(200, 4);
+  });
+
+  it('scales a SCALE element with the board, keeping its shape', () => {
+    const d = doc({
+      elements: [{ id: 'hero', type: 'shape' }],
+      sizes: [{ id: '500x500', label: 'Square 500×500', width: 500, height: 500 }],
+      layouts: { '500x500': { hero: { x: 0.1, y: 0.1, w: 0.4, h: 0.4 } } },
+    } as Partial<TemplateDoc>);
+
+    const { doc: next, addedIds } = addSizesToDoc(d, [{ label: 'Wide', width: 2000, height: 500 }], '500x500');
+    const box = next.layouts[addedIds[0]].hero;
+
+    // Four times the board width → four times the element. The square shape wants
+    // 800×800, which a 500-tall board can't hold; a plain shape clamps rather than
+    // bleeding. (Keeping the ORIGINAL 200×200 is what `sizeMode: 'fixed'` is for —
+    // see the test above; bleeding is for cover photos — see size-scope.test.ts.)
+    expect(box.w * 2000).toBeCloseTo(800, 4);
+    expect(box.h * 500).toBeCloseTo(500, 4);
+  });
+
+  it('scales a scale element\'s font by the width ratio, and pins a fixed one\'s', () => {
+    const d = doc({
+      elements: [
+        { id: 'hero', type: 'text' },
+        { id: 'badge', type: 'text', sizeMode: 'fixed' },
+      ],
+      sizes: [{ id: '500x500', label: 'Square 500×500', width: 500, height: 500 }],
+      layouts: {
+        '500x500': {
+          hero: { x: 0.1, y: 0.1, w: 0.4, h: 0.2, fontSize: 20 },
+          badge: { x: 0.1, y: 0.5, w: 0.4, h: 0.2, fontSize: 20 },
+        },
+      },
+    } as Partial<TemplateDoc>);
+
+    const { doc: next, addedIds } = addSizesToDoc(d, [{ label: 'Wide', width: 1000, height: 500 }], '500x500');
+    const lay = next.layouts[addedIds[0]];
+
+    expect(lay.hero.fontSize).toBe(40); // twice the board width → twice the type
+    expect(lay.badge.fontSize).toBe(20); // fixed: the same object everywhere
   });
 
   it('labels each size with its dimensions and leaves existing sizes alone', () => {

@@ -3,7 +3,7 @@ import { OFFER_TYPES } from './offer-text';
 import type { TemplateDoc } from './doc-types';
 import { enrichOfferFields } from './offer-text';
 import { missingRequired, type OemOfferRule, FIELD_LABELS } from './compliance';
-import { SYSTEM_FIELD_DEFAULTS } from './system-fields';
+import { OFFER_KINDS } from './offer-kinds';
 import { evaluateCoopRules, splitCoopPack, type CoopRulePack } from './coop-rules';
 
 /**
@@ -62,16 +62,31 @@ export interface PreflightResult {
 
 /**
  * Field keys whose canonical default is an obvious PLACEHOLDER ("X,XXX", "XX.XX")
- * rather than a real value. Derived from `SYSTEM_FIELD_DEFAULTS` so adding a new
- * placeholder default automatically extends the guard.
+ * rather than a real value. Derived from EVERY offer kind's defaults, so adding a
+ * placeholder default to any kind extends the guard on its own.
+ *
+ * It used to derive from `SYSTEM_FIELD_DEFAULTS` alone — the vehicle kind's — so
+ * a custom offer's `offerPrice: 'XX.XX'` or `minimumSpend: 'XXX'` was outside
+ * the check. That is latent rather than live today (no non-vehicle kind is
+ * automatable, and preflight is the unattended gate), but the guard existing and
+ * silently not covering a kind is exactly the shape of bug this file is for.
+ *
+ * Purely additive for the vehicle kind: the extra keys don't appear in a vehicle
+ * ad's data, so nothing new can fire on one.
  *
  * Scoping the check to these keys (instead of every field) is deliberate: a value
  * like "Model X" or "Trail X" is legitimate free text, and a blanket
  * "contains X, no digits" rule would reject real vehicle names.
  */
-export const PLACEHOLDER_GUARDED_KEYS: string[] = Object.entries(SYSTEM_FIELD_DEFAULTS)
-  .filter(([, v]) => looksLikePlaceholder(v))
-  .map(([k]) => k);
+export const PLACEHOLDER_GUARDED_KEYS: string[] = Array.from(
+  new Set(
+    OFFER_KINDS.flatMap((k) =>
+      Object.entries(k.defaults)
+        .filter(([, v]) => looksLikePlaceholder(v))
+        .map(([key]) => key),
+    ),
+  ),
+);
 
 /**
  * A value that is placeholder scaffolding, not data: it carries at least one `X`

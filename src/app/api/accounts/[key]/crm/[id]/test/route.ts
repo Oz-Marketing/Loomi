@@ -78,17 +78,26 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
     dealerName: account?.dealer || key,
     formName: form?.name || 'Sample Form',
     submission: {
+      // Unique per send: the CRM dedupes on <id>, and two identical test
+      // leads would otherwise collapse into one record.
+      id: `loomi-test-${Date.now()}`,
       data: {
         firstName: 'Sample',
         lastName: 'Lead',
         email: 'sample.lead@example.com',
         phone: '+15555550123',
+        // Sample vehicle so the test lead exercises the <vehicle> block —
+        // it's the fastest way to confirm the CRM maps it to a real field
+        // rather than dropping it into the lead's comments.
+        vehicleYear: '2026',
+        vehicleMake: 'Nissan',
+        vehicleModel: 'Altima',
         message: 'This is a Loomi CRM test lead.',
       },
       createdAt: new Date(),
       utmSource: 'loomi-test',
       utmMedium: null,
-      utmCampaign: null,
+      utmCampaign: 'loomi-test-campaign',
       utmTerm: null,
       utmContent: null,
     } as unknown as FormSubmission,
@@ -98,6 +107,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
       firstName: 'Sample',
       lastName: 'Lead',
     } as unknown as Contact,
+    vehicleContext: 'interest' as const,
   };
 
   // Send the test to a single address (the first) — a test shouldn't blast a

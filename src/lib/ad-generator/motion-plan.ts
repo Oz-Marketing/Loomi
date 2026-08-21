@@ -165,11 +165,13 @@ export function planMotionComposite(
         fit,
         focalX: box.objectX,
         focalY: box.objectY,
-        // Crop zoom ONLY where the still renderer applies it: on an image/logo
-        // element with a cover fit. A `background` element's texture ignores
-        // `objectScale` in CSS, so honouring it here would crop the MP4 tighter
-        // than the PNG of the same ad.
-        ...(el.type !== 'background' && fit !== 'contain' ? { zoom: box.objectScale } : {}),
+        // Crop zoom ONLY where the still renderer applies it, or the MP4 would
+        // crop tighter than the PNG of the same ad. The two element types differ:
+        // a background texture zooms on a plain `cover` fit, while an image slot
+        // zooms on `tile` too (a clip has no tiled form, so it fills like cover).
+        ...(el.type === 'background' ? fit === 'cover' : fit !== 'contain')
+          ? { zoom: box.objectScale }
+          : {},
         opacity: clipOpacity(el),
         fps: settings.fps,
         ...(hasRoundedCorners(cornerRadii(el)) ? { radii: cornerRadii(el) } : {}),

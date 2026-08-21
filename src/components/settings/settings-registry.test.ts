@@ -169,6 +169,25 @@ describe('account settings sections', () => {
     }
   });
 
+  it('keeps Email & Texts to Studio', () => {
+    // Reporting and Projects don't send anything, so a SendGrid key or a
+    // suppression list there would be a dead panel.
+    expect(sectionKeys('studio')).toContain('email-texts');
+    for (const surface of ['reporting', 'app'] as const) {
+      expect(sectionKeys(surface)).not.toContain('email-texts');
+    }
+  });
+
+  it('exposes email settings as ONE nav entry, not four', () => {
+    // Email identity, SMS, the footer, and suppressions are sub-tabs of
+    // Email & Texts. Four sibling entries read as four unrelated pages.
+    const keys = sectionKeys('studio');
+    for (const retired of ['sending', 'sms', 'email-footer', 'suppressions']) {
+      expect(keys).not.toContain(retired);
+    }
+    expect(keys[keys.indexOf('contact-fields') + 1]).toBe('email-texts');
+  });
+
   it('offers Notifications everywhere but Reporting', () => {
     expect(sectionKeys('studio')).toContain('notifications');
     expect(sectionKeys('app')).toContain('notifications');

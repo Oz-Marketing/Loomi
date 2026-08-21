@@ -1,4 +1,5 @@
-import { usableByAutomation, type TemplateDoc } from '../doc-types';
+import type { TemplateDoc } from '../doc-types';
+import { usableByAutomation } from '../offer-kinds';
 
 /**
  * Template resolution for autonomous generation.

@@ -16,6 +16,9 @@ import {
   PuzzlePieceIcon,
   ShieldCheckIcon,
   PaperAirplaneIcon,
+  RectangleGroupIcon,
+  DocumentTextIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 
 export type SettingsTabKey =
@@ -30,6 +33,10 @@ export type SettingsTabKey =
   | 'budget-channels'
   | 'alerts'
   | 'coop-guidelines'
+  | 'ad-sizes'
+  | 'ad-disclaimers'
+  | 'ad-oem-rules'
+  | 'ad-automation'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'integrations'
@@ -295,6 +302,56 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     // Still global data (one library per make), which is why it's sector-level
     // and not per-account.
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess && s.oemRelevant,
+    rail: 'sector',
+  },
+  // ── Ad Generator config ──
+  //
+  // The four screens that used to hang off a cog on the Ad Generator's own
+  // header. Every one of them is sector-wide setup the tool READS — the size
+  // library it designs against, the disclaimer text and OEM field rules an
+  // export must satisfy, and the unattended pipeline's watch scope — so they
+  // belong in Studio's settings rail rather than behind a cog on one page. The
+  // old /ad-generator/* routes redirect here.
+  //
+  // Not gated on `oemRelevant` like the co-op library above: the generator
+  // itself isn't OEM-only (custom offer kinds ship with it), and a make-less
+  // global disclaimer is exactly what a non-OEM account uses.
+  {
+    key: 'ad-sizes',
+    label: 'Ad Sizes',
+    titleLabel: 'Ad Sizes',
+    group: 'configure',
+    icon: RectangleGroupIcon,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
+    rail: 'sector',
+  },
+  {
+    key: 'ad-disclaimers',
+    label: 'Disclaimers',
+    titleLabel: 'Disclaimer Templates',
+    group: 'configure',
+    icon: DocumentTextIcon,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
+    rail: 'sector',
+  },
+  {
+    // Directly after Disclaimers: the two were sibling tabs on the old page and
+    // are still read as a pair — what an ad must SAY, and what it must CARRY.
+    key: 'ad-oem-rules',
+    label: 'OEM Rules',
+    titleLabel: 'OEM Compliance Rules',
+    group: 'configure',
+    icon: ShieldCheckIcon,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
+    rail: 'sector',
+  },
+  {
+    key: 'ad-automation',
+    label: 'Ad Automation',
+    titleLabel: 'Ad Automation',
+    group: 'configure',
+    icon: BoltIcon,
+    visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
     rail: 'sector',
   },
   // Notifications are surface-scoped by category (NOTIFICATION_CATEGORY_SURFACE

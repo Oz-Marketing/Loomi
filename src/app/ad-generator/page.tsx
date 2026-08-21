@@ -640,8 +640,12 @@ export default function AdGeneratorListPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Settings cog → management links (Ad Sizes, Template Builder).
-                Managers only — clients get a bare create-and-export surface. */}
+            {/* Settings cog → the Studio settings tabs that configure this
+                tool: sizes, disclaimers, OEM rules, automation. The screens
+                themselves live in the settings rail (the four /ad-generator/*
+                routes redirect there); this stays as the shortcut from where the
+                work happens. Managers only — clients get a bare
+                create-and-export surface. */}
             {isManager && (
             <div className="relative" ref={cogRef}>
               <button
@@ -656,31 +660,26 @@ export default function AdGeneratorListPage() {
               {cogOpen && (
                 <div className="absolute right-0 top-full mt-1 z-30 w-56 glass-dropdown">
                   {(() => {
-                    const acct = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
                     const itemCls =
                       'flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors';
                     return (
                       <>
-                        <Link href={`/ad-generator/sizes${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                        <Link href="/settings/ad-sizes" onClick={() => setCogOpen(false)} className={itemCls}>
                           <RectangleGroupIcon className="w-4 h-4" />
                           Ad Sizes
                         </Link>
-                        {isManager && (
-                          <>
-                            <Link href={`/ad-generator/templates${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
-                              <DocumentTextIcon className="w-4 h-4" />
-                              Disclaimer templates
-                            </Link>
-                            <Link href={`/ad-generator/oem-rules${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
-                              <ShieldCheckIcon className="w-4 h-4" />
-                              OEM compliance rules
-                            </Link>
-                            <Link href={`/ad-generator/automation${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
-                              <BoltIcon className="w-4 h-4" />
-                              Automation
-                            </Link>
-                          </>
-                        )}
+                        <Link href="/settings/ad-disclaimers" onClick={() => setCogOpen(false)} className={itemCls}>
+                          <DocumentTextIcon className="w-4 h-4" />
+                          Disclaimer templates
+                        </Link>
+                        <Link href="/settings/ad-oem-rules" onClick={() => setCogOpen(false)} className={itemCls}>
+                          <ShieldCheckIcon className="w-4 h-4" />
+                          OEM compliance rules
+                        </Link>
+                        <Link href="/settings/ad-automation" onClick={() => setCogOpen(false)} className={itemCls}>
+                          <BoltIcon className="w-4 h-4" />
+                          Automation
+                        </Link>
                       </>
                     );
                   })()}
@@ -762,7 +761,7 @@ export default function AdGeneratorListPage() {
                     </button>
                   ) : (
                     <Link
-                      href={`/ad-generator/automation${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`}
+                      href="/settings/ad-automation?tab=settings"
                       onClick={() => setNewOpen(false)}
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
                     >
@@ -1262,7 +1261,7 @@ const AD_TYPES: { kind: string; mode: VehicleFieldsMode; label: string; hint: st
  * builder opens, so a brand-new design starts at the right dimensions instead
  * of always defaulting to a 1080 square.
  *
- * Sizes come from the size library (`/ad-generator/sizes`) — the same list the
+ * Sizes come from the size library (Settings → Ad Sizes) — the same list the
  * builder's Sizes panel reads. This modal used to render a code-side catalog
  * instead, so sizes a team added were simply absent here.
  */
@@ -1349,7 +1348,7 @@ function ScratchSetupModal({
           <SizePicker sizes={sizes} facets={facets} loading={loading} selectedIds={selectedIds} onToggle={toggle} />
         </div>
         <Link
-          href="/ad-generator/sizes"
+          href="/settings/ad-sizes"
           className="mt-2 inline-block text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]"
         >
           Manage size library →

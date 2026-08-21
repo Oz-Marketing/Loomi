@@ -316,7 +316,7 @@ export function DisclaimerField({
             Disclaimer template
             <span className="ml-1 font-normal text-[var(--muted-foreground)]">— auto-fills the text below</span>
           </label>
-          <Link href="/ad-generator/templates" className="flex-shrink-0 text-[11px] font-medium text-[var(--primary)] hover:underline">
+          <Link href="/settings/ad-disclaimers" className="flex-shrink-0 text-[11px] font-medium text-[var(--primary)] hover:underline">
             Manage
           </Link>
         </div>

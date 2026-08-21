@@ -44,7 +44,16 @@ export function overridableKeys(patch: Partial<DocElement>): (keyof DocElement)[
   return (Object.keys(patch) as (keyof DocElement)[]).filter((k) => !NEVER_OVERRIDE.has(k));
 }
 
-/** The element as it renders on `sizeId`: shared style, with that size's diffs on top. */
+/**
+ * The element as it renders on `sizeId`: shared style, with that size's diffs on top.
+ *
+ * Shared-only keys in a stored patch are IGNORED, not merged. `applyElementPatch`
+ * refuses to write them, so a doc authored since that rule can't carry one — but
+ * older docs can, and a stale `binding` in one board's override is the worst kind:
+ * the text would read differently on that board alone, and retyping it on the
+ * canvas (which writes the shared element) would look like the edit didn't take.
+ * WHAT an element shows is the template's answer, on every board.
+ */
 export function effectiveElement(
   el: DocElement,
   overrides: TemplateDoc['overrides'],
@@ -52,7 +61,12 @@ export function effectiveElement(
 ): DocElement {
   const patch = overrides?.[sizeId]?.[el.id];
   if (!patch || Object.keys(patch).length === 0) return el;
-  return { ...el, ...patch, id: el.id, type: el.type };
+  const keys = overridableKeys(patch);
+  if (!keys.length) return el;
+  return Object.assign(
+    { ...el },
+    Object.fromEntries(keys.map((k) => [k, patch[k]])),
+  ) as DocElement;
 }
 
 /** Every element as it renders on `sizeId`. */
@@ -157,6 +171,69 @@ export function applyElementPatch(
   };
 }
 
+/**
+ * Write a STACKING ORDER at the chosen scope.
+ *
+ * `orderBottomFirst` is the source board's ids painted-first to painted-last. The
+ * board is renumbered to contiguous `z`, and under `'all'` every other board is
+ * renumbered to the SAME order for the ids it carries.
+ *
+ * Order, not numbers, is what broadcasts. Each board's `z` values are whatever its
+ * own history left behind — 1/2/3 here and 5/9/12 there for the same three
+ * elements — so copying one element's number across is not "the same stacking",
+ * it's a guess. Renumbering both sides from one order is the only way the boards
+ * actually agree.
+ *
+ * `orderBottomFirst` must be COMPLETE for the source board. An id a board carries
+ * that the order doesn't mention (an element the source board doesn't have) is
+ * merged back in where its own `z` already put it, rather than being swept to one
+ * end — that element isn't part of what the designer just reordered, so its
+ * stacking shouldn't change.
+ *
+ * Stacking used to be per-board unconditionally, which is right under
+ * "This size" and wrong under "All sizes" — reordering layers there left every
+ * other board painting in the old order.
+ */
+export function applyStackOrder(
+  doc: TemplateDoc,
+  orderBottomFirst: string[],
+  scope: EditScope,
+  sizeId: string,
+): TemplateDoc {
+  const ranked = new Set(orderBottomFirst);
+  const renumber = (byEl: Record<string, DocLayoutBox>): Record<string, DocLayoutBox> => {
+    const zOf = (id: string) => byEl[id].z ?? 0;
+    // The broadcast order, restricted to what this board actually carries.
+    const merged = orderBottomFirst.filter((id) => byEl[id]);
+    const base = [...merged];
+    // Anything else on this board slots back in at its own height. Ascending z, so
+    // each insert lands at or after the last — hence the running offset.
+    let inserted = 0;
+    for (const id of Object.keys(byEl)
+      .filter((x) => !ranked.has(x))
+      .sort((a, b) => zOf(a) - zOf(b))) {
+      const below = base.filter((x) => zOf(x) <= zOf(id)).length;
+      merged.splice(Math.min(below + inserted, merged.length), 0, id);
+      inserted++;
+    }
+    const next: Record<string, DocLayoutBox> = { ...byEl };
+    merged.forEach((id, i) => {
+      const z = i + 1;
+      if (next[id].z !== z) next[id] = { ...next[id], z };
+    });
+    return next;
+  };
+
+  if (scope === 'size') {
+    const byEl = doc.layouts[sizeId];
+    if (!byEl) return doc;
+    return { ...doc, layouts: { ...doc.layouts, [sizeId]: renumber(byEl) } };
+  }
+  const layouts: TemplateDoc['layouts'] = {};
+  for (const [sid, byEl] of Object.entries(doc.layouts)) layouts[sid] = renumber(byEl);
+  return { ...doc, layouts };
+}
+
 /** Send an element back to the shared style on this size (or on every size). */
 export function clearElementOverride(
   doc: TemplateDoc,
@@ -175,15 +252,6 @@ export function clearElementOverride(
   }
   return { ...doc, overrides: pruneOverrides(next) };
 }
-
-/**
- * Box fields that broadcast under `'all'`: the fractional geometry.
- *
- * Fractions of the canvas mean the same box reads as the same relative PLACEMENT
- * on any aspect ratio, which is what makes broadcasting sensible at all. Size is
- * a different matter — see `rescaleBox`.
- */
-const BROADCAST_BOX_KEYS = ['x', 'y', 'w', 'h'] as const;
 
 /** How close to 1 a fraction has to be to count as running edge to edge. */
 const EDGE_EPS = 0.001;
@@ -307,6 +375,37 @@ function placeExtent(start: number, oldExtent: number, extent: number, bleed: bo
  * a background), while text and contained logos clamp to the board, because there
  * overflow cuts content instead of framing it. See {@link SizeFit}.
  */
+/**
+ * The extents `box` should have on `to` — the arithmetic half of
+ * {@link rescaleBox}, with no opinion about where the box then sits.
+ *
+ * Split out because there are two callers with different ideas about position
+ * and only one right answer about size: `rescaleBox` places the result at the
+ * source's own coordinates, while `applyBox`'s broadcast places it at THIS
+ * board's coordinates plus a displacement. Both then run the same
+ * `placeExtent`, so bleed and clamping behave identically either way.
+ *
+ * The returned extents are RAW — possibly bigger than the board. Deciding what
+ * to do about that is `placeExtent`'s job, and it needs to see the real number.
+ */
+function targetExtents(
+  box: DocLayoutBox,
+  from: { width: number; height: number },
+  to: { width: number; height: number },
+  mode: SizeMode,
+): { w: number; h: number } {
+  if (!(from.width > 0 && from.height > 0 && to.width > 0 && to.height > 0)) {
+    return { w: box.w, h: box.h };
+  }
+  // Straight pixel round-trip: source fraction → source px → target fraction.
+  if (mode === 'fixed') {
+    return { w: (box.w * from.width) / to.width, h: (box.h * from.height) / to.height };
+  }
+  if (spansEdgeToEdge(box)) return { w: box.w, h: box.h };
+  // Width stays a fraction of width; height is re-derived to hold the shape.
+  return { w: box.w, h: box.h * ((from.height * to.width) / (to.height * from.width)) };
+}
+
 export function rescaleBox(
   box: DocLayoutBox,
   from: { width: number; height: number },
@@ -316,10 +415,10 @@ export function rescaleBox(
   const { mode = 'scale', bleed = false } = fit;
   const next = { ...box };
   if (!(from.width > 0 && from.height > 0 && to.width > 0 && to.height > 0)) return next;
+  const ext = targetExtents(box, from, to, mode);
   if (mode === 'fixed') {
-    // Straight pixel round-trip: source fraction → source px → target fraction.
-    const across = placeExtent(box.x, box.w, (box.w * from.width) / to.width, bleed);
-    const down = placeExtent(box.y, box.h, (box.h * from.height) / to.height, bleed);
+    const across = placeExtent(box.x, box.w, ext.w, bleed);
+    const down = placeExtent(box.y, box.h, ext.h, bleed);
     next.x = across.pos;
     next.w = across.extent;
     next.y = down.pos;
@@ -327,15 +426,31 @@ export function rescaleBox(
     return next;
   }
   if (spansEdgeToEdge(box)) return next;
-  const down = placeExtent(
-    box.y,
-    box.h,
-    box.h * ((from.height * to.width) / (to.height * from.width)),
-    bleed,
-  );
+  const down = placeExtent(box.y, box.h, ext.h, bleed);
   next.y = down.pos;
   next.h = down.extent;
   return next;
+}
+
+/**
+ * A DISPLACEMENT measured on `from`, re-expressed on `to`.
+ *
+ * `dx` is a fraction of width, which is the unit distances travel in (see
+ * `rescaleBox`), so it carries over unchanged. `dy` is a fraction of HEIGHT, so
+ * it goes through the same width-anchored ratio the height of a box does —
+ * otherwise "up 20px" on a 1080 square becomes "up 36px" on a 1080×1920 story,
+ * and a nudge drifts differently on every board.
+ */
+export function scaleDelta(
+  d: { dx: number; dy: number },
+  from: { width: number; height: number },
+  to: { width: number; height: number },
+): { dx: number; dy: number } {
+  const ok = from.width > 0 && from.height > 0 && to.width > 0 && to.height > 0;
+  return {
+    dx: d.dx,
+    dy: ok ? (d.dy * (from.height * to.width)) / (to.height * from.width) : d.dy,
+  };
 }
 
 /**
@@ -411,6 +526,54 @@ export function refitElementAcrossSizes(
   return refitAllSizes(doc, fromSizeId, elId);
 }
 
+/**
+ * Layouts with a BRAND-NEW element placed on every board.
+ *
+ * `box` is authored against `fromSizeId` — the board the designer is looking at —
+ * and re-derived for every other board by the element's own {@link SizeFit}, with
+ * scale-mode type following the width ratio. The same arithmetic
+ * {@link rescaleBox} does for a broadcast move and `insertBlockIntoDoc` does for a
+ * saved block, so an element arrives the same way however it got there.
+ *
+ * The add paths used to copy the fractions AND the font size verbatim to every
+ * size, which is the one thing that cannot survive a change of aspect ratio:
+ * 0.4×0.12 is 432×130px on a 1080 square and 480×75px on a 1200×628, so a new
+ * text box landed in a different shape on every board — and since a text frame
+ * drives the font fit, it then rendered at a different size too. That is the
+ * "blocks aren't consistent across sizes" report.
+ *
+ * `z` is per-board (it always has been): each board stacks the newcomer on top of
+ * its own contents.
+ */
+export function seedElementLayouts(
+  doc: TemplateDoc,
+  el: Pick<DocElement, 'id' | 'type' | 'fit' | 'sizeMode'>,
+  box: DocLayoutBox,
+  fromSizeId: string,
+): TemplateDoc['layouts'] {
+  const from = doc.sizes.find((s) => s.id === fromSizeId) ?? doc.sizes[0];
+  const fit = sizeFitOf(el);
+  const layouts: TemplateDoc['layouts'] = { ...doc.layouts };
+  for (const size of doc.sizes) {
+    const existing = layouts[size.id] ?? {};
+    const maxZ = Object.values(existing).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
+    const fitted = from ? rescaleBox(box, from, size, fit) : { ...box };
+    // Fixed type is pinned with the frame; scale type follows the width ratio.
+    const scale = from?.width ? size.width / from.width : 1;
+    const fontSize =
+      box.fontSize != null
+        ? fit.mode === 'fixed'
+          ? box.fontSize
+          : Math.max(1, Math.round(box.fontSize * scale))
+        : null;
+    layouts[size.id] = {
+      ...existing,
+      [el.id]: { ...fitted, z: maxZ + 1, ...(fontSize != null ? { fontSize } : {}) },
+    };
+  }
+  return layouts;
+}
+
 /** Font size clamp, matching the builder's own stepper bounds. */
 const MIN_FONT = 4;
 const MAX_FONT = 400;
@@ -419,8 +582,17 @@ const MAX_FONT = 400;
  * Write a placement at the chosen scope.
  *
  * Under `'all'`:
- *   - `x/y` are COPIED as fractions — a fraction means the same relative
- *     placement on any aspect ratio.
+ *   - `x/y` travel as a DISPLACEMENT, not as an absolute fraction: every board
+ *     moves by the same distance (scaled per `scaleDelta`) from wherever it
+ *     already had the element. This is the only thing that composes with the
+ *     rest of the system. Copying the edited board's fractions across meant an
+ *     element that legitimately sat at a different height on another board —
+ *     which is exactly what a block's lockup placement produces — TELEPORTED to
+ *     the source's fraction the moment you nudged it, usually in the opposite
+ *     direction to the nudge. It also meant that any box write at all (hiding a
+ *     layer, fitting a frame to its text) silently repositioned every other
+ *     board. A write that doesn't move the element on the edited board now
+ *     doesn't move it anywhere.
  *   - `w/h` are re-derived per board by the element's {@link DocElement.sizeMode}:
  *     SCALE keeps the shape at a board-appropriate size, FIXED keeps the literal
  *     pixels. See `rescaleBox`.
@@ -430,9 +602,16 @@ const MAX_FONT = 400;
  *     bury it, but "make it 20% bigger everywhere" is exactly what asking for all
  *     sizes means. On a FIXED element the number is copied outright, because a
  *     fixed element is the same object on every board.
- *   - `z`, `hidden`, `objectX/Y/Scale` stay on the board they were set on.
- *     Stacking and per-board omission are per-size by design, and per-size framing
- *     is the entire point of per-size framing.
+ *   - `hidden` travels, but ONLY when this write actually changed it. Hiding a
+ *     layer under "All sizes" should hide it everywhere; a DRAG carries the prior
+ *     flag along untouched, and copying that would silently un-hide a board you
+ *     had deliberately hidden it on.
+ *   - `z` does NOT travel here, because a raw z number is meaningless on another
+ *     board — copying `z: 2` onto a board stacked 5/9/12 buries the element. Order
+ *     is broadcast as an ORDER: see {@link applyStackOrder}, which every stacking
+ *     action goes through.
+ *   - `objectX/Y/Scale` stay on the board they were set on: per-size framing is
+ *     the entire point of per-size framing.
  *
  * A size with no placement for the element yet is skipped rather than gaining
  * one: broadcasting a move shouldn't add the element to boards a designer
@@ -441,10 +620,15 @@ const MAX_FONT = 400;
 export function applyBox(
   doc: TemplateDoc,
   elId: string,
-  box: DocLayoutBox,
+  rawBox: DocLayoutBox,
   scope: EditScope,
   sizeId: string,
 ): TemplateDoc {
+  // Absent IS visible, so a falsy `hidden` is stored as no key at all — one
+  // spelling for one state, on the edited board and on the broadcast ones alike.
+  const box = { ...rawBox };
+  if (!box.hidden) delete box.hidden;
+
   if (scope === 'size') {
     return {
       ...doc,
@@ -463,6 +647,14 @@ export function applyBox(
   const from = doc.sizes.find((s) => s.id === sizeId);
   const fit = sizeFitOf(doc.elements.find((e) => e.id === elId));
 
+  // Did this write TOGGLE visibility? Only then does the flag broadcast.
+  const priorHere = doc.layouts[sizeId]?.[elId];
+  const hiddenChanged = !!priorHere && !!priorHere.hidden !== !!box.hidden;
+  // How far this write MOVED the element on the edited board. Null when the
+  // element is new to this board, where there is no displacement to speak of and
+  // the absolute fraction is the only placement available.
+  const moved = priorHere ? { dx: box.x - priorHere.x, dy: box.y - priorHere.y } : null;
+
   const layouts: TemplateDoc['layouts'] = {};
   for (const [sid, byEl] of Object.entries(doc.layouts)) {
     const prior = byEl[elId];
@@ -477,7 +669,29 @@ export function applyBox(
     const to = doc.sizes.find((s) => s.id === sid);
     const fitted = from && to ? rescaleBox(box, from, to, fit) : box;
     const next = { ...prior };
-    for (const k of BROADCAST_BOX_KEYS) next[k] = fitted[k];
+    next.w = fitted.w;
+    next.h = fitted.h;
+    if (moved && from && to) {
+      // Displace from where THIS board had it, then run the same placement rules
+      // `rescaleBox` uses for the new extent — so a cover photo still bleeds
+      // symmetrically and text still lands on the board. Position and extent are
+      // decided together; that's what `placeExtent` is for.
+      const { dx, dy } = scaleDelta(moved, from, to);
+      const ext = targetExtents(box, from, to, fit.mode);
+      const across = placeExtent(prior.x + dx, prior.w, ext.w, fit.bleed);
+      const down = placeExtent(prior.y + dy, prior.h, ext.h, fit.bleed);
+      next.x = across.pos;
+      next.w = across.extent;
+      next.y = down.pos;
+      next.h = down.extent;
+    } else {
+      next.x = fitted.x;
+      next.y = fitted.y;
+    }
+    if (hiddenChanged) {
+      if (box.hidden) next.hidden = true;
+      else delete next.hidden;
+    }
     if (fit.mode === 'fixed') {
       const pinned = pinnedFontSize(box, prior);
       if (pinned != null) next.fontSize = Math.min(MAX_FONT, Math.max(MIN_FONT, pinned));

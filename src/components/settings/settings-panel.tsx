@@ -11,6 +11,10 @@ import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { ClientReportsTab } from '@/components/settings/client-reports-tab';
 import { BudgetChannelsTab } from '@/components/settings/budget-channels-tab';
 import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
+import { AdSizesTab } from '@/components/settings/ad-sizes-tab';
+import { AdDisclaimersTab } from '@/components/settings/ad-disclaimers-tab';
+import { AdOemRulesTab } from '@/components/settings/ad-oem-rules-tab';
+import { AdAutomationTab } from '@/components/settings/ad-automation-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { IndustriesTab } from '@/components/settings/industries-tab';
@@ -118,6 +122,11 @@ export function SettingsPanel({
     'budget-channels': () => <BudgetChannelsTab />,
     alerts: () => <AlertRulesTab />,
     'coop-guidelines': () => <CoopGuidelinesTab />,
+    // Ad Generator config, moved off the cog on the generator's own header.
+    'ad-sizes': () => <AdSizesTab />,
+    'ad-disclaimers': () => <AdDisclaimersTab />,
+    'ad-oem-rules': () => <AdOemRulesTab />,
+    'ad-automation': () => <AdAutomationTab />,
     'contact-field-blueprints': () => <CustomFieldBlueprintsTab />,
     'client-reports': () => <ClientReportsTab />,
     notifications: () => <NotificationsTab />,
@@ -162,6 +171,10 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'budget-channels',
   'alerts',
   'coop-guidelines',
+  'ad-sizes',
+  'ad-disclaimers',
+  'ad-oem-rules',
+  'ad-automation',
   'contact-field-blueprints',
   'client-reports',
   'notifications',

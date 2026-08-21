@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { buildThumbnailKey, downloadFromS3, headS3Object, uploadToS3 } from '@/lib/s3';
 import { checkAnyUploadSize } from '@/lib/media-limits';
 import { generateThumbnail, shouldThumbnailOnFinalize } from '@/lib/media-thumbnails';
+import { generateVideoThumbnail, isVideoMime } from '@/lib/media-video-thumbnail';
 import {
   buildAssetMetadata,
   canAccessAsset,
@@ -102,17 +103,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: metadata.error }, { status: 400 });
   }
 
-  // Thumbnail, for images small enough that pulling the object back is cheap.
+  // Thumbnail: images small enough that pulling the object back is cheap, plus
+  // every video (whose frame is read in place, so its size is irrelevant).
   // Best-effort on purpose: a failure here must not fail an upload whose bytes
   // are already safely in the bucket — the row is still correct without it, and
   // the backfill script can pick it up later.
   let thumbnailKey: string | null = null;
   let thumbDims: { width: number; height: number } | null = null;
   const mimeType = head.contentType || body?.contentType || 'application/octet-stream';
-  if (shouldThumbnailOnFinalize(mimeType, head.size)) {
+  if (shouldThumbnailOnFinalize(mimeType, head.size) || isVideoMime(mimeType)) {
     try {
-      const bytes = await downloadFromS3(key);
-      const thumb = await generateThumbnail(bytes, mimeType);
+      // A video is never pulled back: ffmpeg reads the frame it wants in place,
+      // through a presigned URL, so a 200MB clip costs the same as a 2MB one and
+      // the size cap that guards the image path doesn't apply.
+      const thumb = isVideoMime(mimeType)
+        ? await generateVideoThumbnail({ s3Key: key }, mimeType)
+        : await generateThumbnail(await downloadFromS3(key), mimeType);
       if (thumb) {
         thumbnailKey = buildThumbnailKey(accountKey, assetId);
         await uploadToS3(thumbnailKey, thumb.buffer, 'image/webp');

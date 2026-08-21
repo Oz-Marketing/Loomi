@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
   SparklesIcon,
   FilmIcon,
+  PlayIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { MEDIA_CATEGORIES } from '@/lib/media-categories';
@@ -424,6 +425,13 @@ export function MediaPickerModal({
                     />
                   ) : (
                     <div className="flex items-center justify-center h-full"><PhotoIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-30" /></div>
+                  )}
+                  {/* A poster frame is indistinguishable from a photo, so a clip
+                      says what it is — it changes which export the ad can produce. */}
+                  {isClipFile(f) && (
+                    <span className="pointer-events-none absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+                      <PlayIcon className="h-2 w-2" /> Video
+                    </span>
                   )}
                   {outOfLicence && (
                     <span className="absolute left-1 top-1 rounded bg-red-500/90 px-1 py-0.5 text-[9px] font-medium text-white">

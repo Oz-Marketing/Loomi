@@ -13,6 +13,7 @@
 import type { AdData, FieldSpec } from './types';
 import type { DocElement, DocLayoutBox, TemplateDoc } from './doc-types';
 import { addFieldKit } from './vehicle-fields';
+import { offerKindForDoc, type OfferKind } from './offer-kinds';
 import { rescaleBox, sizeFitOf } from './size-scope';
 
 export const BLOCK_PAYLOAD_VERSION = 1;
@@ -206,8 +207,42 @@ export function insertBlockIntoDoc(
     layouts,
     ...(newGroups.length ? { groups: [...(doc.groups ?? []), ...newGroups] } : {}),
   };
-  if (payload.offerKit) next = addFieldKit(next, payload.offerKit);
-  if (payload.requiredFields.length) next = mergeFields(next, payload.requiredFields, payload.requiredDefaults);
+  // ── The schema invariant ──────────────────────────────────────────────────
+  //
+  // A block may NEVER widen the doc's schema beyond what its offer kind
+  // declares. Both merges below would otherwise do exactly that: the seeded
+  // "Lease" / "APR offer" / "Vehicle offer block" rows carry `offerKit: 'single'`
+  // and vehicle `requiredFields`, so inserting one into a GENERAL ad would graft
+  // the vehicle offer schema onto a template that has no offer — the same class
+  // of corruption `blankTemplateDoc` used to cause for every doc.
+  //
+  // The elements still insert either way. A binding to a field the kind doesn't
+  // have renders blank, which is visible and fixable; a silently mutated schema
+  // is neither. The builder also filters incompatible blocks out of the list
+  // (see `blockFitsKind`) — this is the safety net behind that, for a block
+  // inserted some other way.
+  const kind = offerKindForDoc(doc);
+  const declared = new Set(kind.fields.map((f) => f.key));
+  if (payload.offerKit && kind.capabilities.dualOffer) next = addFieldKit(next, payload.offerKit);
+  const allowed = payload.requiredFields.filter((f) => declared.has(f.key));
+  if (allowed.length) next = mergeFields(next, allowed, payload.requiredDefaults);
 
   return { doc: next, newIds: [...idMap.values()] };
+}
+
+/**
+ * Can this block be inserted into a doc of `kind` without losing anything?
+ *
+ * False when the block needs a field the kind doesn't declare — a vehicle offer
+ * block on a general ad. Used to filter the builder's block list, so an
+ * incompatible block is never offered rather than being offered and then
+ * silently arriving half-wired (see the invariant in `insertBlockIntoDoc`).
+ *
+ * `offerKit` counts as a requirement: a block carrying one is built around the
+ * offer question set.
+ */
+export function blockFitsKind(payload: BlockPayload, kind: OfferKind): boolean {
+  if (payload.offerKit && !kind.capabilities.dualOffer) return false;
+  const declared = new Set(kind.fields.map((f) => f.key));
+  return payload.requiredFields.every((f) => declared.has(f.key));
 }

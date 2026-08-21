@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { buildTokenValues, substituteTokens, composeDisclaimer } from './disclaimer';
+import {
+  buildTokenValues,
+  substituteTokens,
+  composeDisclaimer,
+  deriveOfferFigures,
+  DEFAULT_DISCLAIMER_TEMPLATES,
+} from './disclaimer';
+import { ALL_OFFER_TYPE_SPECS } from './offer-text';
+import type { AdData } from './types';
 
 describe('substituteTokens', () => {
   it('fills known tokens and leaves unfilled ones visible', () => {
@@ -206,5 +214,173 @@ describe('copyright_year', () => {
     );
     expect(out).toContain('©2026 Audi of America, Inc.');
     expect(out).not.toContain('{{copyright_year}}');
+  });
+});
+
+describe('custom offers', () => {
+  it('derives the savings from a flat price, and shows its arithmetic', () => {
+    const figs = deriveOfferFigures({ offerType: 'flat_price', offerPrice: '99', regularPrice: '139' });
+    expect(figs.savings_amount).toEqual({ label: 'You save', value: '$40', math: '$139 − $99' });
+    expect(figs.savings_percent.value).toBe('29%');
+  });
+
+  it('derives the resulting price for a dollars-off offer before subtracting', () => {
+    // A dollars-off offer states the DISCOUNT, so the advertised price has to be
+    // derived first or the savings arithmetic has nothing to subtract from.
+    const figs = deriveOfferFigures({ offerType: 'dollar_off', dollarOff: '50', regularPrice: '200' });
+    expect(figs.savings_amount.value).toBe('$50');
+    expect(figs.savings_amount.math).toBe('$200 − $150');
+    expect(figs.savings_percent.value).toBe('25%');
+  });
+
+  it('states no saving at all rather than a zero or negative one', () => {
+    // A regular price at or below the advertised one is a data-entry error.
+    // "SAVE $0" on an ad is worse than no savings line.
+    const cases: AdData[] = [
+      { offerType: 'flat_price', offerPrice: '139', regularPrice: '139' },
+      { offerType: 'flat_price', offerPrice: '149', regularPrice: '139' },
+      { offerType: 'flat_price', offerPrice: '99' }, // no regular price given
+      { offerType: 'flat_price', regularPrice: '139' }, // no advertised price
+    ];
+    for (const d of cases) {
+      const figs = deriveOfferFigures(d);
+      expect(figs.savings_amount, JSON.stringify(d)).toBeUndefined();
+      expect(figs.savings_percent, JSON.stringify(d)).toBeUndefined();
+    }
+  });
+
+  it('never lets a savings figure be typed', () => {
+    // The whole point: there is no field for either, so a value in the data can
+    // not override the arithmetic.
+    const values = buildTokenValues({
+      offerType: 'flat_price',
+      offerPrice: '99',
+      regularPrice: '139',
+      savingsAmount: '$500',
+      savings_amount: '$500',
+    });
+    expect(values.savings_amount).toBe('$40');
+  });
+
+  it('resolves the service slugs the fine print needs', () => {
+    const values = buildTokenValues({
+      offerType: 'flat_price',
+      offerName: 'Synthetic Blend Oil Change',
+      offerPrice: '79.95',
+      regularPrice: '109',
+      includedAllowance: 'Up to 5 quarts',
+      appliesTo: 'Most vehicles',
+      redemptionLimit: 'One per customer',
+      couponCode: 'OIL2695',
+      expiration: 'August 31',
+    });
+    expect(values.offer_name).toBe('Synthetic Blend Oil Change');
+    expect(values.offer_price).toBe('$79.95'); // cents preserved — see `money`
+    expect(values.regular_price).toBe('$109');
+    expect(values.included_allowance).toBe('Up to 5 quarts');
+    expect(values.applies_to).toBe('Most vehicles');
+    expect(values.redemption_limit).toBe('One per customer');
+    expect(values.coupon_code).toBe('OIL2695');
+    expect(values.offer_end_date).toBe('August 31');
+  });
+
+  it('does NOT append the vehicle fee boilerplate to a service coupon', () => {
+    // "Advertised price includes all dealer-imposed fees" is a claim about a
+    // vehicle price. On an oil-change coupon it states something untrue.
+    const out = composeDisclaimer({
+      offerType: 'flat_price',
+      offerName: 'Synthetic Blend Oil Change',
+      offerPrice: '79.95',
+    });
+    expect(out).not.toMatch(/dealer-imposed fees/i);
+    expect(out).not.toMatch(/title, and registration/i);
+    expect(out).toBe('Synthetic Blend Oil Change for $79.95. See dealer for complete details.');
+  });
+
+  it('still appends it to a vehicle offer', () => {
+    const out = composeDisclaimer({ offerType: 'sales_price', salePrice: '28995', msrp: '34000' });
+    expect(out).toMatch(/dealer-imposed fees/i);
+  });
+
+  /**
+   * KNOWN, PRE-EXISTING — three of the four vehicle default bodies reference a
+   * field the type does not require, so an offer that omits it composes a
+   * disclaimer containing LITERAL `{{token}}` markup:
+   *
+   *   lease        `{{due_at_signing}}` — required: monthlyPayment, leaseTerm
+   *   discount     `{{msrp}}`           — required: discountAmount
+   *   sales_price  `{{msrp}}`           — required: salePrice
+   *
+   * Found by this test while adding the service bodies; it predates offer kinds.
+   * Only reachable on a DEFAULT body — a real `AdDisclaimerTemplate` row is what
+   * most brands use — but the default is exactly what a dealer with no
+   * brand template on file gets.
+   *
+   * NOT fixed here. Either fix is a user-facing change well outside this phase:
+   * adding the field to `required` BLOCKS EXPORT on every existing ad that omits
+   * it, and rewording the bodies is a change to legal text that belongs to
+   * whoever owns it. Asserted below so the debt is recorded rather than hidden,
+   * and so whoever fixes one is told to delete it from this list.
+   */
+  const KNOWN_RAW_TOKEN_TYPES = ['lease', 'discount', 'sales_price'];
+
+  it('leaves no raw token in any code default body', () => {
+    // `substituteTokens` leaves an unresolved token as a literal `{{token}}`, so a
+    // default body may only reference fields its type requires. This is the guard
+    // that a new type's default body can't print markup into a legal line.
+    for (const spec of ALL_OFFER_TYPE_SPECS) {
+      const body = DEFAULT_DISCLAIMER_TEMPLATES[spec.value];
+      if (!body || KNOWN_RAW_TOKEN_TYPES.includes(spec.value)) continue;
+      const data: AdData = { offerType: spec.value };
+      // Fill exactly what the type declares as required, nothing more.
+      for (const key of spec.required ?? []) data[key] = '10';
+      const out = composeDisclaimer(data);
+      expect(out, `${spec.value}: ${out}`).not.toMatch(/\{\{?[a-z_]+\}\}?/);
+    }
+  });
+
+  it('still has exactly the known raw-token types, and no more', () => {
+    for (const value of KNOWN_RAW_TOKEN_TYPES) {
+      const spec = ALL_OFFER_TYPE_SPECS.find((t) => t.value === value)!;
+      const data: AdData = { offerType: value };
+      for (const key of spec.required ?? []) data[key] = '10';
+      expect(
+        composeDisclaimer(data),
+        `${value} no longer leaks a raw token — remove it from KNOWN_RAW_TOKEN_TYPES`,
+      ).toMatch(/\{\{?[a-z_]+\}\}?/);
+    }
+  });
+});
+
+describe('an offer type that has not been picked yet', () => {
+  // A from-scratch ad's `data` starts EMPTY while the Offer-type select already
+  // displays the template's default. That state composed vehicle legal text onto
+  // a custom offer, because the fallback type is `custom` and `custom` belongs to
+  // the vehicle kind.
+  it('borrows nothing from the vehicle kind on a custom-kind ad', () => {
+    const out = composeDisclaimer({}, undefined, undefined, { offerKind: 'custom' });
+    // Neither the fee boilerplate...
+    expect(out).not.toMatch(/dealer-imposed fees/i);
+    expect(out).not.toMatch(/title, and registration/i);
+    // ...nor the vehicle `custom` body. Nothing has been stated about this ad
+    // yet, so the disclaimer states nothing.
+    expect(out).toBe('');
+  });
+
+  it('still puts it on a vehicle-kind ad', () => {
+    expect(composeDisclaimer({}, undefined, undefined, { offerKind: 'vehicle' })).toMatch(
+      /dealer-imposed fees/i,
+    );
+    // ...and with no kind given at all, which is the pre-existing behaviour.
+    expect(composeDisclaimer({})).toMatch(/dealer-imposed fees/i);
+  });
+
+  it('honours the real offer type over the kind hint once one is picked', () => {
+    // The hint is a fallback, not an override: a vehicle offer type inside a
+    // mis-tagged doc must still compose vehicle wording.
+    const out = composeDisclaimer({ offerType: 'sales_price', salePrice: '28995' }, undefined, undefined, {
+      offerKind: 'custom',
+    });
+    expect(out).toMatch(/dealer-imposed fees/i);
   });
 });

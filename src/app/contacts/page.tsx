@@ -461,25 +461,30 @@ function AdminContactsView({
               onChange={setAccountFilters}
               accounts={accountOptions}
             />
+            {/* Icon-only. The active tint is the only thing left saying a
+                filter is on, so it has to stay — the label used to carry
+                that job. `title` + `aria-label` keep it identifiable to
+                anyone hovering or using a screen reader. */}
             <button
               type="button"
               onClick={contactFilter.openBuilder}
               title="Build a filter across these contacts, then save it as a segment"
-              className={`flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border transition-colors ${
+              aria-label="Filter contacts"
+              className={`flex items-center justify-center w-10 h-10 rounded-lg border transition-colors ${
                 activeFilter
                   ? 'border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10'
                   : 'border-[var(--border)] hover:border-[var(--primary)]/40'
               }`}
             >
-              <FunnelIcon className="w-4 h-4" />
-              Filter
+              <FunnelIcon className="w-5 h-5" />
             </button>
             <Link
               href={subHref('/contacts/import')}
-              className="inline-flex items-center gap-1.5 px-2 h-10 text-sm text-[var(--foreground)] hover:text-[var(--primary)] transition-colors"
+              title="Import contacts from a CSV"
+              aria-label="Import contacts"
+              className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:text-[var(--primary)] hover:border-[var(--primary)]/40 transition-colors"
             >
-              <ArrowUpTrayIcon className="w-4 h-4" />
-              Import Contacts
+              <ArrowUpTrayIcon className="w-5 h-5" />
             </Link>
             <button
               type="button"
@@ -755,25 +760,30 @@ function AccountContactsView({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {/* Icon-only. The active tint is the only thing left saying a
+                filter is on, so it has to stay — the label used to carry
+                that job. `title` + `aria-label` keep it identifiable to
+                anyone hovering or using a screen reader. */}
             <button
               type="button"
               onClick={contactFilter.openBuilder}
               title="Build a filter across these contacts, then save it as a segment"
-              className={`flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border transition-colors ${
+              aria-label="Filter contacts"
+              className={`flex items-center justify-center w-10 h-10 rounded-lg border transition-colors ${
                 activeFilter
                   ? 'border-[var(--primary)] text-[var(--primary)] bg-[var(--primary)]/10'
                   : 'border-[var(--border)] hover:border-[var(--primary)]/40'
               }`}
             >
-              <FunnelIcon className="w-4 h-4" />
-              Filter
+              <FunnelIcon className="w-5 h-5" />
             </button>
             <Link
               href={subHref('/contacts/import')}
-              className="inline-flex items-center gap-1.5 px-2 h-10 text-sm text-[var(--foreground)] hover:text-[var(--primary)] transition-colors"
+              title="Import contacts from a CSV"
+              aria-label="Import contacts"
+              className="inline-flex items-center justify-center w-10 h-10 rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:text-[var(--primary)] hover:border-[var(--primary)]/40 transition-colors"
             >
-              <ArrowUpTrayIcon className="w-4 h-4" />
-              Import Contacts
+              <ArrowUpTrayIcon className="w-5 h-5" />
             </Link>
             <button
               type="button"

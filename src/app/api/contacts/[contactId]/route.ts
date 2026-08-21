@@ -104,7 +104,9 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
 
   const existing = await prisma.contact.findFirst({
     where: { id: contactId, accountKey },
-    select: { id: true },
+    // The name columns come back because `fullName` has to be re-derived
+    // when either half of the name changes — see below.
+    select: { id: true, firstName: true, lastName: true },
   });
   if (!existing) {
     return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
@@ -152,6 +154,29 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
         (data as Record<string, unknown>)[key] = parsed;
       }
     }
+  }
+
+  // `fullName` is a STORED column, not a computed one: the contacts list
+  // searches it (`c."fullName" ILIKE`), sorts on it, and renders it in
+  // preference to firstName + lastName. So renaming a contact without
+  // re-deriving it leaves them listed, searchable and sortable under the
+  // OLD name while the detail page shows the new one — with nothing
+  // reporting a failure.
+  //
+  // Import already derives it the same way (see lib/contacts/normalize).
+  // An explicit `fullName` in the body still wins, so a caller that wants
+  // a display name unlike "first last" can still set one.
+  const renamingFirst = 'firstName' in body;
+  const renamingLast = 'lastName' in body;
+  if ((renamingFirst || renamingLast) && !('fullName' in body)) {
+    const nextFirst = renamingFirst
+      ? ((data as Record<string, unknown>).firstName as string | null)
+      : existing.firstName;
+    const nextLast = renamingLast
+      ? ((data as Record<string, unknown>).lastName as string | null)
+      : existing.lastName;
+    const derived = [nextFirst, nextLast].filter(Boolean).join(' ').trim();
+    data.fullName = derived || null;
   }
 
   if ('tags' in body && Array.isArray(body.tags)) {

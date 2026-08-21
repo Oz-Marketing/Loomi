@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { VehicleCard, type GarageVehicle } from '@/components/contacts/vehicle-card';
 import { ContactHistory, type ContactEventDto } from '@/components/contacts/contact-history';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -9,12 +9,12 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import {
-  ArrowLeftIcon,
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
   EnvelopeIcon,
   DevicePhoneMobileIcon,
   TagIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
   InlineEditableField,
@@ -246,6 +246,7 @@ function accountAddressLine(account: AccountSummary | null): string {
 export default function ContactDetailPage() {
   const { isAccount } = useAccount();
   const subHref = useSubaccountHref();
+  const router = useRouter();
   const params = useParams<{ contactId: string | string[] }>();
   const searchParams = useSearchParams();
   const contactId = Array.isArray(params.contactId) ? params.contactId[0] : params.contactId;
@@ -359,6 +360,55 @@ export default function ContactDetailPage() {
       active = false;
     };
   }, [contactId, accountKey]);
+
+  // ── Modal shell ────────────────────────────────────────────
+  //
+  // This route renders as a full-screen overlay rather than a page
+  // inside the app shell, and closing returns to the contacts list.
+  //
+  // The list URL travels in `?from=` (set by the row click) because
+  // `?segment=`, the search and the page number all live there — a bare
+  // push to /contacts would drop whatever filter got the user here.
+  //
+  // NOT router.back(): history is not a reliable way to close a modal.
+  // A refresh, a bookmark, or a back/forward shuffle can leave the
+  // previous entry pointing anywhere — including at this same contact,
+  // which reopens the modal the user just closed.
+  const returnHref = useMemo(() => {
+    const raw = searchParams.get('from') || '';
+    // Same-origin, path-only. `//evil.com` is a protocol-relative URL
+    // that a bare startsWith('/') check would wave through, so an
+    // attacker-supplied `from` could turn a close into an off-site
+    // redirect.
+    if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+    return subHref('/contacts');
+  }, [searchParams, subHref]);
+
+  const handleClose = useCallback(() => {
+    router.push(returnHref);
+  }, [router, returnHref]);
+
+  // Escape closes, and the page behind must not scroll while it's open.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      // An inline-edit input handles its own Escape (cancel the edit);
+      // only close the modal when the key wasn't meant for a field.
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+        return;
+      }
+      handleClose();
+    }
+    document.addEventListener('keydown', onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [handleClose]);
 
   const fullName = useMemo(() => {
     if (!contact) return '';
@@ -608,17 +658,24 @@ export default function ContactDetailPage() {
   const hasPhone = Boolean(contact?.phone);
 
   return (
-    <div className="space-y-5">
-      <div className="page-sticky-header">
+    <div
+      className="fixed inset-0 z-[120] flex items-stretch justify-center bg-black/60 backdrop-blur-sm sm:p-4"
+      onClick={handleClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={fullName || 'Contact details'}
+    >
+      {/* Header pinned, body scrolls. `min-h-0` on the scroll band is
+          load-bearing — a flex child won't shrink below its content
+          without it, so the overflow would never engage and the panel
+          would grow past the viewport instead. */}
+      <div
+        className="glass-card w-full sm:max-w-[1500px] sm:rounded-2xl border border-[var(--border)] flex flex-col overflow-hidden"
+        onClick={(e) => e.stopPropagation()}
+      >
+      <div className="flex-shrink-0 border-b border-[var(--border)]/70 px-4 sm:px-6 py-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
-            <Link
-              href={subHref('/contacts')}
-              className="mt-0.5 p-2 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
-            >
-              <ArrowLeftIcon className="w-4 h-4" />
-            </Link>
-
             <div className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center bg-[var(--primary)]/15 text-[var(--primary)] font-semibold flex-shrink-0">
               <span>{(contact?.firstName || fullName || '?').charAt(0).toUpperCase()}</span>
             </div>
@@ -656,8 +713,20 @@ export default function ContactDetailPage() {
               </div>
             </Link>
           )}
+
+          <button
+            type="button"
+            onClick={handleClose}
+            title="Close (Esc)"
+            aria-label="Close contact details"
+            className="ml-auto p-2 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors flex-shrink-0"
+          >
+            <XMarkIcon className="w-4 h-4" />
+          </button>
         </div>
       </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-5 space-y-5">
 
       {contactLoading && (
         <div className="glass-card rounded-xl p-8 text-center text-[var(--muted-foreground)]">
@@ -679,6 +748,26 @@ export default function ContactDetailPage() {
             <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
               <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">Contact</h3>
               <div className="grid gap-2.5 sm:grid-cols-2">
+                {/* Name is editable here rather than only in the header:
+                    the API re-derives the stored `fullName` column from
+                    these two, which is what the contacts list searches,
+                    sorts and displays. */}
+                <InlineEditableField
+                  label="First name"
+                  type="text"
+                  fieldRef={{ kind: 'canonical', column: 'firstName' }}
+                  displayValue={contact.firstName || '—'}
+                  rawValue={contact.firstName}
+                  onSave={(v) => patchContact({ kind: 'canonical', column: 'firstName', value: v })}
+                />
+                <InlineEditableField
+                  label="Last name"
+                  type="text"
+                  fieldRef={{ kind: 'canonical', column: 'lastName' }}
+                  displayValue={contact.lastName || '—'}
+                  rawValue={contact.lastName}
+                  onSave={(v) => patchContact({ kind: 'canonical', column: 'lastName', value: v })}
+                />
                 <InlineEditableField
                   label="Email"
                   type="text"
@@ -861,6 +950,8 @@ export default function ContactDetailPage() {
           />
         </div>
       )}
+      </div>
+      </div>
     </div>
   );
 }

@@ -81,9 +81,9 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
-import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
+import { enrichOfferFields, offerTokenFields, primaryOfferField } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
-import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
+import { offerKindForDoc, type OfferKind } from '@/lib/ad-generator/offer-kinds';
 import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
@@ -111,7 +111,7 @@ import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVari
 import { useIndustries } from '@/lib/hooks/use-industries';
 import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
-import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
+import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
@@ -341,21 +341,9 @@ const OFFER_TYPE_SHORT: Record<string, string> = {
 // Which offer-input field each computed offer token surfaces, per offer type —
 // so binding an element to `_offerValue`/`_offerTerms`/… counts as *showing*
 // those required fields on the ad. Label / $ / % tokens surface no data field.
-const OFFER_TOKEN_FIELDS: Record<string, Record<string, string[]>> = {
-  lease: { _offerMain: ['monthlyPayment'], _offerValue: ['monthlyPayment'], _offerTerms: ['leaseTerm', 'dueAtSigning'] },
-  apr: { _offerMain: ['aprRate'], _offerValue: ['aprRate'], _offerTerms: ['aprTerm'] },
-  discount: { _offerMain: ['discountAmount'], _offerValue: ['discountAmount'], _offerTerms: ['msrp'] },
-  sales_price: { _offerMain: ['salePrice'], _offerValue: ['salePrice'], _offerTerms: ['msrp'] },
-  custom: {},
-};
-// The headline amount per offer type — must be shown as its own element / offer
-// token (a disclaimer alone doesn't count as surfacing it).
-const PRIMARY_OFFER_FIELD: Record<string, string> = {
-  lease: 'monthlyPayment',
-  apr: 'aprRate',
-  discount: 'discountAmount',
-  sales_price: 'salePrice',
-};
+// `offerTokenFields` / `primaryOfferField` (imported) replaced two hand-listed
+// vehicle-only maps here. Derived from each offer type's spec, so a service
+// template's compliance check works without either being extended.
 
 /** The field keys an element actually renders — a direct field binding, or the
  *  `{{tokens}}` inside typed static content. Used to tell whether a required OEM
@@ -400,14 +388,21 @@ function sourceValueToBinding(v: string, currentValue: string): Binding {
  *  Labels that collide across groups (e.g. "Vehicle" in both Offer 1 and Offer 2)
  *  are auto-suffixed with their group so the control is unambiguous open OR
  *  collapsed. */
-function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSelectOption[] {
+function buildContentSources(
+  el: DocElement,
+  fields: FieldSpec[],
+  kind: OfferKind,
+): SearchableSelectOption[] {
   const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
   const hasO2 = fields.some((f) => f.key === 'o2_offerType');
-  // Only surface the computed offer tokens when the template actually has the
-  // offer question set — otherwise a blank/non-offer template lists Offer
-  // label/amount/terms that resolve to nothing (confusing). They ride in with
-  // the "Vehicle Offer" category starter (or the offer field kit).
-  const hasOffer = fields.some((f) => f.key === 'offerType');
+  // Only surface the computed `_offer*` tokens when they'd actually resolve to
+  // something — otherwise the list offers Offer label/amount/terms that render
+  // blank, which reads as a broken binding. Both halves are required: the doc
+  // has to carry the offer question set, AND the kind has to have at least one
+  // offer type that assembles a block (a general-ad kind whose only types are
+  // free text assembles nothing, so the tokens stay hidden).
+  const hasOffer =
+    fields.some((f) => f.key === 'offerType') && kind.offerTypes.some((t) => !!t.main);
   const opts: SearchableSelectOption[] = [
     { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
   ];
@@ -812,7 +807,23 @@ export default function AdBuilderPage() {
   // The Make/OEM tag + compliance checklist apply to Automotive templates: shown
   // when the template targets Automotive — explicitly selected, or the empty
   // "all vehicle-offer accounts" default (which includes Automotive).
-  const templateIsAutomotive = (doc.industries ?? []).length === 0 || (doc.industries ?? []).includes('Automotive');
+  // The doc's offer KIND — what its field schema, offer types and capabilities
+  // come from. Declared here, high up, because several gates below read it.
+  //
+  // Depends on the whole doc, not just `doc.offerKind`: `offerKind()` returns the
+  // registry's own object, so a recompute yields the SAME reference and the memos
+  // downstream don't invalidate. Cheap and honest beats a narrow dep list that
+  // goes stale the moment someone reads another field off `doc` here.
+  const docKind = useMemo(() => offerKindForDoc(doc), [doc]);
+
+  // The Make / OEM section. Gated on the KIND first: the make is what drives the
+  // disclaimer template, the OEM required fields and every co-op lookup, so the
+  // capability to read is `manufacturerRules` — a SERVICE template has a make and
+  // needs its compliance checklist without having a vehicle. The industry tag
+  // stays as the second condition so nothing changes for existing templates.
+  const templateIsAutomotive =
+    docKind.capabilities.manufacturerRules &&
+    ((doc.industries ?? []).length === 0 || (doc.industries ?? []).includes('Automotive'));
   // Compliance vs. the tagged make's OEM rule: per offer type, which required
   // fields are NOT surfaced on the artboard for that offer type — i.e. no element
   // (visible for that type) renders the field directly, via a computed offer
@@ -821,7 +832,7 @@ export default function AdBuilderPage() {
   // Surfaced as a chip on the action bar; null when the template has no make.
   const compliance = useMemo(() => {
     if (!doc.make) return null;
-    return OFFER_TYPES.map((t) => {
+    return docKind.offerTypes.map((t) => {
       const required = requiredFieldsFor(t.value, oemRule);
       if (required.length === 0) return { type: t, missing: [] };
       const surfaced = new Set<string>();
@@ -832,17 +843,17 @@ export default function AdBuilderPage() {
         for (const key of elementFieldRefs(el)) {
           if (key === 'disclaimer') { hasDisclaimer = true; surfaced.add('disclaimer'); }
           else if (/^_(?:o2_)?offer/.test(key)) {
-            for (const f of OFFER_TOKEN_FIELDS[t.value]?.[key.replace(/^_o2_/, '_')] ?? []) surfaced.add(f);
+            for (const f of offerTokenFields(t.value)[key.replace(/^_o2_/, '_')] ?? []) surfaced.add(f);
           } else surfaced.add(key);
         }
       }
       // A disclaimer element discloses the fine-print legal fields — everything
       // the OEM disclaimer composes — except the headline amount, which must be
       // shown on its own (via the offer block or a direct binding).
-      if (hasDisclaimer) for (const k of required) if (k !== PRIMARY_OFFER_FIELD[t.value]) surfaced.add(k);
+      if (hasDisclaimer) for (const k of required) if (k !== primaryOfferField(t.value)) surfaced.add(k);
       return { type: t, missing: required.filter((k) => !surfaced.has(k)) };
     }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
-  }, [doc.make, doc.elements, oemRule]);
+  }, [doc.make, doc.elements, oemRule, docKind]);
   const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
   // Compliance "insert": drop a text element bound to the missing field onto the
   // artboard, shown for that offer type — so the ad now surfaces it and the
@@ -1138,9 +1149,9 @@ export default function AdBuilderPage() {
     for (const el of doc.elements) {
       if (!isOfferElement(el)) continue;
       if (el.visibleWhen?.field === 'offerType') for (const v of el.visibleWhen.in) set.add(v);
-      else for (const t of OFFER_TYPES) set.add(t.value); // ungated offer element → shown for all types
+      else for (const t of docKind.offerTypes) set.add(t.value); // ungated offer element → shown for all types
     }
-    return OFFER_TYPES.filter((t) => set.has(t.value));
+    return docKind.offerTypes.filter((t) => set.has(t.value));
   }, [doc.elements]);
 
   const previewData = useMemo(() => {
@@ -1693,8 +1704,8 @@ export default function AdBuilderPage() {
 
   // "Shows" options for the selected element's Content source picker — the fixed
   // SYSTEM fields + computed offer tokens + brand data (see buildContentSources).
-  // Sourced from the system schema, not doc.fields: designers bind to system
-  // fields, they don't author their own.
+  // Sourced from the doc's offer KIND, not doc.fields: designers bind to their
+  // kind's schema, they don't author their own fields.
   //
   // The one exception is the SECOND OFFER (`o2_*`). The system schema is the
   // single-offer field set, so on a dual template — seeded by "Two vehicles" at
@@ -1703,12 +1714,13 @@ export default function AdBuilderPage() {
   // unreachable. Those keys are system-defined twins (not designer-authored), so
   // admitting them keeps the fixed-schema rule intact.
   const bindableFields = useMemo<FieldSpec[]>(() => {
+    const schema = docKind.fields;
     const o2 = doc.fields.filter((f) => f.key.startsWith('o2_'));
-    return o2.length ? [...SYSTEM_FIELDS, ...o2] : SYSTEM_FIELDS;
-  }, [doc.fields]);
+    return o2.length ? [...schema, ...o2] : schema;
+  }, [doc.fields, docKind]);
   const contentSources = useMemo<SearchableSelectOption[]>(
-    () => (selected ? buildContentSources(selected, bindableFields) : []),
-    [selected, bindableFields],
+    () => (selected ? buildContentSources(selected, bindableFields, docKind) : []),
+    [selected, bindableFields, docKind],
   );
 
   // Write the selected element's content back to its source: static → the literal,
@@ -2303,6 +2315,17 @@ export default function AdBuilderPage() {
   );
 
   // One saved-block row: insert on click, inline rename, delete. Shared by the
+  // Blocks this doc's KIND can actually take. A seeded offer block carries the
+  // vehicle offer question set, so offering it on a general ad would mean either
+  // grafting the vehicle schema on or inserting elements bound to fields that
+  // don't exist — `insertBlockIntoDoc` refuses the former, so the block would
+  // arrive half-wired. Filtering here means it is never offered in the first
+  // place.
+  const insertableBlocks = useMemo(
+    () => blocks.filter((b) => b.doc && blockFitsKind(b.doc, docKind)),
+    [blocks, docKind],
+  );
+
   // Insert popout (default/global blocks) and the Blocks panel (custom blocks).
   const renderBlockRow = (b: BlockRow) => (
     <div key={b.id} className="flex items-center gap-1 rounded-lg border border-[var(--border)] pr-1 transition-colors hover:border-[var(--primary)]">
@@ -3934,7 +3957,12 @@ export default function AdBuilderPage() {
                     </div>
 
                     {/* Offers — adds/removes the parallel `o2_` question set, so
-                        a template can be made dual after it was started. */}
+                        a template can be made dual after it was started. Hidden
+                        on a kind with no offer types: "Two offers" merges the
+                        VEHICLE offer field kit, so on a general template it would
+                        inject the whole vehicle schema into a doc that has no
+                        offer at all. */}
+                    {docKind.capabilities.dualOffer && (
                     <div className="mt-4 border-t border-[var(--border)] pt-3">
                       <div className="mb-1 flex items-center gap-1.5">
                         <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Offers</h3>
@@ -3966,6 +3994,7 @@ export default function AdBuilderPage() {
                         </p>
                       )}
                     </div>
+                    )}
 
                     {templateIsAutomotive && (
                       <div className="mt-4 border-t border-[var(--border)] pt-3">
@@ -4167,12 +4196,12 @@ export default function AdBuilderPage() {
                 <Squares2X2Icon className="h-3.5 w-3.5" />
                 Saved blocks
               </h2>
-              {blocks.length === 0 ? (
+              {insertableBlocks.length === 0 ? (
                 <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
                   Select elements on the canvas, then <span className="text-[var(--foreground)]">Save as block</span> (right-click or the multi-select panel) to reuse them here.
                 </p>
               ) : (
-                <div className="flex flex-col gap-1">{blocks.map(renderBlockRow)}</div>
+                <div className="flex flex-col gap-1">{insertableBlocks.map(renderBlockRow)}</div>
               )}
             </section>
           )}
@@ -4642,11 +4671,11 @@ export default function AdBuilderPage() {
                             <AdderGrid adders={adders} variant="onboarding" />
                             {/* Start from a saved block — begin a blank canvas from
                                 a pre-wired cluster instead of single elements. */}
-                            {blocks.length > 0 && (
+                            {insertableBlocks.length > 0 && (
                               <div className="mt-4">
                                 <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Or start from a block</p>
                                 <div className="flex flex-col gap-1.5">
-                                  {blocks.map((b) => (
+                                  {insertableBlocks.map((b) => (
                                     <button
                                       key={b.id}
                                       type="button"
@@ -5094,6 +5123,7 @@ export default function AdBuilderPage() {
                   multiSize={doc.sizes.length > 1}
                   fitFontPx={fitFontPx}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
+                  offerTypes={docKind.offerTypes}
                   arrangeTarget={arrangeTargetEff}
                   onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
@@ -5123,6 +5153,7 @@ export default function AdBuilderPage() {
                   })()}
                   fontOptions={fontOptions}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
+                  offerTypes={docKind.offerTypes}
                   onElAll={patchSelectedElements}
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
@@ -5661,15 +5692,18 @@ function TokenTextArea({
 /** Per-offer-type visibility toggles (element `visibleWhen`). All selected =
  *  always shown; a subset shows the element(s) only for those offer types.
  *  Shared by the single-element inspector and the multi-select panel. */
-function ShowForControl({ visibleWhen, onChange }: {
+function ShowForControl({ visibleWhen, offerTypes, onChange }: {
   visibleWhen?: { field: string; in: string[] };
+  /** The offer types of the doc's KIND — a service template gates on
+   *  `flat_price` / `percent_off`, not on `lease` / `apr`. */
+  offerTypes: { value: string; label: string }[];
   onChange: (v: { field: string; in: string[] } | undefined) => void;
 }) {
-  const all = OFFER_TYPES.map((x) => x.value);
+  const all = offerTypes.map((x) => x.value);
   const cur = visibleWhen?.field === 'offerType' ? visibleWhen.in : all;
   return (
     <div className="flex flex-wrap items-center gap-1">
-      {OFFER_TYPES.map((t) => {
+      {offerTypes.map((t) => {
         const active = cur.includes(t.value);
         return (
           <button
@@ -5708,6 +5742,7 @@ function MultiSelectPanel({
   sampleFontSize,
   fontOptions,
   hasOfferField,
+  offerTypes,
   onElAll,
   onBoxAll,
   onBumpSize,
@@ -5728,6 +5763,8 @@ function MultiSelectPanel({
   fontOptions: SelectOption[];
   /** Whether the template has an `offerType` field — gates the "Show for" control. */
   hasOfferField: boolean;
+  /** The doc kind's offer types, for the "Show for" toggles. */
+  offerTypes: { value: string; label: string }[];
   onElAll: (patch: Partial<DocElement>) => void;
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
@@ -5772,7 +5809,7 @@ function MultiSelectPanel({
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
           <PanelSection title="Show for">
-            <ShowForControl visibleWhen={elements[0]?.visibleWhen} onChange={(v) => onElAll({ visibleWhen: v })} />
+            <ShowForControl visibleWhen={elements[0]?.visibleWhen} offerTypes={offerTypes} onChange={(v) => onElAll({ visibleWhen: v })} />
           </PanelSection>
         )}
         {/* Scale vs Fixed for the whole selection — pinning a lockup of several
@@ -5939,6 +5976,7 @@ function SelectionPanel({
   multiSize,
   fitFontPx,
   hasOfferField,
+  offerTypes,
   arrangeTarget,
   onArrangeTarget,
   onAlign,
@@ -5981,6 +6019,8 @@ function SelectionPanel({
   /** Whether the template has an `offerType` field — gates the per-offer-type
    *  "Show for" (element visibleWhen) control. */
   hasOfferField: boolean;
+  /** The doc kind's offer types, for the "Show for" toggles. */
+  offerTypes: { value: string; label: string }[];
   /** What Arrange aligns this element to (artboard / margins). "Selection" is
    *  meaningless for one element, so the picker hides it here. */
   arrangeTarget: ArrangeTarget;
@@ -6282,7 +6322,7 @@ function SelectionPanel({
             a subset to show this element only for those offer types. */}
         {hasOfferField && (
           <PanelSection title="Show for">
-            <ShowForControl visibleWhen={el.visibleWhen} onChange={(v) => onEl({ visibleWhen: v })} />
+            <ShowForControl visibleWhen={el.visibleWhen} offerTypes={offerTypes} onChange={(v) => onEl({ visibleWhen: v })} />
           </PanelSection>
         )}
 

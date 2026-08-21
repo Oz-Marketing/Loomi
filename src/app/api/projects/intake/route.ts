@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as projects from '@/lib/services/projects';
-import { isBudgetChannel } from '@/lib/budget/channels';
+import { channelRegistry } from '@/lib/services/budget-channels';
+import type { ChannelRegistry } from '@/lib/budget/channel-registry';
 import { isValidPeriod } from '@/lib/services/budget';
 import type { BudgetEntry } from '@/lib/projects/ui';
 
@@ -18,13 +19,13 @@ import type { BudgetEntry } from '@/lib/projects/ui';
  * amounts are DROPPED rather than rejected: a malformed row shouldn't cost the
  * rep the whole ticket, and the hub surfaces any money that didn't land.
  */
-function parseBudgetEntries(raw: unknown): BudgetEntry[] {
+function parseBudgetEntries(ch: ChannelRegistry, raw: unknown): BudgetEntry[] {
   if (!Array.isArray(raw)) return [];
   const out: BudgetEntry[] = [];
   for (const r of raw) {
     if (!r || typeof r !== 'object') continue;
     const { channel, amount } = r as { channel?: unknown; amount?: unknown };
-    if (typeof channel !== 'string' || !isBudgetChannel(channel)) continue;
+    if (typeof channel !== 'string' || !ch.has(channel)) continue;
     const n = typeof amount === 'number' ? amount : Number(amount);
     if (!Number.isFinite(n) || n <= 0) continue;
     out.push({ channel, amount: n });
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
 
   const scope = getAccountScope(session!);
   const body = await req.json().catch(() => ({}));
+  const ch = await channelRegistry();
 
   const accountKeys: string[] = Array.isArray(body.accountKeys)
     ? body.accountKeys.map(String).filter(Boolean)
@@ -67,7 +69,7 @@ export async function POST(req: NextRequest) {
             d.details && typeof d.details === 'object'
               ? (d.details as Record<string, unknown>)
               : undefined,
-          budget: parseBudgetEntries(d.budget),
+          budget: parseBudgetEntries(ch, d.budget),
         }))
     : [];
 

@@ -207,25 +207,20 @@ export function fieldsForKind(kind: string): FieldDef[] {
 }
 
 // ── Budget ────────────────────────────────────────────────────────────────
-// Re-exported from the channel registry so the kind→channel map lives next to
-// the channels it names and the two can't drift apart.
-import { KIND_BUDGET_CHANNELS } from '@/lib/budget/channels';
-
-export { KIND_BUDGET_CHANNELS };
-
+//
 // Money is NOT a per-type field. It used to be six unrelated `number` keys in
 // TYPE_FIELDS (mailerBudget, radioBudget, tvBudget, videoBudget,
 // sponsorshipAmount, budget) that nothing could sum, reconcile, or trace. It
 // is now a real ledger — see docs/budget-module.md. Intake collects one amount
 // per BUDGET CHANNEL and the server turns each into a BudgetLine.
-
-export function budgetChannelsForKind(kind: string): string[] {
-  return KIND_BUDGET_CHANNELS[kind] ?? [];
-}
-
-export function kindSpendsBudget(kind: string): boolean {
-  return budgetChannelsForKind(kind).length > 0;
-}
+//
+// WHICH channels a kind may spend on is no longer here. It was
+// `KIND_BUDGET_CHANNELS`, a hardcoded map; it's now `BudgetChannel.intakeKinds`,
+// edited in Agency Settings → Channels. Ask the registry:
+// `channels.forKind(kind)` and `channels.spendsBudget(kind)` — from
+// `useBudgetChannels()` on the client, `channelRegistry()` on the server. The
+// sync helpers that used to live here are gone rather than left wrapping the
+// seed, because a stale answer here silently drops a rep's money.
 
 /** One channel's requested amount, as intake sends it. */
 export interface BudgetEntry {

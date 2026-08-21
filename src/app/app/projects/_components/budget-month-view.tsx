@@ -3,7 +3,8 @@
 import { useMemo, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { channelLabel, isPacedChannel } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
+import type { ChannelRegistry } from '@/lib/budget/channel-registry';
 import { Collapse } from '@/components/ui/collapse';
 import { StatusPill } from './budget-status-pill';
 import { MONTH_ABBR, usd0, type BudgetAgreement, type BudgetLine } from './budget-shared';
@@ -48,6 +49,7 @@ export function BudgetMonthView({
   /** Opens the panel holding a budget's pieces for this month. */
   onOpenGroup: (title: string, lines: BudgetLine[]) => void;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const period = `${year}-${String(month).padStart(2, '0')}`;
 
   /** Budgets peeked open in place. Keyed by budget so it survives a re-sort. */
@@ -101,7 +103,7 @@ export function BudgetMonthView({
         // back to the lines' own label rather than rendering a blank row.
         name:
           budgets.find((b) => b.id === id.split('|')[0])?.name?.trim() ||
-          channelBaseLabel(rows[0]) ||
+          channelBaseLabel(ch, rows[0]) ||
           rows[0]?.label ||
           'Budget',
         rows: rows.sort((a, b) => b.amount - a.amount),
@@ -245,9 +247,9 @@ export function BudgetMonthView({
                       </span>
                       <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
                         {single
-                          ? channelLabel(group.rows[0]!.channel)
+                          ? ch.label(group.rows[0]!.channel)
                           : `${group.rows.length} items · ${[
-                              ...new Set(group.rows.map((r) => channelLabel(r.channel))),
+                              ...new Set(group.rows.map((r) => ch.label(r.channel))),
                             ].join(', ')}`}
                       </span>
                     </span>
@@ -309,6 +311,7 @@ function PieceRow({
   onOpen: (id: string) => void;
   indent?: boolean;
 }) {
+  const { channels: ch } = useBudgetChannels();
   return (
     <button
       type="button"
@@ -323,13 +326,13 @@ function PieceRow({
       />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm text-[var(--foreground)]">
-          {line.label || channelLabel(line.channel)}
+          {line.label || ch.label(line.channel)}
         </span>
         {/* The channel only when the name isn't already it — "Radio / Radio"
             is a row that says one thing twice. */}
-        {line.label && line.label !== channelLabel(line.channel) && (
+        {line.label && line.label !== ch.label(line.channel) && (
           <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-            {channelLabel(line.channel)}
+            {ch.label(line.channel)}
           </span>
         )}
       </span>
@@ -340,7 +343,7 @@ function PieceRow({
       )}
       {/* Only where the split is real. Meta and Google feed the pacer's two
           goals; a radio line's bucket is a column value nothing reads. */}
-      {line.channel && isPacedChannel(line.channel) && (
+      {line.channel && ch.isPaced(line.channel) && (
         <span className="hidden whitespace-nowrap text-[11px] text-[var(--muted-foreground)] sm:inline">
           {line.bucket === 'base' ? 'Base' : 'Added'}
         </span>
@@ -360,9 +363,7 @@ function PieceRow({
  * something the pacer acts on. "Radio Base" would imply a distinction radio
  * doesn't have.
  */
-function channelBaseLabel(line: BudgetLine | undefined): string | null {
+function channelBaseLabel(ch: ChannelRegistry, line: BudgetLine | undefined): string | null {
   if (!line?.channel) return null;
-  return isPacedChannel(line.channel)
-    ? `${channelLabel(line.channel)} Base`
-    : channelLabel(line.channel);
+  return ch.isPaced(line.channel) ? `${ch.label(line.channel)} Base` : ch.label(line.channel);
 }

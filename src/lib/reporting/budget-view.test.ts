@@ -1,5 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { toClientBudgetView, indexActuals } from './budget-view';
+import {
+  createChannelRegistry,
+  SEED_CHANNEL_RECORDS,
+} from '@/lib/budget/channel-registry';
+
+/**
+ * The seed channel list, as a registry. Passed in rather than loaded, which is
+ * what keeps `toClientBudgetView` pure — and pure is the property that makes
+ * "margin never leaks" assertable here instead of a convention.
+ */
+const ch = createChannelRegistry(SEED_CHANNEL_RECORDS);
 import type { BudgetSummary } from '@/lib/services/budget';
 
 // The point of this file is the LEAK TEST. Reporting admits the `client` role,
@@ -97,7 +108,7 @@ function allNumbers(value: unknown, acc: number[] = []): number[] {
 }
 
 describe('toClientBudgetView — margin must not leak', () => {
-  const view = toClientBudgetView('youngHonda', summary(), noActuals);
+  const view = toClientBudgetView(ch, 'youngHonda', summary(), noActuals);
 
   it('carries no cost, revenue, margin or markup key anywhere', () => {
     const keys = allKeys(view).map((k) => k.toLowerCase());
@@ -132,14 +143,13 @@ describe('toClientBudgetView — margin must not leak', () => {
 
 describe('toClientBudgetView — shaping', () => {
   it('labels channels from the registry rather than echoing the key', () => {
-    const view = toClientBudgetView('youngHonda', summary(), noActuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary(), noActuals);
     expect(view.byChannel.map((c) => c.label)).toEqual(['Meta', 'Google']);
     expect(view.byChannel[0].category).toBe('Digital');
   });
 
   it('falls back to the raw key for a channel the registry does not know', () => {
-    const view = toClientBudgetView(
-      'youngHonda',
+    const view = toClientBudgetView(ch, 'youngHonda',
       summary({ byChannel: [{ channel: 'mystery_channel', amount: 100, spendTarget: 80 }] }),
       noActuals,
     );
@@ -148,8 +158,7 @@ describe('toClientBudgetView — shaping', () => {
   });
 
   it('sorts channels by spend, biggest first', () => {
-    const view = toClientBudgetView(
-      'youngHonda',
+    const view = toClientBudgetView(ch, 'youngHonda',
       summary({
         byChannel: [
           { channel: 'google', amount: 10, spendTarget: 8 },
@@ -163,8 +172,7 @@ describe('toClientBudgetView — shaping', () => {
   });
 
   it('orders months chronologically and labels them in UTC', () => {
-    const view = toClientBudgetView(
-      'youngHonda',
+    const view = toClientBudgetView(ch, 'youngHonda',
       summary({
         byPeriod: [
           { period: '2026-03', amount: 1, spendTarget: 1 },
@@ -178,8 +186,7 @@ describe('toClientBudgetView — shaping', () => {
   });
 
   it('reports a null contract total rather than inventing one from the lines', () => {
-    const view = toClientBudgetView(
-      'youngHonda',
+    const view = toClientBudgetView(ch, 'youngHonda',
       summary({ declaredTotal: null, unplanned: null, agreements: [] }),
       noActuals,
     );
@@ -190,7 +197,7 @@ describe('toClientBudgetView — shaping', () => {
   });
 
   it('passes the over-planned flag through', () => {
-    const view = toClientBudgetView('youngHonda', summary({ overAllocated: true }), noActuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary({ overAllocated: true }), noActuals);
     expect(view.overPlanned).toBe(true);
   });
 });
@@ -253,7 +260,7 @@ describe('toClientBudgetView — actuals', () => {
       { period: '2026-02', channel: 'meta', actualAmount: 10_000, settled: true },
       { period: '2026-02', channel: 'google', actualAmount: 500, settled: false },
     ]);
-    const view = toClientBudgetView('youngHonda', summary(), actuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary(), actuals);
     const [jan, feb] = view.byPeriod;
     expect(jan.settled).toBe(true);
     expect(feb.settled).toBe(false);
@@ -266,7 +273,7 @@ describe('toClientBudgetView — actuals', () => {
     const actuals = indexActuals([
       { period: '2026-01', channel: 'meta', actualAmount: null, settled: true },
     ]);
-    const view = toClientBudgetView('youngHonda', summary(), actuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary(), actuals);
     const jan = view.byPeriod.find((p) => p.period === '2026-01')!;
     expect(jan.settled).toBe(true);
     expect(jan.actual).toBeNull();
@@ -274,7 +281,7 @@ describe('toClientBudgetView — actuals', () => {
   });
 
   it('reports null spend overall when nothing anywhere has been recorded', () => {
-    const view = toClientBudgetView('youngHonda', summary(), noActuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary(), noActuals);
     expect(view.spent).toBeNull();
     expect(view.byPeriod.every((p) => p.actual === null)).toBe(true);
     expect(view.byChannel.every((c) => c.actual === null)).toBe(true);
@@ -284,7 +291,7 @@ describe('toClientBudgetView — actuals', () => {
     const actuals = indexActuals([
       { period: '2026-01', channel: 'meta', actualAmount: 0, settled: true },
     ]);
-    const view = toClientBudgetView('youngHonda', summary(), actuals);
+    const view = toClientBudgetView(ch, 'youngHonda', summary(), actuals);
     const jan = view.byPeriod.find((p) => p.period === '2026-01')!;
     expect(jan.actual).toBe(0);
     expect(jan.actualRecorded).toBe(true);

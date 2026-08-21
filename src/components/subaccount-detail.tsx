@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { Select } from '@/components/select';
 import { createPortal } from 'react-dom';
-import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeftIcon,
@@ -19,23 +19,26 @@ import {
   ExclamationTriangleIcon,
   QuestionMarkCircleIcon,
   PuzzlePieceIcon,
+  TagIcon,
+  ChartBarIcon,
+  PaperAirplaneIcon,
+  ChatBubbleLeftRightIcon,
+  NoSymbolIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
-import { UsersTab } from '@/components/settings/users-tab';
 import { ReportAccessTab } from '@/components/settings/report-access-tab';
-import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
-import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { SendingTab } from '@/components/settings/sending-tab';
+import { SmsTab } from '@/components/settings/sms-tab';
+import { SuppressionsTab } from '@/components/settings/suppressions-tab';
 import {
   canonicalSubaccountSection,
-  useSubaccountSections,
 } from '@/components/settings/use-settings-tabs';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
-// Sending + Suppressions tabs now live under /messaging/settings.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -93,10 +96,10 @@ type DetailTab =
   | 'contact-fields'
   | 'domains'
   | 'integrations'
-  | 'users'
-  | 'notifications'
-  | 'reports'
-  | 'appearance';
+  | 'email'
+  | 'sms'
+  | 'suppressions'
+  | 'reports';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
 const META_LOGO_URL =
@@ -105,60 +108,44 @@ type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 
 type TabDef = { key: DetailTab; label: string; icon?: React.ComponentType<{ className?: string }> };
 
+/**
+ * An account's settings — ONE list, everywhere.
+ *
+ * There used to be two: this, for the agency drill-in, and a registry-driven
+ * per-sector list for a `settingsMode` variant that rendered the same screens in
+ * the app shell with its tabs in the sidebar. Same account, same panels, two
+ * routes and two rails. Agency Settings → Accounts is the single door now, so
+ * `settingsMode` is gone and Custom Fields and Reports joined this list.
+ *
+ * Not sector-gated either, deliberately: this is an ACCOUNT's configuration,
+ * and it doesn't change depending on which surface you opened it from.
+ */
 const TABS: TabDef[] = [
   { key: 'general', label: 'General', icon: BuildingStorefrontIcon },
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
   { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
+  // Account-scoped contact fields. The global blueprint library is its own
+  // Studio settings tab; this declares what THIS account collects.
+  { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
+  // The email/SMS engine's per-account config. It lived in a parallel
+  // /messaging/settings route tree — sender identity, Twilio credentials and the
+  // suppression list are all THIS account's, so they belong on the account with
+  // everything else that is.
+  { key: 'email', label: 'Email', icon: PaperAirplaneIcon },
+  { key: 'sms', label: 'SMS', icon: ChatBubbleLeftRightIcon },
+  { key: 'suppressions', label: 'Suppressions', icon: NoSymbolIcon },
+  // Which reports this account's CLIENT users see.
+  { key: 'reports', label: 'Reports', icon: ChartBarIcon },
 ];
 
-// The SETTINGS-mode tab list is no longer declared here — it comes from the
-// shared registry (`useSubaccountSections`), which also feeds the sidebar's
-// settings nav and gates each section by sector. The two lists used to be
-// hand-synced copies.
-//
-// Sending + Suppressions used to live here but moved into the
-// messaging-scoped settings page at /subaccount/<slug>/messaging/settings
-// since they're tightly coupled to the email engine. Legacy URLs are
-// redirected from the [tab] page below.
 
-// Settings mode lives at two URL shapes:
-//   • Studio scoped:  /subaccount/<slug>/settings/<tab>            (section in path)
-//   • Admin browse:   [<surface>/]settings/subaccounts/<key>?tab=  (section in query —
-//     keeps the single [key] route, no per-tab route files needed)
-// These read/write the active section for whichever shape we're on.
-function isStudioSettingsScheme(pathname: string): boolean {
-  return pathname.split('/').filter(Boolean)[0] === 'subaccount';
-}
-function readSettingsSectionTab(
-  pathname: string,
-  search?: { get(name: string): string | null } | null,
-): string | undefined {
-  if (isStudioSettingsScheme(pathname)) {
-    const segments = pathname.split('/').filter(Boolean);
-    const i = segments.indexOf('settings');
-    return i >= 0 ? segments[i + 1] : undefined;
-  }
-  return search?.get('tab') ?? undefined;
-}
-function buildSettingsSectionPath(pathname: string, key: string, tab: string): string {
-  if (isStudioSettingsScheme(pathname)) {
-    const slug = pathname.split('/').filter(Boolean)[1];
-    return `/subaccount/${slug}/settings/${tab}`;
-  }
-  // Preserve any surface prefix (e.g. /reporting) that sits before /settings.
-  const i = pathname.indexOf('/settings/subaccounts');
-  const prefix = i > 0 ? pathname.slice(0, i) : '';
-  return `${prefix}/settings/subaccounts/${key}?tab=${tab}`;
-}
 
 interface SubAccountDetailPageProps {
   /** Base path for navigation, e.g. '/subaccounts' or '/settings/subaccounts' */
   basePath: string;
-  /** When true, renders as a sub-account settings page with settings-style header and extra tabs */
-  settingsMode?: boolean;
-  /** Account key to use (for settings mode, where there's no :key route param) */
+  /** Account key, when it doesn't come from a `:key` route param. */
   accountKeyProp?: string;
   /**
    * Rendered inside the Agency Settings modal rather than on a route. The
@@ -171,22 +158,18 @@ interface SubAccountDetailPageProps {
 
 export function SubAccountDetailPage({
   basePath,
-  settingsMode,
   accountKeyProp,
   onBack,
 }: SubAccountDetailPageProps) {
   const params = useParams();
-  const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
-  const key = settingsMode || accountKeyProp ? (accountKeyProp || '') : (params.key as string);
+  const key = accountKeyProp || (params.key as string);
   const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
   const [activeTab, setActiveTab] = useState<DetailTab>('general');
-  // Settings-mode sections for the current sector, from the shared registry.
-  const settingsSections = useSubaccountSections();
   // Which integration card is open in the Integrations tab (null = no modal).
   const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
   /**
@@ -432,46 +415,15 @@ export function SubAccountDetailPage({
     };
   }, [key]);
 
-  // ── Settings mode: resolve tab from URL path ──
-  const settingsUrlTab = useMemo(() => {
-    if (!settingsMode) return undefined;
-    return readSettingsSectionTab(pathname, searchParams);
-  }, [settingsMode, pathname, searchParams]);
-
-  // Settings mode: sync activeTab from URL on initial load and popstate
+  // Deep-link to a tab with `?tab=`. The only URL handling left: the
+  // settings-mode variant also owned a path segment per section and kept it in
+  // sync with pushState, which is what made two rails necessary.
   useEffect(() => {
-    if (!settingsMode) return;
-    const allTabKeys = settingsSections.map(t => t.key);
-    const syncFromUrl = () => {
-      const url = new URL(window.location.href);
-      const tab =
-        canonicalSubaccountSection(readSettingsSectionTab(url.pathname, url.searchParams)) ??
-        'general';
-      if (allTabKeys.includes(tab as never)) {
-        setActiveTab(tab as DetailTab);
-      }
-    };
-    // Sync on mount — if no tab in URL, push default tab into the URL
-    const canonical = canonicalSubaccountSection(settingsUrlTab);
-    if (canonical && allTabKeys.includes(canonical as never)) {
-      setActiveTab(canonical as DetailTab);
-    } else if (!settingsUrlTab) {
-      // No tab segment — add /general to URL (scheme-aware)
-      window.history.replaceState({}, '', buildSettingsSectionPath(pathname, key, 'general'));
-    }
-    // Sync on browser back/forward
-    window.addEventListener('popstate', syncFromUrl);
-    return () => window.removeEventListener('popstate', syncFromUrl);
-  }, [settingsMode, settingsUrlTab, pathname, settingsSections]);
-
-  // Handle ?tab= query param for deep-linking to a specific tab (non-settings mode)
-  useEffect(() => {
-    if (settingsMode) return;
     const tabParam = canonicalSubaccountSection(searchParams.get('tab') ?? undefined);
-    if (tabParam && ['general', 'branding', 'contacts'].includes(tabParam)) {
+    if (tabParam && TABS.some((t) => t.key === tabParam)) {
       setActiveTab(tabParam as DetailTab);
     }
-  }, [settingsMode, searchParams]);
+  }, [searchParams]);
 
   // ── Save ──
   function buildCustomValuesForSave(): Record<string, CustomValueDef> {
@@ -709,14 +661,14 @@ export function SubAccountDetailPage({
 
   if (loading) {
     const loadingEl = <div className="text-[var(--muted-foreground)]">Loading...</div>;
-    return settingsMode ? loadingEl : <AdminOnly>{loadingEl}</AdminOnly>;
+    return <AdminOnly>{loadingEl}</AdminOnly>;
   }
 
   if (!account) {
     const notFoundEl = (
       <div className="text-center py-16">
         <p className="text-[var(--muted-foreground)]">Account not found</p>
-        {!settingsMode && (onBack ? (
+        {onBack ? (
           <button
             type="button"
             onClick={onBack}
@@ -728,10 +680,10 @@ export function SubAccountDetailPage({
           <Link href={basePath} className="text-sm text-[var(--primary)] mt-2 inline-block hover:underline">
             Back to Accounts
           </Link>
-        ))}
+        )}
       </div>
     );
-    return settingsMode ? notFoundEl : <AdminOnly>{notFoundEl}</AdminOnly>;
+    return <AdminOnly>{notFoundEl}</AdminOnly>;
   }
 
   const inputClass = 'w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] focus:outline-none focus:border-[var(--primary)]';
@@ -740,35 +692,23 @@ export function SubAccountDetailPage({
   const sectionCardClass = 'glass-section-card rounded-xl p-6';
   const isSettingsEmbed = basePath.startsWith('/settings/');
   const showContactsTab = !isSettingsEmbed;
-  const visibleTabs: TabDef[] = settingsMode
-    ? settingsSections.map((s) => ({ key: s.key as DetailTab, label: s.label, icon: s.icon }))
-    : TABS.filter((tab) => {
-        if (tab.key === 'contacts' && !showContactsTab) return false;
-        return true;
-      });
-  const showSaveButton = !settingsMode || !['users', 'appearance'].includes(activeTab);
+  const visibleTabs: TabDef[] = TABS.filter((tab) => {
+    if (tab.key === 'contacts' && !showContactsTab) return false;
+    return true;
+  });
+  // Custom Fields and Reports save their own rows as you edit them; a
+  // page-level Save above them would look like it owned those changes.
+  const showSaveButton = !['contact-fields', 'reports', 'email', 'sms', 'suppressions'].includes(
+    activeTab,
+  );
   const backHref = basePath;
   const showBrandsSelector = industryHasBrands(category);
   const isAutomotiveIndustry = category.trim().toLowerCase() === 'automotive';
   const isEcommerceIndustry = category.trim().toLowerCase() === 'ecommerce';
 
-  // ── Settings mode: tab click navigates via pushState (no full route transition) ──
-  const handleTabClick = (tabKey: DetailTab) => {
-    if (settingsMode) {
-      window.history.pushState({}, '', buildSettingsSectionPath(pathname, key, tabKey));
-      setActiveTab(tabKey);
-    } else {
-      setActiveTab(tabKey);
-    }
-  };
+  const handleTabClick = (tabKey: DetailTab) => setActiveTab(tabKey);
 
-  /**
-   * Jump from the Reports tab to the integration that report needs.
-   *
-   * Goes through `handleTabClick` rather than `setActiveTab`: in settings mode
-   * the active tab is synced from the URL, so setting state alone gets undone
-   * on the next sync and the click appears to do nothing.
-   */
+  /** Jump from the Reports tab to the integration that report needs. */
   const openIntegration = (provider: string) => {
     handleTabClick('integrations');
     // Meta's modal is owned here; the rest belong to ReportingIntegrationCards.
@@ -779,84 +719,6 @@ export function SubAccountDetailPage({
   const content = (
       <div>
         {/* ── Header ── */}
-        {settingsMode ? (
-          <div className="page-sticky-header mb-8">
-            <div className="flex items-center justify-between gap-4">
-              <div className="group flex min-w-0 items-center gap-3">
-                <AccountAvatar
-                  name={dealer || key}
-                  accountKey={key}
-                  storefrontImage={storefrontImage}
-                  logos={{ light: logoLight, dark: logoDark, white: logoWhite, black: logoBlack }}
-                  size={44}
-                  className="flex-shrink-0 rounded-xl border border-[var(--border)]"
-                />
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    {isEditingDealerName ? (
-                      <input
-                        type="text"
-                        value={dealer}
-                        onChange={(event) => setDealer(event.target.value)}
-                        onBlur={() => setIsEditingDealerName(false)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            setIsEditingDealerName(false);
-                          }
-                          if (event.key === 'Escape') {
-                            event.preventDefault();
-                            setDealer(account?.dealer || '');
-                            setIsEditingDealerName(false);
-                          }
-                        }}
-                        className="w-full max-w-md min-w-0 bg-transparent border-b border-[var(--border)] text-2xl font-bold text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
-                        autoFocus
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingDealerName(true)}
-                        className="truncate text-left text-2xl font-bold text-[var(--foreground)] transition hover:opacity-80"
-                        title="Edit name"
-                      >
-                        {dealer || key}
-                      </button>
-                    )}
-                    {!isEditingDealerName && (
-                      <button
-                        type="button"
-                        onClick={() => setIsEditingDealerName(true)}
-                        className="flex-shrink-0 rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] group-hover:opacity-100"
-                        title="Edit account name"
-                      >
-                        <PencilSquareIcon className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                  <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
-                    Manage settings and configuration for this account
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-shrink-0 items-center gap-2">
-                {/* Sections portal their primary action here (e.g. Users' "Add
-                    User"), so it sits beside the heading rather than floating
-                    above the section's own content. */}
-                <div id="settings-title-actions" className="flex items-center gap-2" />
-                {showSaveButton && (
-                  <button
-                    onClick={handleSave}
-                    disabled={saving || !hasFormChanges}
-                    className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
-                  >
-                    {saving ? 'Saving...' : 'Save Changes'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : (
           <div className="page-sticky-header flex items-center gap-3 mb-6">
             {onBack ? (
               <button
@@ -921,45 +783,52 @@ export function SubAccountDetailPage({
                 <span className="font-mono">{key}</span>
               </div>
             </div>
-            <button
-              onClick={handleSave}
-              disabled={saving || !hasFormChanges}
-              className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
-            >
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
+            {showSaveButton && (
+              <button
+                onClick={handleSave}
+                disabled={saving || !hasFormChanges}
+                className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
+              >
+                {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+            )}
           </div>
-        )}
 
-        {/* ── Sidebar nav + content wrapper ──
-            In settings mode the section nav lives in the app sidebar
-            (SettingsNav), so we drop the inner rail and go full-width. The
-            admin drill-in (non-settings) keeps its own rail. */}
-        <div className={settingsMode ? '' : 'flex gap-6'}>
-        {/* Vertical nav (admin drill-in only) */}
-        {!settingsMode && (
-        <nav className="flex flex-col gap-1 w-48 shrink-0 sticky top-4 self-start">
+        {/* ── Sidebar nav + content wrapper ── the rail is the page's own now.
+            It used to be dropped in settings mode because the app sidebar
+            carried the sections there; that variant is gone. */}
+        <div className="flex gap-6">
+        {/* Narrower and tighter than the page rails: this one sits inside a
+            modal beside the content, so w-48 and py-2 rows were spending width
+            and height the panel needs. Matches the settings rail's density. */}
+        {/* Sticky, not a second scroll container. Giving the content column its
+            own `overflow-y-auto` did pin the rail, but it left the surrounding
+            container overflowing by the 16px `content-dock-lead` spacer — a
+            second scrollbar — and moved the scroll off the element the header's
+            dock/fade listens to, so the fade under the header stopped firing.
+            One scroller, sticky rail: same result, fade intact. */}
+        <nav
+          className="sticky flex w-40 shrink-0 flex-col gap-px self-start"
+          style={{ top: 'var(--page-header-offset)' }}
+        >
           {visibleTabs.map(tab => (
             <button
               key={tab.key}
               onClick={() => handleTabClick(tab.key)}
-              className={`flex items-center gap-2.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left ${
+              className={`flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors ${
                 activeTab === tab.key
-                  ? 'bg-[var(--accent)] text-[var(--foreground)]'
+                  ? 'bg-[var(--accent)] font-medium text-[var(--foreground)]'
                   : 'text-[var(--muted-foreground)] hover:bg-[var(--accent)]/50 hover:text-[var(--foreground)]'
               }`}
             >
-              {tab.icon && <tab.icon className="w-4 h-4 shrink-0" />}
-              <span className="flex items-center gap-1.5">
-                {tab.label}
-              </span>
+              {tab.icon && <tab.icon className="h-4 w-4 shrink-0" />}
+              <span className="truncate">{tab.label}</span>
             </button>
           ))}
         </nav>
-        )}
 
         {/* Tab content */}
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
 
         {/* ════════════ COMPANY TAB ════════════ */}
         {activeTab === 'general' && (
@@ -1645,41 +1514,38 @@ export function SubAccountDetailPage({
             document.body,
           )}
 
-        {/* ════════════ USERS TAB (settings mode only) ════════════ */}
-        {settingsMode && activeTab === 'users' && <UsersTab />}
+        {/* ════════════ CUSTOM FIELDS TAB ════════════
+            Account-scoped — declares the contact custom fields that the filter
+            engine, CSV importer and contact detail page all surface. The global
+            blueprint library is its own Studio settings tab. */}
+        {activeTab === 'contact-fields' && <CustomFieldsTab />}
 
-        {/* ════════════ CUSTOM FIELDS TAB (settings mode only) ════════════
-            Account-scoped — declares contact custom fields that the
-            filter engine, CSV importer, and contact detail page all
-            surface. Admin-level blueprints live at /settings under the
-            top-level Field Blueprints tab. */}
-        {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
+        {/* ════════════ EMAIL / SMS / SUPPRESSIONS ════════════
+            Moved here from /messaging/settings. Sender identity and the
+            SendGrid key gate whether this account can send at all; the
+            suppression list is what the campaign hygiene filter reads. */}
+        {activeTab === 'email' && key && <SendingTab accountKey={key} />}
+        {activeTab === 'sms' && key && <SmsTab accountKey={key} />}
+        {activeTab === 'suppressions' && key && <SuppressionsTab accountKey={key} />}
 
-        {/* ════════════ REPORTS TAB (settings mode only) ════════════
+        {/* ════════════ REPORTS TAB ════════════
             Which reports this account's CLIENT users see. Narrowing only —
             staff always see everything their role allows. */}
-        {settingsMode && activeTab === 'reports' && (
+        {activeTab === 'reports' && (
           <ReportAccessTab accountKey={key} onIntegrate={openIntegration} />
         )}
 
-        {/* ════════════ NOTIFICATIONS TAB (settings mode only) ════════════
-            Personal delivery preferences, filtered to the categories that
-            belong to the current sector (see NOTIFICATION_CATEGORY_SURFACE).
-            Not offered on Reporting, which has no categories of its own. */}
-        {settingsMode && activeTab === 'notifications' && <NotificationsTab />}
+        {/* Users, Notifications and Appearance used to render here in settings
+            mode. Users is the agency-level Clients tab now; the other two are
+            personal, not an account's, and live in the app-shell settings. */}
 
-        {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
-        {settingsMode && activeTab === 'appearance' && <AppearanceTab />}
-
-        {/* Sending + Suppressions tabs moved to /messaging/settings — see
-            the route at src/app/subaccount/[slug]/messaging/settings. */}
 
         </div>{/* end tab content */}
         </div>{/* end flex sidebar+content */}
       </div>
   );
 
-  return settingsMode ? content : <AdminOnly>{content}</AdminOnly>;
+  return <AdminOnly>{content}</AdminOnly>;
 }
 
 // ════════════════════════════════════════

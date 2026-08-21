@@ -9,12 +9,10 @@ import {
   isCreativeKind,
   kindLabel,
   fieldsForKind,
-  budgetChannelsForKind,
-  kindSpendsBudget,
   BILLING_FIELDS,
   TEAM_KINDS,
 } from '@/lib/projects/ui';
-import { channelLabel } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { MultiSelect } from '@/components/ui/multi-select';
@@ -116,6 +114,9 @@ function deptTypeOptions(teamKey: string) {
 
 export function IntakeForm() {
   const router = useRouter();
+  // Named `channels`, not `ch`: the budget block below already binds `ch` as
+  // its per-channel loop variable.
+  const { channels } = useBudgetChannels();
   const [options, setOptions] = useState<Options | null>(null);
   const [loadError, setLoadError] = useState(false);
 
@@ -576,7 +577,7 @@ export function IntakeForm() {
                 // media budget — SMS has no fields but does have a budget, and
                 // filtering on fields alone would silently hide its input.
                 const kindsWithFields = (deptKinds[tk] ?? []).filter(
-                  (k) => fieldsForKind(k).length > 0 || kindSpendsBudget(k),
+                  (k) => fieldsForKind(k).length > 0 || channels.spendsBudget(k),
                 );
                 const expanded = isDeptExpanded(tk);
                 const stats = deptFieldStats(tk);
@@ -677,7 +678,7 @@ export function IntakeForm() {
                                   {/* Media budget — one input per channel this
                                       type can spend on. Each becomes a real
                                       BudgetLine, per account. */}
-                                  {kindSpendsBudget(kind) && (
+                                  {channels.spendsBudget(kind) && (
                                     <div
                                       className={`p-3 ${fieldsForKind(kind).length > 0 ? 'border-t border-[var(--border)]' : ''}`}
                                     >
@@ -690,14 +691,14 @@ export function IntakeForm() {
                                         </span>
                                       </div>
                                       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                        {budgetChannelsForKind(kind).map((ch) => (
+                                        {channels.forKind(kind).map((ch) => (
                                           <label key={ch} className="flex items-center gap-2">
                                             <span className="flex w-28 flex-shrink-0 items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                                               <ChannelIcon
                                                 channel={ch}
                                                 className="h-3.5 w-3.5 flex-shrink-0"
                                               />
-                                              <span className="truncate">{channelLabel(ch)}</span>
+                                              <span className="truncate">{channels.label(ch)}</span>
                                             </span>
                                             <span className="relative flex-1">
                                               <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">

@@ -5,7 +5,7 @@ import { TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { MONTH_ABBR, monthIndexOf, usd2, type BudgetLine } from './budget-shared';
 
 /**
@@ -39,6 +39,7 @@ export function BudgetPanel({
   onClose: () => void;
   onChanged: () => void;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const [drafts, setDrafts] = useState<Record<string, { amount: string; label: string }>>({});
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -94,7 +95,7 @@ export function BudgetPanel({
         // survives, which is the whole point of a ledger.
         const res = await fetch(`/api/budget/lines/${line.id}?toPool=false`, { method: 'DELETE' });
         if (!res.ok) throw new Error('Could not remove that item');
-        toast.success(`${line.label || channelLabel(line.channel)} removed`);
+        toast.success(`${line.label || ch.label(line.channel)} removed`);
         onChanged();
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Could not remove that item');
@@ -158,7 +159,7 @@ export function BudgetPanel({
                   />
                   <input
                     type="text"
-                    placeholder={channelLabel(line.channel)}
+                    placeholder={ch.label(line.channel)}
                     value={draft.label}
                     onChange={(e) =>
                       setDrafts((d) => ({ ...d, [line.id]: { ...draft, label: e.target.value } }))
@@ -215,7 +216,7 @@ export function BudgetPanel({
                   <SearchableSelect
                     value={line.channel ?? ''}
                     onChange={(v) => void patch(line, { channel: v }, 'channel')}
-                    options={BUDGET_CHANNELS.map((c) => ({
+                    options={ch.active.map((c) => ({
                       value: c.key,
                       label: c.label,
                       icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
@@ -233,7 +234,7 @@ export function BudgetPanel({
                       rather than behind another click — but ONLY on the
                       channels the pacer reads. Offering the choice on a radio
                       buy invites a decision that changes nothing. */}
-                  {line.channel && isPacedChannel(line.channel) && (
+                  {line.channel && ch.isPaced(line.channel) && (
                     <div className="w-[128px]">
                       <SearchableSelect
                         value={line.bucket}

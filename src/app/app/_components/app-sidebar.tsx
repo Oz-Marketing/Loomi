@@ -113,9 +113,12 @@ export function AppSidebar() {
   // the shared sub-account detail page. Studio reaches it at
   // /subaccount/<slug>/settings; this surface has no such route tree, so it
   // uses the admin-browse shape (section in ?tab=) against the active account.
+  // No ?tab= — the account's own General/Branding/Integrations moved to Agency
+  // Settings → Accounts, so this rail lands on its first SECTOR section and the
+  // page picks that itself rather than us naming a tab that may not exist.
   const subaccountSettingsHref =
     isAccount && accountKey
-      ? `${prefix}/settings/subaccounts/${accountKey}?tab=general`
+      ? `${prefix}/settings/subaccounts/${accountKey}`
       : `${prefix}/settings`;
 
   return (
@@ -125,7 +128,18 @@ export function AppSidebar() {
           <LoomiWordmark className="h-8 w-auto" />
         </Link>
       }
-      account={showCollapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
+      account={
+        // No switcher in settings: the rail IS the settings nav here, and the
+        // sections it lists belong to whichever account you arrived from —
+        // leaving a picker above them invites changing account mid-edit, which
+        // silently repoints the form. Dropping it also lifts "Back to <sector>"
+        // to the top, which is the way out of this mode.
+        isSettingsPath(pathname) ? null : showCollapsed ? (
+          <AccountSwitcher compact />
+        ) : (
+          <AccountSwitcher />
+        )
+      }
       bottom={
         <>
           {/* Quick switch between Projects (App) and Studio. */}

@@ -6,6 +6,7 @@
 // run in parallel from a single /api/dashboard/portfolio handler.
 
 import { prisma } from '@/lib/prisma';
+import { accountSettingsHref } from '@/lib/account-settings-href';
 
 // Schema note: EmailBlast.accountKeys + SmsBlast.accountKeys are
 // stored as a JSON string (not a relational column). SQL-side scoping
@@ -982,7 +983,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
         detail: `${r._count._all.toLocaleString()} new suppressions in 7d (${(pct * 100).toFixed(1)}% of list).`,
         accountKey: r.accountKey,
         dealer: dealerByAccount.get(r.accountKey) || r.accountKey,
-        href: '/messaging/settings/suppressions',
+        href: accountSettingsHref(r.accountKey, 'suppressions'),
         timestamp: new Date().toISOString(),
       });
     }

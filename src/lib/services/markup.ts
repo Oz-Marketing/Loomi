@@ -1,5 +1,5 @@
 import { getSetting, setSetting } from '@/lib/services/app-settings';
-import { BILLING_CATEGORIES, isBillingCategory } from '@/lib/budget/channels';
+import { activeRates, setRateByKey } from '@/lib/services/rate-cards';
 
 /**
  * Agency-wide default markup (gross→spend factor), editable by elevated admins
@@ -45,43 +45,35 @@ export async function setGlobalDefaultMarkup(value: number): Promise<number> {
 // swag order and print run computed at a 23% margin because that was the only
 // rate the system had.
 //
-// Stored one AppSetting row per category rather than as a JSON blob, so a bad
-// write can only ever corrupt one rate, and so the audit trail reads as
-// "someone changed Swag" instead of "someone changed the markup config".
+// The rates now live in the `BillingCategory` TABLE, not in the
+// `app-markup-billing-<key>` AppSetting rows this used to read, because the
+// category LIST has to be editable too — see services/rate-cards.ts. The
+// functions below stay as the markup-resolution contract (`resolveMarkup` in
+// services/budget imports `getBillingMarkups`) and simply delegate.
 
-/** Setting key for one category's rate. Namespaced under the global one. */
+/**
+ * Setting key for one category's rate, in the pre-table layout.
+ *
+ * Kept only so the seed script can migrate the rates that are already live
+ * there. Nothing reads these rows at runtime any more.
+ */
 export function billingMarkupKey(category: string): string {
   return `app-markup-billing-${category}`;
 }
 
 /**
- * Every configured rate card, keyed by billing category.
+ * Every active rate card, keyed by billing category.
  *
- * A category with no stored row falls back to the seed in `BILLING_CATEGORIES`
- * — so the rates work on day one without anyone visiting Settings, and the
- * page shows real numbers rather than a form full of blanks. A stored row that
- * is corrupt or non-positive is treated as absent for the same reason the
- * global default is: a plausible-looking wrong number is worse than the seed.
+ * An archived (or deleted) category is ABSENT rather than zero, so the caller's
+ * precedence chain falls through to the account rate and then the agency
+ * default — the behaviour that existed before rate cards, which is the right
+ * answer for a category someone deliberately retired.
  */
 export async function getBillingMarkups(): Promise<Record<string, number>> {
-  const entries = await Promise.all(
-    BILLING_CATEGORIES.map(async (c) => {
-      const raw = await getSetting(billingMarkupKey(c.key));
-      const n = raw == null ? NaN : Number(raw);
-      return [c.key, Number.isFinite(n) && n > 0 ? n : c.defaultMarkup] as const;
-    }),
-  );
-  return Object.fromEntries(entries);
+  return activeRates();
 }
 
-/** Set one category's rate. Same positive-number guard as the global default. */
+/** Set one category's rate. The category must already exist. */
 export async function setBillingMarkup(category: string, value: number): Promise<number> {
-  if (!isBillingCategory(category)) {
-    throw new Error(`"${category}" is not a billing category.`);
-  }
-  if (!Number.isFinite(value) || value <= 0 || value > 1) {
-    throw new Error('A markup must be between 0 and 1 (e.g. 0.77 for a 23% margin).');
-  }
-  await setSetting(billingMarkupKey(category), String(value));
-  return value;
+  return setRateByKey(category, value);
 }

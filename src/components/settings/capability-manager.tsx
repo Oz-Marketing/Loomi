@@ -2,6 +2,7 @@
 
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   SENSITIVE_CAPABILITIES,
   type Permission,
@@ -102,26 +103,25 @@ export function CapabilityManager({
           description: '',
         };
         return (
-          <label
-            key={capability}
-            className={`flex items-start gap-2 ${disabled ? 'opacity-50' : 'cursor-pointer'}`}
-          >
-            <input
-              type="checkbox"
+          // Wrapped so each row is block-level: Checkbox is inline-flex, which
+          // is what a table cell wants but not a stacked list.
+          <div key={capability}>
+            <Checkbox
               checked={granted.has(capability)}
-              disabled={disabled}
               onChange={() => toggle(capability)}
-              className="mt-0.5 rounded border-[var(--border)] disabled:cursor-not-allowed"
+              disabled={disabled}
+              label={
+                <span className="inline-flex items-center gap-1">
+                  {copy.label}
+                  {copy.description && (
+                    <Tooltip label={copy.description}>
+                      <InformationCircleIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                    </Tooltip>
+                  )}
+                </span>
+              }
             />
-            <span className="inline-flex items-center gap-1 text-xs text-[var(--foreground)]">
-              {copy.label}
-              {copy.description && (
-                <Tooltip label={copy.description}>
-                  <InformationCircleIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                </Tooltip>
-              )}
-            </span>
-          </label>
+          </div>
         );
       })}
     </div>

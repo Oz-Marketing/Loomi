@@ -5139,3 +5139,126 @@ model Billboard {
   @@index([accountKey, status])
   @@index([accountKey, expirationDate])
 }
+
+// ─────────────────────────────────────────────────────
+// Rate cards (billing categories)
+// ─────────────────────────────────────────────────────
+//
+// What the agency keeps on each kind of work. One row per billing category
+// (Digital, Mass Media, Swag…); a budget line picks up the rate of the category
+// its channel bills at, and that rate is FROZEN onto the line at creation
+// (BudgetLine.markupSnapshot) so editing a card never rewrites committed money.
+//
+// A TABLE, not the `app-markup-billing-<key>` AppSetting rows this replaces
+// (those held only the rate, against a category list hardcoded in
+// lib/budget/channels.ts). Every agency prices differently and names its
+// categories differently, so the taxonomy itself has to be editable — a rate
+// card list that needs a deploy to change isn't agnostic. The seed script
+// migrates the old AppSetting rates in and leaves them untouched.
+//
+// `key` is the stable slug the rest of the system stores and joins on
+// (BudgetChannel.billing today, a real FK in phase 2). It is immutable once
+// created — `label` is what gets renamed. Archived, never deleted, for the same
+// reason: budget lines and channels reference keys as plain strings, so a
+// delete would orphan history that still has to add up.
+model BillingCategory {
+  id    String @id @default(cuid())
+  key   String @unique // stable slug, e.g. "mass_media" — never renamed
+  label String // "Mass Media" — what the UI shows, freely renamed
+
+  // Gross→spend factor: 0.77 means the agency keeps 23%. Stored as the factor
+  // (what the ledger holds) though the UI edits the margin percentage, because
+  // that's the number a line's markupSnapshot has to read as. Must be > 0 and
+  // <= 1; a 0 would zero out every line on the category.
+  markup Float
+
+  sortOrder  Int       @default(0)
+  // Archived cards stop being offered and stop resolving a rate — channels
+  // pointing at one fall back to the account rate, then the agency default,
+  // which is exactly the pre-rate-card behaviour. Never a hard delete.
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channels BudgetChannel[]
+
+  @@index([sortOrder])
+}
+
+// ─────────────────────────────────────────────────────
+// Budget channels
+// ─────────────────────────────────────────────────────
+//
+// The spend axis every BudgetLine is placed on — Meta, Radio, Swag, Management
+// Fee. Was a 44-entry `BUDGET_CHANNELS` constant in lib/budget/channels.ts,
+// which made Loomi's whole budget taxonomy Oz Marketing's: the list mirrored Oz
+// Reports' `channels` table one-for-one, right down to its numeric ids. Another
+// agency runs different channels, groups them differently and prices them
+// differently, and none of that should need a deploy.
+//
+// `key` is what everything else stores and joins on (BudgetLine.channel,
+// KIND_BUDGET_CHANNELS, the pacer rollups). Immutable once created; `label` is
+// the renameable name. Archive rather than delete, for the same reason as
+// BillingCategory: lines reference the key as a plain string, so a delete would
+// orphan history that still has to reconcile.
+model BudgetChannel {
+  id    String @id @default(cuid())
+  key   String @unique // stable slug, e.g. "mass_media" — never renamed
+  label String
+
+  // Display grouping in the hub ("Digital", "Traditional", …). A plain string,
+  // not an enum: the groups ARE whatever the channels say they are, and the
+  // hub's section order falls out of sortOrder. A group nobody uses simply
+  // stops existing.
+  category String
+
+  // Default line type for money on this channel — media | fee | service |
+  // production | unclassified. Overridable per line; see BudgetLine.lineType.
+  lineType String @default("unclassified")
+
+  // Which rate card this channel bills at. A real relation, unlike
+  // BudgetLine.channel: an archived card still has a row, so the reference
+  // stays valid and rate resolution falls through on its own. Null = no rate of
+  // its own, which falls back to the account rate then the agency default.
+  billingKey      String?
+  billingCategory BillingCategory? @relation(fields: [billingKey], references: [key], onDelete: SetNull)
+
+  // Ad Pacer platform this channel's budget rolls into — "meta" | "google" |
+  // null. Null is the common case: most channels settle by hand. Not a free
+  // string in practice; the write path validates it against the pacer's
+  // platforms, because a typo here silently stops a channel pacing.
+  pacer String?
+
+  // Which Projects task kinds may spend on this channel — the editable form of
+  // what `KIND_BUDGET_CHANNELS` used to hardcode. Empty = offered at intake
+  // nowhere, which is what every channel exists for anyway: the hub needs all
+  // of them to reconcile, a rep only picks the few their ticket is about.
+  //
+  // REPLACES a plain `intake Boolean`, which was a second, coarser answer to
+  // the same question — and a wrong one. The intake form has always gated on
+  // the kind map, so 18 of the 36 channels flagged `intake` were offered
+  // nowhere and the checkbox said otherwise. One field, one truth.
+  //
+  // Task kinds themselves stay in code (`KIND_META`): each has its own intake
+  // form and its own fields, so a new kind is a code change either way.
+  intakeKinds String[]
+
+  // Lucide icon name. Brand marks (Meta, Google Ads, YouTube) stay in code —
+  // they're licensed assets, not configuration.
+  icon String?
+
+  // Foreign channel ids this maps from on import — Oz Reports' channel_id
+  // today. An IMPORT MAPPING, not taxonomy: an agency with nothing to import
+  // just has none, which is why this isn't the primary key it used to be.
+  externalIds Int[]
+
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+  @@index([billingKey])
+}

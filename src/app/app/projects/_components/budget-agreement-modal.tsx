@@ -5,7 +5,8 @@ import { createPortal } from 'react-dom';
 import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { BUDGET_CHANNELS, channelLabel } from '@/lib/budget/channels';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
+import type { ChannelRegistry } from '@/lib/budget/channel-registry';
 import { MONTH_ABBR, usd0 as usd, type AgreementFee, type BudgetAgreement } from './budget-shared';
 
 /**
@@ -144,6 +145,7 @@ function AgreementList({
   onNew: () => void;
   onArchive: (id: string) => Promise<void>;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const yearTotal = agreements.reduce((s, a) => s + (a.commitmentForYear ?? 0), 0);
   const anyCommitted = agreements.some((a) => a.committedAmount != null);
 
@@ -160,7 +162,7 @@ function AgreementList({
             >
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-[var(--foreground)]">
-                  {budgetTitle(a)}
+                  {budgetTitle(ch, a)}
                 </p>
                 <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                   {fmtDate(a.startDate)} – {fmtDate(a.endDate)} · {a.termMonths} mo
@@ -230,7 +232,7 @@ function AgreementList({
                 return (
                   <div key={a.id}>
                     <div className="flex items-baseline justify-between text-[10px] text-[var(--muted-foreground)]">
-                      <span className="truncate">{budgetTitle(a)}</span>
+                      <span className="truncate">{budgetTitle(ch, a)}</span>
                       <span className="tabular-nums">
                         {usd(a.booked)} of {usd(a.commitmentForYear!)}
                       </span>
@@ -305,6 +307,7 @@ function AgreementForm({
   onDone: () => void;
   canCancel: boolean;
 }) {
+  const { channels: ch } = useBudgetChannels();
   const [name, setName] = useState(agreement?.name ?? '');
   // Months, not dates. A budget runs for whole months — asking for a start and
   // end DAY made people pick 03/23–03/28 and get a one-month budget they didn't
@@ -579,7 +582,7 @@ function AgreementForm({
                       <SearchableSelect
                         value={item.channel}
                         onChange={(v) => set({ channel: v })}
-                        options={BUDGET_CHANNELS.map((c) => ({
+                        options={ch.active.map((c) => ({
                           value: c.key,
                           label: c.label,
                           icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
@@ -665,7 +668,7 @@ function AgreementForm({
                         ) : math.remainder > 0.005 ? (
                           <>
                             {usd(math.assigned)} of {usd(math.total)} split ·{' '}
-                            {usd(math.remainder)} stays as {channelLabel(item.channel)}
+                            {usd(math.remainder)} stays as {ch.label(item.channel)}
                           </>
                         ) : (
                           <>Fully split across {item.pieces.length} pieces</>
@@ -685,7 +688,7 @@ function AgreementForm({
                           // visibly unchanged; the next one starts empty.
                           ...(split
                             ? [{ label: '', amount: '' }]
-                            : [{ label: channelLabel(item.channel), amount: item.total }]),
+                            : [{ label: ch.label(item.channel), amount: item.total }]),
                         ],
                       })
                     }
@@ -704,7 +707,7 @@ function AgreementForm({
             onClick={() =>
               setItems((prev) => [
                 ...prev,
-                { channel: nextUnusedChannel(prev), total: '', pieces: [] },
+                { channel: nextUnusedChannel(ch, prev), total: '', pieces: [] },
               ])
             }
             className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
@@ -807,9 +810,11 @@ function MoneyInput({ value, onChange }: { value: string; onChange: (v: string) 
  * produce a second row of the same thing — which would render as a SPLIT of
  * the existing item rather than the new item the user asked for.
  */
-function nextUnusedChannel(items: ItemDraft[]): string {
+function nextUnusedChannel(ch: ChannelRegistry, items: ItemDraft[]): string {
   const used = new Set(items.map((i) => i.channel));
-  return (BUDGET_CHANNELS.find((c) => !used.has(c.key)) ?? BUDGET_CHANNELS[0]!).key;
+  // '' when there are no channels at all — the list hasn't loaded yet, and an
+  // empty channel is what an unplaced item already looks like.
+  return (ch.active.find((c) => !used.has(c.key)) ?? ch.active[0])?.key ?? '';
 }
 
 function round2(n: number): number {
@@ -879,10 +884,10 @@ function monthOptions(year: number): { value: string; label: string }[] {
  * An unnamed budget is the standing spend, and "Untitled" would read as a
  * mistake rather than a category. It's named after what it covers instead.
  */
-function budgetTitle(a: BudgetAgreement): string {
+function budgetTitle(ch: ChannelRegistry, a: BudgetAgreement): string {
   const own = a.name?.trim();
   if (own) return own;
-  const channels = [...new Set(a.fees.map((f) => channelLabel(f.channel)))];
+  const channels = [...new Set(a.fees.map((f) => ch.label(f.channel)))];
   if (channels.length === 0) return 'Standing budget';
   if (channels.length <= 2) return `${channels.join(' + ')} Base`;
   return `Standing budget · ${channels.length} channels`;

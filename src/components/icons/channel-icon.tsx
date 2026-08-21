@@ -2,43 +2,46 @@
 
 import {
   BanknotesIcon,
-  ChartBarIcon,
-  ChatBubbleLeftRightIcon,
-  CircleStackIcon,
-  CodeBracketIcon,
-  EnvelopeIcon,
-  HashtagIcon,
-  MagnifyingGlassIcon,
   MegaphoneIcon,
-  PlayCircleIcon,
-  PrinterIcon,
   QuestionMarkCircleIcon,
-  RectangleGroupIcon,
-  SignalIcon,
-  SparklesIcon,
-  StarIcon,
-  TrophyIcon,
-  TvIcon,
-  UserPlusIcon,
   VideoCameraIcon,
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
-import { channelLineType } from '@/lib/budget/channels';
+import { LucideIcon, isIconName } from '@/components/lucide-icon';
+import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { MetaBrandIcon, GoogleAdsBrandIcon, YouTubeBrandIcon } from './platform-logos';
+
+/**
+ * Brand marks, by channel key.
+ *
+ * The one part of a channel's appearance that stays in code: these are licensed
+ * assets shipped as components, not a name someone can type into a settings
+ * field. A rep scanning the grid recognizes the Meta swirl faster than the word
+ * "Meta", which is why they're worth the exception.
+ *
+ * Keyed by the SEED keys. An agency that renames its Meta channel keeps the
+ * mark (the key doesn't change); one that creates its own "meta" channel gets
+ * it too, which is the right answer either way.
+ */
+const BRAND_MARKS: Record<string, (p: { className?: string }) => React.ReactElement> = {
+  meta: MetaBrandIcon,
+  google: GoogleAdsBrandIcon,
+  youtube: YouTubeBrandIcon,
+};
 
 /**
  * The mark shown beside a budget channel's name.
  *
- * Third-party ad platforms get their real brand mark — a rep scanning the grid
- * recognizes the Meta swirl faster than the word "Meta". Everything else is a
- * category rather than a vendor, so it gets a neutral glyph in the caller's
- * text color; there's no logo to be right about.
+ * Three tiers, in order:
+ *   1. a brand mark, for the ad platforms (full colour, ignores currentColor)
+ *   2. the channel's own lucide icon, picked in Agency Settings
+ *   3. its KIND of money — banknote, wrench, camera
  *
- * FALLS BACK BY LINE TYPE rather than rendering nothing. The registry grew from
- * 11 channels to 44 to mirror Oz Reports, and hand-picking a glyph for every
- * fee and vendor service is tedious and low-value — but a grid where most rows
- * have no icon reads as broken. An unmapped channel shows its KIND of money
- * (banknote, wrench, camera), which is the more useful distinction anyway.
+ * Tier 3 exists because a grid where most rows have no icon reads as broken,
+ * and hand-picking a glyph for all 44 fees and vendor services is tedious and
+ * low-value. It used to be a 30-case switch on the channel key; that switch was
+ * the last place a channel's appearance was hardcoded, so it's gone — the glyph
+ * is a field on the channel now.
  */
 export function ChannelIcon({
   channel,
@@ -47,73 +50,18 @@ export function ChannelIcon({
   channel: string | null | undefined;
   className?: string;
 }) {
+  const { channels } = useBudgetChannels();
   if (!channel) return null;
 
-  switch (channel) {
-    // ── Brand marks (full color, don't inherit currentColor) ──
-    case 'meta':
-      return <MetaBrandIcon className={className} />;
-    case 'google':
-      return <GoogleAdsBrandIcon className={className} />;
-    case 'youtube':
-      return <YouTubeBrandIcon className={className} />;
+  const Brand = BRAND_MARKS[channel];
+  if (Brand) return <Brand className={className} />;
 
-    // ── Media ──
-    case 'ott':
-      return <PlayCircleIcon className={className} />;
-    case 'tv':
-      return <TvIcon className={className} />;
-    case 'radio':
-      return <SignalIcon className={className} />;
-    case 'billboard':
-    case 'transit_billboard':
-      return <RectangleGroupIcon className={className} />;
-    case 'print':
-    case 'edd':
-      return <PrinterIcon className={className} />;
-
-    // ── Services ──
-    case 'email':
-    case 'sms':
-      return <EnvelopeIcon className={className} />;
-    case 'seo':
-      return <MagnifyingGlassIcon className={className} />;
-    case 'organic_social':
-      return <HashtagIcon className={className} />;
-    case 'data_feed':
-    case 'database':
-      return <CircleStackIcon className={className} />;
-    case 'lead_provider':
-    case 'conversion_provider':
-      return <UserPlusIcon className={className} />;
-    case 'reputation':
-      return <StarIcon className={className} />;
-    case 'chat':
-      return <ChatBubbleLeftRightIcon className={className} />;
-    case 'development':
-    case 'maintenance':
-      return <CodeBracketIcon className={className} />;
-    case 'marketing_analytics':
-      return <ChartBarIcon className={className} />;
-
-    // ── Production ──
-    case 'production':
-      return <VideoCameraIcon className={className} />;
-
-    // ── Other ──
-    case 'sponsorship':
-      return <TrophyIcon className={className} />;
-    case 'new_clients':
-      return <SparklesIcon className={className} />;
-
-    default:
-      return <LineTypeIcon channel={channel} className={className} />;
+  const record = channels.get(channel);
+  if (isIconName(record?.icon)) {
+    return <LucideIcon name={record.icon} className={className} />;
   }
-}
 
-/** Kind-of-money fallback for a channel with no glyph of its own. */
-function LineTypeIcon({ channel, className }: { channel: string; className?: string }) {
-  switch (channelLineType(channel)) {
+  switch (channels.lineType(channel)) {
     case 'media':
       return <MegaphoneIcon className={className} />;
     case 'fee':
@@ -123,6 +71,8 @@ function LineTypeIcon({ channel, className }: { channel: string; className?: str
     case 'production':
       return <VideoCameraIcon className={className} />;
     default:
+      // Also the "list hasn't loaded yet" case, which is correct: an unknown
+      // channel and an unloaded one are equally unknown at this moment.
       return <QuestionMarkCircleIcon className={className} />;
   }
 }

@@ -1,14 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
-import {
-  canonicalSubaccountSection,
-  useSettingsTabs,
-  useSubaccountSectionGroups,
-} from '@/components/settings/use-settings-tabs';
+import { useSettingsTabs } from '@/components/settings/use-settings-tabs';
 
 /** True when the path is a Settings route (admin `/settings` or sub-account `/…/settings`). */
 export function isSettingsPath(pathname: string): boolean {
@@ -32,17 +28,11 @@ export function SettingsNav({
   collapsed?: boolean;
 }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const genericTabs = useSettingsTabs();
-  const subaccountGroups = useSubaccountSectionGroups();
 
-  // Sub-account settings show that sub-account's sections (the inner page rail is
-  // dropped in this mode). Two URL shapes:
-  //   • Studio scoped:  /subaccount/<slug>/settings/<section>
-  //   • Admin browse:   [<surface>/]settings/subaccounts/<key>/<section>
-  const sub = pathname.match(/^\/subaccount\/([^/]+)\/settings/);
-  const subAdmin = pathname.match(/^(.*)\/settings\/subaccounts\/([^/]+)/);
-
+  // No sub-account branch here any more. An account's settings render their own
+  // tab rail (see TABS in components/subaccount-detail), reached from Agency
+  // Settings → Accounts; this nav is only the surface's own settings list.
   type NavLink = {
     key: string;
     label: string;
@@ -50,53 +40,21 @@ export function SettingsNav({
     href: string;
   };
 
-  // Sub-account settings are split under two headings — the account's own
-  // config, then what this sector adds. The generic case keeps one "Settings".
-  let groups: { label: string; items: NavLink[] }[];
-  let activeKey: string | undefined;
-  if (sub) {
-    groups = subaccountGroups.map((g) => ({
-      label: g.label,
-      items: g.items.map((s) => ({
-        key: s.key,
-        label: s.label,
-        icon: s.icon,
-        href: `/subaccount/${sub[1]}/settings/${s.key}`,
+  const settingsIdx = pathname.indexOf('/settings');
+  const base = settingsIdx >= 0 ? pathname.slice(0, settingsIdx + '/settings'.length) : '/settings';
+  const groups: { label: string; items: NavLink[] }[] = [
+    {
+      label: 'Settings',
+      items: genericTabs.map((t) => ({
+        key: t.key,
+        label: t.label,
+        icon: t.icon,
+        href: `${base}/${t.key}`,
       })),
-    }));
-    const settingsIdx = pathname.indexOf('/settings');
-    activeKey = canonicalSubaccountSection(
-      pathname.slice(settingsIdx + '/settings'.length).split('/').filter(Boolean)[0],
-    );
-  } else if (subAdmin) {
-    const prefix = subAdmin[1]; // surface prefix (e.g. '' or '/reporting')
-    const key = subAdmin[2];
-    // Section lives in ?tab= (single [key] route, no per-tab route files).
-    groups = subaccountGroups.map((g) => ({
-      label: g.label,
-      items: g.items.map((s) => ({
-        key: s.key,
-        label: s.label,
-        icon: s.icon,
-        href: `${prefix}/settings/subaccounts/${key}?tab=${s.key}`,
-      })),
-    }));
-    activeKey = canonicalSubaccountSection(searchParams.get('tab') ?? undefined) ?? 'general';
-  } else {
-    groups = [
-      {
-        label: 'Settings',
-        items: genericTabs.map((t) => {
-          const idx = pathname.indexOf('/settings');
-          const base = idx >= 0 ? pathname.slice(0, idx + '/settings'.length) : '/settings';
-          return { key: t.key, label: t.label, icon: t.icon, href: `${base}/${t.key}` };
-        }),
-      },
-    ];
-    const settingsIdx = pathname.indexOf('/settings');
-    const after = settingsIdx >= 0 ? pathname.slice(settingsIdx + '/settings'.length) : '';
-    activeKey = after.split('/').filter(Boolean)[0];
-  }
+    },
+  ];
+  const after = settingsIdx >= 0 ? pathname.slice(settingsIdx + '/settings'.length) : '';
+  const activeKey = after.split('/').filter(Boolean)[0];
 
   const backBtn = (
     <Link

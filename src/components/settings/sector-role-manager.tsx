@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import { InformationCircleIcon } from '@heroicons/react/24/outline';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
+import { Select, type SelectOption } from '@/components/select';
 import {
   SECTORS,
   assignableRolesForTier,
@@ -86,6 +87,16 @@ export function SectorRoleManager({
     return map;
   }, [value]);
 
+  // "No access" is a real option rather than an empty trigger: leaving a sector
+  // off is a deliberate choice, and a blank dropdown reads as unset-by-accident.
+  const roleOptions = (sector: Sector): SelectOption[] => [
+    { value: NO_ACCESS, label: 'No access' },
+    ...assignableRolesForTier(tier, sector).map((role) => ({
+      value: role,
+      label: sectorRoleLabel(role),
+    })),
+  ];
+
   const setSector = (sector: Sector, role: string) => {
     // Rebuild in SECTORS order so the saved array is stable and two equivalent
     // selections don't look like a change to the dirty check.
@@ -126,20 +137,15 @@ export function SectorRoleManager({
             </div>
 
             <div className="flex-1 min-w-0 flex items-center gap-2">
-              <select
+              <Select
                 value={current}
+                onChange={(role) => setSector(sector, role)}
+                options={roleOptions(sector)}
+                previewFont={false}
                 disabled={disabled}
-                onChange={(e) => setSector(sector, e.target.value)}
-                aria-label={`${sectorLabel(sector)} role`}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-50"
-              >
-                <option value={NO_ACCESS}>No access</option>
-                {assignableRolesForTier(tier, sector).map((role) => (
-                  <option key={role} value={role}>
-                    {sectorRoleLabel(role)}
-                  </option>
-                ))}
-              </select>
+                ariaLabel={`${sectorLabel(sector)} role`}
+                className="flex-1 min-w-0"
+              />
               {/* What the SELECTED role actually permits. In a tooltip rather
                   than under the field so a four-sector stack stays one scannable
                   column of dropdowns. */}

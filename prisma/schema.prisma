@@ -2815,6 +2815,18 @@ model MetaAdsPacerPeriodBudget {
   // Σ ad pacerActual). The client budget for these months is entered later into
   // baseBudgetGoal, so over/under = historicalActual − baseBudgetGoal × markup.
   historicalActual      String?
+  // The account-level monthly spend Meta reports for this month (Graph
+  // insights, time_increment=monthly) — the reconciliation's RAW anchor. Stored
+  // rather than fetched per page load so the tie-out survives a Meta outage, an
+  // expired token, and the daily-series retention window. Independent of the ad
+  // rows BY DESIGN: that independence is the whole point of the Raw-vs-Counted
+  // check (an ad spending in the account but never linked in Loomi shows up as
+  // a residual only because these two numbers come from different places).
+  // Meta-only — Google has no equivalent account pull, so its raw stays the row
+  // sum. Null = never pulled (the month then falls back to the row sum and is
+  // excluded from the tie-out rather than reported as a phantom gap).
+  metaAccountSpend      String?
+  metaAccountSpendAt    DateTime?
   // ── Google allocator (google-pacing-card spec §3/§9) ──
   // The unit the WHOLE Google card allocates in: "pct" (percent of payable) or
   // "amt" (dollar amounts). One unit for every line, deliberately — mixed units
@@ -2930,6 +2942,19 @@ model MetaAdsPacerAd {
   // (full scope) and the ad contributes 0 to any other month. Server-managed
   // via /resolve-cross-month; never written by autosave or the Meta sync.
   fullRunAppliedToMonth String?
+  // Cross-month settlement SNAPSHOT (rebuild §5). `fullRunAppliedToMonth` above
+  // is the stored intent ("bill this run in month X"); these three are the
+  // stored FACTS captured the first time the flight settles (run complete AND
+  // billed month reached). After that, Out/In read
+  // `settledRunSpend − settledBilledDelivery` instead of the live fields, so the
+  // posting can never move under a later re-sync or once the rolling daily
+  // series (MetaAdsPacerDailySpend, 120-day retention) prunes the run's days.
+  // Both inputs are persisted, not just the derived Out, so the split and the
+  // tie-out stay auditable. Written server-side by the reconciliation read;
+  // never by autosave or the Meta sync.
+  settledRunSpend       String?
+  settledBilledDelivery String?
+  settledAt             DateTime?
   // §2b: JSON Record<YYYY-MM, number> — a lifetime ad's editable planned split
   // across the months its flight touches. DISPLAY-ONLY (planned vs actual);
   // never books a variance (§3 owns the over/under). Server-managed too.

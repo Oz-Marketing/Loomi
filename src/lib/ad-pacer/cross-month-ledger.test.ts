@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildFlightLedger,
   checkConservation,
+  countedMonthSpend,
   countedSpendRow,
+  pendingSnapshots,
   rawMonthSpend,
   rollupCrossMonth,
 } from './cross-month-ledger';
@@ -122,6 +124,10 @@ function buildDataset(): SplitRunAdLike[] {
           start: f.start,
           end: f.end,
           cap: f.cap,
+          // Meta's all-time full-run spend, on every row of the ad set — the
+          // rebuild derives Out/In from `runSpend − billedDelivery`, so this is
+          // now load-bearing rather than informational.
+          runSpend: Math.round(f.slices.reduce((t, [, v]) => t + v, 0) * 100) / 100,
         }),
       );
       flightSpendByPeriod.set(
@@ -144,9 +150,14 @@ describe('§8a regression — Young Powersports Euro, Jan–Jul 2026', () => {
   const ads = buildDataset();
   const ledger = buildFlightLedger(ads, NOW, TZ);
   const rollup = rollupCrossMonth(ledger, PERIODS);
+  // Raw and Counted are computed from DIFFERENT things: raw is every dollar
+  // dated to the month, counted is Σ effectiveActual (the full run once, in its
+  // billed month). In this dataset the account spent exactly what the rows say,
+  // so they must reconcile to the cent — that is the point of the check.
   const rowFor = (p: string) =>
     countedSpendRow(
       rawMonthSpend(ads.filter((a) => a.period === p)),
+      countedMonthSpend(ads.filter((a) => a.period === p), p),
       rollup.get(p),
     );
 
@@ -192,10 +203,12 @@ describe('§8a regression — Young Powersports Euro, Jan–Jul 2026', () => {
     }
   });
 
-  it('holds Counted = Raw − Out + In in every row (acceptance check 2)', () => {
+  it('ties out in every row — Raw − Out + In lands on Counted (check 2)', () => {
     for (const p of PERIODS) {
       const r = rowFor(p);
-      expect(r.countedSpend).toBeCloseTo(r.rawSpend - r.out + r.in, 2);
+      expect(r.tieOut).toBeCloseTo(r.rawSpend - r.out + r.in, 2);
+      expect(r.countedSpend).toBeCloseTo(r.tieOut, 2);
+      expect(r.residual).toBeCloseTo(0, 2);
     }
   });
 
@@ -255,6 +268,7 @@ describe('§8a regression — Young Powersports Euro, Jan–Jul 2026', () => {
         s +
         countedSpendRow(
           rawMonthSpend(interiorOnly.filter((a) => a.period === p)),
+          countedMonthSpend(interiorOnly.filter((a) => a.period === p), p),
           r.get(p),
         ).countedSpend,
       0,
@@ -287,9 +301,20 @@ describe('§8a regression — Young Powersports Euro, Jan–Jul 2026', () => {
 // ─── §4 pending / settled ───────────────────────────────────────────────────
 describe('settlement state (§4)', () => {
   const pair = (billed: string, end: string): SplitRunAdLike[] => [
-    row({ id: 'a-jun', name: 'Euro Bike Night', objectId: 'os-1', period: '2026-06', actual: 76.6, billed, start: '2026-06-26', end }),
-    row({ id: 'a-jul', name: 'Euro Bike Night', objectId: 'os-1', period: '2026-07', actual: 38.79, billed, start: '2026-06-26', end }),
+    row({ id: 'a-jun', name: 'Euro Bike Night', objectId: 'os-1', period: '2026-06', actual: 76.6, billed, start: '2026-06-26', end, runSpend: 115.39 }),
+    row({ id: 'a-jul', name: 'Euro Bike Night', objectId: 'os-1', period: '2026-07', actual: 38.79, billed, start: '2026-06-26', end, runSpend: 115.39 }),
   ];
+  /** The month's two independent totals, as the reconciliation composes them. */
+  const monthRow = (
+    ads: SplitRunAdLike[],
+    p: string,
+    rollup: ReturnType<typeof rollupCrossMonth>,
+  ) =>
+    countedSpendRow(
+      rawMonthSpend(ads.filter((a) => a.period === p)),
+      countedMonthSpend(ads.filter((a) => a.period === p), p),
+      rollup.get(p),
+    );
 
   it('keeps a mid-flight slice counted in its origin month, flagged Pending', () => {
     // Jul 1: the run has not finished, so nothing moves (§4).
@@ -297,11 +322,15 @@ describe('settlement state (§4)', () => {
     const ledger = buildFlightLedger(ads, Date.UTC(2026, 6, 1, 18), TZ);
     expect(ledger[0].status).toBe('pending');
     const r = rollupCrossMonth(ledger, ['2026-06', '2026-07']);
-    const june = countedSpendRow(76.6, r.get('2026-06'));
+    const june = monthRow(ads, '2026-06', r);
     expect(june.out).toBe(0);
     expect(june.in).toBe(0);
-    expect(june.countedSpend).toBeCloseTo(76.6, 2); // still June's
+    expect(june.rawSpend).toBeCloseTo(76.6, 2); // still June's raw
     expect(june.pendingForward).toBeCloseTo(76.6, 2); // …but explained
+    // …and a flight in flight is NOT a data gap: pending nets out of the check
+    // at both ends, so neither month reads as money missing from Loomi.
+    expect(june.residual).toBeCloseTo(0, 2);
+    expect(monthRow(ads, '2026-07', r).residual).toBeCloseTo(0, 2);
   });
 
   it('posts Out and In together once the run ends and the month is reached', () => {
@@ -309,8 +338,10 @@ describe('settlement state (§4)', () => {
     const ledger = buildFlightLedger(ads, Date.UTC(2026, 7, 5, 18), TZ);
     expect(ledger[0].status).toBe('settled');
     const r = rollupCrossMonth(ledger, ['2026-06', '2026-07']);
-    expect(countedSpendRow(76.6, r.get('2026-06')).countedSpend).toBeCloseTo(0, 2);
-    expect(countedSpendRow(38.79, r.get('2026-07')).countedSpend).toBeCloseTo(115.39, 2);
+    expect(monthRow(ads, '2026-06', r).tieOut).toBeCloseTo(0, 2);
+    expect(monthRow(ads, '2026-07', r).tieOut).toBeCloseTo(115.39, 2);
+    expect(monthRow(ads, '2026-06', r).residual).toBeCloseTo(0, 2);
+    expect(monthRow(ads, '2026-07', r).residual).toBeCloseTo(0, 2);
     expect(r.get('2026-06')!.pendingForward).toBe(0);
   });
 
@@ -327,20 +358,22 @@ describe('settlement state (§4)', () => {
     const ads = pair('2026-07', '2026-07-03');
     const ledger = buildFlightLedger(ads, Date.UTC(2026, 6, 1, 18), TZ);
     const r = rollupCrossMonth(ledger, ['2026-06', '2026-07']);
-    const counted =
-      countedSpendRow(76.6, r.get('2026-06')).countedSpend +
-      countedSpendRow(38.79, r.get('2026-07')).countedSpend;
-    expect(counted).toBeCloseTo(76.6 + 38.79, 2);
+    const tied =
+      monthRow(ads, '2026-06', r).tieOut + monthRow(ads, '2026-07', r).tieOut;
+    expect(tied).toBeCloseTo(76.6 + 38.79, 2);
   });
 });
 
 // ─── §7 edge cases ──────────────────────────────────────────────────────────
 describe('edge cases (§7)', () => {
-  it('handles a three-month flight: one In equals the sum of every Out', () => {
+  it('splits a three-month flight when its own rows account for the span', () => {
+    // The subtraction gives ONE lump (100 − 5 = 95) for April+May together. The
+    // flight's own month rows can place it, and they add up to exactly that
+    // lump, so it is split rather than flagged. Corroborated data, not a guess.
     const ads = [
-      row({ id: 'm1', name: 'Long Run', objectId: 'os-3', period: '2026-04', actual: 40, billed: '2026-06', start: '2026-04-20', end: '2026-06-02' }),
-      row({ id: 'm2', name: 'Long Run', objectId: 'os-3', period: '2026-05', actual: 55, billed: '2026-06', start: '2026-04-20', end: '2026-06-02' }),
-      row({ id: 'm3', name: 'Long Run', objectId: 'os-3', period: '2026-06', actual: 5, billed: '2026-06', start: '2026-04-20', end: '2026-06-02' }),
+      row({ id: 'm1', name: 'Long Run', objectId: 'os-3', period: '2026-04', actual: 40, billed: '2026-06', start: '2026-04-20', end: '2026-06-02', runSpend: 100 }),
+      row({ id: 'm2', name: 'Long Run', objectId: 'os-3', period: '2026-05', actual: 55, billed: '2026-06', start: '2026-04-20', end: '2026-06-02', runSpend: 100 }),
+      row({ id: 'm3', name: 'Long Run', objectId: 'os-3', period: '2026-06', actual: 5, billed: '2026-06', start: '2026-04-20', end: '2026-06-02', runSpend: 100 }),
     ];
     const periods = ['2026-04', '2026-05', '2026-06'];
     const ledger = buildFlightLedger(ads, NOW, TZ);
@@ -369,8 +402,8 @@ describe('edge cases (§7)', () => {
 
   it('keys on the cross-month choice, NOT the lifetime flag (§3, §7)', () => {
     const daily = [
-      row({ id: 'd1', name: 'Daily straddler', objectId: 'os-6', period: '2026-06', actual: 30, billed: '2026-07', start: '2026-06-28', end: '2026-07-02' }),
-      row({ id: 'd2', name: 'Daily straddler', objectId: 'os-6', period: '2026-07', actual: 10, billed: '2026-07', start: '2026-06-28', end: '2026-07-02' }),
+      row({ id: 'd1', name: 'Daily straddler', objectId: 'os-6', period: '2026-06', actual: 30, billed: '2026-07', start: '2026-06-28', end: '2026-07-02', runSpend: 40 }),
+      row({ id: 'd2', name: 'Daily straddler', objectId: 'os-6', period: '2026-07', actual: 10, billed: '2026-07', start: '2026-06-28', end: '2026-07-02', runSpend: 40 }),
     ].map((a) => ({ ...a, budgetType: 'Daily' }) as SplitRunAdLike);
     const ledger = buildFlightLedger(daily, NOW, TZ);
     expect(ledger).toHaveLength(1);
@@ -379,10 +412,10 @@ describe('edge cases (§7)', () => {
 
   it('sums several flights per month and keeps them separate in the drill-down', () => {
     const ads = [
-      row({ id: 'x1', name: 'Flight X', objectId: 'os-x', period: '2026-06', actual: 12, billed: '2026-07', start: '2026-06-28', end: '2026-07-01' }),
-      row({ id: 'x2', name: 'Flight X', objectId: 'os-x', period: '2026-07', actual: 3, billed: '2026-07', start: '2026-06-28', end: '2026-07-01' }),
-      row({ id: 'y1', name: 'Flight Y', objectId: 'os-y', period: '2026-06', actual: 7, billed: '2026-07', start: '2026-06-29', end: '2026-07-02' }),
-      row({ id: 'y2', name: 'Flight Y', objectId: 'os-y', period: '2026-07', actual: 4, billed: '2026-07', start: '2026-06-29', end: '2026-07-02' }),
+      row({ id: 'x1', name: 'Flight X', objectId: 'os-x', period: '2026-06', actual: 12, billed: '2026-07', start: '2026-06-28', end: '2026-07-01', runSpend: 15 }),
+      row({ id: 'x2', name: 'Flight X', objectId: 'os-x', period: '2026-07', actual: 3, billed: '2026-07', start: '2026-06-28', end: '2026-07-01', runSpend: 15 }),
+      row({ id: 'y1', name: 'Flight Y', objectId: 'os-y', period: '2026-06', actual: 7, billed: '2026-07', start: '2026-06-29', end: '2026-07-02', runSpend: 11 }),
+      row({ id: 'y2', name: 'Flight Y', objectId: 'os-y', period: '2026-07', actual: 4, billed: '2026-07', start: '2026-06-29', end: '2026-07-02', runSpend: 11 }),
     ];
     const r = rollupCrossMonth(buildFlightLedger(ads, NOW, TZ), ['2026-06', '2026-07']);
     expect(r.get('2026-06')!.out).toBe(19);
@@ -393,8 +426,8 @@ describe('edge cases (§7)', () => {
 
   it('flags a settled lifetime flight computing OVER its Meta lifetime cap', () => {
     const ads = [
-      row({ id: 'o1', name: 'Overspent', objectId: 'os-7', period: '2026-06', actual: 70, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', cap: 80 }),
-      row({ id: 'o2', name: 'Overspent', objectId: 'os-7', period: '2026-07', actual: 25, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', cap: 80 }),
+      row({ id: 'o1', name: 'Overspent', objectId: 'os-7', period: '2026-06', actual: 70, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', cap: 80, runSpend: 95 }),
+      row({ id: 'o2', name: 'Overspent', objectId: 'os-7', period: '2026-07', actual: 25, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', cap: 80, runSpend: 95 }),
     ];
     const ledger = buildFlightLedger(ads, NOW, TZ);
     expect(ledger[0].flightTotal).toBe(95);
@@ -407,16 +440,17 @@ describe('edge cases (§7)', () => {
       row({ id: 'r2', name: 'Drifted', objectId: 'os-8', period: '2026-07', actual: 20, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', runSpend: 90 }),
     ];
     const ledger = buildFlightLedger(ads, NOW, TZ);
-    expect(ledger[0].flightTotal).toBe(70); // slices are the basis
-    expect(ledger[0].runSpendMismatch).toBe(90); // …and the disagreement is shown
+    expect(ledger[0].flightTotal).toBe(90); // the full run is the basis now
+    expect(ledger[0].originTotal).toBe(70); // 90 − July's own 20
+    expect(ledger[0].runSpendMismatch).toBe(70); // …and the stale rows are shown
   });
 
   it('detects an orphaned slice — the leak the invariant exists to catch', () => {
     // A hand-built ledger whose In was dropped: Σ Out no longer equals Σ In and
     // the delta is NOT the known edge outflow, so the month must be flagged.
     const ads = [
-      row({ id: 'g1', name: 'Ghost', objectId: 'os-9', period: '2026-06', actual: 40, billed: '2026-07', start: '2026-06-26', end: '2026-07-03' }),
-      row({ id: 'g2', name: 'Ghost', objectId: 'os-9', period: '2026-07', actual: 10, billed: '2026-07', start: '2026-06-26', end: '2026-07-03' }),
+      row({ id: 'g1', name: 'Ghost', objectId: 'os-9', period: '2026-06', actual: 40, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', runSpend: 50 }),
+      row({ id: 'g2', name: 'Ghost', objectId: 'os-9', period: '2026-07', actual: 10, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', runSpend: 50 }),
     ];
     const ledger = buildFlightLedger(ads, NOW, TZ);
     const orphaned = ledger.map((f) => ({ ...f, billedMonth: '2026-11' }));
@@ -425,12 +459,200 @@ describe('edge cases (§7)', () => {
     expect(c.sumIn).toBe(0);
     expect(c.carryOut).toBe(40); // accounted for as leaving the window…
     expect(c.balanced).toBe(true);
-    // …whereas a slice that leaves with nothing to explain it does not balance.
+    // …whereas an In with no slices behind it does not balance: $40 arrives in
+    // July out of nowhere, which is the leak the invariant exists to catch.
     const leaked = checkConservation(
-      [{ ...ledger[0], originSlices: [], flightTotal: 50 }],
+      [{ ...ledger[0], originSlices: [] }],
       ['2026-06', '2026-07'],
     );
-    expect(leaked.sumIn).toBe(0);
-    expect(leaked.balanced).toBe(true);
+    expect(leaked.sumIn).toBe(40);
+    expect(leaked.sumOut).toBe(0);
+    expect(leaked.balanced).toBe(false);
+  });
+});
+
+// ─── Rebuild invariants ─────────────────────────────────────────────────────
+// The rebuild's whole claim is that Raw and Counted come from different places
+// and are then reconciled. These are the checks that would fail under the old
+// design, where Counted was DERIVED from Raw and the tie-out was an identity.
+
+describe('independence of Raw and Counted (rebuild §12.4)', () => {
+  const linked = row({
+    id: 'linked',
+    name: 'Tracked ad',
+    objectId: 'os-ind',
+    period: '2026-07',
+    actual: 1460,
+  });
+  const rollup = rollupCrossMonth(buildFlightLedger([linked], NOW, TZ), ['2026-07']);
+  const counted = countedMonthSpend([linked], '2026-07');
+
+  it('reads clean when the account spent exactly what Loomi tracked', () => {
+    const r = countedSpendRow(1460, counted, rollup.get('2026-07'));
+    expect(r.residual).toBeCloseTo(0, 2);
+  });
+
+  it('moves the residual — and ONLY the residual — by an unlinked dollar', () => {
+    // An $80 ad running in the account that was never added to the pacer.
+    const r = countedSpendRow(1540, counted, rollup.get('2026-07'));
+    expect(r.rawSpend).toBeCloseTo(1540, 2);
+    expect(r.countedSpend).toBeCloseTo(1460, 2); // unchanged — rows didn't move
+    expect(r.residual).toBeCloseTo(80, 2);
+  });
+
+  it('signs the other direction when Loomi counts more than the account spent', () => {
+    const r = countedSpendRow(1400, counted, rollup.get('2026-07'));
+    expect(r.residual).toBeCloseTo(-60, 2);
+  });
+});
+
+describe('direction-agnostic subtraction (rebuild §4, §11b)', () => {
+  // Delivers late, bills early: Aug 20 – Sep 5, billed August. Only the August
+  // row exists — the origin month is LATER than the billed month, which the old
+  // "sibling rows before the billed month" logic could not see at all.
+  const backward = row({
+    id: 'aug',
+    name: 'August ad',
+    objectId: 'os-back',
+    period: '2026-08',
+    actual: 55,
+    billed: '2026-08',
+    start: '2026-08-20',
+    end: '2026-09-05',
+    runSpend: 80,
+  });
+  const SETTLED = Date.UTC(2026, 8, 6, 18); // Sep 6, the day after the run ends
+
+  it('posts Out in the LATER month and In in the earlier billed month', () => {
+    const ledger = buildFlightLedger([backward], SETTLED, TZ);
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].status).toBe('settled');
+    expect(ledger[0].originTotal).toBeCloseTo(25, 2);
+    const r = rollupCrossMonth(ledger, ['2026-08', '2026-09']);
+    expect(r.get('2026-09')!.out).toBeCloseTo(25, 2);
+    expect(r.get('2026-08')!.in).toBeCloseTo(25, 2);
+    expect(checkConservation(ledger, ['2026-08', '2026-09']).balanced).toBe(true);
+  });
+
+  it('lands the full run in the billed month and nothing in the origin month', () => {
+    const r = rollupCrossMonth(buildFlightLedger([backward], SETTLED, TZ), [
+      '2026-08',
+      '2026-09',
+    ]);
+    // August's own delivery was $55; the account also spent $25 in September.
+    const aug = countedSpendRow(55, countedMonthSpend([backward], '2026-08'), r.get('2026-08'));
+    const sep = countedSpendRow(25, countedMonthSpend([], '2026-09'), r.get('2026-09'));
+    expect(aug.countedSpend).toBeCloseTo(80, 2); // the whole run
+    expect(aug.residual).toBeCloseTo(0, 2);
+    expect(sep.countedSpend).toBeCloseTo(0, 2);
+    expect(sep.residual).toBeCloseTo(0, 2);
+  });
+
+  it('works from the billed row alone — no sibling row in the origin month', () => {
+    // The forward mirror of the case above: a Jun 26 – Jul 3 flight billed in
+    // July, where June never got its own pacer row.
+    const julyOnly = row({
+      id: 'jul-only',
+      name: 'Bike Night Event Ad',
+      objectId: 'os-fwd',
+      period: '2026-07',
+      actual: 26.34,
+      billed: '2026-07',
+      start: '2026-06-26',
+      end: '2026-07-03',
+      runSpend: 79.97,
+    });
+    const ledger = buildFlightLedger([julyOnly], NOW, TZ);
+    expect(ledger[0].originTotal).toBeCloseTo(53.63, 2);
+    const r = rollupCrossMonth(ledger, ['2026-06', '2026-07']);
+    expect(r.get('2026-06')!.out).toBeCloseTo(53.63, 2);
+    expect(r.get('2026-07')!.in).toBeCloseTo(53.63, 2);
+  });
+});
+
+describe('settlement snapshot (rebuild §5, §12.5)', () => {
+  const base = {
+    name: 'Snapshot flight',
+    objectId: 'os-snap',
+    billed: '2026-07',
+    start: '2026-06-26',
+    end: '2026-07-03',
+  } as const;
+
+  it('asks for a snapshot the first time it settles, and only then', () => {
+    const settled = row({ ...base, id: 's1', period: '2026-07', actual: 38.79, runSpend: 115.39 });
+    expect(pendingSnapshots(buildFlightLedger([settled], NOW, TZ))).toEqual([
+      { adId: 's1', runSpend: '115.39', billedDelivery: '38.79' },
+    ]);
+    // Mid-flight there is nothing to freeze yet.
+    const midFlight = buildFlightLedger([settled], Date.UTC(2026, 6, 1, 18), TZ);
+    expect(pendingSnapshots(midFlight)).toEqual([]);
+  });
+
+  it('holds Out/In steady when a later re-sync moves the live figures', () => {
+    // The snapshot is written; the daily series has since been pruned and a
+    // re-sync has restated pacerRunSpend. Out/In must not move.
+    const snapshotted = {
+      ...row({ ...base, id: 's2', period: '2026-07', actual: 9999, runSpend: 4242 }),
+      settledRunSpend: '115.39',
+      settledBilledDelivery: '38.79',
+      settledAt: new Date('2026-07-06T12:00:00Z'),
+    };
+    const ledger = buildFlightLedger([snapshotted], NOW, TZ);
+    expect(ledger[0].fromSnapshot).toBe(true);
+    expect(ledger[0].flightTotal).toBeCloseTo(115.39, 2);
+    expect(ledger[0].originTotal).toBeCloseTo(76.6, 2);
+    // …and it is never re-snapshotted.
+    expect(pendingSnapshots(ledger)).toEqual([]);
+  });
+});
+
+describe('flights that raise their hand (rebuild §8, §12.6–7)', () => {
+  it('flags a 3+ month flight whose rows cannot place the lump', () => {
+    // May–Jul billed July, but only May and July have rows: the $60 that fell
+    // outside July can't be split between May and June, so nothing is posted.
+    const ads = [
+      row({ id: 'l1', name: 'Long Run', objectId: 'os-long', period: '2026-05', actual: 40, billed: '2026-07', start: '2026-05-20', end: '2026-07-02', runSpend: 100 }),
+      row({ id: 'l3', name: 'Long Run', objectId: 'os-long', period: '2026-07', actual: 40, billed: '2026-07', start: '2026-05-20', end: '2026-07-02', runSpend: 100 }),
+    ];
+    const ledger = buildFlightLedger(ads, NOW, TZ);
+    expect(ledger[0].needsReview).toBe(true);
+    expect(ledger[0].reviewReason).toBe('unsplittable_span');
+    // Excluded from auto-reconciliation entirely — no lump posted to a guess.
+    const periods = ['2026-05', '2026-06', '2026-07'];
+    const r = rollupCrossMonth(ledger, periods);
+    for (const p of periods) {
+      expect(r.get(p)!.out).toBe(0);
+      expect(r.get(p)!.in).toBe(0);
+    }
+    expect(checkConservation(ledger, periods).sumOut).toBe(0);
+  });
+
+  it('flags a missing full-run figure instead of computing an origin of $0', () => {
+    const ads = [
+      row({ id: 'n1', name: 'Unsynced', objectId: 'os-nrs', period: '2026-07', actual: 26.34, billed: '2026-07', start: '2026-06-26', end: '2026-07-03' }),
+    ];
+    const ledger = buildFlightLedger(ads, NOW, TZ);
+    expect(ledger[0].needsReview).toBe(true);
+    expect(ledger[0].reviewReason).toBe('missing_run_spend');
+    expect(ledger[0].originTotal).toBe(0);
+  });
+
+  it('flags a billed month with no row to carry the run', () => {
+    // Marked to bill in July, but July has no ad row — Counted would place the
+    // run nowhere, so an In posted there would be invented.
+    const ads = [
+      row({ id: 'b1', name: 'Homeless', objectId: 'os-nb', period: '2026-06', actual: 60, billed: '2026-07', start: '2026-06-26', end: '2026-07-03', runSpend: 80 }),
+    ];
+    const ledger = buildFlightLedger(ads, NOW, TZ);
+    expect(ledger[0].needsReview).toBe(true);
+    expect(ledger[0].reviewReason).toBe('billed_month_has_no_row');
+  });
+
+  it('leaves an ordinary single-month resolution alone — no run figure needed', () => {
+    const ads = [
+      row({ id: 'p1', name: 'June only', objectId: 'os-one', period: '2026-06', actual: 500, billed: '2026-06', start: '2026-06-02', end: '2026-06-28' }),
+    ];
+    expect(buildFlightLedger(ads, NOW, TZ)).toEqual([]);
   });
 });

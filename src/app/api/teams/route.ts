@@ -1,3 +1,4 @@
+import { withRouteErrors } from '@/lib/api-errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import * as teams from '@/lib/services/teams';
@@ -6,7 +7,7 @@ import * as teams from '@/lib/services/teams';
  * GET /api/teams — list active teams (with members) + the internal-user
  * directory for the member picker. Internal-staff only.
  */
-export async function GET() {
+async function handleGet() {
   const { error } = await requirePermission('agency.teams.manage');
   if (error) return error;
 
@@ -18,7 +19,7 @@ export async function GET() {
 }
 
 /** POST /api/teams — create a team. */
-export async function POST(req: NextRequest) {
+async function handlePost(req: NextRequest) {
   const { error } = await requirePermission('agency.teams.manage');
   if (error) return error;
 
@@ -37,3 +38,8 @@ export async function POST(req: NextRequest) {
   const team = await teams.getTeamWithMembers(created.id);
   return NextResponse.json({ team }, { status: 201 });
 }
+
+// Wrapped so an unhandled throw returns the JSON error envelope instead of
+// a 500 with an empty body, which a caller cannot parse or report.
+export const GET = withRouteErrors(handleGet, 'teams');
+export const POST = withRouteErrors(handlePost, 'teams');

@@ -87,6 +87,18 @@ function collectGuards(): Guard[] {
   // `src/app/api` — so the regex is deliberately greedy about the helper name.
   const GUARD = /\b(requireRole|requirePermission|requireAllPermissions)\s*\(([^)]*)\)/g;
   const METHOD = /export async function (GET|POST|PUT|PATCH|DELETE)/g;
+  // A route wrapped by `withRouteErrors` declares its handler under a private
+  // name and exports the HTTP method separately:
+  //
+  //   async function handleGet(req) { ... }
+  //   export const GET = withRouteErrors(handleGet, 'flows');
+  //
+  // METHOD finds nothing in that file, so every guard in it gets attributed to
+  // '?' and the completeness checks below silently stop covering the route.
+  // That is the third time this walker has been blinded by a new handler shape;
+  // resolve the export back to its declaration rather than pattern-matching the
+  // handler's name, so the naming convention can change without breaking this.
+  const WRAPPED = /export const (GET|POST|PUT|PATCH|DELETE)\s*=\s*withRouteErrors\(\s*([A-Za-z0-9_$]+)/g;
 
   for (const file of walk(API_ROOT)) {
     // Paths are reported relative to `src/app` with the `api/` segment dropped,
@@ -100,6 +112,11 @@ function collectGuards(): Guard[] {
       at: m.index!,
       name: m[1],
     }));
+    for (const w of src.matchAll(WRAPPED)) {
+      const decl = new RegExp(`(async\\s+)?function\\s+${w[2]}\\s*\\(`).exec(src);
+      if (decl) methods.push({ at: decl.index, name: w[1] });
+    }
+    methods.sort((a, b) => a.at - b.at);
     const methodAt = (index: number) =>
       [...methods].reverse().find((m) => m.at < index)?.name ?? '?';
 
@@ -137,6 +154,20 @@ const GUARDS = collectGuards();
 describe('guard migration', () => {
   it('finds the API guards at all (the walker still works)', () => {
     expect(GUARDS.length).toBeGreaterThan(200);
+  });
+
+  // Guards the fix above, not just the shape of it: if the walker stops
+  // resolving `withRouteErrors` exports it will find these routes' guards but
+  // attribute them to '?', and every completeness check below would go quietly
+  // blind on them rather than fail.
+  it('sees guards inside withRouteErrors-wrapped handlers', () => {
+    const wrapped = GUARDS.filter((g) => g.file === 'flows/route.ts');
+    expect(wrapped.length, 'flows/route.ts has guards').toBeGreaterThan(0);
+    expect(
+      wrapped.map((g) => g.method),
+      'wrapped handlers must resolve to their HTTP method, not "?"',
+    ).not.toContain('?');
+    expect(wrapped.map((g) => g.method)).toContain('GET');
   });
 
   it('only uses permission keys that exist in the registry', () => {

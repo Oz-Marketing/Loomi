@@ -12,7 +12,8 @@ import JSZip from 'jszip';
 import { getAuthSession } from '@/lib/api-auth';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { usedFontFamilies } from '@/lib/ad-generator/fonts';
-import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
+import { resolveTemplate, resolveTemplateDoc } from '@/lib/ad-generator/resolve-template';
+import { stillRenderFor } from '@/lib/ad-generator/posterize';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { renderAdBatch } from '@/lib/ad-generator/render';
@@ -72,10 +73,18 @@ export async function POST(req: NextRequest) {
   );
   const googleCss = await googleFontFaceCss(usedGoogle);
   if (googleCss) data.fontFaceCss = `${data.fontFaceCss ?? ''}\n${googleCss}`;
-  const merged = { ...template.defaults, ...data };
+  // Clips become poster frames before Chromium sees them — see the single-render
+  // route for why.
+  const still = await stillRenderFor({
+    template,
+    doc: snapshot ?? (await resolveTemplateDoc(body.templateId ?? '')),
+    data: { ...template.defaults, ...data },
+  });
 
   try {
-    const pngs = await renderAdBatch(sizes.map((size) => ({ html: template.render(merged, size), width: size.width, height: size.height })));
+    const pngs = await renderAdBatch(
+      sizes.map((size) => ({ html: still.template.render(still.data, size), width: size.width, height: size.height })),
+    );
     const base = slug(body.name || template.id);
     const zip = new JSZip();
     sizes.forEach((size, i) => zip.file(`${base}-${slug(size.label || size.id)}-${size.width}x${size.height}.png`, pngs[i]));

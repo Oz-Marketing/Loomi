@@ -5,6 +5,8 @@ import {
   fetchAdSetForPublish,
   getMetaConfig,
   uploadAdImage,
+  uploadAdVideo,
+  waitForVideoReady,
 } from '@/lib/integrations/meta-ads';
 import type { AdCopyVariation } from '../copy-types';
 import type { TemplateDoc } from '../doc-types';
@@ -19,9 +21,12 @@ import {
   categoryAgrees,
   publishBlockers,
   type Blocker,
+  type CreativeAsset,
 } from '../meta-publish';
 import { preflight, summarizePreflight } from '../preflight';
 import { mergeRenderData, renderCreativeSizes } from '../render-creative';
+import { motionExportAvailable, renderMotionSizes } from '../render-motion';
+import { docHasMotion } from '../motion-plan';
 import { vehicleFromData } from '../vehicle-fields';
 
 /**
@@ -237,6 +242,11 @@ export async function launchToMeta(params: {
   }
 
   // ── everything checkable without a write ──
+  //
+  // Whether this ad MOVES is one of those things. A video ad needs an encoder on
+  // this server, and finding that out after the AdLaunch row is written means a
+  // failed launch and a row to clean up.
+  const isMotionAd = docHasMotion(doc, mergeRenderData(doc, data), launch.sizeIds.length ? launch.sizeIds : undefined);
   const blockers = publishBlockers({
     pageId: account?.metaPageId,
     instagramActorId: account?.metaInstagramActorId,
@@ -246,6 +256,8 @@ export async function launchToMeta(params: {
     copy,
     imageCount: launch.sizeIds.length,
     mode,
+    motion: isMotionAd,
+    videoExportAvailable: isMotionAd ? await motionExportAvailable() : true,
   });
   if (blockers.length) return { launchId: null, status: 'blocked', blockers, notices };
 
@@ -361,46 +373,77 @@ export async function launchToMeta(params: {
 
   // ── writes ──
   try {
-    const rendered = await renderCreativeSizes({
-      doc,
-      data,
-      accountKey: ad.accountKey,
-      sizeIds: launch.sizeIds.length ? launch.sizeIds : undefined,
-    });
-    if (!rendered.length) throw new Error('The creative rendered no sizes.');
+    const sizeIds = launch.sizeIds.length ? launch.sizeIds : undefined;
+    const adAccountId = account!.metaAdAccountId!;
+    // What Meta ends up pointing at: an image hash, or a video id + its poster.
+    let asset: CreativeAsset;
+    // Everything uploaded, recorded whether or not this ad uses it — so the
+    // placement-specific follow-on never has to re-upload.
+    const platformRefs: Record<string, string> = {};
 
-    const imageRefs: Record<string, string> = {};
-    for (const r of rendered) {
-      const { hash } = await uploadAdImage(cfg, account!.metaAdAccountId!, r.png, `${ad.id}-${r.width}x${r.height}.png`);
-      imageRefs[`${r.width}x${r.height}`] = hash;
-    }
+    /**
+     * ONE ad, using the squarest render.
+     *
+     * Meta's `link_data` (and `video_data`) carries a single asset, and creating
+     * one ad per size would put near-identical ads in competition with each other
+     * inside the same ad set — splitting delivery and learning for no gain.
+     * Per-placement assets need `asset_feed_spec`, which is a follow-on.
+     */
+    const pickPreferred = <T extends { width: number; height: number }>(list: T[]): T =>
+      list.find((r) => r.width === r.height) ?? list.find((r) => r.width > r.height) ?? list[0];
 
-    // ONE ad, using the squarest render.
-    //
-    // Meta's `link_data` carries a single image, and creating one ad per size
-    // would put near-identical ads in competition with each other inside the same
-    // ad set — splitting delivery and learning for no gain. Per-placement assets
-    // need `asset_feed_spec`, which is a follow-on; the other hashes are recorded
-    // above so that work doesn't have to re-upload anything.
-    const preferred =
-      rendered.find((r) => r.width === r.height) ??
-      rendered.find((r) => r.width > r.height) ??
-      rendered[0];
-    const chosenHash = imageRefs[`${preferred.width}x${preferred.height}`];
-    if (rendered.length > 1) {
-      notices.push(
-        `Published the ${preferred.width}×${preferred.height} render. The other ${rendered.length - 1} size(s) were uploaded to the ad account's image library for placement-specific assets later.`,
-      );
+    if (isMotionAd) {
+      // A moving ad publishes as a VIDEO creative. The poster comes from the same
+      // renderer, so the thumbnail Meta shows is the frame the video opens on.
+      const rendered = await renderMotionSizes({ doc, data, accountKey: ad.accountKey, sizeIds });
+      if (!rendered.length) throw new Error('The creative rendered no video sizes.');
+      notices.push(...new Set(rendered.flatMap((r) => r.warnings)));
+
+      const preferred = pickPreferred(rendered);
+      const dims = `${preferred.width}x${preferred.height}`;
+      const { hash: thumbnailHash } = await uploadAdImage(cfg, adAccountId, preferred.poster, `${ad.id}-${dims}-poster.png`);
+      const { videoId } = await uploadAdVideo(cfg, adAccountId, preferred.mp4, `${ad.id}-${dims}.mp4`);
+      // Meta encodes asynchronously; a creative built on a still-processing video
+      // fails with an error that reads like a bad id.
+      const ready = await waitForVideoReady(cfg, videoId);
+      if (!ready) {
+        notices.push(
+          'Facebook was still processing the video when the ad was created. If the ad shows no video, give it a few minutes and refresh in Ads Manager.',
+        );
+      }
+      asset = { video: { videoId, thumbnailHash } };
+      platformRefs[dims] = `video:${videoId}`;
+      platformRefs[`${dims}-poster`] = thumbnailHash;
+      if (rendered.length > 1) {
+        notices.push(
+          `Published the ${dims} video. The other ${rendered.length - 1} size(s) were rendered but not uploaded — Meta takes one asset per ad.`,
+        );
+      }
+    } else {
+      const rendered = await renderCreativeSizes({ doc, data, accountKey: ad.accountKey, sizeIds });
+      if (!rendered.length) throw new Error('The creative rendered no sizes.');
+
+      for (const r of rendered) {
+        const { hash } = await uploadAdImage(cfg, adAccountId, r.png, `${ad.id}-${r.width}x${r.height}.png`);
+        platformRefs[`${r.width}x${r.height}`] = hash;
+      }
+      const preferred = pickPreferred(rendered);
+      asset = { imageHash: platformRefs[`${preferred.width}x${preferred.height}`] };
+      if (rendered.length > 1) {
+        notices.push(
+          `Published the ${preferred.width}×${preferred.height} render. The other ${rendered.length - 1} size(s) were uploaded to the ad account's image library for placement-specific assets later.`,
+        );
+      }
     }
 
     const creativeId = await createAdCreative(
       cfg,
-      account!.metaAdAccountId!,
+      adAccountId,
       buildAdCreativePayload({
         name: `${ad.name} — Loomi`,
         pageId: account!.metaPageId!,
         instagramActorId: account?.metaInstagramActorId,
-        imageHash: chosenHash,
+        ...asset,
         link: launch.destinationUrl!,
         copy,
       }),
@@ -430,7 +473,7 @@ export async function launchToMeta(params: {
         status: 'published',
         finishedAt: new Date(),
         platformAdIds: JSON.stringify({ [ad.id]: adId }),
-        platformImageRefs: JSON.stringify(imageRefs),
+        platformImageRefs: JSON.stringify(platformRefs),
         pacerAdId,
       },
     });

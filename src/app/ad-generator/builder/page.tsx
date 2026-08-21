@@ -89,6 +89,7 @@ import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, ty
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAlignCenterIcon, HAlignRightIcon } from '@/components/ad-generator/valign-icons';
 import { normalizeTags, type LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { motionKind, motionSettings, MOTION_LIMITS } from '@/lib/ad-generator/motion';
 import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
 import { SizePicker } from '@/components/ad-generator/size-picker';
 import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator/size-ids';
@@ -2708,6 +2709,17 @@ export default function AdBuilderPage() {
     });
   }
 
+  /**
+   * Doc-level MP4 settings (duration / frame rate).
+   *
+   * On the doc rather than the element because an ad is one clip of one length —
+   * two videos in a design share it, each looping to fill. Edited from whichever
+   * motion layer is selected, which is where a designer is when they care.
+   */
+  function setMotion(patch: { durationSec?: number; fps?: number }) {
+    setDoc((prev) => ({ ...prev, motion: { ...motionSettings(prev), ...patch } }));
+  }
+
   // Safe-area margin (value + unit, builder-only guide).
   function setMargin(patch: Partial<{ value: number; unit: MarginUnit }>) {
     setDoc((prev) => {
@@ -5115,6 +5127,8 @@ export default function AdBuilderPage() {
                   content={selectionContent}
                   contentSources={contentSources}
                   onContentChange={setSelectedContent}
+                  motion={motionSettings(doc)}
+                  onMotion={setMotion}
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
@@ -5968,6 +5982,8 @@ function SelectionPanel({
   content,
   contentSources,
   onContentChange,
+  motion,
+  onMotion,
   accountKey,
   onEl,
   onBox,
@@ -6001,6 +6017,9 @@ function SelectionPanel({
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
+  /** The doc's resolved MP4 settings — shown only when this element is a clip. */
+  motion: { durationSec: number; fps: number };
+  onMotion: (patch: { durationSec?: number; fps?: number }) => void;
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
@@ -6043,6 +6062,10 @@ function SelectionPanel({
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';
+  /** Is what this element shows a moving source? Decided by the URL, exactly as
+   *  the renderer and the exporter decide it — there is no "make this a video"
+   *  switch to get out of sync with the file. */
+  const clipKind = isImageEl ? motionKind(content?.value ?? '') : null;
   // Text sizing mode (default Shrink). Shrink: a fixed W×H frame; the text holds
   // YOUR font size (the CAP — font editable) and auto-shrinks to fit only when a
   // value overflows. Fill: a fixed W×H frame; the text auto-scales up + down to
@@ -6158,7 +6181,12 @@ function SelectionPanel({
             {(content.mode === 'image-edit' || content.mode === 'image-readonly') && (
               <div className="flex items-center gap-3">
                 <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-[var(--muted)]/40">
-                  {content.value ? (
+                  {content.value && clipKind === 'video' ? (
+                    // A still <img> of an .mp4 is a broken-image icon, so the
+                    // swatch plays the clip — which also makes "did I pick the
+                    // right take?" answerable without exporting anything.
+                    <video src={content.value} autoPlay muted loop playsInline className="h-full w-full object-contain" />
+                  ) : content.value ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={content.value} alt="" className="h-full w-full object-contain" />
                   ) : (
@@ -6191,6 +6219,76 @@ function SelectionPanel({
                 )}
               </div>
             )}
+          </PanelSection>
+        )}
+
+        {/* Motion — shown only when this layer's source actually moves. The clip
+            plays in the canvas as-is; these controls decide what the MP4 export
+            does with it, and which frame every STILL export freezes on. */}
+        {clipKind && (
+          <PanelSection
+            title="Motion"
+            action={
+              <Tooltip
+                label={
+                  clipKind === 'gif'
+                    ? 'This layer is an animated GIF. It animates in the editor, and video exports composite it over your design at the frame rate below. Still exports (PNG/ZIP) use its first frame.'
+                    : 'This layer is a video. It plays in the editor, and “Export video” on the ad produces an MP4 with your design composited over it. Still exports (PNG/ZIP) — and the thumbnail Meta shows — use the poster frame below, so the picture and the video’s first frame always match. Audio is dropped: social feeds autoplay muted.'
+                }
+              >
+                <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+              </Tooltip>
+            }
+          >
+            {clipKind === 'video' && (
+              <div className="mb-2">
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Poster frame</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    value={el.trimStart ?? 0}
+                    onChange={(e) => onEl({ trimStart: Math.max(0, Number(e.target.value) || 0) || undefined })}
+                    className="w-20 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">seconds in — where the clip starts</span>
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Length</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={MOTION_LIMITS.minSec}
+                    max={MOTION_LIMITS.maxSec}
+                    value={motion.durationSec}
+                    onChange={(e) => onMotion({ durationSec: Number(e.target.value) })}
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">sec</span>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Frame rate</label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={MOTION_LIMITS.minFps}
+                    max={MOTION_LIMITS.maxFps}
+                    value={motion.fps}
+                    onChange={(e) => onMotion({ fps: Number(e.target.value) })}
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">fps</span>
+                </div>
+              </div>
+            </div>
+            <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+              Length and frame rate apply to the whole ad — a shorter clip loops to fill it.
+            </p>
           </PanelSection>
         )}
 
@@ -6720,6 +6818,8 @@ function SelectionPanel({
         <MediaPickerModal
           accountKey={accountKey}
           showCategories
+          // The builder is the one picker whose consumer can render a clip.
+          allowMotion
           brandingMedia={brandLogos.map((l) => ({ label: `${l.label} logo`, url: l.url }))}
           onSelect={(url) => {
             onContentChange(url);

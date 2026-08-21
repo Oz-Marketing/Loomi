@@ -24,11 +24,15 @@ import { assembleOffer } from '@/lib/ad-generator/offer-text';
 import { vehicleFromData } from '@/lib/ad-generator/vehicle-fields';
 import { googleCopySheet, metaCopySheet, readmeSheet, targetingSheet } from '@/lib/ad-generator/launch-kit';
 import { resolveLaunch, type PresetRow } from '@/lib/ad-generator/launch-preset';
-import { renderCreativeSizes } from '@/lib/ad-generator/render-creative';
+import { mergeRenderData, renderCreativeSizes } from '@/lib/ad-generator/render-creative';
+import { renderMotionSizes } from '@/lib/ad-generator/render-motion';
+import { docHasMotion } from '@/lib/ad-generator/motion-plan';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300;
+// Raised for the video path: encoding an MP4 per size on a small box is minutes,
+// and the still-only kit still returns in seconds.
+export const maxDuration = 600;
 
 function safeJson<T>(raw: string | null): T | null {
   if (!raw) return null;
@@ -170,6 +174,33 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const base = slug(ad.name);
   const imageFiles = rendered.map((r) => `images/${base}-${r.width}x${r.height}.png`);
+
+  /**
+   * A moving ad's kit has to carry the MP4.
+   *
+   * The kit is what someone uploads by hand, so a video ad whose archive held
+   * only PNGs would quietly get published as a still. Best-effort: a server with
+   * no encoder still produces a usable kit (stills + copy + targeting) with the
+   * reason attached, rather than failing the whole download.
+   */
+  const videos: { file: string; mp4: Buffer }[] = [];
+  const kitNotices: string[] = [];
+  if (docHasMotion(doc, mergeRenderData(doc, data), launch.sizeIds.length ? launch.sizeIds : undefined)) {
+    try {
+      const clips = await renderMotionSizes({
+        doc,
+        data,
+        accountKey: ad.accountKey,
+        sizeIds: launch.sizeIds.length ? launch.sizeIds : undefined,
+      });
+      for (const c of clips) videos.push({ file: `video/${base}-${c.width}x${c.height}.mp4`, mp4: c.mp4 });
+      kitNotices.push(...new Set(clips.flatMap((c) => c.warnings)));
+    } catch (err) {
+      kitNotices.push(
+        `This ad has a video layer, but the MP4 could not be produced: ${err instanceof Error ? err.message : 'unknown error'}`,
+      );
+    }
+  }
   const input = {
     adName: ad.name,
     accountName: account?.dealer ?? ad.accountKey,
@@ -185,6 +216,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     launch,
     approval,
     imageFiles,
+    videoFiles: videos.map((v) => v.file),
     expiresAt: ad.expiresAt ? ad.expiresAt.toISOString() : null,
     generatedAt: new Date().toISOString(),
   };
@@ -195,6 +227,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   zip.file('meta.txt', metaCopySheet(input));
   zip.file('google.txt', googleCopySheet(input));
   rendered.forEach((r, i) => zip.file(imageFiles[i], r.png));
+  for (const v of videos) zip.file(v.file, v.mp4);
+  if (kitNotices.length) zip.file('notes.txt', ['NOTES', ...kitNotices.map((n) => `  · ${n}`), ''].join('\n'));
 
   const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'STORE' });
   return new NextResponse(new Uint8Array(buf), {

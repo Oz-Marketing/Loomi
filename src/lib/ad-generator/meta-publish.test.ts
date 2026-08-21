@@ -114,6 +114,31 @@ describe('categoryAgrees', () => {
   });
 });
 
+describe('publishBlockers — video', () => {
+  const ok = {
+    pageId: '1',
+    adAccountId: 'act_1',
+    destinationUrl: 'https://d.com',
+    copy: copy(),
+    imageCount: 1,
+    mode: 'attach_existing' as const,
+    targetAdSetId: '5',
+  };
+
+  it('refuses a motion ad on a server with no encoder, before anything is written', () => {
+    const blockers = publishBlockers({ ...ok, motion: true, videoExportAvailable: false });
+    expect(blockers.map((b) => b.field)).toContain('video');
+  });
+
+  it('allows a motion ad when the encoder is there', () => {
+    expect(publishBlockers({ ...ok, motion: true, videoExportAvailable: true })).toEqual([]);
+  });
+
+  it('ignores the encoder entirely for a still ad', () => {
+    expect(publishBlockers({ ...ok, videoExportAvailable: false })).toEqual([]);
+  });
+});
+
 describe('buildObjectStorySpec', () => {
   const base = { pageId: '1234', imageHash: 'abc', link: 'https://d.com', copy: copy() };
 
@@ -140,6 +165,37 @@ describe('buildObjectStorySpec', () => {
     c.meta.description = '';
     const spec = buildObjectStorySpec({ ...base, copy: c }) as { link_data: Record<string, unknown> };
     expect(spec.link_data).not.toHaveProperty('description');
+  });
+
+  it('builds video_data — not link_data — for a clip, with the link on the CTA', () => {
+    // `video_data` has no `link` of its own. Sending one there and none on the
+    // call to action publishes an ad with nowhere to click.
+    const spec = buildObjectStorySpec({
+      pageId: '1234',
+      video: { videoId: 'v9', thumbnailHash: 'thumb' },
+      link: 'https://d.com',
+      copy: copy(),
+    }) as { page_id: string; video_data: Record<string, unknown>; link_data?: unknown };
+    expect(spec.link_data).toBeUndefined();
+    expect(spec.video_data.video_id).toBe('v9');
+    expect(spec.video_data.image_hash).toBe('thumb');
+    expect(spec.video_data.title).toBe('$311/mo — Trax');
+    expect(spec.video_data.message).toBe('2026 Trax — $311/mo.');
+    expect(spec.video_data.call_to_action).toEqual({ type: 'LEARN_MORE', value: { link: 'https://d.com' } });
+  });
+
+  it('maps the description to link_description on a video', () => {
+    const spec = buildObjectStorySpec({
+      pageId: '1',
+      video: { videoId: 'v', thumbnailHash: 't' },
+      link: 'https://d.com',
+      copy: copy(),
+    }) as { video_data: Record<string, unknown> };
+    expect(spec.video_data.link_description).toBe(copy().meta.description);
+  });
+
+  it('refuses a spec with no asset at all', () => {
+    expect(() => buildObjectStorySpec({ pageId: '1', link: 'https://d.com', copy: copy() })).toThrow(/imageHash or a video/);
   });
 });
 

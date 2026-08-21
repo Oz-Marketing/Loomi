@@ -35,6 +35,39 @@ Backgrounds are just layers. A full-bleed shape with a gradient, a texture image
 tiled over it, a scrim to knock it back: composed in the builder rather than
 pre-baked in Illustrator, which is what lets a background reflow across sizes.
 
+# Motion and video backgrounds
+
+A layer moves when the file behind it moves. Pick an `.mp4`, `.webm`, `.mov` or
+an animated GIF from the media library the same way you'd pick a photo — into a
+Background layer's texture, or into any Image layer — and it plays right on the
+canvas. There is no "make this a video" switch to remember, and no separate video
+template: everything else about the layer works as before, including cover/contain
+fit, the per-size focal point and crop, corner radius, and opacity.
+
+Selecting a moving layer adds a **Motion** section:
+
+- **Poster frame** — how many seconds into the clip it starts. This one number
+  does two jobs: it's where playback begins in the MP4, and it's the frame every
+  still export freezes on. So the poster and the video's first frame can never
+  disagree.
+- **Length** and **Frame rate** — properties of the whole ad, not of the layer.
+  Two clips in one design share them, each looping to fill the length.
+
+What to know when designing one:
+
+- **Video is a normal layer.** Put a scrim over it, put a second clip over that;
+  stacking order is honoured on export exactly as on the canvas.
+- **Tile has no video form.** A clip set to Tile fills its box like Cover.
+- **Blend modes apply to stills only.** A multiply on a clip shows in the PNG and
+  not in the MP4, and the export tells you so rather than differing quietly.
+- **Keep the source small.** The clip is re-encoded per size. A 4K master makes a
+  slow export and no better ad; something near the largest size you're rendering
+  is plenty.
+
+The MP4 itself is produced from the ad, not from the builder — whoever fills the
+template in gets an **Export video** button, and launching to Meta uploads the
+video as a video ad.
+
 # Fields
 
 The Fields panel defines what the person filling this template in will be asked

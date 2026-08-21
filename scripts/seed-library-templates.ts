@@ -9,6 +9,17 @@
  *   npx tsx scripts/seed-library-templates.ts --clean    # delete then re-create
  *
  * Idempotent: re-running updates content + metadata for existing slugs.
+ *
+ * NOTE ON FOOTERS: these bodies are raw HTML with no template engine behind
+ * them — substitution is plain string replacement, so anything that LOOKS like
+ * a template comment (`{{!-- … --}}`) is not stripped and ships verbatim into a
+ * recipient's inbox. Keep explanatory notes up here, in TypeScript, where they
+ * cannot leak.
+ *
+ * One footer used to link `mailto:hi@loomi.com`, a domain Oz does not own. It is
+ * removed rather than replaced: there is no canonical Loomi support mailbox
+ * anywhere in the codebase, and inventing one would just relocate the dead link.
+ * Add a real address here when one exists.
  */
 
 import 'dotenv/config';
@@ -2510,7 +2521,7 @@ const HTML_SAAS_UPDATE = `<!doctype html>
           <tr>
             <td class="pad" align="center" style="padding:32px 8px 0;">
               <p style="margin:0; font-size:12px; color:#a3a3a3;">
-                Loomi · <a href="mailto:hi@loomi.com" style="color:#525252; text-decoration:underline;">hi@loomi.com</a> · <a href="{{unsubscribe_url}}" style="color:#a3a3a3; text-decoration:underline;">Unsubscribe</a>
+                Loomi · <a href="{{unsubscribe_url}}" style="color:#a3a3a3; text-decoration:underline;">Unsubscribe</a>
               </p>
             </td>
           </tr>

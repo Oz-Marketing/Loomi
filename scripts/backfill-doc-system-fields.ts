@@ -1,11 +1,11 @@
 /**
- * Backfill the fixed system-field schema into existing template docs.
+ * Backfill a template doc's OWN offer kind's field schema into it.
  *
- * WHY THIS IS NEEDED. `blankTemplateDoc` stamps `fields: SYSTEM_FIELDS` into a
- * doc at CREATION, and `adTemplateFromDoc` then reads `doc.fields` back. So a
- * doc's field list is frozen at the moment it was made: adding a field to
- * `SYSTEM_FIELDS` reaches new docs and nothing else. Every template already in
- * the library keeps the schema it was born with.
+ * WHY THIS IS NEEDED. `blankTemplateDoc` stamps the kind's `fields` into a doc at
+ * CREATION, and `adTemplateFromDoc` then reads `doc.fields` back. So a doc's
+ * field list is frozen at the moment it was made: adding a field to a kind's
+ * schema reaches new docs and nothing else. Every template already in the
+ * library keeps the schema it was born with.
  *
  * That is how the Program fields (dealer invoice, advertising allowance,
  * selling price, customer down, the lease fees…) came to exist in code, pass
@@ -13,8 +13,16 @@
  * them, so nobody could type one in, and the Audi/VW disclaimer bodies that
  * depend on them would have rendered their tokens raw.
  *
- * WHAT IT DOES. For each `AdTemplateDoc`, appends any system field the doc is
- * missing, matched by `key`. Existing entries are left exactly as they are —
+ * ⚠️ PER KIND, NOT PER APP. Each doc is topped up from ITS OWN kind
+ * (`doc.offerKind`, defaulting to `vehicle`) — never from one global schema. An
+ * earlier version of this script read `SYSTEM_FIELDS`, which is only the VEHICLE
+ * kind's fields; the moment a second kind exists that version would append the
+ * whole ~50-field vehicle offer schema to every service and general template it
+ * touched. That is the single worst thing this script could do, because it is run
+ * per environment and its output looks like success.
+ *
+ * WHAT IT DOES. For each `AdTemplateDoc`, appends any field of its own kind the
+ * doc is missing, matched by `key`. Existing entries are left exactly as they are —
  * a designer may have edited a label or a placeholder, and this is not the
  * place to overrule that. Field ORDER is preserved and additions go on the end,
  * so no form is reshuffled; new groups (Program) simply appear last.
@@ -26,7 +34,7 @@
  *   npx tsx --env-file=.env.local scripts/backfill-doc-system-fields.ts --apply
  */
 import { prisma } from '../src/lib/prisma';
-import { SYSTEM_FIELDS, SYSTEM_FIELD_DEFAULTS } from '../src/lib/ad-generator/system-fields';
+import { offerKindForDoc } from '../src/lib/ad-generator/offer-kinds';
 import type { TemplateDoc } from '../src/lib/ad-generator/doc-types';
 import type { FieldSpec } from '../src/lib/ad-generator/types';
 
@@ -45,11 +53,13 @@ async function main() {
       continue;
     }
 
+    // The doc's own kind — NOT a global schema. See the header warning.
+    const kind = offerKindForDoc(doc);
     const fields: FieldSpec[] = Array.isArray(doc.fields) ? doc.fields : [];
     const have = new Set(fields.map((f) => f?.key).filter(Boolean));
-    const missing = SYSTEM_FIELDS.filter((f) => !have.has(f.key));
+    const missing = kind.fields.filter((f) => !have.has(f.key));
     if (missing.length === 0) {
-      console.log(`ok   ${row.id} (${row.name}) — already complete`);
+      console.log(`ok   ${row.id} (${row.name}) [${kind.id}] — already complete`);
       continue;
     }
 
@@ -57,15 +67,15 @@ async function main() {
     // chosen default is never replaced by the canonical placeholder.
     const defaults: Record<string, string> = { ...(doc.defaults ?? {}) };
     for (const f of missing) {
-      if (!(f.key in defaults) && f.key in SYSTEM_FIELD_DEFAULTS) {
-        defaults[f.key] = SYSTEM_FIELD_DEFAULTS[f.key];
+      if (!(f.key in defaults) && f.key in kind.defaults) {
+        defaults[f.key] = kind.defaults[f.key];
       }
     }
 
     const next: TemplateDoc = { ...doc, fields: [...fields, ...missing], defaults };
     changed++;
     console.log(
-      `${APPLY ? 'FIX ' : 'WOULD'} ${row.id} (${row.name}) — +${missing.length}: ${missing.map((f) => f.key).join(', ')}`,
+      `${APPLY ? 'FIX ' : 'WOULD'} ${row.id} (${row.name}) [${kind.id}] — +${missing.length}: ${missing.map((f) => f.key).join(', ')}`,
     );
     if (APPLY) {
       await prisma.adTemplateDoc.update({ where: { id: row.id }, data: { doc: JSON.stringify(next) } });

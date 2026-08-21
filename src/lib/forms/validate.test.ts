@@ -94,3 +94,53 @@ describe('validateSubmission — field_file', () => {
     expect((values.back as File[]).length).toBe(1);
   });
 });
+
+describe('validateSubmission — contact name identifiers', () => {
+  function textBlock(name: string): Block {
+    return { id: name, type: 'field_text', props: { name } };
+  }
+
+  it('splits a single combined name field into first and last', () => {
+    // Regression: a form collecting one "Name" input used to create a
+    // nameless contact, which surfaced as a bare email address in Loomi
+    // and as a blank customer on the dealer's CRM lead.
+    const { identifiers } = validateSubmission(formWith([textBlock('Name')]), {
+      Name: 'Blake Glass',
+    });
+    expect(identifiers.firstName).toBe('Blake');
+    expect(identifiers.lastName).toBe('Glass');
+  });
+
+  it('recognizes the common aliases for a combined name field', () => {
+    for (const field of ['full_name', 'yourName', 'customer name']) {
+      const { identifiers } = validateSubmission(formWith([textBlock(field)]), {
+        [field]: 'Ada Lovelace',
+      });
+      expect(identifiers.firstName).toBe('Ada');
+      expect(identifiers.lastName).toBe('Lovelace');
+    }
+  });
+
+  it('leaves the last name null for a mononym', () => {
+    const { identifiers } = validateSubmission(formWith([textBlock('name')]), { name: 'Cher' });
+    expect(identifiers.firstName).toBe('Cher');
+    expect(identifiers.lastName).toBeNull();
+  });
+
+  it('prefers an explicit first/last pair regardless of field order', () => {
+    const { identifiers } = validateSubmission(
+      formWith([textBlock('name'), textBlock('first_name'), textBlock('last_name')]),
+      { name: 'Wrong Person', first_name: 'Ada', last_name: 'Lovelace' },
+    );
+    expect(identifiers.firstName).toBe('Ada');
+    expect(identifiers.lastName).toBe('Lovelace');
+  });
+
+  it('does not read a non-person name field as the contact', () => {
+    const { identifiers } = validateSubmission(formWith([textBlock('business_name')]), {
+      business_name: 'Young Ford of Morgan',
+    });
+    expect(identifiers.firstName).toBeNull();
+    expect(identifiers.lastName).toBeNull();
+  });
+});

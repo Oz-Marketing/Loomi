@@ -76,6 +76,17 @@ describe('assembleOffer', () => {
     expect(apr?.terms).toBe('for XX months');
   });
 
+  it('preserves cents on a money figure, but only when there are any', () => {
+    // Fixed-ops pricing is quoted in cents. Rounding $79.95 to $80 advertises a
+    // price the dealer does not charge; whole-dollar vehicle figures must keep
+    // reading as whole dollars.
+    expect(assembleOffer({ offerType: 'flat_price', offerPrice: '79.95' })?.main).toBe('$79.95');
+    expect(assembleOffer({ offerType: 'flat_price', offerPrice: '79.9' })?.main).toBe('$79.90');
+    expect(assembleOffer({ offerType: 'flat_price', offerPrice: '80' })?.main).toBe('$80');
+    expect(assembleOffer({ offerType: 'lease', monthlyPayment: '299' })?.main).toBe('$299/mo');
+    expect(assembleOffer({ offerType: 'sales_price', salePrice: '28995' })?.main).toBe('$28,995');
+  });
+
   it('returns null for custom (free-text price/terms are used instead)', () => {
     expect(assembleOffer({ offerType: 'custom', price: '$299/mo' })).toBeNull();
     expect(assembleOffer({})).toBeNull(); // defaults to custom

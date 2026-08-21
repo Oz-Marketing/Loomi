@@ -289,7 +289,14 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
         layers.push(`<div style="position:absolute;inset:0;${texOp}background-image:url(${texUrl});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`);
       } else {
         const objPos = box.objectX != null || box.objectY != null ? `${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%` : 'center';
-        layers.push(`<div style="position:absolute;inset:0;overflow:hidden;${texOp}"><img src="${texUrl}" alt="" style="width:100%;height:100%;object-fit:${el.fit ?? 'cover'};object-position:${objPos};" /></div>`);
+        // Crop zoom, same as a plain cover image. A background could always carry
+        // a per-size focal point but never a zoom, so on a board whose aspect
+        // ratio differed sharply from the photo's there was no way to scale the
+        // image up and choose what the crop kept. Per size, like the focal point
+        // it pivots on.
+        const bgScale = (el.fit ?? 'cover') === 'cover' && box.objectScale && box.objectScale > 1 ? box.objectScale : 1;
+        const bgZoom = bgScale > 1 ? `transform:scale(${bgScale});transform-origin:${objPos};` : '';
+        layers.push(`<div style="position:absolute;inset:0;overflow:hidden;${texOp}"><img src="${texUrl}" alt="" style="width:100%;height:100%;object-fit:${el.fit ?? 'cover'};object-position:${objPos};${bgZoom}" /></div>`);
       }
     }
     // 3. Fade / overlay gradient on top.

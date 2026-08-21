@@ -26,7 +26,7 @@
 import type { Contact } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { decryptToken } from '@/lib/crypto/encryption';
-import { buildAdfXml, buildAdfSubject, hasUsableProspect } from './adf';
+import { buildAdfXml, buildAdfSubject, hasUsableProspect, parseVehicleContext } from './adf';
 import { sendLeadEmail, LeadEmailError } from './send-lead-email';
 import { parseLeadEmails } from './lead-emails';
 import {
@@ -251,7 +251,12 @@ async function deliverAdfLead(
 
   const form = await prisma.form.findUnique({
     where: { id: submission.formId },
-    select: { name: true, accountKey: true, forwardToCrm: true },
+    select: {
+      name: true,
+      accountKey: true,
+      forwardToCrm: true,
+      crmVehicleContext: true,
+    },
   });
   if (!form) {
     await markTerminal(delivery.id, attempt, 'Form no longer exists');
@@ -285,6 +290,9 @@ async function deliverAdfLead(
     formName: form.name,
     submission,
     contact,
+    // Read at send time (not enqueue time) so correcting a mis-set form
+    // fixes the leads still in the retry queue.
+    vehicleContext: parseVehicleContext(form.crmVehicleContext),
   };
 
   // ADF requires a populated <contact>; a lead with no name/email/phone is

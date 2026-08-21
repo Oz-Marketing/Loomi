@@ -4,9 +4,8 @@ import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { XMarkIcon, PlusIcon, TrashIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
-import { Select } from '@/components/select';
-import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
-import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
+import { Select, type SelectOption } from '@/components/select';
+import { OFFER_KINDS } from '@/lib/ad-generator/offer-kinds';
 import {
   RULE_KIND_META,
   suggestRuleId,
@@ -43,10 +42,40 @@ const BRAND_KEYS = [
   { key: 'eventLogoUrl', label: 'Sales event logo' },
 ];
 
-const FIELD_OPTIONS = [
-  ...BRAND_KEYS.map((b) => ({ value: b.key, label: b.label })),
-  ...SYSTEM_FIELDS.map((f) => ({ value: f.key, label: f.label })),
-];
+/**
+ * Every field a rule can inspect, across EVERY offer kind — grouped by kind so
+ * it's clear which ads a rule keyed on it can fire for.
+ *
+ * This used to be `SYSTEM_FIELDS`, i.e. the vehicle kind's schema alone. Nothing
+ * errored: the dropdown simply had no way to name a custom offer's price or its
+ * exclusions, so no service or parts co-op rule could be authored at all.
+ *
+ * De-duplicated by key with the first kind winning, matching how `FIELD_LABELS`
+ * resolves — so shared keys like `expiration` and `disclaimer` appear once.
+ */
+const FIELD_OPTIONS: SelectOption[] = (() => {
+  const seen = new Set<string>();
+  const out: SelectOption[] = BRAND_KEYS.map((b) => ({ value: b.key, label: b.label, group: 'Brand' }));
+  for (const b of BRAND_KEYS) seen.add(b.key);
+  for (const kind of OFFER_KINDS) {
+    for (const f of kind.fields) {
+      if (seen.has(f.key)) continue;
+      seen.add(f.key);
+      out.push({ value: f.key, label: f.label || f.key, group: kind.label });
+    }
+  }
+  return out;
+})();
+
+/**
+ * The offer types a rule can be scoped to — every kind's, grouped by kind.
+ *
+ * Values are globally unique across kinds, so ticking the custom kind's types IS
+ * scoping the rule to custom offers; no separate "offer kinds" field is needed
+ * and none exists (it would be a second source of truth able to disagree with
+ * this one).
+ */
+const SCOPE_TYPE_GROUPS = OFFER_KINDS.map((k) => ({ kind: k, types: k.offerTypes }));
 
 const blankRule = (make: string, taken: string[]): DraftRule => ({
   id: suggestRuleId(make, 'new rule', taken),
@@ -317,9 +346,14 @@ function RuleForm({ rule, onChange }: { rule: DraftRule; onChange: (p: Partial<D
             ]}
           />
         </Row>
-        <Row label="Applies to" hint="Leave empty for every offer type.">
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {OFFER_TYPES.map((t) => {
+        <Row label="Applies to" hint="Leave empty for every offer type. Ticking one kind's types scopes the rule to that kind.">
+          <div className="space-y-1.5 pt-1">
+            {SCOPE_TYPE_GROUPS.map(({ kind, types }) => (
+              <div key={kind.id} className="flex flex-wrap items-center gap-1.5">
+                <span className="w-14 shrink-0 text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+                  {kind.shortLabel}
+                </span>
+                {types.map((t) => {
               const on = rule.offerTypes?.includes(t.value);
               return (
                 <button
@@ -341,7 +375,9 @@ function RuleForm({ rule, onChange }: { rule: DraftRule; onChange: (p: Partial<D
                   {t.label}
                 </button>
               );
-            })}
+                })}
+              </div>
+            ))}
           </div>
         </Row>
       </div>

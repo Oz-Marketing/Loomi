@@ -1,44 +1,32 @@
 import type { FieldSpec } from './types';
-import { vehicleOffer } from './templates/vehicle-offer';
+import { offerKind } from './offer-kinds';
 
 /**
- * THE canonical field schema for every ad — the fixed "system fields" a designer
- * binds elements to. This is Phase 1 of collapsing the old model (designers
- * authored arbitrary per-template fields) into one shared schema: designers no
- * longer create/manage fields, they just drag an element and point its value at
- * one of these.
+ * The VEHICLE kind's field schema — the fields a designer binds elements to on a
+ * vehicle offer template.
  *
- * Why a fixed set is the right call: everything downstream — the offer engine
+ * Designers do not author fields. Everything downstream — the offer engine
  * (`_offer*` tokens), OEM compliance / required fields, the disclaimer token
- * engine, and MarketCheck — already only understands THESE exact keys. A
- * designer-invented field was inert. So making them the single source of truth
- * removes the confusion without losing real capability.
+ * engine, and MarketCheck — only understands these exact keys, so a
+ * designer-invented field was inert.
  *
- * Sourced from the vehicle-offer template's field set (the fields the engine
- * already speaks) so there is ONE definition, never a drifting copy.
+ * ⚠️ THIS IS NO LONGER "the schema for every ad". It is one kind's schema, and
+ * it is the one that happens to be the default. Anything that needs the schema
+ * for a PARTICULAR template must read `fieldsForKind(docOfferKind(doc))`, not
+ * this — otherwise it silently applies vehicle fields to every other kind, which
+ * is exactly the bug offer kinds exist to fix. This export remains because plenty
+ * of callers legitimately mean "the vehicle schema" (the code vehicle templates,
+ * the co-op rule editor's field list).
  */
-export const SYSTEM_FIELDS: FieldSpec[] = vehicleOffer.fields;
+export const SYSTEM_FIELDS: FieldSpec[] = offerKind('vehicle').fields;
 
-/** Canonical preview / starter values so a fresh canvas reads real immediately.
- *  The offer NUMBERS default to obvious placeholders ("X,XXX", "X.X", …) — NOT
- *  fake-real values like "299" — so the design never looks like a configured
- *  offer; the actual numbers come from the client at generation. They're
- *  non-numeric, so the offer engine passes them straight through. */
-export const SYSTEM_FIELD_DEFAULTS: Record<string, string> = {
-  ...vehicleOffer.defaults,
-  monthlyPayment: 'XXX',
-  leaseTerm: 'XX',
-  dueAtSigning: 'X,XXX',
-  securityDeposit: 'XXX',
-  aprRate: 'X.X',
-  aprTerm: 'XX',
-  costPerThousand: 'XX.XX',
-  discountAmount: 'X,XXX',
-  salePrice: 'XX,XXX',
-  msrp: 'XX,XXX',
-  price: '$X,XXX/mo',
-  terms: '',
-};
+/** The vehicle kind's preview / starter values, so a fresh canvas reads real
+ *  immediately. The offer numbers are deliberate placeholders — see the kind.
+ *
+ *  Spread into a fresh object rather than aliased: several callers assign this
+ *  straight into a doc's `defaults`, and an alias would let one of them mutate
+ *  the kind for the whole process. */
+export const SYSTEM_FIELD_DEFAULTS: Record<string, string> = { ...offerKind('vehicle').defaults };
 
 /** System fields keyed by their `key` — for O(1) lookups (labels, gating, etc.). */
 export const SYSTEM_FIELD_BY_KEY: Record<string, FieldSpec> = Object.fromEntries(

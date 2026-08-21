@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useFormDetail } from '@/components/forms/form-detail-context';
+import { HelpTip } from '@/components/ui/help-tip';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 
 interface ContactListOption {
@@ -31,6 +32,7 @@ export function FormSettingsForm() {
     notificationEmail: form.notificationEmail,
     listId: form.listId,
     forwardToCrm: form.forwardToCrm,
+    crmVehicleContext: form.crmVehicleContext,
   });
   const [lists, setLists] = React.useState<ContactListOption[]>([]);
   const [saving, setSaving] = React.useState<string | null>(null);
@@ -43,6 +45,7 @@ export function FormSettingsForm() {
       notificationEmail: form.notificationEmail,
       listId: form.listId,
       forwardToCrm: form.forwardToCrm,
+      crmVehicleContext: form.crmVehicleContext,
     });
   }, [form]);
 
@@ -74,6 +77,7 @@ export function FormSettingsForm() {
         notificationEmail: form.notificationEmail,
         listId: form.listId,
         forwardToCrm: form.forwardToCrm,
+        crmVehicleContext: form.crmVehicleContext,
       });
       return;
     }
@@ -181,6 +185,39 @@ export function FormSettingsForm() {
               />
             </button>
           </label>
+
+          {draft.forwardToCrm && (
+            <label className="block">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                Vehicle fields describe
+                <HelpTip title="Vehicle fields describe">
+                  <p>
+                    Sends this form&apos;s year / make / model / VIN fields to the CRM as a
+                    structured vehicle instead of burying them in the lead&apos;s comments.
+                  </p>
+                  <p>
+                    The same fields mean opposite things on a &quot;reserve this truck&quot;
+                    form and a trade appraisal, so pick which one this form asks for. Leave
+                    it off and no vehicle is sent — better than telling the dealer a
+                    customer wants to buy the car they&apos;re trading in.
+                  </p>
+                </HelpTip>
+              </span>
+              <select
+                value={draft.crmVehicleContext}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDraft((d) => ({ ...d, crmVehicleContext: next }));
+                  void patch('crmVehicleContext', next);
+                }}
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
+              >
+                <option value="">Don&apos;t send a vehicle</option>
+                <option value="interest">A vehicle they&apos;re interested in</option>
+                <option value="trade">Their current vehicle (trade-in)</option>
+              </select>
+            </label>
+          )}
 
           <label className="block">
             <span className="text-sm font-medium">Lead notification email</span>

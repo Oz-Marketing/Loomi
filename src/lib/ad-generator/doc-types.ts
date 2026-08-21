@@ -78,6 +78,12 @@ export interface GradientFill {
 }
 
 /**
+ * Whether an element is sized relative to its artboard or pinned to real pixels.
+ * See {@link DocElement.sizeMode}.
+ */
+export type SizeMode = 'scale' | 'fixed';
+
+/**
  * A shared element: its identity, binding, and base style. Position + size
  * live PER SIZE in `layouts` (so a designer tunes each aspect ratio
  * independently) — an element is the same thing across sizes, just placed
@@ -97,6 +103,23 @@ export interface DocElement {
   /** Group membership — elements sharing a groupId move/select together and nest
    *  under the group in the Layers panel. The group list lives on the doc. */
   groupId?: string;
+  /**
+   * How this element's SIZE travels between artboards.
+   *
+   * `'scale'` (the default) — the element is sized RELATIVE to the board: its
+   * width stays the same fraction of the board's width and its height is
+   * re-derived so the shape holds. A headline that spans 80% of the square spans
+   * 80% of the story too, just bigger or smaller in pixels.
+   *
+   * `'fixed'` — the element keeps its PIXEL width and height on every board. A
+   * 200×200 badge is 200×200 on the 500×500 and on the 2000×500, because a logo
+   * lockup, a QR code or a legal plate has a size that is correct in absolute
+   * terms and wrong when a wide board inflates it.
+   *
+   * Shared, never per-size: it says what the element IS, so letting it drift per
+   * board would mean "fixed" only held on the boards that happened to agree.
+   */
+  sizeMode?: SizeMode;
   /** What the element displays. Omitted for plain shapes. */
   binding?: Binding;
   /** Conditional visibility: render this element ONLY when the value of field
@@ -264,17 +287,16 @@ export function templateUsage(doc: Pick<TemplateDoc, 'usage'>): TemplateUsage {
   return doc.usage ?? 'both';
 }
 
-/** Can this template be used by unattended OEM generation? */
-export function usableByAutomation(doc: Pick<TemplateDoc, 'usage'>): boolean {
-  return templateUsage(doc) !== 'custom';
-}
+// `usableByAutomation` lives in `offer-kinds.ts`: the answer now depends on the
+// doc's offer kind as well as its usage, and this module sits BELOW the kind
+// registry (the registry reads `templateUsage` from here).
 
 /**
  * The field keys a template actually renders — every element's binding key.
  *
- * The system-field schema is fixed, so a doc carries all of them whether or not
- * it draws them. This is how a caller tells "the template has a Tagline" from
- * "the template merely inherits the Tagline field and never shows it".
+ * A doc carries its whole kind's schema whether or not it draws every field, so
+ * this is how a caller tells "the template has a Tagline" from "the template
+ * merely inherits the Tagline field and never shows it".
  */
 export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> {
   const keys = new Set<string>();
@@ -356,6 +378,21 @@ export interface TemplateDoc {
    * `templateUsage`.
    */
   usage?: TemplateUsage;
+  /**
+   * WHICH OFFER KIND this template is built against — `vehicle`, and later
+   * `service` / `parts` / `general`. Selects the field schema the designer binds
+   * to, the offer types the form offers, the disclaimer slugs available, and
+   * whether the automotive machinery (vehicle picker, manufacturer rules,
+   * unattended generation) applies at all.
+   *
+   * Undefined reads as `vehicle` — see {@link DEFAULT_OFFER_KIND}.
+   *
+   * ⚠️ Changing this on an existing template swaps the field schema out from
+   * under every binding it already has, so it must be a deliberate, warned
+   * action rather than an ordinary edit. A doc's `fields` are stamped at
+   * CREATION and read back by `adTemplateFromDoc`, so the two must agree.
+   */
+  offerKind?: string;
   /** Shared template taxonomy: a single category + freeform tags, used to
    *  organize/filter this template alongside every other kind on /templates. */
   category?: string;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyBox,
   applyElementPatch,
+  applyStackOrder,
   clearElementOverride,
   effectiveElement,
   effectiveElements,
@@ -11,6 +12,7 @@ import {
   refitAllSizes,
   refitElementAcrossSizes,
   rescaleBox,
+  seedElementLayouts,
   sizeFitOf,
   sizeModeOf,
 } from './size-scope';
@@ -62,6 +64,71 @@ describe('effectiveElement', () => {
     const eff = effectiveElement(d.elements[0], overrides, 'story');
     expect(eff.id).toBe('headline');
     expect(eff.type).toBe('text');
+  });
+
+  it('ignores a shared-only key left in an old doc\u2019s override', () => {
+    // What an element SHOWS is the template's answer on every board. A legacy
+    // doc carrying a per-size `binding` would read differently on that board —
+    // and retyping the text on the canvas (which writes the shared element)
+    // would look like it hadn't applied.
+    const d = doc();
+    const overrides = {
+      story: {
+        headline: {
+          binding: { kind: 'static', value: 'STALE' },
+          visibleWhen: { field: 'offerType', in: ['apr'] },
+          sizeMode: 'fixed',
+          locked: true,
+          color: '#ff0000',
+        },
+      },
+    } as unknown as TemplateDoc['overrides'];
+    const eff = effectiveElement(d.elements[0], overrides, 'story');
+    expect(eff.binding).toEqual({ kind: 'static', value: 'HEADLINE' });
+    expect(eff.visibleWhen).toBeUndefined();
+    expect(eff.sizeMode).toBeUndefined();
+    expect(eff.locked).toBeUndefined();
+    expect(eff.color).toBe('#ff0000'); // style still overrides
+  });
+});
+
+describe('seedElementLayouts', () => {
+  const wide = { id: 'wide', label: 'Leaderboard', width: 1200, height: 628 };
+
+  it('gives a scale element the same SHAPE and proportional type on every board', () => {
+    const d = { ...doc(), sizes: [SQUARE, STORY, wide], layouts: { ...doc().layouts, wide: {} } };
+    const el = { id: 'new', type: 'text' as const };
+    const layouts = seedElementLayouts(d, el, { x: 0.3, y: 0.44, w: 0.4, h: 0.12, fontSize: 48 }, 'square');
+    const px = (sid: string, s: { width: number; height: number }) => ({
+      w: layouts[sid].new.w * s.width,
+      h: layouts[sid].new.h * s.height,
+    });
+    // Authored 432×130 on the square; the same pixel shape everywhere it can be.
+    expect(px('square', SQUARE).w).toBeCloseTo(432, 1);
+    expect(px('square', SQUARE).h).toBeCloseTo(129.6, 1);
+    const story = px('story', STORY);
+    expect(story.w / story.h).toBeCloseTo(432 / 129.6, 2);
+    const w = px('wide', wide);
+    expect(w.w / w.h).toBeCloseTo(432 / 129.6, 2);
+    // Type follows the width ratio, so it reads the same size relative to the board.
+    expect(layouts.square.new.fontSize).toBe(48);
+    expect(layouts.story.new.fontSize).toBe(48); // same width
+    expect(layouts.wide.new.fontSize).toBe(Math.round(48 * (1200 / 1080)));
+  });
+
+  it('pins a fixed element\u2019s pixels and type instead', () => {
+    const d = { ...doc(), sizes: [SQUARE, wide], layouts: { ...doc().layouts, wide: {} } };
+    const el = { id: 'badge', type: 'image' as const, sizeMode: 'fixed' as const };
+    const layouts = seedElementLayouts(d, el, { x: 0.1, y: 0.1, w: 0.2, h: 0.2, fontSize: 24 }, 'square');
+    expect(layouts.wide.badge.w * 1200).toBeCloseTo(216, 1); // 0.2 × 1080
+    expect(layouts.wide.badge.h * 628).toBeCloseTo(216, 1);
+    expect(layouts.wide.badge.fontSize).toBe(24);
+  });
+
+  it('stacks the newcomer on top of each board\u2019s own contents', () => {
+    const layouts = seedElementLayouts(doc(), { id: 'new', type: 'shape' }, { x: 0, y: 0, w: 0.1, h: 0.1 }, 'square');
+    expect(layouts.square.new.z).toBe(3); // square's max z is 2
+    expect(layouts.story.new.z).toBe(6); // story's is 5
   });
 });
 
@@ -152,17 +219,58 @@ describe('applyBox', () => {
     expect(d.layouts.story.headline.x).toBe(0.05);
   });
 
-  it('scope "all" broadcasts position verbatim and re-derives height to keep the shape', () => {
+  it('scope "all" MOVES every board by the same distance, it does not copy the position', () => {
+    // The square goes 0.1 → 0.3 on both axes, i.e. +216px each way. The story
+    // starts somewhere else entirely (0.05 / 0.2) and must move by the same
+    // distance from THERE — not jump to the square's fractions.
     const d = applyBox(doc(), 'headline', { ...moved, fontSize: 108, z: 2 }, 'all', 'square');
     const story = d.layouts.story.headline;
-    // Position and width are fractions of the same axis, so they carry across.
-    expect(story).toMatchObject({ x: 0.3, y: 0.3, w: 0.4 });
+    expect(story.x).toBeCloseTo(0.25, 6); // 0.05 + 0.2
+    expect(story.y).toBeCloseTo(0.3125, 6); // 0.2 + 216px on a 1920-tall board
+    expect(Math.round((story.x - 0.05) * 1080)).toBe(216);
+    expect(Math.round((story.y - 0.2) * 1920)).toBe(216);
     // Height is NOT copied: 0.1 of a 1080-tall square is 108px, and this used to
     // arrive as 0.1 of a 1920-tall story — 192px, a different shape. It now lands
     // as the fraction that reproduces 108px on this board.
     expect(story.h).toBeCloseTo(0.05625, 6);
     expect(Math.round(story.h * 1920)).toBe(108);
     expect(Math.round(story.w * 1080)).toBe(432);
+  });
+
+  it('does not move a board the edit did not move', () => {
+    // A write that changes something OTHER than position — hiding a layer,
+    // fitting a frame to its text — used to drag every other board to the edited
+    // board's fractions as a side effect.
+    const before = doc().layouts.story.headline;
+    const b = doc().layouts.square.headline;
+    const hidden = applyBox(doc(), 'headline', { ...b, hidden: true }, 'all', 'square');
+    expect(hidden.layouts.story.headline.x).toBe(before.x);
+    expect(hidden.layouts.story.headline.y).toBe(before.y);
+    const resized = applyBox(doc(), 'headline', { ...b, w: 0.5 }, 'all', 'square');
+    expect(resized.layouts.story.headline.x).toBe(before.x);
+    expect(resized.layouts.story.headline.y).toBe(before.y);
+  });
+
+  it('keeps a nudge in the direction it was nudged, on every board', () => {
+    // Connor's report: a block member sits LOWER on the square than on the story
+    // (the lockup places members by pixel offset, so their fractions differ per
+    // board). Nudging it UP on the square used to copy the square's larger
+    // fraction onto the story and shove it DOWN.
+    const d: TemplateDoc = {
+      ...doc(),
+      layouts: {
+        square: { headline: { x: 0.1, y: 0.65, w: 0.8, h: 0.06 } },
+        story: { headline: { x: 0.1, y: 0.42, w: 0.8, h: 0.0338 } },
+      },
+    };
+    const up = { ...d.layouts.square.headline, y: 0.62 }; // 32px up on the square
+    const out = applyBox(d, 'headline', up, 'all', 'square');
+    expect(out.layouts.square.headline.y).toBeLessThan(0.65);
+    expect(out.layouts.story.headline.y).toBeLessThan(0.42); // UP, not down
+    // Same distance in px, so the lockup stays intact.
+    const squareDy = (0.65 - out.layouts.square.headline.y) * 1080;
+    const storyDy = (0.42 - out.layouts.story.headline.y) * 1920;
+    expect(storyDy).toBeCloseTo(squareDy, 3);
   });
 
   it('scope "all" leaves stacking and omission alone', () => {
@@ -531,5 +639,79 @@ describe('sizeMode — relative vs absolute sizing across artboards', () => {
     const d = applyElementPatch(pinDoc(), 'badge', { sizeMode: 'fixed' }, 'size', 'wide');
     expect(d.overrides).toBeUndefined();
     expect(d.elements[0].sizeMode).toBe('fixed');
+  });
+});
+
+
+describe('applyStackOrder', () => {
+  it('renumbers only the board on screen under "this size"', () => {
+    const d = applyStackOrder(doc(), ['sub', 'headline'], 'size', 'square');
+    expect(d.layouts.square.sub.z).toBe(1);
+    expect(d.layouts.square.headline.z).toBe(2);
+    // Story keeps its own stack — that's what "this size" means.
+    expect(d.layouts.story.headline.z).toBe(5);
+    expect(d.layouts.story.sub.z).toBeUndefined();
+  });
+
+  it('gives every board the same ORDER under "all sizes"', () => {
+    // The point: story's z values (5 / undefined) say headline paints LAST there
+    // and square's (2 / undefined) say the same — copying either number across
+    // would be meaningless. The order is what travels.
+    const d = applyStackOrder(doc(), ['sub', 'headline'], 'all', 'square');
+    for (const sid of ['square', 'story']) {
+      expect(d.layouts[sid].sub.z, sid).toBe(1);
+      expect(d.layouts[sid].headline.z, sid).toBe(2);
+    }
+  });
+
+  it('slots an element the source board lacks back in at its own height', () => {
+    const base = doc();
+    const d = {
+      ...base,
+      layouts: {
+        ...base.layouts,
+        // Story alone carries a badge, painted between the two shared elements.
+        story: { ...base.layouts.story, badge: { x: 0, y: 0, w: 0.1, h: 0.1, z: 3 } },
+      },
+    };
+    // Reordering on the square can't know about the badge; it must not be swept
+    // to an end.
+    const out = applyStackOrder(d, ['sub', 'headline'], 'all', 'square');
+    expect(out.layouts.story.badge.z).toBe(2); // still above sub, below headline
+    expect(out.layouts.story.sub.z).toBe(1);
+    expect(out.layouts.story.headline.z).toBe(3);
+  });
+});
+
+describe('applyBox — hidden', () => {
+  it('hides on every board under "all sizes"', () => {
+    const b = doc().layouts.square.headline;
+    const d = applyBox(doc(), 'headline', { ...b, hidden: true }, 'all', 'square');
+    expect(d.layouts.square.headline.hidden).toBe(true);
+    expect(d.layouts.story.headline.hidden).toBe(true);
+  });
+
+  it('un-hides on every board too', () => {
+    const hidden = applyBox(doc(), 'headline', { ...doc().layouts.square.headline, hidden: true }, 'all', 'square');
+    const shown = applyBox(hidden, 'headline', { ...hidden.layouts.square.headline, hidden: false }, 'all', 'square');
+    expect(shown.layouts.square.headline.hidden).toBeUndefined();
+    expect(shown.layouts.story.headline.hidden).toBeUndefined();
+  });
+
+  it('leaves visibility alone when the write did not touch it', () => {
+    // story hides `headline` in the fixture. A DRAG on the square carries the
+    // square's own (visible) flag along; copying it would silently un-hide story.
+    const b = doc().layouts.square.headline;
+    const d = applyBox(doc(), 'headline', { ...b, x: 0.5 }, 'all', 'square');
+    expect(d.layouts.story.headline.hidden).toBe(true);
+  });
+
+  it('keeps a hide to one board under "this size"', () => {
+    const b = doc().layouts.square.headline;
+    const d = applyBox(doc(), 'headline', { ...b, hidden: true }, 'size', 'square');
+    expect(d.layouts.square.headline.hidden).toBe(true);
+    expect(d.layouts.story.headline.hidden).toBe(true); // story was already hidden
+    const sub = applyBox(doc(), 'sub', { ...doc().layouts.square.sub, hidden: true }, 'size', 'square');
+    expect(sub.layouts.story.sub.hidden).toBeUndefined();
   });
 });

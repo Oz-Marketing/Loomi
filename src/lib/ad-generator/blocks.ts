@@ -5,10 +5,10 @@
  * Pure helpers (no React/prisma) shared by the builder and the blocks API, so
  * the save/insert geometry + field-seeding is testable in isolation.
  *
- * Geometry note: `doc.layouts` boxes are normalized 0–1 fractions, which are
- * size-agnostic — so a block's boxes apply to EVERY size in the target doc.
- * The only size-dependent value is `fontSize` (px), which we scale by the
- * artboard-height ratio between the source and target size.
+ * Geometry note: a block is a LOCKUP, not a bag of elements — see
+ * `insertBlockIntoDoc`. `doc.layouts` boxes are normalized 0–1 fractions, and
+ * copying those fractions element-by-element between boards of different shapes
+ * is what used to pull a block apart.
  */
 import type { AdData, FieldSpec } from './types';
 import type { DocElement, DocLayoutBox, TemplateDoc } from './doc-types';
@@ -39,6 +39,40 @@ export interface BlockPayload {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+/**
+ * A member that is NOT part of the lockup's internal spacing.
+ *
+ * A full-bleed backdrop or a croppable photo inside a block is scenery: it is
+ * meant to fill whatever board it lands on, so it keeps the per-element
+ * treatment (`rescaleBox`) and is left out of the block's bounding box — a
+ * background stretching edge to edge would otherwise BE the bounding box and
+ * every real member would be positioned relative to the whole canvas.
+ */
+function isScenery(el: DocElement, box: DocLayoutBox): boolean {
+  return sizeFitOf(el).bleed || box.w >= 0.999 || box.h >= 0.999;
+}
+
+/** The lockup's bounding box in SOURCE pixels, or null if it has no members. */
+function lockupBounds(
+  payload: BlockPayload,
+): { l: number; t: number; w: number; h: number } | null {
+  const { w: W, h: H } = payload.sourceSize;
+  if (!(W > 0 && H > 0)) return null;
+  let l = Infinity;
+  let t = Infinity;
+  let r = -Infinity;
+  let b = -Infinity;
+  for (const el of payload.elements) {
+    const box = payload.boxes[el.id];
+    if (!box || isScenery(el, box)) continue;
+    l = Math.min(l, box.x * W);
+    t = Math.min(t, box.y * H);
+    r = Math.max(r, (box.x + box.w) * W);
+    b = Math.max(b, (box.y + box.h) * H);
+  }
+  return r > l && b > t ? { l, t, w: r - l, h: b - t } : null;
+}
 
 /** Field-binding keys referenced by the given elements. */
 function fieldKeysOf(elements: DocElement[]): string[] {
@@ -120,11 +154,34 @@ function mergeFields(doc: TemplateDoc, fields: FieldSpec[], defaults: AdData): T
 }
 
 /**
- * Insert a block into a doc: clone its elements with fresh ids, place their
- * (size-agnostic) boxes on EVERY size — scaling `fontSize` per size, bumping
- * z above everything, and nudging the cluster so it doesn't sit exactly on top
- * of existing content — then re-seed any fields the bindings need. Returns the
- * next doc and the new element ids (for selecting them).
+ * Insert a block into a doc: clone its elements with fresh ids, place them on
+ * EVERY size, bump z above everything, nudge the cluster so it doesn't sit
+ * exactly on top of existing content, then re-seed any fields the bindings need.
+ * Returns the next doc and the new element ids (for selecting them).
+ *
+ * ── A block is a LOCKUP ──────────────────────────────────────────────────────
+ *
+ * Its members are placed RELATIVE TO THE BLOCK, not relative to the board: the
+ * lockup's bounding box is scaled by the board's width ratio, and every member
+ * sits at its own offset inside that box, scaled by the same factor. So the gaps
+ * between a price and its disclaimer are the same multiple of the type size on
+ * every artboard, which is the whole reason a designer saved the cluster.
+ *
+ * Placing each member independently — copying its `x`/`y` fractions and letting
+ * `rescaleBox` re-derive its size — is what this replaces, and it destroyed
+ * every block it touched. Measured on the shipped "Sale Price" block, inserted
+ * once: the gap between the price and the MSRP line came out 43px on a
+ * 1080×1080, 261px on a 1080×1920, and MINUS 1px (overlapping) on a 300×250.
+ * Each element was individually the right size; the arrangement was gone.
+ * The cause is arithmetic, not tuning — `y` is a fraction of the board's HEIGHT,
+ * so on a taller board every member drifts down by more than its own size grows,
+ * and on a squat one they collide.
+ *
+ * Two members opt out. Scenery (a full-bleed backdrop, a croppable photo) keeps
+ * the per-element treatment, since it is meant to fill the board rather than
+ * hold a position in the lockup. And a `sizeMode: 'fixed'` member keeps its
+ * PIXEL size while still being placed at a scaled offset — a pinned badge is the
+ * same object on every board, but where it sits in the lockup still travels.
  */
 export function insertBlockIntoDoc(
   doc: TemplateDoc,
@@ -159,41 +216,92 @@ export function insertBlockIntoDoc(
     parentId: g.parentId ? groupIdMap.get(g.parentId) : undefined,
   }));
 
+  const from = { width: payload.sourceSize.w, height: payload.sourceSize.h };
+  const bounds = lockupBounds(payload);
+
   const layouts: TemplateDoc['layouts'] = { ...doc.layouts };
   for (const size of doc.sizes) {
     const sid = size.id;
     const existing = layouts[sid] ?? {};
     const maxZ = Object.values(existing).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
-    // Type scales by the WIDTH ratio, matching how `rescaleBox` anchors geometry.
-    // It used to scale by HEIGHT while the frame's fractions were copied
-    // untouched, so on a landscape board the frame grew wider and shorter while
-    // the type shrank — the two moved in opposite directions and the block broke.
-    const scale = payload.sourceSize.w ? size.width / payload.sourceSize.w : 1;
-    const from = { width: payload.sourceSize.w, height: payload.sourceSize.h };
+    // The lockup — and the type inside it — scales by the WIDTH ratio, matching
+    // how `rescaleBox` anchors geometry. It used to scale by HEIGHT while the
+    // frame's fractions were copied untouched, so on a landscape board the frame
+    // grew wider and shorter while the type shrank: the two moved in opposite
+    // directions and the block broke.
+    const widthScale = from.width ? size.width / from.width : 1;
+    // Shrink (never grow) if the scaled lockup wouldn't fit the board. A block is
+    // type and panels, so overflow here is a CUT, not a crop — unlike scenery,
+    // which is allowed to hang off (see sizeFitOf's `bleed`).
+    const fitScale = bounds
+      ? Math.min(
+          1,
+          size.width / (bounds.w * widthScale),
+          size.height / (bounds.h * widthScale),
+        )
+      : 1;
+    const k = widthScale * Math.min(1, fitScale);
+    // Where the lockup sits: its own top-left keeps its fractional position
+    // (nudged off existing content), clamped so the whole cluster stays aboard.
+    const blockW = bounds ? (bounds.w * k) / size.width : 0;
+    const blockH = bounds ? (bounds.h * k) / size.height : 0;
+    const originX = bounds
+      ? clamp(bounds.l / from.width + OFFSET, 0, Math.max(0, 1 - blockW))
+      : 0;
+    const originY = bounds
+      ? clamp(bounds.t / from.height + OFFSET, 0, Math.max(0, 1 - blockH))
+      : 0;
+
     const next: Record<string, DocLayoutBox> = { ...existing };
     for (const el of payload.elements) {
       const box = payload.boxes[el.id];
       const newId = idMap.get(el.id);
       if (!box || !newId) continue;
-      // Re-derive the box for THIS board by the element's own sizing mode, so a
-      // scale element keeps its shape and a fixed one keeps its pixels.
       const fit = sizeFitOf(el);
-      const fitted = rescaleBox(box, from, size, fit);
-      // Fixed type is pinned with the frame; scale type follows the width ratio.
-      const fontSize = box.fontSize != null
-        ? fit.mode === 'fixed'
-          ? box.fontSize
-          : Math.max(1, Math.round(box.fontSize * scale))
-        : null;
       // The anti-overlap nudge must not undo a deliberate bleed: an element wider
       // or taller than the board has no in-bounds position to be clamped to, and
       // clamping it to 0 would slam a centred background against the top-left.
       const nudge = (pos: number, extent: number) =>
         extent >= 1 ? pos : clamp(pos + OFFSET, 0, 1 - extent);
+
+      if (!bounds || isScenery(el, box)) {
+        // Scenery: per-element, as before — it fills the board, it doesn't hold a
+        // place in the lockup.
+        const fitted = rescaleBox(box, from, size, fit);
+        const fontSize =
+          box.fontSize != null
+            ? fit.mode === 'fixed'
+              ? box.fontSize
+              : Math.max(1, Math.round(box.fontSize * widthScale))
+            : null;
+        next[newId] = {
+          ...fitted,
+          x: nudge(fitted.x, fitted.w),
+          y: nudge(fitted.y, fitted.h),
+          z: (box.z ?? 0) + maxZ + 1,
+          ...(fontSize != null ? { fontSize } : {}),
+        };
+        continue;
+      }
+
+      // A lockup member: offset inside the block, both scaled by the same factor.
+      const offX = (box.x * from.width - bounds.l) * k;
+      const offY = (box.y * from.height - bounds.t) * k;
+      // Fixed keeps its real size (and its type) on every board; scale follows k.
+      const wPx = box.w * from.width * (fit.mode === 'fixed' ? 1 : k);
+      const hPx = box.h * from.height * (fit.mode === 'fixed' ? 1 : k);
+      const fontSize =
+        box.fontSize != null
+          ? fit.mode === 'fixed'
+            ? box.fontSize
+            : Math.max(1, Math.round(box.fontSize * k))
+          : null;
       next[newId] = {
-        ...fitted,
-        x: nudge(fitted.x, fitted.w),
-        y: nudge(fitted.y, fitted.h),
+        ...box,
+        x: originX + offX / size.width,
+        y: originY + offY / size.height,
+        w: wPx / size.width,
+        h: hPx / size.height,
         z: (box.z ?? 0) + maxZ + 1,
         ...(fontSize != null ? { fontSize } : {}),
       };

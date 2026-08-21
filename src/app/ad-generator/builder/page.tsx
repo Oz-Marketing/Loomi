@@ -96,12 +96,14 @@ import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator
 import {
   applyBox,
   applyElementPatch,
+  applyStackOrder,
   clearElementOverride,
   effectiveElement,
   overriddenKeys,
   refitAllSizes,
   refitElementAcrossSizes,
   rescaleBox,
+  seedElementLayouts,
   sizeFitOf,
   sizeModeOf,
   styleVariants,
@@ -307,20 +309,18 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // Computed offer tokens are DATA only (numbers + the terms line the numbers
 // build). The offer LABEL — "APR", "PER MONTH LEASE", "SALES PRICE" — is
 // editorial text the designer types statically per offer type, NOT computed.
-const OFFER_TOKENS: { key: string; label: string }[] = [
-  { key: '_offerMain', label: 'Offer amount' },
-  { key: '_offerValue', label: 'Offer number (no symbol)' },
-  { key: '_offerCurrency', label: 'Offer $ symbol' },
-  { key: '_offerPercent', label: 'Offer % symbol' },
-  { key: '_offerTerms', label: 'Offer terms' },
+const OFFER_TOKENS: { key: string; label: string; hint: string }[] = [
+  { key: '_offerMain', label: 'Offer amount', hint: 'The whole amount, formatted — $299/mo · 1.9% · $28,995' },
+  { key: '_offerValue', label: 'Offer number (no symbol)', hint: 'Just the digits — 299 · 1.9 · 28,995. Pair with the symbols below to style them separately.' },
+  { key: '_offerCurrency', label: 'Offer $ symbol', hint: 'A “$”, and only when the offer is an amount' },
+  { key: '_offerPercent', label: 'Offer % symbol', hint: 'A “%”, and only when the offer is a rate' },
+  { key: '_offerTerms', label: 'Offer terms', hint: 'The small line under the number — 36 months, $2,999 due at signing' },
 ];
-const OFFER_TOKENS_O2: { key: string; label: string }[] = [
-  { key: '_o2_offerMain', label: 'Offer 2 amount' },
-  { key: '_o2_offerValue', label: 'Offer 2 number (no symbol)' },
-  { key: '_o2_offerCurrency', label: 'Offer 2 $ symbol' },
-  { key: '_o2_offerPercent', label: 'Offer 2 % symbol' },
-  { key: '_o2_offerTerms', label: 'Offer 2 terms' },
-];
+const OFFER_TOKENS_O2: { key: string; label: string; hint: string }[] = OFFER_TOKENS.map((t) => ({
+  key: t.key.replace('_offer', '_o2_offer'),
+  label: t.label.replace('Offer', 'Offer 2'),
+  hint: t.hint,
+}));
 
 // Per-offer-type accent color + short label — drives the color-coded preview
 // tabs on the canvas action bar (each tab tinted to its offer type).
@@ -389,11 +389,29 @@ function sourceValueToBinding(v: string, currentValue: string): Binding {
  *  Labels that collide across groups (e.g. "Vehicle" in both Offer 1 and Offer 2)
  *  are auto-suffixed with their group so the control is unambiguous open OR
  *  collapsed. */
+/**
+ * A bindable source, with what the variable picker needs to explain itself.
+ *
+ * Extends the plain select option rather than replacing it, so the collapsed
+ * "Shows" dropdown keeps reading `value`/`label`/`group` and ignores the rest.
+ */
+type ContentSource = SearchableSelectOption & {
+  /** One line on what the variable is for. */
+  hint?: string;
+  /** A typical value, when the field itself suggests one. */
+  example?: string;
+  /** Offer types this field fills for — absent means every type. Carries the
+   *  type's own value so the pill can wear that type's colour. */
+  offerTypes?: { value: string; label: string }[];
+  /** What it resolves to right now, from the live preview data. */
+  sample?: string;
+};
+
 function buildContentSources(
   el: DocElement,
   fields: FieldSpec[],
   kind: OfferKind,
-): SearchableSelectOption[] {
+): ContentSource[] {
   const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
   const hasO2 = fields.some((f) => f.key === 'o2_offerType');
   // Only surface the computed `_offer*` tokens when they'd actually resolve to
@@ -404,13 +422,43 @@ function buildContentSources(
   // free text assembles nothing, so the tokens stay hidden).
   const hasOffer =
     fields.some((f) => f.key === 'offerType') && kind.offerTypes.some((t) => !!t.main);
-  const opts: SearchableSelectOption[] = [
-    { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
+  const opts: ContentSource[] = [
+    {
+      value: 'static',
+      label: isImage ? 'Fixed image' : 'Type it in',
+      group: 'Custom',
+      hint: isImage ? 'One picture, the same on every ad' : 'Words you type, the same on every ad',
+    },
   ];
+  // A field conditioned on `offerType` only fills for those types — the thing a
+  // designer most needs to know when a template has to serve lease AND apr, and
+  // the reason the flat list was a guessing game.
+  const typeLabel = new Map(kind.offerTypes.map((t) => [t.value, t.label]));
+  // Scoped by the element's OWN "Show for": an APR-only text box can never
+  // display a lease-only field, so offering it is offering a blank. All types
+  // selected (or none set, which means the same) filters nothing.
+  //
+  // ShowForControl writes `undefined` when every type is on, so the length check
+  // is belt and braces for a doc that stored the full set explicitly.
+  const shownIn = el.visibleWhen?.field === 'offerType' ? el.visibleWhen.in : null;
+  const shownFor =
+    shownIn && shownIn.length > 0 && shownIn.length < kind.offerTypes.length ? new Set(shownIn) : null;
   for (const f of fields) {
     const fieldIsImage = f.type === 'image';
     if (isImage !== fieldIsImage) continue; // image elements ↔ image fields; text ↔ the rest
-    opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: f.group?.trim() || 'Fields' });
+    const gated = f.visibleWhen?.field === 'offerType' ? f.visibleWhen.in : null;
+    if (shownFor && gated && !gated.some((v) => shownFor.has(v))) continue; // would always be blank here
+    // Badge only the types that apply HERE. On a layer scoped to APR, telling it
+    // a field also fills for Lease is noise about a case this layer never renders.
+    const badges = gated && shownFor ? gated.filter((v) => shownFor.has(v)) : gated;
+    opts.push({
+      value: `field:${f.key}`,
+      label: f.label || f.key,
+      group: f.group?.trim() || 'Fields',
+      hint: f.help,
+      example: f.placeholder,
+      offerTypes: badges ? badges.map((v) => ({ value: v, label: OFFER_TYPE_SHORT[v] ?? typeLabel.get(v) ?? v })) : undefined,
+    });
   }
   if (!isImage) {
     // Computed offer text — only when the template has the offer question set
@@ -418,20 +466,17 @@ function buildContentSources(
     // explicitly when a second offer exists.
     if (hasOffer) {
       const offer1Tokens = hasO2
-        ? [
-            { key: '_offerMain', label: 'Offer 1 amount' },
-            { key: '_offerValue', label: 'Offer 1 number (no symbol)' },
-            { key: '_offerCurrency', label: 'Offer 1 $ symbol' },
-            { key: '_offerPercent', label: 'Offer 1 % symbol' },
-            { key: '_offerTerms', label: 'Offer 1 terms' },
-          ]
+        ? OFFER_TOKENS.map((t) => ({ ...t, label: t.label.replace('Offer', 'Offer 1') }))
         : OFFER_TOKENS;
-      for (const t of offer1Tokens) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
-      if (hasO2) for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
+      for (const t of offer1Tokens)
+        opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text', hint: t.hint });
+      if (hasO2)
+        for (const t of OFFER_TOKENS_O2)
+          opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text', hint: t.hint });
     }
-    opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand' });
+    opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand', hint: "The account's name" });
   } else {
-    opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand' });
+    opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand', hint: "The account's logo — each account resolves its own" });
   }
   // Offer 1 and Offer 2 share identical field labels ("Vehicle", "Offer type").
   // Where a label collides, suffix ONLY the second-offer twin with its group
@@ -869,11 +914,7 @@ export default function AdBuilderPage() {
         visibleWhen: { field: 'offerType', in: [offerType] },
         shrink: true,
       };
-      const layouts = { ...prev.layouts };
-      for (const sid of Object.keys(prev.layouts)) {
-        const zs = Object.values(prev.layouts[sid]).map((b) => b.z ?? 0);
-        layouts[sid] = { ...prev.layouts[sid], [id]: { x: 0.06, y: 0.06, w: 0.3, h: 0.08, z: (zs.length ? Math.max(...zs) : 0) + 1 } };
-      }
+      const layouts = seedElementLayouts(prev, el, { x: 0.06, y: 0.06, w: 0.3, h: 0.08 }, size.id);
       return { ...prev, elements: [...prev.elements, el], layouts };
     });
     setSelectedIds([id]);
@@ -927,6 +968,13 @@ export default function AdBuilderPage() {
   // Figma-style alignment guides shown while dragging (fractions, or null).
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // An inline text edit turns the REAL canvas node into a contenteditable (see the
+  // editingText effect), so rewriting the frame under it destroys the node — and
+  // with it whatever was typed, since the value only reaches the doc on blur.
+  // `writeFrame` defers while a session is live and the session's teardown flushes.
+  const editingNodeRef = useRef<string | null>(null);
+  const pendingFrameRef = useRef(false);
+  const writeFrameRef = useRef<() => void>(() => {});
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
   const [leftPanel, setLeftPanel] = useState<'insert' | 'blocks' | 'layers' | null>(null);
@@ -974,7 +1022,7 @@ export default function AdBuilderPage() {
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
   const [customTags, setCustomTags] = useState('');
-  // The size library — the same list the /ad-generator/sizes page and the
+  // The size library — the same list the Ad Sizes settings tab and the
   // from-scratch modal read, so a size added anywhere is offered everywhere.
   const { sizes: libSizes, facets: libFacets, loading: libLoading, reload: reloadLibrary } = useSizeLibrary();
 
@@ -1295,6 +1343,10 @@ export default function AdBuilderPage() {
   const writeFrame = useCallback(() => {
     const idoc = iframeRef.current?.contentDocument;
     if (!idoc?.documentElement) return;
+    if (editingNodeRef.current) {
+      pendingFrameRef.current = true; // flushed when the edit session ends
+      return;
+    }
     const inner = html.replace(/^[\s\S]*?<html[^>]*>/i, '').replace(/<\/html>\s*$/i, '');
     idoc.documentElement.innerHTML = inner;
     // Fill pinned-width fonts + sync auto boxes to their text after layout and once
@@ -1305,6 +1357,7 @@ export default function AdBuilderPage() {
     idoc.fonts?.ready?.then(() => { fitTextNodes(); syncAutoBoxes(); }).catch(() => {});
   }, [html, fitTextNodes, syncAutoBoxes]);
   useEffect(() => {
+    writeFrameRef.current = writeFrame;
     writeFrame();
   }, [writeFrame]);
 
@@ -1699,9 +1752,20 @@ export default function AdBuilderPage() {
     // Text/button: authored as free text with {{variables}}. Any legacy
     // field/brand binding is surfaced as its token so it stays editable — and
     // converts to a static token string on first edit (see setSelectedContent).
-    const text = !b ? '' : b.kind === 'static' ? b.value : `{{${b.key}}}`;
+    //
+    // While an inline canvas edit is OPEN, show what's being typed. The doc only
+    // takes the value on commit (blur) — until then the typed text lives in the
+    // canvas node and in `editingText` — so this box otherwise sat on the old
+    // value for the whole session and read as "the edit didn't register".
+    // Excluded for a pure `{{token}}` box: there the inline edit writes the
+    // FIELD's value, and the content really is still the token.
+    const live =
+      editingText?.id === selected.id && pureFieldTokenKey(selected) == null
+        ? editingText.value
+        : null;
+    const text = live ?? (!b ? '' : b.kind === 'static' ? b.value : `{{${b.key}}}`);
     return { mode: 'text-edit', value: text };
-  }, [selected, previewData]);
+  }, [selected, previewData, editingText]);
 
   // "Shows" options for the selected element's Content source picker — the fixed
   // SYSTEM fields + computed offer tokens + brand data (see buildContentSources).
@@ -1719,10 +1783,21 @@ export default function AdBuilderPage() {
     const o2 = doc.fields.filter((f) => f.key.startsWith('o2_'));
     return o2.length ? [...schema, ...o2] : schema;
   }, [doc.fields, docKind]);
-  const contentSources = useMemo<SearchableSelectOption[]>(
-    () => (selected ? buildContentSources(selected, bindableFields, docKind) : []),
-    [selected, bindableFields, docKind],
-  );
+  const contentSources = useMemo<ContentSource[]>(() => {
+    const base = selected ? buildContentSources(selected, bindableFields, docKind) : [];
+    // Stamp each variable with what it resolves to RIGHT NOW — the same value the
+    // canvas is showing. A designer picking between "Offer amount" and "Offer
+    // number" gets to see "$299/mo" next to "299" instead of guessing from names.
+    return base.map((o) => {
+      if (!o.value.startsWith('field:')) return o;
+      const raw = previewData[o.value.slice('field:'.length)];
+      if (raw == null || typeof raw === 'object') return o;
+      const sample = String(raw).trim();
+      // A URL is not a sample anyone can read at 10px.
+      if (!sample || /^(https?:|data:|\/)/i.test(sample)) return o;
+      return { ...o, sample: sample.length > 24 ? `${sample.slice(0, 23)}…` : sample };
+    });
+  }, [selected, bindableFields, docKind, previewData]);
 
   // Write the selected element's content back to its source: static → the literal,
   // field → that field's default (the form data the generator prefills).
@@ -1880,6 +1955,7 @@ export default function AdBuilderPage() {
             ? el.binding!.value
             : String(previewData[(el.binding as { key: string }).key] ?? '');
       setSelectedIds([elId]);
+      editingNodeRef.current = elId;
       setEditingText({ id: elId, value: cur, initial: cur });
     },
     [doc.elements, previewData, textEditTarget],
@@ -1945,9 +2021,24 @@ export default function AdBuilderPage() {
     if (!editingText) return;
     const idoc = iframeRef.current?.contentDocument;
     const iwin = iframeRef.current?.contentWindow;
-    if (!idoc || !iwin) return;
+    // Every bail-out has to clear the marker, or `writeFrame` would defer for the
+    // rest of the session and the canvas would silently stop updating.
+    const endSession = () => {
+      editingNodeRef.current = null;
+      if (pendingFrameRef.current) {
+        pendingFrameRef.current = false;
+        writeFrameRef.current();
+      }
+    };
+    if (!idoc || !iwin) {
+      endSession();
+      return;
+    }
     const node = idoc.querySelector(`[data-el-id="${editingText.id}"]`) as HTMLElement | null;
-    if (!node) return;
+    if (!node) {
+      endSession();
+      return;
+    }
 
     const el = doc.elements.find((e) => e.id === editingText.id);
     const color =
@@ -2033,6 +2124,7 @@ export default function AdBuilderPage() {
       node.removeEventListener('blur', onBlur);
       node.removeAttribute('contenteditable');
       node.style.cursor = prevCursor;
+      endSession();
     };
     // Keyed on id only: value changes must NOT re-run this (would reset the caret).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2171,42 +2263,45 @@ export default function AdBuilderPage() {
       contentH = node.offsetHeight;
       node.style.height = prevStyle.height;
     }
+    // Through applyBox, so this is a resize like any other and obeys the scope.
+    // It used to write this board's layout directly, which meant a fit under
+    // "All sizes" tightened ONE board's frame — and since a text frame drives the
+    // font fit, that board then rendered the text at a different size from its
+    // siblings (the overlapping-label report).
     setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      const b = lay[id];
+      const b = prev.layouts[size.id]?.[id];
       if (!b) return prev;
       const nb = { ...b };
       if (contentW) nb.w = clamp(contentW / size.width, 0.02, 1 - b.x);
       if (contentH) nb.h = clamp(contentH / size.height, 0.01, 1 - b.y);
-      lay[id] = nb;
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+      return applyBox(prev, id, nb, effectiveScope, size.id);
     }, `fit:${axis}:${id}`);
-  }, [size.id, size.width, size.height]);
+  }, [size.id, size.width, size.height, effectiveScope]);
 
   const addElement = useCallback(
     (type: DocElementType) => {
       const id = `${type}-${rid()}`;
       setDoc((prev) => {
-        const curLayout = prev.layouts[prev.sizes[0].id] ?? {};
-        const maxZ = Object.values(curLayout).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
+        // Authored against the board you're looking at, then re-derived per board
+        // by the element's own sizing mode (see seedElementLayouts). Copying these
+        // fractions and this font size verbatim to every size is what made a new
+        // element land in a different shape — and render at a different size — on
+        // each aspect ratio.
         const box: DocLayoutBox = {
           x: 0.3,
           y: 0.44,
           w: 0.4,
           h: 0.12,
-          z: maxZ + 1,
           ...(type === 'text' ? { fontSize: 48 } : {}),
         };
-        const layouts = { ...prev.layouts };
-        for (const s of prev.sizes) layouts[s.id] = { ...layouts[s.id], [id]: { ...box } };
         // New text defaults to SHRINK — holds its font size, scales down to fit
         // only if a value overflows the frame.
         const el = type === 'text' ? { ...makeDefaultElement(id, type), shrink: true } : makeDefaultElement(id, type);
-        return { ...prev, elements: [...prev.elements, el], layouts };
+        return { ...prev, elements: [...prev.elements, el], layouts: seedElementLayouts(prev, el, box, size.id) };
       });
       setSelectedIds([id]);
     },
-    [],
+    [size.id],
   );
 
   // Add a Button: a text element styled as a brand-colored pill (white,
@@ -2214,11 +2309,7 @@ export default function AdBuilderPage() {
   const addButton = useCallback(() => {
     const id = `text-${rid()}`;
     setDoc((prev) => {
-      const curLayout = prev.layouts[prev.sizes[0].id] ?? {};
-      const maxZ = Object.values(curLayout).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
-      const box: DocLayoutBox = { x: 0.35, y: 0.8, w: 0.3, h: 0.08, z: maxZ + 1, fontSize: 28 };
-      const layouts = { ...prev.layouts };
-      for (const s of prev.sizes) layouts[s.id] = { ...layouts[s.id], [id]: { ...box } };
+      const box: DocLayoutBox = { x: 0.35, y: 0.8, w: 0.3, h: 0.08, fontSize: 28 };
       const el: DocElement = {
         id,
         type: 'text',
@@ -2234,10 +2325,10 @@ export default function AdBuilderPage() {
         // Fixed frame; the label holds its size and shrinks to fit if long.
         shrink: true,
       };
-      return { ...prev, elements: [...prev.elements, el], layouts };
+      return { ...prev, elements: [...prev.elements, el], layouts: seedElementLayouts(prev, el, box, size.id) };
     });
     setSelectedIds([id]);
-  }, []);
+  }, [size.id]);
 
   // ── Reusable blocks ──────────────────────────────────────────────────────
   const refreshBlocks = useCallback(() => {
@@ -2402,44 +2493,43 @@ export default function AdBuilderPage() {
     if (selected) setElement(selected.id, patch, `el:${selected.id}:${Object.keys(patch).sort().join(',')}`);
   };
 
-  // Z-order within the current size (z lives per-size on the box). Front/back
-  // JUMP past everything; forward/backward STEP one layer by normalizing the
-  // stack to contiguous z then swapping the neighbour (ties broken by element
-  // order so a step is always deterministic). Functional setDoc so consecutive
-  // presses read fresh z.
+  // Z-order. Every mode resolves to an ORDER for the board on screen, which
+  // `applyStackOrder` then writes at the chosen scope — this board under "This
+  // size", every board under "All sizes". Front/back JUMP to an end;
+  // forward/backward STEP one layer, swapping the neighbour (ties broken by
+  // element order so a step is always deterministic). Functional setDoc so
+  // consecutive presses read fresh z.
   const applyZ = useCallback(
     (mode: 'front' | 'back' | 'forward' | 'backward') => {
       if (selectedIds.length !== 1) return;
       const id = selectedIds[0];
       setDoc((prev) => {
         const lay = prev.layouts[size.id] ?? {};
-        const b = lay[id];
-        if (!b) return prev;
-        if (mode === 'front' || mode === 'back') {
-          const zs = Object.values(lay).map((x) => x.z ?? 0);
-          const nz = mode === 'front' ? Math.max(...zs) + 1 : Math.min(...zs) - 1;
-          return { ...prev, layouts: { ...prev.layouts, [size.id]: { ...lay, [id]: { ...b, z: nz } } } };
-        }
+        if (!lay[id]) return prev;
         const ids = Object.keys(lay);
         if (ids.length < 2) return prev;
         const elIndex = new Map(prev.elements.map((e, i) => [e.id, i] as const));
+        // Bottom-first, which is paint order.
         const order = ids.slice().sort((a, c) => {
           const za = lay[a].z ?? 0;
           const zc = lay[c].z ?? 0;
           return za !== zc ? za - zc : (elIndex.get(a) ?? 0) - (elIndex.get(c) ?? 0);
         });
         const i = order.indexOf(id);
-        const j = i + (mode === 'forward' ? 1 : -1);
-        if (i < 0 || j < 0 || j >= order.length) return prev; // already at an end
-        [order[i], order[j]] = [order[j], order[i]];
-        const next = { ...lay };
-        order.forEach((eid, idx) => {
-          next[eid] = { ...next[eid], z: idx };
-        });
-        return { ...prev, layouts: { ...prev.layouts, [size.id]: next } };
+        if (i < 0) return prev;
+        if (mode === 'front' || mode === 'back') {
+          order.splice(i, 1);
+          if (mode === 'front') order.push(id);
+          else order.unshift(id);
+        } else {
+          const j = i + (mode === 'forward' ? 1 : -1);
+          if (j < 0 || j >= order.length) return prev; // already at an end
+          [order[i], order[j]] = [order[j], order[i]];
+        }
+        return applyStackOrder(prev, order, effectiveScope, size.id);
       }, `z:${mode}:${id}`);
     },
-    [selectedIds, size.id],
+    [selectedIds, size.id, effectiveScope],
   );
 
   // ── per-size operations ──
@@ -2461,18 +2551,24 @@ export default function AdBuilderPage() {
     setElement(id, { name: name.trim() || undefined });
   }
 
-  // Drag-reorder in the Layers panel → reassign z within the CURRENT size so the
-  // dropped order sticks (z is per-size). `orderTopFirst` is front→back (as the
-  // Layers list shows it); the renderer paints low z first, so invert.
+  // Drag-reorder in the Layers panel → the dropped order becomes the stack, at the
+  // chosen scope. `orderTopFirst` is front→back (as the Layers list shows it); the
+  // renderer paints low z first, so invert before handing it over.
   function reorderLayers(orderTopFirst: string[]) {
     setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      const n = orderTopFirst.length;
-      orderTopFirst.forEach((id, i) => {
-        const b = lay[id];
-        if (b) lay[id] = { ...b, z: n - i }; // top of list = highest z (front)
-      });
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+      const lay = prev.layouts[size.id] ?? {};
+      const dropped = [...orderTopFirst].reverse();
+      const listed = new Set(dropped);
+      // The Layers list only shows what the canvas is showing — off-type elements
+      // are filtered out of `placed` — so the dropped order can be a SUBSET of the
+      // board. Walk the board's current paint order and refill only the slots the
+      // list occupied, which leaves the unlisted elements exactly where they were
+      // and still hands applyStackOrder a complete order.
+      const it = dropped[Symbol.iterator]();
+      const full = Object.keys(lay)
+        .sort((a, b) => (lay[a].z ?? 0) - (lay[b].z ?? 0))
+        .map((id) => (listed.has(id) ? it.next().value ?? id : id));
+      return applyStackOrder(prev, full, effectiveScope, size.id);
     });
   }
 
@@ -2623,11 +2719,14 @@ export default function AdBuilderPage() {
     const ids = membersOf(gid);
     const lay = doc.layouts[size.id] ?? {};
     const anyVisible = ids.some((id) => lay[id] && !lay[id].hidden);
-    setDoc((prev) => {
-      const cur = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (cur[id]) cur[id] = { ...cur[id], hidden: anyVisible };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: cur } };
-    });
+    // Through applyBox, so hiding a group obeys the scope switch exactly as hiding
+    // a single layer does — it used to write this board's layout directly.
+    setDoc((prev) =>
+      ids.reduce((acc, id) => {
+        const b = acc.layouts[size.id]?.[id];
+        return b ? applyBox(acc, id, { ...b, hidden: anyVisible }, effectiveScope, size.id) : acc;
+      }, prev),
+    );
   }
 
   // New sizes start from the current size's layout so they're not empty.
@@ -3575,19 +3674,74 @@ export default function AdBuilderPage() {
   }
 
   // ── align / distribute the multi-selection ──
-  function applyBoxes(patch: Record<string, DocLayoutBox>) {
-    // Align/distribute is a move like any other, so it obeys the scope too.
+  /**
+   * Run an Arrange action on every board the scope covers, computing it AGAINST
+   * EACH BOARD.
+   *
+   * Not a broadcast: "centre this on the artboard" is a different box on a
+   * 1080×1080 and a 300×250, so the answer has to be worked out per board and
+   * written there (hence scope `'size'` per call). It used to solve for the board
+   * on screen and broadcast that box, which was only ever right by accident —
+   * vertical centring was already wrong, since each board re-derives its own
+   * height and the copied `y` centred none of them.
+   */
+  function applyPerBoard(
+    compute: (lay: Record<string, DocLayoutBox>, sz: AdSize) => Record<string, DocLayoutBox> | null,
+  ) {
+    const boards = effectiveScope === 'all' ? doc.sizes : doc.sizes.filter((s) => s.id === size.id);
     setDoc((prev) =>
-      Object.keys(patch).reduce((acc, id) => applyBox(acc, id, patch[id], effectiveScope, size.id), prev),
+      boards.reduce((acc, sz) => {
+        const patch = compute(acc.layouts[sz.id] ?? {}, sz);
+        if (!patch) return acc;
+        return Object.keys(patch).reduce(
+          (d, id) => applyBox(d, id, patch[id], 'size', sz.id),
+          acc,
+        );
+      }, prev),
     );
   }
+
+  /**
+   * The selection split into the UNITS Arrange moves.
+   *
+   * A GROUP travels as one: aligning a saved block left should slide the whole
+   * lockup to the margin, not stack its four text boxes on top of each other at
+   * x=0 — which is what per-element alignment did to every block it touched.
+   * Loose elements are each their own unit, so aligning a headline and a badge
+   * still lines them both up.
+   *
+   * Drilled into a group (double-click), the member you are working on IS the
+   * unit — same rule the drag handler follows, and the only way to nudge one
+   * piece of a lockup into place.
+   */
+  const arrangeUnits = useCallback(
+    (ids: string[]): string[][] => {
+      const byGroup = new Map<string, string[]>();
+      const loose: string[][] = [];
+      for (const id of ids) {
+        const chain = ancestorChain(id);
+        const drilled = focusedGroupId ? chain.includes(focusedGroupId) : false;
+        const outer = drilled ? null : chain[chain.length - 1];
+        if (!outer) {
+          loose.push([id]);
+          continue;
+        }
+        const members = byGroup.get(outer);
+        if (members) members.push(id);
+        else byGroup.set(outer, [id]);
+      }
+      return [...byGroup.values(), ...loose];
+    },
+    [ancestorChain, focusedGroupId],
+  );
 
   /**
    * `arrangeTarget`, corrected for what the selection can actually support: with
    * one element there is no selection bounding box, so fall back to the artboard
    * rather than leaving the buttons inert.
    */
-  const arrangeTargetEff: ArrangeTarget = arrangeTarget === 'selection' && selectedIds.length < 2 ? 'artboard' : arrangeTarget;
+  const arrangeTargetEff: ArrangeTarget =
+    arrangeTarget === 'selection' && arrangeUnits(selectedIds).length < 2 ? 'artboard' : arrangeTarget;
 
   /** Pick what Arrange aligns to. Choosing Margins with no margin set seeds the
    *  default and turns the guide on, so the target is visible on the canvas. */
@@ -3608,9 +3762,9 @@ export default function AdBuilderPage() {
    * something sane); Selection = the union of the selected boxes (the old
    * behaviour, which needs 2+ to mean anything).
    */
-  function arrangeBounds(boxes: { box: DocLayoutBox }[]) {
+  function arrangeBounds(boxes: { box: DocLayoutBox }[], sz: AdSize) {
     if (arrangeTargetEff !== 'selection') {
-      const sa = arrangeTargetEff === 'margins' ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
+      const sa = arrangeTargetEff === 'margins' ? safeAreaFractions(doc.safeArea, sz.width, sz.height) : null;
       const mx = sa?.x ?? 0;
       const my = sa?.y ?? 0;
       return { left: mx, right: 1 - mx, top: my, bottom: 1 - my };
@@ -3623,61 +3777,102 @@ export default function AdBuilderPage() {
     };
   }
 
+  /** A unit's bounding box on one board, plus the members inside it. */
+  function unitBoxes(ids: string[], lay: Record<string, DocLayoutBox>) {
+    return ids
+      .map((id) => ({ id, box: lay[id] }))
+      .filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
+  }
+  function unitBounds(members: { box: DocLayoutBox }[]) {
+    return {
+      left: Math.min(...members.map((m) => m.box.x)),
+      right: Math.max(...members.map((m) => m.box.x + m.box.w)),
+      top: Math.min(...members.map((m) => m.box.y)),
+      bottom: Math.max(...members.map((m) => m.box.y + m.box.h)),
+    };
+  }
+
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
-    const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    // Selection-relative needs two boxes to have a bounding box; artboard /
-    // margins are absolute, so a single element is enough (and is the common
-    // case — "centre this headline").
-    if (boxes.length < (arrangeTargetEff === 'selection' ? 2 : 1)) return;
-    const { left, right, top, bottom } = arrangeBounds(boxes);
-    const cx = (left + right) / 2;
-    const cy = (top + bottom) / 2;
-    const patch: Record<string, DocLayoutBox> = {};
-    for (const { id, box } of boxes) {
-      let { x, y } = box;
-      if (edge === 'left') x = left;
-      else if (edge === 'right') x = right - box.w;
-      else if (edge === 'hcenter') x = cx - box.w / 2;
-      else if (edge === 'top') y = top;
-      else if (edge === 'bottom') y = bottom - box.h;
-      else if (edge === 'vmiddle') y = cy - box.h / 2;
-      patch[id] = { ...box, x: clamp(x, 0, 1 - box.w), y: clamp(y, 0, 1 - box.h) };
-    }
-    applyBoxes(patch);
+    applyPerBoard((lay, sz) => {
+      const units = arrangeUnits(selectedIds)
+        .map((ids) => unitBoxes(ids, lay))
+        .filter((u) => u.length > 0);
+      // Counted in UNITS: a four-box block is ONE thing, so selection-relative
+      // alignment needs a second unit to mean anything. Artboard / margins are
+      // absolute, so one unit is enough (the common case — "centre this block").
+      if (units.length < (arrangeTargetEff === 'selection' ? 2 : 1)) return null;
+      const { left, right, top, bottom } = arrangeBounds(units.flat(), sz);
+      const cx = (left + right) / 2;
+      const cy = (top + bottom) / 2;
+      const patch: Record<string, DocLayoutBox> = {};
+      for (const members of units) {
+        const bb = unitBounds(members);
+        let dx = 0;
+        let dy = 0;
+        if (edge === 'left') dx = left - bb.left;
+        else if (edge === 'right') dx = right - bb.right;
+        else if (edge === 'hcenter') dx = cx - (bb.left + bb.right) / 2;
+        else if (edge === 'top') dy = top - bb.top;
+        else if (edge === 'bottom') dy = bottom - bb.bottom;
+        else if (edge === 'vmiddle') dy = cy - (bb.top + bb.bottom) / 2;
+        // Clamped as a UNIT — clamping members one by one is what let a wide
+        // lockup collapse against an edge instead of stopping there together.
+        dx = clamp(dx, -bb.left, 1 - bb.right);
+        dy = clamp(dy, -bb.top, 1 - bb.bottom);
+        for (const { id, box } of members) patch[id] = { ...box, x: box.x + dx, y: box.y + dy };
+      }
+      return patch;
+    });
   }
 
   function distributeSelected(axis: 'h' | 'v') {
-    const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
-    // Spreading INSIDE the selection needs 3+ (the outer two define the span and
-    // don't move). Against the artboard / margins the span is given, so two
-    // elements is enough — they land flush against each edge.
-    if (boxes.length < (arrangeTargetEff === 'selection' ? 3 : 2)) return;
-    const bounds = arrangeBounds(boxes);
-    const patch: Record<string, DocLayoutBox> = {};
-    if (axis === 'h') {
-      boxes.sort((a, b) => a.box.x - b.box.x);
-      const start = arrangeTargetEff === 'selection' ? boxes[0].box.x : bounds.left;
-      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w : bounds.right;
-      const totalW = boxes.reduce((s, b) => s + b.box.w, 0);
-      const gap = (end - start - totalW) / (boxes.length - 1);
-      let cur = start;
-      for (const { id, box } of boxes) {
-        patch[id] = { ...box, x: clamp(cur, 0, 1 - box.w) };
-        cur += box.w + gap;
+    applyPerBoard((lay, sz) => {
+      // Units, for the same reason align uses them: spreading a block evenly
+      // means spreading the BLOCK, not scattering its members across the board.
+      const units = arrangeUnits(selectedIds)
+        .map((ids) => unitBoxes(ids, lay))
+        .filter((u) => u.length > 0)
+        .map((members) => ({ members, bb: unitBounds(members) }));
+      // Spreading INSIDE the selection needs 3+ units (the outer two define the
+      // span and don't move). Against the artboard / margins the span is given,
+      // so two units is enough — they land flush against each edge.
+      if (units.length < (arrangeTargetEff === 'selection' ? 3 : 2)) return null;
+      const bounds = arrangeBounds(units.flatMap((u) => u.members), sz);
+      const patch: Record<string, DocLayoutBox> = {};
+      const shift = (members: { id: string; box: DocLayoutBox }[], key: 'x' | 'y', d: number) => {
+        for (const { id, box } of members) patch[id] = { ...box, [key]: box[key] + d };
+      };
+      if (axis === 'h') {
+        units.sort((a, b) => a.bb.left - b.bb.left);
+        const first = units[0].bb;
+        const last = units[units.length - 1].bb;
+        const start = arrangeTargetEff === 'selection' ? first.left : bounds.left;
+        const end = arrangeTargetEff === 'selection' ? last.right : bounds.right;
+        const totalW = units.reduce((s, u) => s + (u.bb.right - u.bb.left), 0);
+        const gap = (end - start - totalW) / (units.length - 1);
+        let cur = start;
+        for (const { members, bb } of units) {
+          const w = bb.right - bb.left;
+          shift(members, 'x', clamp(cur - bb.left, -bb.left, 1 - bb.right));
+          cur += w + gap;
+        }
+      } else {
+        units.sort((a, b) => a.bb.top - b.bb.top);
+        const first = units[0].bb;
+        const last = units[units.length - 1].bb;
+        const start = arrangeTargetEff === 'selection' ? first.top : bounds.top;
+        const end = arrangeTargetEff === 'selection' ? last.bottom : bounds.bottom;
+        const totalH = units.reduce((s, u) => s + (u.bb.bottom - u.bb.top), 0);
+        const gap = (end - start - totalH) / (units.length - 1);
+        let cur = start;
+        for (const { members, bb } of units) {
+          const h = bb.bottom - bb.top;
+          shift(members, 'y', clamp(cur - bb.top, -bb.top, 1 - bb.bottom));
+          cur += h + gap;
+        }
       }
-    } else {
-      boxes.sort((a, b) => a.box.y - b.box.y);
-      const start = arrangeTargetEff === 'selection' ? boxes[0].box.y : bounds.top;
-      const end = arrangeTargetEff === 'selection' ? boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h : bounds.bottom;
-      const totalH = boxes.reduce((s, b) => s + b.box.h, 0);
-      const gap = (end - start - totalH) / (boxes.length - 1);
-      let cur = start;
-      for (const { id, box } of boxes) {
-        patch[id] = { ...box, y: clamp(cur, 0, 1 - box.h) };
-        cur += box.h + gap;
-      }
-    }
-    applyBoxes(patch);
+      return patch;
+    });
   }
 
   // ── keyboard: nudge / delete ALL selected elements ──
@@ -4025,7 +4220,7 @@ export default function AdBuilderPage() {
                             manager here so it's reachable from the editor. New tab
                             so the design isn't lost. */}
                         <a
-                          href="/ad-generator/templates"
+                          href="/settings/ad-disclaimers"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80"
@@ -4356,7 +4551,7 @@ export default function AdBuilderPage() {
                       </button>
                       <button
                         onClick={() => toggleHidden(el.id)}
-                        title={box.hidden ? 'Show in this size' : 'Hide in this size'}
+                        title={`${box.hidden ? 'Show' : 'Hide'} ${effectiveScope === 'all' ? 'on all sizes' : 'in this size'}`}
                         className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
                       >
                         {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
@@ -5173,6 +5368,7 @@ export default function AdBuilderPage() {
                   onBumpSize={bumpSelectedFontSize}
                   onSetSizeModeAll={(mode) => setSizeMode(selectedIds, mode)}
                   multiSize={doc.sizes.length > 1}
+                  unitCount={arrangeUnits(selectedIds).length}
                   arrangeTarget={arrangeTargetEff}
                   onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
@@ -5341,7 +5537,9 @@ export default function AdBuilderPage() {
                       <Item onClick={() => applyZ('back')} kbd="⌘⇧[">Send to back</Item>
                       <Item onClick={() => duplicateElement(single.id)} kbd="⌘D">Duplicate</Item>
                       <Item onClick={() => toggleLock(single.id)}>{single.locked ? 'Unlock' : 'Lock'}</Item>
-                      <Item onClick={() => toggleHidden(single.id)}>{selectedBox?.hidden ? 'Show in this size' : 'Hide in this size'}</Item>
+                      <Item onClick={() => toggleHidden(single.id)}>
+                        {`${selectedBox?.hidden ? 'Show' : 'Hide'} ${effectiveScope === 'all' ? 'on all sizes' : 'in this size'}`}
+                      </Item>
                       <Item
                         onClick={() => {
                           setRenameDraft(elName(single));
@@ -5461,21 +5659,58 @@ function ComplianceChip({
  * wrapping) with tokens wrapped in a coloured span; scroll is synced. The caret
  * + editing stay in the real textarea, so behaviour is unchanged.
  */
+/** A one-line "what is this for" under a variable group's heading. */
+const VAR_GROUP_NOTE: Record<string, string> = {
+  'Computed offer text': 'Assembled from whichever offer type the ad runs — use these when one design has to serve lease, APR and cash.',
+  Offer: 'Typed per ad. A badge means the field only fills for those offer types — on any other type it renders empty.',
+};
+/** Groups the picker leads with, most useful first. */
+const VAR_GROUP_ORDER = ['Computed offer text', 'Offer', 'Vehicle', 'Copy', 'Brand', 'Custom'];
+const VAR_GROUP_RANK = (g: string) => {
+  const i = VAR_GROUP_ORDER.indexOf(g);
+  return i < 0 ? VAR_GROUP_ORDER.length : i;
+};
+
+/**
+ * A pill on a variable row: one offer type the field fills for, in that type's
+ * own colour — the same palette as the canvas's offer-type preview tabs, so
+ * "this is the APR one" is the same violet in both places.
+ */
+function VarBadge({ type, children }: { type: string; children: React.ReactNode }) {
+  const color = OFFER_TYPE_COLOR[type];
+  return (
+    <span
+      className="shrink-0 rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
+      style={
+        color
+          ? { color, borderColor: `${color}66`, backgroundColor: `${color}1f` }
+          : undefined
+      }
+    >
+      {children}
+    </span>
+  );
+}
+
 function TokenTextArea({
   value,
   onChange,
   placeholder,
   options = [],
   onTokenClick,
+  scopeNote,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   /** Field tokens offered by a `{{` autocomplete (value `field:<key>`). */
-  options?: SearchableSelectOption[];
+  options?: ContentSource[];
   /** Clicking inside a `{{token}}` calls this with the token key — the caller
    *  jumps to that field in the Fields panel. */
   onTokenClick?: (key: string) => void;
+  /** Why the variable list is shorter than usual — the element's "Show for"
+   *  scope. Said out loud so a filtered list doesn't read as a broken one. */
+  scopeNote?: string;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
@@ -5555,8 +5790,32 @@ function TokenTextArea({
   const pickMatches = options.filter((o) => {
     const q = pickQuery.trim().toLowerCase();
     if (!q) return true;
-    return o.value.replace(/^field:/, '').toLowerCase().includes(q) || o.label.toLowerCase().includes(q);
+    return (
+      o.value.replace(/^field:/, '').toLowerCase().includes(q) ||
+      o.label.toLowerCase().includes(q) ||
+      (o.hint ?? '').toLowerCase().includes(q)
+    );
   });
+  // Grouped, with the offer tokens FIRST: on a template that has to carry lease
+  // and apr and cash, those are the only variables that fill for all of them, and
+  // burying them mid-list is what made this a guessing game. The rest keep the
+  // order the schema declares.
+  const pickGroups = useMemo(() => {
+    const order: string[] = [];
+    const byGroup = new Map<string, ContentSource[]>();
+    for (const o of pickMatches) {
+      const g = o.group || 'Fields';
+      const list = byGroup.get(g);
+      if (list) list.push(o);
+      else {
+        byGroup.set(g, [o]);
+        order.push(g);
+      }
+    }
+    order.sort((a, b) => VAR_GROUP_RANK(a) - VAR_GROUP_RANK(b));
+    return order.map((group) => ({ group, note: VAR_GROUP_NOTE[group], items: byGroup.get(group)! }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [options, pickQuery]);
   useEffect(() => {
     if (!pickOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -5651,7 +5910,9 @@ function TokenTextArea({
             <VariableIcon className="h-3.5 w-3.5" />
           </button>
           {pickOpen && (
-            <div className="absolute right-0 top-full z-[90] mt-1 w-56 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
+            /* Width is capped by the inspector panel: it scrolls vertically, so
+               anything wider than the panel is simply clipped off the left. */
+            <div className="absolute right-0 top-full z-[90] mt-1 w-[15.5rem] rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
               <div className="relative mb-1">
                 <MagnifyingGlassIcon className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
                 <input
@@ -5662,18 +5923,58 @@ function TokenTextArea({
                   className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] py-1 pl-7 pr-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                 />
               </div>
-              <ul className="max-h-52 overflow-y-auto">
-                {pickMatches.length === 0 && <li className="px-2 py-1.5 text-xs text-[var(--muted-foreground)]">No variables</li>}
-                {pickMatches.map((o) => (
-                  <li key={o.value}>
-                    <button
-                      type="button"
-                      onClick={() => insertToken(o)}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-                    >
-                      <span className="truncate">{o.label}</span>
-                      {o.group && <span className="ml-auto shrink-0 text-[10px] text-[var(--muted-foreground)]">{o.group}</span>}
-                    </button>
+              {scopeNote && (
+                <p className="mb-1 rounded-md bg-[var(--primary)]/10 px-2 py-1 text-[10px] leading-snug text-[var(--primary)]">
+                  {scopeNote}
+                </p>
+              )}
+              <ul className="max-h-[22rem] overflow-y-auto">
+                {pickGroups.length === 0 && <li className="px-2 py-1.5 text-xs text-[var(--muted-foreground)]">No variables</li>}
+                {pickGroups.map(({ group, note, items }) => (
+                  <li key={group}>
+                    <p className="px-2.5 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                      {group}
+                    </p>
+                    {note && (
+                      <p className="px-2.5 pb-1 text-[10px] leading-snug text-[var(--muted-foreground)]">{note}</p>
+                    )}
+                    <ul>
+                      {items.map((o) => (
+                        <li key={o.value}>
+                          <button
+                            type="button"
+                            onClick={() => insertToken(o)}
+                            className="group/var w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--muted)]"
+                          >
+                            <span className="flex items-baseline gap-2">
+                              <span className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)]">{o.label}</span>
+                              {/* What it renders RIGHT NOW. The sample is the
+                                  whole explanation for "amount" vs "number". */}
+                              {(o.sample ?? o.example) && (
+                                <span className="max-w-[45%] shrink-0 truncate rounded bg-[var(--muted)]/60 px-1.5 py-px font-mono text-[10px] text-[var(--foreground)] group-hover/var:bg-[var(--background)]">
+                                  {o.sample ?? o.example}
+                                </span>
+                              )}
+                            </span>
+                            {/* Type badges only where they carry information: in
+                                the computed group every row fills for every type,
+                                and the heading already says so. */}
+                            {(o.offerTypes?.length || o.hint) && (
+                              <span className="mt-0.5 flex flex-wrap items-baseline gap-1">
+                                {o.offerTypes?.map((t) => (
+                                  <VarBadge key={t.value} type={t.value}>
+                                    {t.label}
+                                  </VarBadge>
+                                ))}
+                                {o.hint && (
+                                  <span className="text-[10px] leading-snug text-[var(--muted-foreground)]">{o.hint}</span>
+                                )}
+                              </span>
+                            )}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   </li>
                 ))}
               </ul>
@@ -5694,7 +5995,15 @@ function TokenTextArea({
                 }`}
               >
                 <span className="truncate">{o.label}</span>
-                {o.group && <span className={`ml-auto shrink-0 text-[10px] ${i === Math.min(acIdx, matches.length - 1) ? 'text-white/70' : 'text-[var(--muted-foreground)]'}`}>{o.group}</span>}
+                {/* The live value beats the group name here: it's what tells you
+                    this is the one you meant. */}
+                <span
+                  className={`ml-auto shrink-0 font-mono text-[10px] ${
+                    i === Math.min(acIdx, matches.length - 1) ? 'text-white/80' : 'text-[var(--muted-foreground)]'
+                  }`}
+                >
+                  {o.sample ?? o.example ?? o.group}
+                </span>
               </button>
             </li>
           ))}
@@ -5762,6 +6071,7 @@ function MultiSelectPanel({
   onBumpSize,
   onSetSizeModeAll,
   multiSize,
+  unitCount,
   arrangeTarget,
   onArrangeTarget,
   onAlign,
@@ -5787,6 +6097,12 @@ function MultiSelectPanel({
   onSetSizeModeAll: (mode: SizeMode) => void;
   /** More than one artboard — gates the Across-sizes control. */
   multiSize: boolean;
+  /**
+   * How many independent things Arrange would move — a grouped block counts ONCE.
+   * Element count would offer "distribute" for a four-box lockup that is a single
+   * unit, i.e. a button with nothing to do.
+   */
+  unitCount: number;
   /** What align/distribute measure against (artboard / margins / selection). */
   arrangeTarget: ArrangeTarget;
   onArrangeTarget: (t: ArrangeTarget) => void;
@@ -5818,7 +6134,7 @@ function MultiSelectPanel({
         {/* Position align / distribute — applies to any 2+ selection (all element
             types), mirroring the right-click menu. The target picker decides
             whether that means the selection, the artboard, or the margin box. */}
-        <ArrangeSection count={elements.length} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
+        <ArrangeSection count={unitCount} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
         {/* Show for — per-offer-type visibility, applied to the WHOLE selection at
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
@@ -6087,6 +6403,20 @@ function SelectionPanel({
   };
   // Field/offer tokens a designer can drop into text as {{key}}.
   const insertableVars = contentSources.filter((o) => o.value.startsWith('field:'));
+  // The list is scoped to this element's "Show for" (buildContentSources drops
+  // fields that could never fill here) — say which types, so a three-item list
+  // reads as deliberate.
+  const shownForTypes =
+    el.visibleWhen?.field === 'offerType' && el.visibleWhen.in.length < offerTypes.length
+      ? el.visibleWhen.in
+      : null;
+  const varScopeNote = shownForTypes
+    ? `This layer only shows for ${shownForTypes
+        .map((v) => offerTypes.find((t) => t.value === v)?.label ?? v)
+        .join(' + ')}, so only variables that fill for ${
+        shownForTypes.length > 1 ? 'those types' : 'that type'
+      } are listed.`
+    : undefined;
   // Slide in on mount, out when collapsed (kept mounted so both directions animate).
   const [shownIn, setShownIn] = useState(false);
   useEffect(() => {
@@ -6169,7 +6499,13 @@ function SelectionPanel({
               <>
                 {/* Variable-aware text: {{field}} tokens render as purple pills;
                     typing {{ opens an autocomplete, or use the variable icon. */}
-                <TokenTextArea value={content.value} onChange={onContentChange} options={insertableVars} placeholder="Type text — add {{variables}} with the icon →" />
+                <TokenTextArea
+                  value={content.value}
+                  onChange={onContentChange}
+                  options={insertableVars}
+                  scopeNote={varScopeNote}
+                  placeholder="Type text — add {{variables}} with the icon →"
+                />
               </>
             )}
             {content.mode === 'text-readonly' && (
@@ -7876,7 +8212,7 @@ function SizesManager({
         </div>
         <div className="flex flex-shrink-0 items-center gap-2">
           <Link
-            href="/ad-generator/sizes"
+            href="/settings/ad-sizes"
             className="rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
           >
             Manage library

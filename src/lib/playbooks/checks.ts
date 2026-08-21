@@ -145,7 +145,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Meta launch preset',
     why: 'Objective, budget, geo and destination for published ads. Without it every launch is hand-configured.',
     severity: 'blocking',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) => {
       const preset = c.launchPresets.find((p) => p.platform === 'meta');
       if (!preset) return fail('no preset — launches must be configured by hand');
@@ -234,7 +234,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Offer automation on',
     why: 'The config is what makes the poller watch this rooftop at all.',
     severity: 'standard',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) => {
       if (!c.automation.exists) return fail('never configured');
       return c.automation.enabled ? pass('enabled') : fail('configured but switched off');
@@ -245,7 +245,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Template mapped',
     why: 'The generate step has nothing to render an offer into without one.',
     severity: 'blocking',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) => {
       const n = c.automation.templateIds.length;
       if (n === 0) return fail('no template mapped — nothing can generate');
@@ -257,7 +257,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Run notifications routed',
     why: 'With no recipients a run that generates nothing, or generates something wrong, reaches nobody.',
     severity: 'standard',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) =>
       c.automation.notifyUserCount > 0
         ? pass(`${c.automation.notifyUserCount} recipient${c.automation.notifyUserCount === 1 ? '' : 's'}`)
@@ -268,7 +268,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Inventory feed healthy',
     why: 'Stock gates which offers are worth advertising, and the feed supplies the vehicle photos.',
     severity: 'standard',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) => {
       const active = c.feeds.filter((f) => f.isActive);
       if (active.length === 0) return fail('no active feed');
@@ -309,7 +309,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Offer email on',
     why: 'The same OEM programme that produces ads can produce the email that announces it. Left off, the offers reach paid audiences only.',
     severity: 'advisory',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) =>
       c.automation.emailEnabled ? pass('enabled') : fail('offers generate ads but no email'),
   },
@@ -334,7 +334,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Offer email audience set',
     why: 'Without a segment the draft lands with no recipients, so it can never send and the run looks successful.',
     severity: 'standard',
-    fix: { surface: 'studio', path: '/ad-generator/automation', label: 'Ad Generator automation' },
+    fix: { surface: 'studio', path: '/settings/ad-automation', label: 'Ad Generator automation' },
     run: (c) => {
       if (!c.automation.emailEnabled) return { status: 'na', detail: 'offer email is off' };
       if (!c.automation.emailAudienceId) return fail('no audience — drafts land untargeted');
@@ -368,7 +368,7 @@ export const CHECKS: PlaybookCheck[] = [
     label: 'Co-op approval current',
     why: 'Unattended launching is defensible because a person got the TEMPLATE approved. Approval is scoped to the design, so a redesign silently voids it.',
     severity: 'blocking',
-    fix: { surface: 'studio', path: '/ad-generator/templates', label: 'Ad templates' },
+    fix: { surface: 'studio', path: '/settings/ad-disclaimers', label: 'Ad templates' },
     run: (c) => {
       if (c.coop.length === 0) return fail('no mapped template to approve');
       const stale = c.coop.filter((t) => t.state === 'stale');

@@ -25,7 +25,8 @@ import { canAccessAccount, forbidden, getAccountScope, getAuthSession } from '@/
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { canAccountUseTemplate, parseSharedKeys } from '@/lib/ad-generator/template-access';
-import { usableByAutomation, type TemplateDoc } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { usableByAutomation } from '@/lib/ad-generator/offer-kinds';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
 
 export const runtime = 'nodejs';

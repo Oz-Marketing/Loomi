@@ -69,11 +69,11 @@ model User {
   budgetLineEvents BudgetLineEvent[] @relation("BudgetLineEventAuthor")
 
   // Permissions
-  sectorRoles       UserSectorRole[]
-  capabilityGrants  UserCapabilityGrant[]      @relation("CapabilityGrantSubject")
-  capabilitiesGiven UserCapabilityGrant[]      @relation("CapabilityGrantedBy")
-  auditEntriesMade     PermissionAuditLog[]    @relation("PermissionAuditActor")
-  auditEntriesReceived PermissionAuditLog[]    @relation("PermissionAuditSubject")
+  sectorRoles          UserSectorRole[]
+  capabilityGrants     UserCapabilityGrant[] @relation("CapabilityGrantSubject")
+  capabilitiesGiven    UserCapabilityGrant[] @relation("CapabilityGrantedBy")
+  auditEntriesMade     PermissionAuditLog[]  @relation("PermissionAuditActor")
+  auditEntriesReceived PermissionAuditLog[]  @relation("PermissionAuditSubject")
 }
 
 // ─────────────────────────────────────────────────────
@@ -489,6 +489,7 @@ model Account {
   reviews                  ReviewEvent[]
   mailerCampaigns          MailerCampaign[]
   billboards               Billboard[]
+  emailFooter              AccountEmailFooter?
 
   @@index([accountRepId])
   @@index([parentAccountKey])
@@ -1390,6 +1391,14 @@ model Form {
   // account's configured CRM destination(s) (Tekion / VinSolutions).
   // When false (default) leads are kept in Loomi only.
   forwardToCrm      Boolean      @default(false)
+  // What the form's vehicle fields (year/make/model/VIN/...) describe, so
+  // the ADF lead can carry a structured <vehicle> block the CRM maps to a
+  // real field instead of burying it in <comments>:
+  //   "interest" -> a vehicle they want (ADF interest="buy")
+  //   "trade"    -> the vehicle they already own (ADF interest="trade-in")
+  // Null (default) emits no <vehicle> at all — guessing wrong is worse
+  // than omitting, so every form opts in explicitly.
+  crmVehicleContext String?
   // When true, this row is a reusable template (authored from the Forms
   // tab of /templates) rather than a live form. Templates are excluded
   // from the normal forms list and from public /f/[slug] serving;
@@ -2167,6 +2176,40 @@ model EmailSuppression {
 }
 
 // ─────────────────────────────────────────────────────
+// Per-account email compliance footer
+// ─────────────────────────────────────────────────────
+//
+// Styling for the CAN-SPAM block appended to every blast and flow email.
+//
+// STRUCTURED, NOT HTML — on purpose. `config` holds presentation plus two
+// copy strings; the dealer name, postal address, and unsubscribe link are
+// emitted by the renderer in lib/sending/unsubscribe-footer.ts and cannot be
+// configured away. A free-text HTML column here would be one paste away from
+// shipping a blast with no address, which is exactly the bug this whole area
+// was built to close. resolveFooterConfig() validates every field on read, so
+// a hand-edited row still can't inject markup or break a style attribute.
+//
+// INHERITANCE — a row is an OVERRIDE, and absence is meaningful. Resolution
+// walks up Account.parentAccountKey and takes the first row it finds, so a
+// footer saved on a group account applies to every rooftop beneath it until
+// that rooftop saves its own. Deleting a rooftop's row re-inherits rather
+// than reverting to the built-in default.
+model AccountEmailFooter {
+  id String @id @default(cuid())
+
+  // One override per account — the resolver wants at most one row to find.
+  accountKey String  @unique
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Partial UnsubscribeFooterConfig. Partial by design: fields the account
+  /// never touched should follow the default if the default ever changes.
+  config Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────
 // Changelog
 // ─────────────────────────────────────────────────────
 
@@ -2815,6 +2858,18 @@ model MetaAdsPacerPeriodBudget {
   // Σ ad pacerActual). The client budget for these months is entered later into
   // baseBudgetGoal, so over/under = historicalActual − baseBudgetGoal × markup.
   historicalActual      String?
+  // The account-level monthly spend Meta reports for this month (Graph
+  // insights, time_increment=monthly) — the reconciliation's RAW anchor. Stored
+  // rather than fetched per page load so the tie-out survives a Meta outage, an
+  // expired token, and the daily-series retention window. Independent of the ad
+  // rows BY DESIGN: that independence is the whole point of the Raw-vs-Counted
+  // check (an ad spending in the account but never linked in Loomi shows up as
+  // a residual only because these two numbers come from different places).
+  // Meta-only — Google has no equivalent account pull, so its raw stays the row
+  // sum. Null = never pulled (the month then falls back to the row sum and is
+  // excluded from the tie-out rather than reported as a phantom gap).
+  metaAccountSpend      String?
+  metaAccountSpendAt    DateTime?
   // ── Google allocator (google-pacing-card spec §3/§9) ──
   // The unit the WHOLE Google card allocates in: "pct" (percent of payable) or
   // "amt" (dollar amounts). One unit for every line, deliberately — mixed units
@@ -2930,6 +2985,19 @@ model MetaAdsPacerAd {
   // (full scope) and the ad contributes 0 to any other month. Server-managed
   // via /resolve-cross-month; never written by autosave or the Meta sync.
   fullRunAppliedToMonth String?
+  // Cross-month settlement SNAPSHOT (rebuild §5). `fullRunAppliedToMonth` above
+  // is the stored intent ("bill this run in month X"); these three are the
+  // stored FACTS captured the first time the flight settles (run complete AND
+  // billed month reached). After that, Out/In read
+  // `settledRunSpend − settledBilledDelivery` instead of the live fields, so the
+  // posting can never move under a later re-sync or once the rolling daily
+  // series (MetaAdsPacerDailySpend, 120-day retention) prunes the run's days.
+  // Both inputs are persisted, not just the derived Out, so the split and the
+  // tie-out stay auditable. Written server-side by the reconciliation read;
+  // never by autosave or the Meta sync.
+  settledRunSpend       String?
+  settledBilledDelivery String?
+  settledAt             DateTime?
   // §2b: JSON Record<YYYY-MM, number> — a lifetime ad's editable planned split
   // across the months its flight touches. DISPLAY-ONLY (planned vs actual);
   // never books a variance (§3 owns the over/under). Server-managed too.
@@ -3233,12 +3301,12 @@ model Notification {
 }
 
 model NotificationPreference {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type   String
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String
   /// In-app: show this kind in the bell panel.
-  enabled Boolean @default(true)
+  enabled      Boolean  @default(true)
   /// Email: also send it to the user's inbox. Independent of `enabled` — a
   /// user can keep the panel entry and mute the email, or vice versa.
   /// Backfilled from `enabled` for rows that predate the split, so nobody
@@ -3463,22 +3531,6 @@ model AdBlock {
 
   @@index([isActive, accountKey])
   @@index([accountKey])
-}
-
-// A template Category's optional STARTER field set. Picking a category in the ad
-// builder seeds these fields into the template (merge-missing). Designer-managed
-// ("Save current fields as this category's starter") — NOT hardcoded. "Vehicle
-// Offer" is seeded with the offer question set; other categories start blank
-// until someone saves a starter for them. Global (shared taxonomy, no account).
-model AdCategoryStarter {
-  id            String   @id @default(cuid())
-  name          String   @unique // category name, e.g. "Vehicle Offer"
-  fields        String   @db.Text // JSON FieldSpec[]
-  defaults      String   @db.Text // JSON AdData (starter default / preview values)
-  createdBy     String?
-  createdByName String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────────────
@@ -4198,7 +4250,7 @@ model Playbook {
   /// JSON: { adTemplateId, sizeIds[], emailTemplateSlug, emailMaxOffers }.
   /// Text + JSON rather than columns because the step list is meant to grow;
   /// see `src/lib/playbooks/creative.ts` for the parsed shape.
-  definition String @db.Text
+  definition     String @db.Text
   /// Hash of `definition`, the staleness test — same discipline as
   /// `AdTemplateCoopCheck.docHash`. Lets "this rooftop is on an older version"
   /// be a fact rather than a guess.
@@ -5138,4 +5190,127 @@ model Billboard {
 
   @@index([accountKey, status])
   @@index([accountKey, expirationDate])
+}
+
+// ─────────────────────────────────────────────────────
+// Rate cards (billing categories)
+// ─────────────────────────────────────────────────────
+//
+// What the agency keeps on each kind of work. One row per billing category
+// (Digital, Mass Media, Swag…); a budget line picks up the rate of the category
+// its channel bills at, and that rate is FROZEN onto the line at creation
+// (BudgetLine.markupSnapshot) so editing a card never rewrites committed money.
+//
+// A TABLE, not the `app-markup-billing-<key>` AppSetting rows this replaces
+// (those held only the rate, against a category list hardcoded in
+// lib/budget/channels.ts). Every agency prices differently and names its
+// categories differently, so the taxonomy itself has to be editable — a rate
+// card list that needs a deploy to change isn't agnostic. The seed script
+// migrates the old AppSetting rates in and leaves them untouched.
+//
+// `key` is the stable slug the rest of the system stores and joins on
+// (BudgetChannel.billing today, a real FK in phase 2). It is immutable once
+// created — `label` is what gets renamed. Archived, never deleted, for the same
+// reason: budget lines and channels reference keys as plain strings, so a
+// delete would orphan history that still has to add up.
+model BillingCategory {
+  id    String @id @default(cuid())
+  key   String @unique // stable slug, e.g. "mass_media" — never renamed
+  label String // "Mass Media" — what the UI shows, freely renamed
+
+  // Gross→spend factor: 0.77 means the agency keeps 23%. Stored as the factor
+  // (what the ledger holds) though the UI edits the margin percentage, because
+  // that's the number a line's markupSnapshot has to read as. Must be > 0 and
+  // <= 1; a 0 would zero out every line on the category.
+  markup Float
+
+  sortOrder  Int       @default(0)
+  // Archived cards stop being offered and stop resolving a rate — channels
+  // pointing at one fall back to the account rate, then the agency default,
+  // which is exactly the pre-rate-card behaviour. Never a hard delete.
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  channels BudgetChannel[]
+
+  @@index([sortOrder])
+}
+
+// ─────────────────────────────────────────────────────
+// Budget channels
+// ─────────────────────────────────────────────────────
+//
+// The spend axis every BudgetLine is placed on — Meta, Radio, Swag, Management
+// Fee. Was a 44-entry `BUDGET_CHANNELS` constant in lib/budget/channels.ts,
+// which made Loomi's whole budget taxonomy Oz Marketing's: the list mirrored Oz
+// Reports' `channels` table one-for-one, right down to its numeric ids. Another
+// agency runs different channels, groups them differently and prices them
+// differently, and none of that should need a deploy.
+//
+// `key` is what everything else stores and joins on (BudgetLine.channel,
+// KIND_BUDGET_CHANNELS, the pacer rollups). Immutable once created; `label` is
+// the renameable name. Archive rather than delete, for the same reason as
+// BillingCategory: lines reference the key as a plain string, so a delete would
+// orphan history that still has to reconcile.
+model BudgetChannel {
+  id    String @id @default(cuid())
+  key   String @unique // stable slug, e.g. "mass_media" — never renamed
+  label String
+
+  // Display grouping in the hub ("Digital", "Traditional", …). A plain string,
+  // not an enum: the groups ARE whatever the channels say they are, and the
+  // hub's section order falls out of sortOrder. A group nobody uses simply
+  // stops existing.
+  category String
+
+  // Default line type for money on this channel — media | fee | service |
+  // production | unclassified. Overridable per line; see BudgetLine.lineType.
+  lineType String @default("unclassified")
+
+  // Which rate card this channel bills at. A real relation, unlike
+  // BudgetLine.channel: an archived card still has a row, so the reference
+  // stays valid and rate resolution falls through on its own. Null = no rate of
+  // its own, which falls back to the account rate then the agency default.
+  billingKey      String?
+  billingCategory BillingCategory? @relation(fields: [billingKey], references: [key], onDelete: SetNull)
+
+  // Ad Pacer platform this channel's budget rolls into — "meta" | "google" |
+  // null. Null is the common case: most channels settle by hand. Not a free
+  // string in practice; the write path validates it against the pacer's
+  // platforms, because a typo here silently stops a channel pacing.
+  pacer String?
+
+  // Which Projects task kinds may spend on this channel — the editable form of
+  // what `KIND_BUDGET_CHANNELS` used to hardcode. Empty = offered at intake
+  // nowhere, which is what every channel exists for anyway: the hub needs all
+  // of them to reconcile, a rep only picks the few their ticket is about.
+  //
+  // REPLACES a plain `intake Boolean`, which was a second, coarser answer to
+  // the same question — and a wrong one. The intake form has always gated on
+  // the kind map, so 18 of the 36 channels flagged `intake` were offered
+  // nowhere and the checkbox said otherwise. One field, one truth.
+  //
+  // Task kinds themselves stay in code (`KIND_META`): each has its own intake
+  // form and its own fields, so a new kind is a code change either way.
+  intakeKinds String[]
+
+  // Lucide icon name. Brand marks (Meta, Google Ads, YouTube) stay in code —
+  // they're licensed assets, not configuration.
+  icon String?
+
+  // Foreign channel ids this maps from on import — Oz Reports' channel_id
+  // today. An IMPORT MAPPING, not taxonomy: an agency with nothing to import
+  // just has none, which is why this isn't the primary key it used to be.
+  externalIds Int[]
+
+  sortOrder  Int       @default(0)
+  archivedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+  @@index([billingKey])
 }

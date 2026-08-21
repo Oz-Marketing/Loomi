@@ -91,12 +91,18 @@ export default function SegmentsPage() {
     setLoading(true);
 
     async function loadAudiences() {
-      // Auto-bootstrap lifecycle audiences for automotive accounts on
-      // first visit. Idempotent — the endpoint short-circuits if the
-      // account has already been seeded or is not automotive.
+      // Auto-bootstrap lifecycle audiences for automotive accounts on FIRST
+      // visit only.
+      //
+      // This used to POST on every mount and lean on the endpoint being
+      // idempotent, so opening an already-initialised page performed a write to
+      // be told there was nothing to write. The account already carries the
+      // marker the endpoint checks, so the same decision can be made here and
+      // the request skipped entirely — a page that only reads should only read.
       const isAutomotive =
         (accountData?.category ?? '').trim().toLowerCase() === 'automotive';
-      if (isAccount && accountKey && isAutomotive) {
+      const needsSeeding = !accountData?.lifecyclePresetsSeededAt;
+      if (isAccount && accountKey && isAutomotive && needsSeeding) {
         try {
           await fetch('/api/audiences/seed-lifecycle', {
             method: 'POST',
@@ -125,7 +131,7 @@ export default function SegmentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAccount, accountKey, accountData?.category]);
+  }, [isAccount, accountKey, accountData?.category, accountData?.lifecyclePresetsSeededAt]);
 
   // ── Scope ────────────────────────────────────────────────────────
   //

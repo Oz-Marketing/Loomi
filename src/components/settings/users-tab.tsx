@@ -77,10 +77,20 @@ function resolveAccountSummary(accountKey: string, account: AccountData | null |
 
 export function UsersTab({
   agencyScope = false,
+  allClients = false,
   onOpenUser,
   onCreateUser,
 }: {
   agencyScope?: boolean;
+  /**
+   * Every CLIENT user, across every account — the agency-level Clients tab.
+   *
+   * A third roster, not a variation on the other two. `agencyScope` is the
+   * agency's own staff; the default is one account's clients; this is all of
+   * them, deliberately ignoring the ambient account the way the modal's other
+   * tabs do. Visiting 18 rooftops to answer "who can log in" was the reason.
+   */
+  allClients?: boolean;
   /**
    * Open a user WITHOUT navigating. Set by the Agency Settings modal so the
    * drill-in stays inside the overlay instead of landing on a page behind it.
@@ -143,10 +153,12 @@ export function UsersTab({
   const scopedUsers = useMemo(() => {
     if (agencyScope) return users.filter((user) => user.role !== 'client');
     const clients = users.filter((user) => user.role === 'client');
+    // The agency-level Clients tab: every client, whichever account is active.
+    if (allClients) return clients;
     if (!isAccount || !accountKey) return clients;
     const inScope = new Set(scopedAccountKeys?.length ? scopedAccountKeys : [accountKey]);
     return clients.filter((user) => user.accountKeys.some((k) => inScope.has(k)));
-  }, [users, agencyScope, isAccount, accountKey, scopedAccountKeys]);
+  }, [users, agencyScope, allClients, isAccount, accountKey, scopedAccountKeys]);
 
   const filteredUsers = useMemo(() => {
     if (!search) return scopedUsers;
@@ -299,7 +311,9 @@ export function UsersTab({
                     ? 'No users match your search'
                     : agencyScope
                       ? 'No agency users yet'
-                      : 'No client users on this account yet'}
+                      : allClients
+                        ? 'No client users yet'
+                        : 'No client users on this account yet'}
                 </td>
               </tr>
             ) : (

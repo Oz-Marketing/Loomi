@@ -1,3 +1,4 @@
+import { withRouteErrors } from '@/lib/api-errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import {
@@ -29,7 +30,7 @@ function clientAccountKeysFromSession(session: {
   return undefined;
 }
 
-export async function GET(req: NextRequest) {
+async function handleGet(req: NextRequest) {
   const { session, error } = await requirePermission(['studio.flows.view', 'reporting.report.view']);
   if (error) return error;
 
@@ -75,7 +76,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ flows });
 }
 
-export async function POST(req: NextRequest) {
+async function handlePost(req: NextRequest) {
   const { session, error } = await requirePermission('studio.flows.edit');
   if (error) return error;
 
@@ -108,3 +109,8 @@ export async function POST(req: NextRequest) {
   });
   return NextResponse.json({ flow }, { status: 201 });
 }
+
+// Wrapped so an unhandled throw returns the JSON error envelope instead of
+// a 500 with an empty body, which a caller cannot parse or report.
+export const GET = withRouteErrors(handleGet, 'flows');
+export const POST = withRouteErrors(handlePost, 'flows');

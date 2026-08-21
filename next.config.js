@@ -1,3 +1,52 @@
+// ── Content-Security-Policy, in REPORT-ONLY ──
+//
+// Nothing below blocks anything. The browser evaluates the policy, allows the
+// request regardless, and POSTs a report to /api/csp-report. That is the point:
+// a policy written from reading the code, rather than from what the app is
+// observed to load, is how you take a product down on a Friday.
+//
+// The values here are the INTENDED enforced policy, deliberately including no
+// `'unsafe-inline'` for scripts even though three inline scripts are known to
+// exist (the root layout's host bootstrap, the App layout's, and JSON-LD). If
+// they were allowed up front the reports would not mention them, and the
+// nonce work needed before enforcement would stay invisible.
+//
+// Known third parties, from an inventory of what actually loads at runtime:
+//   challenges.cloudflare.com   Turnstile, on public forms
+//   www.gstatic.com             Google Charts loader, in reporting
+//
+// `img-src https:` is broad on purpose and will stay that way. Account logos
+// are dealer-supplied URLs on arbitrary CDNs; enumerating them is not possible.
+//
+// READ THE REPORTS FROM PRODUCTION, NOT DEV. A local run immediately reports
+// `script-src <- eval`, which is webpack's dev source-map machinery and does not
+// exist in a production build. Building an allowlist from dev traffic would add
+// 'unsafe-eval' to the real policy for no reason, which is most of the value of
+// having one thrown away.
+//
+// TO ENFORCE, once the reports are quiet: add a nonce in the root layout,
+// attach it to the three inline scripts, swap this header name to
+// `Content-Security-Policy`, and accept that a nonce forces dynamic rendering
+// (the marketing page is deliberately SSR for SEO, so measure that before
+// committing to it).
+const CSP_REPORT_ONLY = [
+  "default-src 'self'",
+  "script-src 'self' https://challenges.cloudflare.com https://www.gstatic.com",
+  // Tailwind and the ad/template renderers inject style attributes; a nonce
+  // cannot cover those, so style stays permissive in the intended policy too.
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https:",
+  "frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com",
+  "media-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+  'report-uri /api/csp-report',
+].join('; ');
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Pin the workspace root to this file's directory so Next.js doesn't
@@ -8,17 +57,16 @@ const nextConfig = {
   // working git tree there for `git pull`). Without this hint Next.js
   // tries to auto-detect and emits a noisy warning every boot.
   outputFileTracingRoot: __dirname,
-  serverExternalPackages: ['yaml', 'puppeteer', 'puppeteer-core', 'sharp'],
+  // ffmpeg-static ships an ~80MB native binary that must stay on disk, not be
+  // traced into the bundle — same reason puppeteer and sharp are here.
+  serverExternalPackages: ['yaml', 'puppeteer', 'puppeteer-core', 'sharp', 'ffmpeg-static'],
   // Baseline security headers. `headers()` applies to every response Next
   // serves — success, redirect, 401 and 5xx alike — which is the point: an
   // audit found these absent on BOTH a 200 login page and a 401 API response,
   // so protections were disappearing on exactly the paths that need them.
   //
-  // NOT included yet: Content-Security-Policy. A nonce-based CSP forces every
-  // page to render dynamically, and the app currently inlines a bootstrap
-  // <script> in the root layout (window.__LOOMI_APP_HOST__), so enforcing one
-  // blind would break staging. Add it as Report-Only first, clear the reports,
-  // then enforce — tracked separately.
+  // Content-Security-Policy ships REPORT-ONLY, on the app surfaces only — see
+  // CSP_REPORT_ONLY above for the policy and the path to enforcing it.
   async headers() {
     return [
       {
@@ -61,6 +109,21 @@ const nextConfig = {
         // rule above without relying on path-to-regexp lookahead.
         source: '/f/:path*',
         headers: [{ key: 'Content-Security-Policy', value: 'frame-ancestors *' }],
+      },
+      {
+        // CSP goes on the APP surfaces only.
+        //
+        // Explicitly NOT on /lp/* : landing pages let a dealer paste arbitrary
+        // <script> into the page head and pre-body — chat widgets, tracking
+        // pixels, whatever their agency gave them. That is the feature. Any
+        // script-src worth having would break every one of them, and a policy
+        // with a hole that big is not worth enforcing. Same for /f/*, which
+        // loads Turnstile inside a customer's own site.
+        //
+        // Negative lookahead rather than listing every app path, so a new route
+        // is covered by default and only the two exclusions are deliberate.
+        source: '/((?!lp/|f/|api/).*)',
+        headers: [{ key: 'Content-Security-Policy-Report-Only', value: CSP_REPORT_ONLY }],
       },
       // Logos and avatars are gated to a session by proxy.ts, so they must not
       // sit in a shared cache. Setting that on the API routes alone is not

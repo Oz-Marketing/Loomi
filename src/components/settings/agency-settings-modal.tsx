@@ -4,21 +4,10 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDockedScroll } from '@/hooks/use-docked-scroll';
 import { XMarkIcon } from '@heroicons/react/24/outline';
-import { AccountsList } from '@/components/accounts-list';
 import { SubAccountDetailPage } from '@/components/subaccount-detail';
 import { UserDetail } from '@/components/users/user-detail';
 import { NewUser } from '@/components/users/new-user';
-import { UsersTab } from '@/components/settings/users-tab';
-import { TeamsTab } from '@/components/settings/teams-tab';
-import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
-import { IndustriesTab } from '@/components/settings/industries-tab';
-import { RateCardsTab } from '@/components/settings/rate-cards-tab';
-import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
-import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
-import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
-import { NotificationsTab } from '@/components/settings/notifications-tab';
-import { AppearanceTab } from '@/components/settings/appearance-tab';
-import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
+import { SettingsPanel } from '@/components/settings/settings-panel';
 import {
   useAgencySettingsNav,
   type SettingsTabKey,
@@ -226,39 +215,23 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
               />
             )}
 
-            {!drill && active === 'subaccounts' && (
-              // No restrictKeys: agency settings span the whole fleet even when
-              // the surrounding page is scoped to one org or sub-account.
-              <AccountsList
-                listPath="/settings/subaccounts"
-                detailBasePath="/settings/subaccounts"
-                restrictKeys={undefined}
+            {/* One shared definition of what each tab renders — see
+                settings-panel. `!drill` so a drill-in replaces the tab's own
+                content rather than stacking above it.
+
+                restrictAccountsToScope={false}: agency settings span the whole
+                fleet even when the surrounding page is scoped to one group. */}
+            {/* `active` is undefined for the tick before the rail resolves its
+                first tab — nothing to render yet, not a blank panel. */}
+            {!drill && active && (
+              <SettingsPanel
+                tab={active}
+                restrictAccountsToScope={false}
                 onOpenAccount={(key) => setDrill({ kind: 'subaccount', key })}
                 onOpenUser={(id) => setDrill({ kind: 'user', id })}
                 onCreateUser={() => setDrill({ kind: 'new-user' })}
               />
             )}
-            {!drill && active === 'users' && (
-              <UsersTab
-                agencyScope
-                onOpenUser={(id) => setDrill({ kind: 'user', id })}
-                onCreateUser={() => setDrill({ kind: 'new-user' })}
-              />
-            )}
-            {active === 'teams' && <TeamsTab />}
-            {active === 'contact-field-blueprints' && <CustomFieldBlueprintsTab />}
-            {active === 'knowledge' && <KnowledgeBaseTab />}
-            {active === 'industries' && <IndustriesTab />}
-            {active === 'markup' && (
-              <div className="space-y-4">
-                <RateCardsTab />
-                <DefaultMarkupTab />
-              </div>
-            )}
-            {active === 'alerts' && <AlertRulesTab />}
-            {active === 'coop-guidelines' && <CoopGuidelinesTab />}
-            {active === 'notifications' && <NotificationsTab />}
-            {active === 'appearance' && <AppearanceTab />}
           </div>
         </div>
       </div>

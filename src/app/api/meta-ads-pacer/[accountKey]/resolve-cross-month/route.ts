@@ -9,6 +9,24 @@ import {
   isValidPeriod,
 } from '@/lib/meta-ads-pacer';
 import { writeAudit } from '@/lib/meta-ads-audit';
+import { groupFlightRuns } from '@/lib/ad-pacer/pacer-calc';
+
+/**
+ * Every row of the same physical flight, this one included — a synced flight
+ * chains by Meta ad-set id, a manual one by the `linkedPrevAdId` pointers. The
+ * SAME grouping the ledger and the split-run settlement use, so the three can
+ * never disagree about what one flight is.
+ */
+async function flightRowIds(planId: string, adId: string): Promise<string[]> {
+  const rows = await prisma.metaAdsPacerAd.findMany({
+    where: { planId },
+    select: { id: true, metaObjectId: true, linkedPrevAdId: true },
+  });
+  for (const members of groupFlightRuns(rows).values()) {
+    if (members.some((m) => m.id === adId)) return members.map((m) => m.id);
+  }
+  return [adId];
+}
 
 interface ResolveBody {
   adId?: string;
@@ -123,8 +141,16 @@ export async function POST(
         { status: 400 },
       );
     }
-    await prisma.metaAdsPacerAd.update({
-      where: { id: ad.id },
+    // Mark EVERY row of the flight, not just the one clicked. The mark is what
+    // `effectiveActual` reads to place the run: an origin row contributes 0 and
+    // the billed row contributes the full run. Marking only the origin row (the
+    // usual click, since that's the month you notice the straddle in) left the
+    // billed row unmarked, so it kept counting its own slice and the rest of the
+    // run was counted in no month at all — invisible before the Raw-vs-Counted
+    // tie-out existed to catch it.
+    const flightIds = await flightRowIds(plan.id, ad.id);
+    await prisma.metaAdsPacerAd.updateMany({
+      where: { id: { in: flightIds } },
       data: { fullRunAppliedToMonth: billedMonth, lifetimeMonthSplit: null },
     });
     summary =
@@ -192,6 +218,15 @@ export async function POST(
     });
     summary = `Linked "${ad.name}" to its prior-month run (settles at flight end)`;
   } else {
+    // The billing mark spans the whole flight, so clearing it must too — leaving
+    // a sibling row marked would strand the run in a month nothing counts. The
+    // split/link fields stay per-row: unlinking a chain is a different intent
+    // from dropping a billing choice.
+    const flightIds = await flightRowIds(plan.id, ad.id);
+    await prisma.metaAdsPacerAd.updateMany({
+      where: { id: { in: flightIds } },
+      data: { fullRunAppliedToMonth: null },
+    });
     await prisma.metaAdsPacerAd.update({
       where: { id: ad.id },
       data: { fullRunAppliedToMonth: null, lifetimeMonthSplit: null, linkedPrevAdId: null },

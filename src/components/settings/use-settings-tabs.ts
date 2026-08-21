@@ -5,14 +5,10 @@ import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 import {
   OEM_INDUSTRIES,
   agencySettingsNavForScope,
-  settingsTabsForScope,
-  subaccountSectionsForScope,
-  subaccountSectionGroupsForScope,
+  sectorSettingsTabsForScope,
   type AgencyNavGroup,
   type SettingsScope,
   type SettingsTab,
-  type SubaccountSection,
-  type SubaccountSectionGroup,
 } from '@/components/settings/settings-registry';
 
 // The registry (data + pure derivation) lives in ./settings-registry so it can
@@ -26,8 +22,6 @@ export {
   type SettingsScope,
   type SettingsTab,
   type SettingsTabKey,
-  type SubaccountSection,
-  type SubaccountSectionKey,
 } from '@/components/settings/settings-registry';
 
 /** The scope/role facts the registry's visibility rules read. */
@@ -49,11 +43,12 @@ export function useSettingsScope(): SettingsScope {
 }
 
 /**
- * The role/scope-gated Settings tabs — shared by the Settings page and the
- * sidebar's settings nav so both stay in sync.
+ * This SECTOR's settings tabs — shared by the Settings page and the sidebar's
+ * settings nav so both stay in sync. Platform config isn't here; it's in the
+ * cog's modal (see `useAgencySettingsNav`).
  */
 export function useSettingsTabs(): SettingsTab[] {
-  return settingsTabsForScope(useSettingsScope());
+  return sectorSettingsTabsForScope(useSettingsScope());
 }
 
 /**
@@ -75,20 +70,4 @@ export function useAgencySettingsNav(): AgencyNavGroup[] {
   });
 }
 
-/**
- * A sub-account's own settings sections for the current sector — the shared
- * core (General, Users, Branding, Integrations, Appearance) plus whatever that
- * sector adds. Rendered by the settings sidebar and the sub-account detail page.
- */
-export function useSubaccountSections(): SubaccountSection[] {
-  return subaccountSectionsForScope(useSettingsScope());
-}
 
-/**
- * The same sections split into their two headings — "Sub-Account Settings" and
- * "<Sector> Settings". Used by the settings rail; the detail page renders the
- * flat list.
- */
-export function useSubaccountSectionGroups(): SubaccountSectionGroup[] {
-  return subaccountSectionGroupsForScope(useSettingsScope());
-}

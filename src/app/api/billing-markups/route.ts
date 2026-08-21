@@ -7,6 +7,10 @@ import { getBillingMarkups, setBillingMarkup } from '@/lib/services/markup';
  * Mass Media, Swag…), replacing the single agency-wide number that was really
  * just Digital's rate applied to everything.
  *
+ * RATE ONLY. The categories themselves (add, rename, reorder, archive) live at
+ * `/api/rate-cards`, which is the canonical surface; both write the same
+ * `BillingCategory` table. This one predates the table and keeps its contract.
+ *
  * GET — management-tier, so the settings tab can render the table.
  * PUT — elevated only; body { category: string, markup: number }.
  *       One category per call: these are five-second edits, and a whole-table

@@ -185,10 +185,10 @@ export function AlertRulesTab() {
   return (
     <div className="max-w-3xl space-y-6">
       <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
-        Config-driven monitoring (§9). Each rule fires a notification off
-        Loomi&apos;s trusted pacing numbers — only on live, allocated, in-flight
-        campaigns, and never more often than its cooldown. Tune thresholds here;
-        no redeploy needed.
+        Alerts watch your live pacing and tell you when a campaign drifts off
+        target. A rule only fires on campaigns that are live, allocated and in
+        flight, and won&apos;t tell you the same thing twice inside its cooldown.
+        Set each one&apos;s thresholds and urgency below.
       </p>
 
       {rules.map((rule) => {
@@ -290,9 +290,10 @@ function RuleCard({
 
       {!isFixed && (
         <p className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--muted)] px-3 py-2 text-[11px] text-[var(--muted-foreground)]">
-          This baseline type needs a metric history Loomi doesn&apos;t have yet —
-          it activates once the Google Ads API is connected (§8). You can still set
-          its tier, cooldown, and enable state now.
+          This rule compares against a history Loomi doesn&apos;t collect yet, so
+          it won&apos;t fire until Google Ads is connected. You can still set its
+          urgency, cooldown and enable state now — it&apos;ll use them when it
+          starts running.
         </p>
       )}
 

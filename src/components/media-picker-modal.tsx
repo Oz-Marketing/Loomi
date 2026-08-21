@@ -9,9 +9,12 @@ import {
   ArrowUpTrayIcon,
   ChevronRightIcon,
   SparklesIcon,
+  FilmIcon,
+  PlayIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { MEDIA_CATEGORIES } from '@/lib/media-categories';
+import { isMotionMime, motionKind, MOTION_ACCEPT } from '@/lib/ad-generator/motion';
 import type { RightsStatus } from '@/lib/media-rights';
 import {
   countOutOfLicence,
@@ -68,6 +71,12 @@ export interface MediaPickerModalProps {
   /** Read-only branding assets (e.g. the account's logo variants), offered as a
    *  sub-view of the picker. Selectable but not editable here. */
   brandingMedia?: BrandingMediaItem[];
+  /**
+   * Offer video / animated files too (the ad builder, where a clip is a valid
+   * layer source). Opt-in: every other picker feeds an `<img>`, and handing one
+   * an .mp4 would render a broken image rather than an error.
+   */
+  allowMotion?: boolean;
 }
 
 // ── Component ──
@@ -81,6 +90,7 @@ export function MediaPickerModal({
   category,
   uploadCategory,
   brandingMedia,
+  allowMotion = false,
 }: MediaPickerModalProps) {
   const [mounted, setMounted] = useState(false);
   const [files, setFiles] = useState<MediaFile[]>([]);
@@ -214,6 +224,10 @@ export function MediaPickerModal({
   if (!mounted) return null;
 
   const isImageFile = (f: MediaFile) => f.type?.startsWith('image') || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(f.url || '');
+  /** A clip that can only be previewed by playing it (an <img> of an .mp4 is a
+   *  broken-image icon). A GIF stays on the image path — it animates as an image. */
+  const isClipFile = (f: MediaFile) =>
+    allowMotion && (motionKind(f.url) === 'video' || (isMotionMime(f.type) && !isImageFile(f)));
 
   return createPortal(
     <div
@@ -229,7 +243,7 @@ export function MediaPickerModal({
         {/* ── Header ── */}
         <div className="flex items-center gap-3 px-5 py-4 border-b border-[var(--border)]">
           <PhotoIcon className="w-5 h-5 text-[var(--muted-foreground)]" />
-          <h3 className="text-base font-semibold flex-shrink-0">Select Image</h3>
+          <h3 className="text-base font-semibold flex-shrink-0">{allowMotion ? 'Select Image or Video' : 'Select Image'}</h3>
           <div className="relative flex-1 max-w-xs">
             <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
             <input
@@ -317,7 +331,14 @@ export function MediaPickerModal({
             className={`mx-4 mt-3 border-2 border-dashed rounded-lg p-3 text-center transition-all cursor-pointer ${dragOver ? 'border-[var(--primary)] bg-[var(--primary)]/5' : 'border-[var(--border)] hover:border-[var(--muted-foreground)]'}`}
             onClick={() => fileInputRef.current?.click()}
           >
-            <input ref={fileInputRef} type="file" multiple accept="image/*" onChange={(e) => handleUpload(e.target.files)} className="hidden" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={allowMotion ? `image/*,${MOTION_ACCEPT}` : 'image/*'}
+              onChange={(e) => handleUpload(e.target.files)}
+              className="hidden"
+            />
             <span className="text-sm text-[var(--muted-foreground)]">
               <ArrowUpTrayIcon className={`w-4 h-4 inline mr-1 ${uploading ? 'animate-bounce' : ''}`} />
               {uploading ? 'Uploading...' : 'Drop files here or click to browse'}
@@ -374,9 +395,28 @@ export function MediaPickerModal({
                 ].filter(Boolean).join(' · ')}
               >
                 <div className="relative h-[120px] bg-[var(--muted)] overflow-hidden">
-                  {isImageFile(f) && f.url ? (
+                  {/* Thumbnail only, never the original — a 120px picker tile
+                      must not pull a multi-megabyte asset. See media/page.tsx.
+                      That rule is why a clip tile shows its poster rather than
+                      the clip: autoplaying a grid of MP4s is the same mistake in
+                      a worse unit. */}
+                  {isClipFile(f) ? (
+                    f.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={f.thumbnailUrl}
+                        alt={f.name}
+                        className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicence ? "opacity-40 grayscale" : ""}`}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <FilmIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-40" />
+                      </div>
+                    )
+                  ) : isImageFile(f) && f.thumbnailUrl ? (
                     <img
-                      src={f.thumbnailUrl || f.url}
+                      src={f.thumbnailUrl}
                       alt={f.name}
                       // Desaturated rather than hidden: still selectable, but it
                       // can't be mistaken for cleared creative at a glance.
@@ -385,6 +425,13 @@ export function MediaPickerModal({
                     />
                   ) : (
                     <div className="flex items-center justify-center h-full"><PhotoIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-30" /></div>
+                  )}
+                  {/* A poster frame is indistinguishable from a photo, so a clip
+                      says what it is — it changes which export the ad can produce. */}
+                  {isClipFile(f) && (
+                    <span className="pointer-events-none absolute bottom-1 left-1 inline-flex items-center gap-0.5 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+                      <PlayIcon className="h-2 w-2" /> Video
+                    </span>
                   )}
                   {outOfLicence && (
                     <span className="absolute left-1 top-1 rounded bg-red-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
@@ -425,7 +472,11 @@ export function MediaPickerModal({
                 {approvedOnly ? 'No approved media here' : 'No media here yet'}
               </p>
               <p className="text-xs mt-1 opacity-60">
-                {approvedOnly ? 'Untick “Approved only” to see drafts.' : 'Upload an image to get started.'}
+                {approvedOnly
+                  ? 'Untick “Approved only” to see drafts.'
+                  : allowMotion
+                    ? 'Upload an image or a video clip to get started.'
+                    : 'Upload an image to get started.'}
               </p>
             </div>
           )}

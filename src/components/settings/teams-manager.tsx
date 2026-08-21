@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { PlusIcon, CheckIcon, XMarkIcon, TrashIcon, UserGroupIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, CheckIcon, XMarkIcon, TrashIcon, UserGroupIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { StarIcon as StarSolid } from '@heroicons/react/24/solid';
 import { StarIcon as StarOutline } from '@heroicons/react/24/outline';
 import { UserAvatar } from '@/components/user-avatar';
@@ -188,6 +188,17 @@ function TeamEditModal({
     new Set((team?.members ?? []).filter((m) => m.role === 'lead').map((m) => m.userId)),
   );
   const [busy, setBusy] = useState(false);
+  const [memberQuery, setMemberQuery] = useState('');
+
+  // Name, email and department are all searchable: on a roster this size people
+  // look for "web development" as often as they look for a name.
+  const visibleUsers = useMemo(() => {
+    const q = memberQuery.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((u) =>
+      [u.name, u.email, u.department ?? ''].some((field) => field.toLowerCase().includes(q)),
+    );
+  }, [users, memberQuery]);
 
   function toggleMember(id: string) {
     setMemberIds((prev) => {
@@ -295,8 +306,12 @@ function TeamEditModal({
       className="fixed inset-0 z-[260] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
+      {/* glass-modal-solid, not bg-[var(--card)]: `--card` is a 62%-opaque fill,
+          so the settings modal and the page behind it read straight through the
+          form. This pair is the project's near-opaque modal surface (it also
+          supplies the radius, hairline, shadow and entrance animation). */}
       <div
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card)] shadow-2xl"
+        className="glass-modal glass-modal-solid flex max-h-[85vh] w-full max-w-lg flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3.5">
@@ -366,8 +381,17 @@ function TeamEditModal({
             <label className="mb-1.5 block text-xs font-medium text-[var(--muted-foreground)]">
               Members
             </label>
+            <div className="relative mb-1.5">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                value={memberQuery}
+                onChange={(e) => setMemberQuery(e.target.value)}
+                placeholder="Search people…"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-1.5 pl-8 pr-2 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+            </div>
             <div className="max-h-56 space-y-0.5 overflow-y-auto rounded-xl border border-[var(--border)] p-1.5">
-              {users.map((u) => {
+              {visibleUsers.map((u) => {
                 const isMember = memberIds.has(u.id);
                 const isLead = leadIds.has(u.id);
                 return (
@@ -380,12 +404,17 @@ function TeamEditModal({
                       onClick={() => toggleMember(u.id)}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
+                      {/* Presentational only — the whole row is the button, so
+                          the box must not be a second focus stop. */}
                       <span
-                        className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
-                          isMember ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--border)]'
+                        aria-hidden
+                        className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+                          isMember
+                            ? 'border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]'
+                            : 'border-[var(--border)] bg-[var(--input)]'
                         }`}
                       >
-                        {isMember && <CheckIcon className="h-3 w-3" />}
+                        {isMember && <CheckIcon className="h-3 w-3 stroke-[3]" />}
                       </span>
                       <UserAvatar
                         name={u.name}
@@ -413,9 +442,11 @@ function TeamEditModal({
                   </div>
                 );
               })}
-              {users.length === 0 && (
+              {visibleUsers.length === 0 && (
                 <p className="px-2 py-3 text-center text-xs text-[var(--muted-foreground)]">
-                  No internal users to add yet.
+                  {users.length === 0
+                    ? 'No internal users to add yet.'
+                    : `No one matches "${memberQuery.trim()}".`}
                 </p>
               )}
             </div>

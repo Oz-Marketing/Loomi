@@ -172,7 +172,7 @@ const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';
 export function ReportingSidebar() {
   const browserPath = usePathname();
   const { collapsed } = useSidebarCollapse();
-  const { isAccount, accountKey, userRole } = useAccount();
+  const { accountKey, userRole } = useAccount();
 
   // Apply the surface prefix to outgoing hrefs, and strip it from the path we
   // match against so the bare-href comparisons below keep working on both hosts
@@ -191,9 +191,13 @@ export function ReportingSidebar() {
   // the shared sub-account detail page. Studio reaches it at
   // /subaccount/<slug>/settings; this surface has no such route tree, so it
   // uses the admin-browse shape (section in ?tab=) against the active account.
-  const subaccountSettingsHref = withSurface(
-    isAccount && accountKey ? `/settings/subaccounts/${accountKey}?tab=general` : '/settings',
-  );
+  // The footer Settings link goes to THIS SECTOR's settings, never to one
+  // account's. An account's own configuration lives on the account (Agency
+  // Settings → Accounts → the account); pointing here at
+  // /settings/subaccounts/<key> is what made the sector's own screens —
+  // Markup, Channels, Alerts, Client Reports — unreachable from the surface
+  // that owns them.
+  const subaccountSettingsHref = withSurface('/settings');
 
   const isChildActive = useCallback(
     (c: NavChild) => !c.soon && pathname.startsWith(c.href),
@@ -278,7 +282,18 @@ export function ReportingSidebar() {
           </div>
         </Link>
       }
-      account={collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
+      account={
+        // No switcher in settings: the rail IS the settings nav here, and the
+        // sections it lists belong to whichever account you arrived from —
+        // leaving a picker above them invites changing account mid-edit, which
+        // silently repoints the form. Dropping it also lifts "Back to <sector>"
+        // to the top, which is the way out of this mode.
+        isSettingsPath(pathname) ? null : collapsed ? (
+          <AccountSwitcher compact />
+        ) : (
+          <AccountSwitcher />
+        )
+      }
       bottom={
         <>
           {/* Quick switch between Studio · Reporting · Projects. */}

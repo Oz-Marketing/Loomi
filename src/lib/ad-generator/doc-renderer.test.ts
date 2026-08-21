@@ -140,6 +140,40 @@ describe('renderDoc', () => {
     expect(html).toContain('linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0) 100%)'); // fade overlay
   });
 
+  it('zooms and frames a background texture per size (was silently ignored)', () => {
+    const bgDoc: TemplateDoc = {
+      id: 'b',
+      name: 'B',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'bg', type: 'background', binding: { kind: 'field', key: 'tex' }, fit: 'cover' }],
+      // The framing that lets ONE photo serve boards of different aspect ratios.
+      layouts: { square: { bg: { x: 0, y: 0, w: 1, h: 1, objectX: 0.2, objectY: 0.8, objectScale: 1.6 } } },
+      defaults: {},
+    };
+    const html = renderDoc(bgDoc, { tex: 'https://x/hero.jpg' }, SIZE);
+    expect(html).toContain('object-position:20% 80%');
+    expect(html).toContain('transform:scale(1.6)');
+    expect(html).toContain('transform-origin:20% 80%');
+  });
+
+  it('does not zoom a background texture that is tiled or contained', () => {
+    const mk = (fit: 'tile' | 'contain') =>
+      renderDoc(
+        {
+          id: 'b', name: 'B', sizes: [SIZE], fields: [],
+          elements: [{ id: 'bg', type: 'background', binding: { kind: 'field', key: 'tex' }, fit }],
+          layouts: { square: { bg: { x: 0, y: 0, w: 1, h: 1, objectScale: 2 } } },
+          defaults: {},
+        } as TemplateDoc,
+        { tex: 'https://x/hero.jpg' },
+        SIZE,
+      );
+    // Tile repeats and contain shows the whole image — neither has a crop to zoom.
+    expect(mk('tile')).not.toContain('transform:scale(');
+    expect(mk('contain')).not.toContain('transform:scale(');
+  });
+
   it('renders a background element with a tiled texture and no fill/overlay', () => {
     const bgDoc: TemplateDoc = {
       id: 'b',

@@ -24,7 +24,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '@prisma/client';
-import { BUDGET_CHANNELS } from '../src/lib/budget/channels';
+import { registryFromRows } from '../src/lib/budget/channel-registry';
 
 async function main() {
   const connectionString = process.env.DATABASE_URL;
@@ -45,9 +45,14 @@ async function main() {
     }
 
     let updated = 0;
+    // Channels are a table now, so read them rather than trusting a constant
+    // that would drift the moment someone adds one. `registryFromRows` falls
+    // back to the seed when the table is still empty, which is the state this
+    // script can legitimately run in on a first deploy.
+    const ch = registryFromRows(await prisma.budgetChannel.findMany());
     // One UPDATE per channel rather than per row: 7,000+ lines across ~40
     // channels is 40 statements, not 7,000.
-    for (const channel of BUDGET_CHANNELS) {
+    for (const channel of ch.all) {
       if (channel.lineType === 'unclassified') continue;
       const n = await prisma.budgetLine.updateMany({
         where: { channel: channel.key, lineType: 'unclassified' },

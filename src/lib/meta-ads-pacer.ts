@@ -30,8 +30,10 @@ import {
   buildFlightLedger,
   checkConservation,
   countedSpendRow,
+  pendingSnapshots,
   rawMonthSpend,
   rollupCrossMonth,
+  EPSILON,
   type ConservationCheck,
   type CrossMonthLine,
   type FlightLedgerEntry,
@@ -1308,18 +1310,30 @@ export interface ReconciliationMonth {
   /** CM4: per-ad over/under contributions for this month — powers the
    *  Reconciliation row drill-down (which ads drove the variance). */
   ads: ReconAdVariance[];
-  // ── Cross-month spend chain (spec §2 columns 5–8, 10) ──
-  // The auditable decomposition of `actual`: a reader can trace raw → adjustment
-  // → counted without anything moving behind the curtain. `rawSpend` is the
-  // immutable anchor; `countedSpend` is derived and is what `variance` measures.
-  /** Immutable Σ of the month's own Meta-dated spend. Never adjusted. */
+  // ── Cross-month spend chain: two independent totals, reconciled ──
+  // `rawSpend` is what the ACCOUNT spent (Meta, account level). `countedSpend`
+  // is what the pacer ROWS carry on a billed basis. Neither is computed from the
+  // other, so `raw − out + in == counted` is a check with teeth: a dollar that
+  // spent in the account but was never linked in Loomi breaks it.
+  /** The account's own monthly spend from Meta. Never adjusted. */
   rawSpend: number;
-  /** Σ settled origin-month slices LEAVING this month (billed later). */
+  /** Where Raw came from. Only `account` is independent enough to tie out. */
+  rawSource: RawSpendSource;
+  /** Σ settled origin-month slices LEAVING this month (billed elsewhere). */
   crossMonthOut: number;
-  /** Σ settled slices ARRIVING here from earlier months (billed this month). */
+  /** Σ settled slices ARRIVING here from other months (billed this month). */
   crossMonthIn: number;
-  /** `rawSpend − crossMonthOut + crossMonthIn`. Derived, never entered. */
+  /** `rawSpend − crossMonthOut + crossMonthIn` — Raw restated onto the billed
+   *  basis. Computed for the CHECK only; nothing downstream measures against it. */
+  tieOut: number;
+  /** Σ `effectiveActual` over this month's rows — the billed-basis pacer total,
+   *  and the base the over/under measures against. Independently sourced. */
   countedSpend: number;
+  /** `tieOut − countedSpend`. 0 = clean; >0 = "in account, not in Loomi". */
+  residual: number;
+  /** False when Raw isn't independent (Google, or Meta never pulled) — the
+   *  residual is then meaningless and must not be reported as a gap. */
+  residualChecked: boolean;
   /**
    * Σ UNSETTLED cross-month slices sitting in this month's raw that will leave
    * at settlement. Informational — does NOT affect countedSpend yet, so no month
@@ -1355,6 +1369,17 @@ export interface YearReconciliation {
    */
   crossMonthFlights: FlightLedgerEntry[];
   conservation: ConservationCheck;
+  /**
+   * Σ residual over months whose Raw is independent enough to tie out, and the
+   * months carrying one. A nonzero residual is a DATA GAP, not a budget
+   * variance: an ad spending in the account that was never linked in Loomi, or
+   * a cross-month flight marked to the wrong month. It never rolls forward —
+   * it gates the carryover apply until someone resolves it.
+   */
+  residualTotal: number;
+  residualMonths: string[];
+  /** True when at least one in-window month has an account-level Raw to check. */
+  rawSpendAvailable: boolean;
   /** The live month carryovers land in; '' when the year has no live month. */
   targetPeriod: string;
   months: ReconciliationMonth[];
@@ -1379,6 +1404,102 @@ export interface YearReconciliation {
    * both-ends indicators (source → target / target ← source) and dated history.
    */
   applications: CarryoverApplication[];
+}
+
+/**
+ * How stale a stored account-spend pull may get before a reconciliation read
+ * refreshes it. Six hours: Meta restates recent spend for a while, but a
+ * reconciliation is a monthly instrument — refreshing it per page load would
+ * spend a Graph call to move numbers nobody is watching that closely.
+ */
+const RAW_SPEND_TTL_MS = 6 * 60 * 60 * 1000;
+
+/** A month's Raw and where it came from — the tie-out only trusts `account`. */
+export type RawSpendSource = 'account' | 'backfill' | 'rows';
+
+/**
+ * The RAW anchor: account-level monthly spend as Meta reports it, INDEPENDENT of
+ * the pacer rows. That independence is the entire point — Counted is the rows
+ * summed, so `Raw − Out + In == Counted` is a real check, and an ad spending in
+ * the account that was never linked in Loomi shows up as a residual instead of
+ * being invisible.
+ *
+ * Stored on the period-budget row rather than fetched inline every time, so a
+ * Meta outage or an expired token degrades to yesterday's anchor instead of
+ * taking the page down. Refreshed here (one Graph call for the whole year) when
+ * anything in the window is missing or older than the TTL. Every failure path is
+ * swallowed: a reconciliation that can't reach Meta falls back to the stored
+ * values and marks the months it couldn't verify, which the tie-out then skips.
+ *
+ * Meta only. Google has no equivalent account-level pull, so its months keep the
+ * row-sum raw and sit out of the tie-out.
+ */
+async function loadAccountRawSpend(
+  accountKey: string,
+  planId: string,
+  periods: string[],
+  stored: Map<string, { spend: string | null; at: Date | null }>,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const period of periods) {
+    const raw = stored.get(period)?.spend;
+    const n = raw == null || raw === '' ? null : Number(raw);
+    if (n != null && Number.isFinite(n)) out.set(period, n);
+  }
+
+  const now = Date.now();
+  const stale = periods.some((period) => {
+    const row = stored.get(period);
+    if (!row?.spend) return true; // never pulled
+    // Only the months that can still MOVE need refreshing on a clock: Meta
+    // restates recent spend, and a closed month two quarters back does not
+    // change. Refresh the last two months plus anything missing.
+    const recent = periods.slice(-2).includes(period);
+    return recent && (!row.at || now - row.at.getTime() > RAW_SPEND_TTL_MS);
+  });
+  if (!stale) return out;
+
+  try {
+    // Dynamic: meta-ads imports this module for the daily-series writer, so a
+    // static import here would close a runtime cycle at module init.
+    const { fetchAccountMonthlySpend, getAdAccountConfig } = await import(
+      '@/lib/integrations/meta-ads'
+    );
+    const { cfg, adAccountId } = await getAdAccountConfig(accountKey);
+    const first = periods[0];
+    const last = periods[periods.length - 1];
+    // Month-aligned bounds so Meta's monthly buckets line up with our periods.
+    const [ly, lm] = last.split('-').map(Number);
+    const lastDay = new Date(Date.UTC(ly, lm, 0)).getUTCDate();
+    const monthly = await fetchAccountMonthlySpend(
+      cfg,
+      adAccountId,
+      `${first}-01`,
+      `${last}-${String(lastDay).padStart(2, '0')}`,
+    );
+    const at = new Date();
+    for (const period of periods) {
+      // The request spans every in-window month, so a month Meta omits spent
+      // nothing — storing that 0 is what lets its tie-out be checked at all.
+      const spend = monthly.get(period) ?? 0;
+      out.set(period, spend);
+      await prisma.metaAdsPacerPeriodBudget.upsert({
+        where: { planId_period: { planId, period } },
+        update: { metaAccountSpend: spend.toFixed(2), metaAccountSpendAt: at },
+        create: {
+          planId,
+          period,
+          metaAccountSpend: spend.toFixed(2),
+          metaAccountSpendAt: at,
+        },
+      });
+    }
+  } catch {
+    // Not connected, no linked ad account, token expired, Graph down — the
+    // reconciliation still renders on the stored anchor. Months with nothing
+    // stored fall back to the row sum and are excluded from the tie-out.
+  }
+  return out;
 }
 
 /**
@@ -1435,6 +1556,9 @@ export async function getYearReconciliation(
       appliedThisMonth: { base: 0, added: 0, total: 0 },
       applications: [],
       crossMonthFlights: [],
+      residualTotal: 0,
+      residualMonths: [],
+      rawSpendAvailable: false,
       conservation: {
         sumOut: 0,
         sumIn: 0,
@@ -1456,6 +1580,8 @@ export async function getYearReconciliation(
         googleBaseBudgetGoal: true,
         googleAddedBudgetGoal: true,
         historicalActual: true,
+        metaAccountSpend: true,
+        metaAccountSpendAt: true,
       },
     }),
     prisma.metaAdsPacerAd.findMany({
@@ -1480,6 +1606,11 @@ export async function getYearReconciliation(
         linkedPrevAdId: true, // manual runs chain via the prev-month link
         lifetimeMonthSplit: true, // the "split across months" mark (any member)
         metaLifetimeBudget: true, // the settlement cap
+        // The settlement snapshot — once written, Out/In read from these two
+        // instead of the live fields, so a re-sync can't move a posted figure.
+        settledRunSpend: true,
+        settledBilledDelivery: true,
+        settledAt: true,
       },
     }),
     prisma.metaAdsPacerCarryoverApplication.findMany({
@@ -1534,6 +1665,43 @@ export async function getYearReconciliation(
   );
   const crossMonthByPeriod = rollupCrossMonth(flightLedger, periods);
   const conservation = checkConservation(flightLedger, periods);
+
+  // Settlement snapshot (rebuild §5). A flight settles days after its run ends,
+  // deep inside the daily-series retention window, so the first read after
+  // settlement always captures fresh inputs. Both inputs are stored, not just
+  // the derived Out, so the split and the tie-out stay auditable — and from then
+  // on the posting is immune to a re-sync moving `pacerRunSpend` underneath it.
+  const snapshots = pendingSnapshots(flightLedger);
+  for (const snap of snapshots) {
+    await prisma.metaAdsPacerAd.update({
+      where: { id: snap.adId },
+      data: {
+        settledRunSpend: snap.runSpend,
+        settledBilledDelivery: snap.billedDelivery,
+        settledAt: new Date(),
+      },
+    });
+  }
+
+  // Raw: the ACCOUNT's own monthly spend from Meta, sourced independently of
+  // every row above. Google has no equivalent pull, so its months keep the
+  // row-sum raw and sit out of the tie-out.
+  const accountRawByPeriod = isGoogle
+    ? new Map<string, number>()
+    : await loadAccountRawSpend(
+        accountKey,
+        plan.id,
+        periods,
+        new Map(
+          periods.map((p) => [
+            p,
+            {
+              spend: budgetByPeriod.get(p)?.metaAccountSpend ?? null,
+              at: budgetByPeriod.get(p)?.metaAccountSpendAt ?? null,
+            },
+          ]),
+        ),
+      );
 
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
@@ -1616,19 +1784,29 @@ export async function getYearReconciliation(
       baseActual - (baseTarget + appliedIn) + (runSettlementByPeriod.get(period) ?? 0);
     const carryover = -variance;
     const appliedOut = appliedOutByPeriod.get(period) ?? 0;
-    // The cross-month chain for this month. `rawSpend` is deliberately Σ
-    // pacerActual — the UNADJUSTED anchor — not `actual` (Σ effectiveActual),
-    // which already has the cross-month substitution folded in; using `actual`
-    // here would apply the adjustment twice. A backfilled month has no rows, so
-    // its raw is the historical figure.
+    // The two independent totals for this month. Raw comes from the ACCOUNT
+    // pull; Counted is `actual` (Σ effectiveActual — the full run once, in its
+    // billed month). Deriving one from the other is precisely what this rebuild
+    // removed: it made `raw − out + in == counted` true by construction and left
+    // an unlinked ad's spend invisible.
+    const accountRaw = accountRawByPeriod.get(period);
+    const rawSource: RawSpendSource =
+      accountRaw != null ? 'account' : isBackfilled ? 'backfill' : 'rows';
     const counted = countedSpendRow(
-      tracked
-        ? rawMonthSpend(adRows.filter((a) => a.period === period))
+      accountRaw != null
+        ? accountRaw
         : isBackfilled
           ? (histActual as number)
-          : 0,
+          : tracked
+            ? rawMonthSpend(adRows.filter((a) => a.period === period))
+            : 0,
+      actual,
       crossMonthByPeriod.get(period),
     );
+    // A month is only checkable when Raw is independent AND the pacer claims to
+    // cover it. An untracked, un-backfilled month makes no claim, so its whole
+    // spend is not a "gap" — it is a month nobody has entered yet.
+    const residualChecked = rawSource === 'account' && (tracked || isBackfilled);
     return {
       period,
       state: monthState(period, tz),
@@ -1647,13 +1825,28 @@ export async function getYearReconciliation(
       appliedIn,
       ads: adVarByPeriod.get(period) ?? [],
       rawSpend: counted.rawSpend,
+      rawSource,
       crossMonthOut: counted.out,
       crossMonthIn: counted.in,
+      tieOut: counted.tieOut,
       countedSpend: counted.countedSpend,
+      residual: counted.residual,
+      residualChecked,
       pendingForward: counted.pendingForward,
       crossMonthLines: crossMonthByPeriod.get(period)?.lines ?? [],
     };
   });
+
+  // The tie-out, per window. A residual is a data gap, never a budget variance:
+  // positive means the account spent more than the tracked rows account for
+  // (an unlinked ad, or a flight marked to the wrong month). It gates the apply
+  // rather than rolling forward.
+  const checkedMonths = months.filter((m) => m.residualChecked);
+  const residualTotal = checkedMonths.reduce((s, m) => s + m.residual, 0);
+  const residualMonths = checkedMonths
+    .filter((m) => Math.abs(m.residual) >= EPSILON)
+    .map((m) => m.period);
+  const rawSpendAvailable = months.some((m) => m.rawSource === 'account');
 
   // YTD aggregates over SETTLED months strictly before the live target month —
   // the live month's own variance is still in-progress, not reconcilable.
@@ -1714,6 +1907,9 @@ export async function getYearReconciliation(
     months,
     crossMonthFlights: flightLedger,
     conservation,
+    residualTotal,
+    residualMonths,
+    rawSpendAvailable,
     ytdVariance,
     ytdCarryover,
     ytdUnapplied,

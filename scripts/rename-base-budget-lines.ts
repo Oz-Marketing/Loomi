@@ -28,7 +28,7 @@ import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '@prisma/client';
-import { channelLabel, isPacedChannel } from '../src/lib/budget/channels';
+import { registryFromRows } from '../src/lib/budget/channel-registry';
 
 /** Labels that carry no decision — safe to replace. */
 const GENERIC = [
@@ -74,10 +74,13 @@ async function main() {
     let renamed = 0;
     let kept = 0;
 
-    for (const line of candidates) {
-      if (!line.channel || !isPacedChannel(line.channel)) continue;
+    // Read the channel table once — see the note in backfill-budget-line-type.
+    const ch = registryFromRows(await prisma.budgetChannel.findMany());
 
-      const target = `${channelLabel(line.channel)} Base`;
+    for (const line of candidates) {
+      if (!line.channel || !ch.isPaced(line.channel)) continue;
+
+      const target = `${ch.label(line.channel)} Base`;
       const current = (line.label ?? '').trim();
       if (current === target) continue;
 
@@ -86,7 +89,7 @@ async function main() {
       const budgetName = (line.agreement?.name ?? '').trim();
       const isGeneric =
         current === '' ||
-        current === channelLabel(line.channel) ||
+        current === ch.label(line.channel) ||
         (budgetName !== '' && current === budgetName) ||
         GENERIC.includes(current.toLowerCase());
 

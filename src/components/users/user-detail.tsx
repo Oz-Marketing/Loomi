@@ -6,6 +6,8 @@ import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { AdminOnly } from '@/components/route-guard';
 import { AccountAssignmentManager } from '@/components/account-assignment-manager';
+import { Select } from '@/components/select';
+import { platformRoleOptions } from '@/components/users/platform-role-options';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
@@ -566,12 +568,13 @@ function UserDetailContent({
           <div className="space-y-4">
             <div>
               <label className={labelClass}>Role</label>
-              <select value={role} onChange={e => handleRoleChange(e.target.value)} className={inputClass}>
-                {currentUserRole === 'developer' && <option value="developer">Developer</option>}
-                <option value="super_admin">Super Admin</option>
-                <option value="admin">Admin</option>
-                <option value="client">Client</option>
-              </select>
+              <Select
+                value={role}
+                onChange={handleRoleChange}
+                options={platformRoleOptions(currentUserRole)}
+                previewFont={false}
+                ariaLabel="Platform role"
+              />
             </div>
 
             <div>

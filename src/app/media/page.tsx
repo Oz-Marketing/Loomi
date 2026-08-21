@@ -3,6 +3,8 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   PhotoIcon,
+  FilmIcon,
+  PlayIcon,
   MagnifyingGlassIcon,
   XMarkIcon,
   EllipsisVerticalIcon,
@@ -390,7 +392,10 @@ function MediaCard({
   onCopyTo,
   onDelete,
 }: MediaCardProps) {
-  const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+  // A video carries a poster thumbnail too, so the tile's gate is "is there a
+  // thumbnail", not "is it an image" — the rule about never loading the ORIGINAL
+  // is what mattered, and it still holds. (The old `isImage` check went with it.)
+  const isVideo = Boolean(f.type?.startsWith('video'));
   const caps = inherited
     ? INHERITED_CAPABILITIES
     : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
@@ -406,17 +411,32 @@ function MediaCard({
         className="h-[140px] bg-[var(--muted)] relative overflow-hidden rounded-t-xl cursor-pointer"
         onClick={onPreview}
       >
-        {isImage && f.url ? (
+        {/* thumbnailUrl only — NEVER the original. `thumbnailUrl || url` meant a
+            tile with no thumbnail downloaded the full-size asset to fill 140px;
+            on production that was 809 images and 420MB of originals. Above the
+            thumbnail size cap the icon is the honest answer, and the preview
+            pane still opens the real thing. */}
+        {f.thumbnailUrl ? (
           <img
-            src={f.thumbnailUrl || f.url}
+            src={f.thumbnailUrl}
             alt={f.name}
             className="w-full h-full object-cover"
             loading="lazy"
           />
         ) : (
           <div className="flex items-center justify-center h-full">
-            <PhotoIcon className="w-10 h-10 text-[var(--muted-foreground)] opacity-30" />
+            {isVideo ? (
+              <FilmIcon className="w-10 h-10 text-[var(--muted-foreground)] opacity-30" />
+            ) : (
+              <PhotoIcon className="w-10 h-10 text-[var(--muted-foreground)] opacity-30" />
+            )}
           </div>
+        )}
+        {/* A poster frame looks exactly like a photo, so a clip says so. */}
+        {isVideo && (
+          <span className="pointer-events-none absolute bottom-2 left-2 inline-flex items-center gap-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-medium text-white">
+            <PlayIcon className="h-2.5 w-2.5" /> Video
+          </span>
         )}
         {/* Hover overlay — pointer-events-none so it never blocks the checkbox. */}
         <div className="pointer-events-none absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
@@ -558,7 +578,10 @@ function MediaListRow({
   onCopyTo,
   onDelete,
 }: MediaCardProps) {
-  const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+  // A video carries a poster thumbnail too, so the tile's gate is "is there a
+  // thumbnail", not "is it an image" — the rule about never loading the ORIGINAL
+  // is what mattered, and it still holds. (The old `isImage` check went with it.)
+  const isVideo = Boolean(f.type?.startsWith('video'));
   const caps = inherited
     ? INHERITED_CAPABILITIES
     : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
@@ -588,11 +611,16 @@ function MediaListRow({
         className="w-10 h-10 rounded-lg bg-[var(--muted)] overflow-hidden flex-shrink-0 cursor-pointer"
         onClick={onPreview}
       >
-        {isImage && f.url ? (
-          <img src={f.thumbnailUrl || f.url} alt={f.name} className="w-full h-full object-cover" loading="lazy" />
+        {/* Same rule as the grid tile above: thumbnail or icon, never the original. */}
+        {f.thumbnailUrl ? (
+          <img src={f.thumbnailUrl} alt={f.name} className="w-full h-full object-cover" loading="lazy" />
         ) : (
           <div className="flex items-center justify-center h-full">
-            <PhotoIcon className="w-5 h-5 text-[var(--muted-foreground)] opacity-30" />
+            {isVideo ? (
+              <FilmIcon className="w-5 h-5 text-[var(--muted-foreground)] opacity-30" />
+            ) : (
+              <PhotoIcon className="w-5 h-5 text-[var(--muted-foreground)] opacity-30" />
+            )}
           </div>
         )}
       </div>

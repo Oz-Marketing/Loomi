@@ -1,3 +1,4 @@
+import { withRouteErrors } from '@/lib/api-errors';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import {
@@ -5,7 +6,7 @@ import {
   listNotificationsForUser,
 } from '@/lib/notifications/service';
 
-export async function GET(req: NextRequest) {
+async function handleGet(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -20,3 +21,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({ items, unreadCount });
 }
+
+// Wrapped so an unhandled throw returns the JSON error envelope instead of
+// a 500 with an empty body, which a caller cannot parse or report.
+export const GET = withRouteErrors(handleGet, 'notifications');

@@ -55,3 +55,23 @@ export async function generateThumbnail(
     return null;
   }
 }
+
+/**
+ * Largest object we will pull back out of storage purely to make a thumbnail.
+ *
+ * The direct-to-S3 upload path exists so the app never holds a whole file in
+ * memory, and that constraint is real for a video or a layered PSD. It is not
+ * real for a logo. Measured against production: 809 of the 940 images in the
+ * library had no thumbnail, and the largest was 5MB — so the cap costs nothing
+ * in practice while still refusing the case the constraint was written for.
+ *
+ * Deliberately well above the observed maximum. A cap that only just clears
+ * today's data quietly starts skipping the moment someone uploads a bigger
+ * photo, and nobody would notice.
+ */
+export const THUMBNAIL_SOURCE_MAX = 25 * 1024 * 1024;
+
+/** Whether finalize should fetch this object back to thumbnail it. */
+export function shouldThumbnailOnFinalize(mimeType: string, size: number): boolean {
+  return isImageMime(mimeType) && size > 0 && size <= THUMBNAIL_SOURCE_MAX;
+}

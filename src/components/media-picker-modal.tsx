@@ -374,9 +374,11 @@ export function MediaPickerModal({
                 ].filter(Boolean).join(' · ')}
               >
                 <div className="relative h-[120px] bg-[var(--muted)] overflow-hidden">
-                  {isImageFile(f) && f.url ? (
+                  {/* Thumbnail only, never the original — a 120px picker tile
+                      must not pull a multi-megabyte asset. See media/page.tsx. */}
+                  {isImageFile(f) && f.thumbnailUrl ? (
                     <img
-                      src={f.thumbnailUrl || f.url}
+                      src={f.thumbnailUrl}
                       alt={f.name}
                       // Desaturated rather than hidden: still selectable, but it
                       // can't be mistaken for cleared creative at a glance.

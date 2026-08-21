@@ -1390,6 +1390,14 @@ model Form {
   // account's configured CRM destination(s) (Tekion / VinSolutions).
   // When false (default) leads are kept in Loomi only.
   forwardToCrm      Boolean      @default(false)
+  // What the form's vehicle fields (year/make/model/VIN/...) describe, so
+  // the ADF lead can carry a structured <vehicle> block the CRM maps to a
+  // real field instead of burying it in <comments>:
+  //   "interest" -> a vehicle they want (ADF interest="buy")
+  //   "trade"    -> the vehicle they already own (ADF interest="trade-in")
+  // Null (default) emits no <vehicle> at all — guessing wrong is worse
+  // than omitting, so every form opts in explicitly.
+  crmVehicleContext String?
   // When true, this row is a reusable template (authored from the Forms
   // tab of /templates) rather than a live form. Templates are excluded
   // from the normal forms list and from public /f/[slug] serving;

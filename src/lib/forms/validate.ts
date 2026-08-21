@@ -38,6 +38,34 @@ export type FieldValue =
   | FileValue[]
   | null;
 
+/**
+ * Field names that hold a whole name in one input ("Blake Glass") rather
+ * than a first/last pair. Matched exactly against the normalized field
+ * name, not by substring, so "Business Name" or "Model Name" is never
+ * read as a person.
+ */
+export const FULL_NAME_KEYS = [
+  'name',
+  'fullname',
+  'yourname',
+  'contactname',
+  'customername',
+];
+
+/**
+ * Split a single-input name into first + last. The first token is the
+ * first name and everything after it is the last name — the pragmatic
+ * split every CRM importer uses, so "Mary Jo Van Der Berg" becomes
+ * Mary / Jo Van Der Berg. Imperfect, but far better than the alternative:
+ * a contact (and a CRM lead) that has no name at all.
+ */
+export function splitFullName(value: string): { first: string; last: string | null } {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { first: '', last: null };
+  if (parts.length === 1) return { first: parts[0], last: null };
+  return { first: parts[0], last: parts.slice(1).join(' ') };
+}
+
 export interface ValidatedSubmission {
   /** Sanitized values keyed by field name (the public submit body). */
   values: Record<string, FieldValue>;
@@ -99,6 +127,9 @@ export function validateSubmission(
     firstName: null as string | null,
     lastName: null as string | null,
   };
+  // Held separately: an explicit first/last pair always wins over a
+  // combined "Name" field, and field order shouldn't decide that.
+  let combinedName: string | null = null;
 
   for (const block of fieldBlocks) {
     const name = getFieldName(block);
@@ -128,10 +159,21 @@ export function validateSubmission(
         identifiers.firstName = result.value;
       } else if (normalized === 'lastname' || normalized === 'lname') {
         identifiers.lastName = result.value;
+      } else if (FULL_NAME_KEYS.includes(normalized)) {
+        // Short lead forms usually collect one "Name" input. Without this
+        // the contact is created with no name at all and shows up as a
+        // bare email address in Loomi and in the dealer's CRM.
+        combinedName = result.value;
       } else if (normalized === 'email' && !identifiers.email && EMAIL_REGEX.test(result.value)) {
         identifiers.email = result.value;
       }
     }
+  }
+
+  if (combinedName && !identifiers.firstName && !identifiers.lastName) {
+    const split = splitFullName(combinedName);
+    identifiers.firstName = split.first || null;
+    identifiers.lastName = split.last;
   }
 
   // Combined upload weight across every file field. The per-field checks

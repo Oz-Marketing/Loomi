@@ -153,6 +153,14 @@ export interface DocElement {
    *  height auto-preserves aspect, and it repeats to fill. Resolution-independent
    *  so tile density stays constant across sizes. Default 0.25 (four across). */
   tileScale?: number;
+  // ── motion (a video / animated source in an image or background element) ──
+  /** Seconds into the source clip this element starts at. Default 0.
+   *
+   *  One value drives both outputs, which is the point: a still export captures
+   *  the frame at `trimStart`, and an MP4 export starts playback there — so the
+   *  frame a designer picked as the poster is the frame the video opens on.
+   *  A clip shorter than the ad's duration loops from here rather than freezing. */
+  trimStart?: number;
   // ── all element types ──
   /** Element opacity, 0–100 (percent). Undefined = fully opaque. Applies to any
    *  element (images/logos for watermarks, shapes/text for overlays); rendered
@@ -375,6 +383,17 @@ export interface TemplateDoc {
    *  legacy docs → derived from the fields' `group` values. */
   fieldGroups?: string[];
   background?: DocBackground;
+  /**
+   * MP4 output settings, used only by a design that carries a motion layer (a
+   * video or animated GIF — see `lib/ad-generator/motion.ts`). Absent, or with a
+   * key absent, falls back to {@link MOTION_DEFAULTS}.
+   *
+   * Deliberately doc-level rather than per element: an ad is one clip of one
+   * length, so two videos in the same design share its duration (each looping to
+   * fill it) instead of each claiming its own. Every static export ignores this
+   * entirely — a doc with no motion layer never reads it.
+   */
+  motion?: { durationSec?: number; fps?: number };
   /** Optional safe-area margin the designer sets to mark consistent padding. A
    *  builder-only guide (never exported) the alignment snapping treats as an
    *  edge. Stored as a value + unit; converted to per-size fractions at use. */

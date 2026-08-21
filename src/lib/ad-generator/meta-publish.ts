@@ -45,6 +45,10 @@ export interface PublishInputs {
   /** How many rendered sizes are available to upload. */
   imageCount: number;
   mode: 'attach_existing' | 'create_new';
+  /** This ad has a moving layer, so publishing it means uploading a video. */
+  motion?: boolean;
+  /** Whether this server can actually encode one (ffmpeg present). */
+  videoExportAvailable?: boolean;
 }
 
 export interface Blocker {
@@ -81,6 +85,16 @@ export function publishBlockers(input: PublishInputs): Blocker[] {
   }
   if (input.imageCount < 1) {
     out.push({ field: 'images', reason: 'No rendered creative to upload.' });
+  }
+  if (input.motion && !input.videoExportAvailable) {
+    // Caught here rather than at the encoder: by the time a launch reaches the
+    // renderer it has already written the AdLaunch row, and a server that cannot
+    // encode video will never be able to publish this ad.
+    out.push({
+      field: 'video',
+      reason:
+        'This ad has a video layer, but this server has no video encoder installed — so the MP4 Meta needs cannot be produced. Install ffmpeg on the server, or publish a still version of this ad.',
+    });
   }
   if (input.mode === 'attach_existing' && !input.targetAdSetId?.trim()) {
     out.push({
@@ -138,39 +152,77 @@ export function categoryAgrees(
 
 // ── payloads ────────────────────────────────────────────────────────────────
 
+/**
+ * What the ad shows: an uploaded still, or an uploaded clip with its thumbnail.
+ *
+ * A video creative is a genuinely different payload — `video_data`, not
+ * `link_data`, and the destination link moves INSIDE the call to action — so the
+ * asset is modelled rather than guessed at from a stray field. The thumbnail is a
+ * normal image hash: Meta requires one for every video ad, and taking it from our
+ * own poster render means the thumbnail matches the first frame.
+ */
+export interface CreativeAsset {
+  /** Still creative: the uploaded image's hash. */
+  imageHash?: string;
+  /** Video creative: the uploaded video plus the hash of its poster frame. */
+  video?: { videoId: string; thumbnailHash: string };
+}
+
 /** `object_story_spec` — who the ad is from and what it shows. */
-export function buildObjectStorySpec(params: {
-  pageId: string;
-  instagramActorId?: string | null;
-  imageHash: string;
-  link: string;
-  copy: AdCopyVariation;
-}): Record<string, unknown> {
-  const spec: Record<string, unknown> = {
-    page_id: params.pageId,
-    link_data: {
-      image_hash: params.imageHash,
-      link: params.link,
-      message: params.copy.meta.primaryText,
-      name: params.copy.meta.headline,
-      ...(params.copy.meta.description ? { description: params.copy.meta.description } : {}),
-      call_to_action: { type: 'LEARN_MORE' },
-    },
-  };
+export function buildObjectStorySpec(
+  params: {
+    pageId: string;
+    instagramActorId?: string | null;
+    link: string;
+    copy: AdCopyVariation;
+  } & CreativeAsset,
+): Record<string, unknown> {
+  if (!params.video && !params.imageHash) {
+    // A programming mistake, not a user one: every other path checks its inputs
+    // before the first Graph call, and a spec with no asset would create a
+    // creative that shows nothing.
+    throw new Error('buildObjectStorySpec needs either an imageHash or a video');
+  }
+  const spec: Record<string, unknown> = params.video
+    ? {
+        page_id: params.pageId,
+        video_data: {
+          video_id: params.video.videoId,
+          image_hash: params.video.thumbnailHash,
+          message: params.copy.meta.primaryText,
+          title: params.copy.meta.headline,
+          ...(params.copy.meta.description ? { link_description: params.copy.meta.description } : {}),
+          // `video_data` has no `link` of its own — the destination rides on the
+          // call to action, and an ad with neither is rejected.
+          call_to_action: { type: 'LEARN_MORE', value: { link: params.link } },
+        },
+      }
+    : {
+        page_id: params.pageId,
+        link_data: {
+          image_hash: params.imageHash,
+          link: params.link,
+          message: params.copy.meta.primaryText,
+          name: params.copy.meta.headline,
+          ...(params.copy.meta.description ? { description: params.copy.meta.description } : {}),
+          call_to_action: { type: 'LEARN_MORE' },
+        },
+      };
   // Omitted rather than sent empty: an empty actor id is rejected, and without it
   // the ad simply runs on Facebook placements instead of failing.
   if (params.instagramActorId?.trim()) spec.instagram_actor_id = params.instagramActorId.trim();
   return spec;
 }
 
-export function buildAdCreativePayload(params: {
-  name: string;
-  pageId: string;
-  instagramActorId?: string | null;
-  imageHash: string;
-  link: string;
-  copy: AdCopyVariation;
-}): Record<string, unknown> {
+export function buildAdCreativePayload(
+  params: {
+    name: string;
+    pageId: string;
+    instagramActorId?: string | null;
+    link: string;
+    copy: AdCopyVariation;
+  } & CreativeAsset,
+): Record<string, unknown> {
   return {
     name: params.name,
     object_story_spec: buildObjectStorySpec(params),

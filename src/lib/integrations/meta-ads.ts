@@ -1755,6 +1755,80 @@ export async function uploadAdImage(
   return { hash: first.hash, url: first.url ?? null };
 }
 
+/**
+ * Upload one MP4 to the ad account's video library, returning its id.
+ *
+ * Multipart, unlike the image upload: `/advideos` does not take base64 bytes in a
+ * form field, and a few MB of video base64-encoded into a urlencoded body is both
+ * a third larger and rejected past Graph's field limits.
+ *
+ * A fresh upload is NOT immediately usable — see {@link waitForVideoReady}.
+ */
+export async function uploadAdVideo(
+  cfg: MetaConfig,
+  adAccountId: string,
+  mp4: Buffer,
+  filename: string,
+): Promise<{ videoId: string }> {
+  const form = new FormData();
+  // Copy into a fresh Uint8Array: a Buffer can be a view onto a larger pooled
+  // allocation, and handing that straight to Blob would upload the neighbours.
+  form.set('source', new Blob([new Uint8Array(mp4)], { type: 'video/mp4' }), filename);
+  form.set('name', filename);
+  form.set('access_token', cfg.token);
+  if (cfg.appSecret) form.set('appsecret_proof', appSecretProof(cfg.token, cfg.appSecret));
+
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH_BASE}/${metaApiVersion()}/${normalizeAccount(adAccountId)}/advideos`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      body: form,
+    });
+  } catch (err) {
+    throw new MetaSyncError(graphNetworkError(err), 'graph_error');
+  }
+  const json = (await res.json().catch(() => null)) as ({ id?: string } & GraphErrorBody) | null;
+  if (!res.ok || json?.error) {
+    throw new MetaSyncError(`Facebook: ${json?.error?.message || `Graph API HTTP ${res.status}`}`, 'graph_error', res.status);
+  }
+  if (!json?.id) {
+    throw new MetaSyncError('Facebook accepted the video upload but returned no id.', 'graph_error');
+  }
+  return { videoId: json.id };
+}
+
+/**
+ * Wait for an uploaded video to finish processing.
+ *
+ * Meta encodes asynchronously, and an ad creative built on a video still in
+ * `processing` fails with an error that reads like a bad video id — so the wait is
+ * not optional politeness, it is the difference between a launch that works and
+ * one that fails intermittently depending on file size.
+ *
+ * Returns false on timeout rather than throwing: the caller decides whether to
+ * proceed (Meta usually finishes shortly after) or to report a failure.
+ */
+export async function waitForVideoReady(
+  cfg: MetaConfig,
+  videoId: string,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const intervalMs = opts.intervalMs ?? 4_000;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const row = await metaGraphFetch<{ status?: { video_status?: string } }>(cfg, videoId, { fields: 'status' });
+    const state = row.status?.video_status;
+    if (state === 'ready') return true;
+    if (state === 'error') {
+      throw new MetaSyncError('Facebook could not process the uploaded video.', 'graph_error');
+    }
+    if (Date.now() + intervalMs >= deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 export interface MetaAdSetSummary {
   id: string;
   name: string;

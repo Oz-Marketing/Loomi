@@ -72,6 +72,20 @@ function kit(over: Partial<LaunchKitInput> = {}): LaunchKitInput {
   };
 }
 
+describe('targetingSheet — video creative', () => {
+  it('tells the uploader to use the MP4, not the stills', () => {
+    // A video ad's kit that only listed PNGs would get published as a still.
+    const s = targetingSheet(kit({ videoFiles: ['video/trax-1080x1080.mp4'] }));
+    expect(s).toContain('video/trax-1080x1080.mp4');
+    expect(s).toContain('not the stills');
+    expect(s).toContain('poster frame');
+  });
+
+  it('says nothing about video for a still ad', () => {
+    expect(targetingSheet(kit())).not.toContain('VIDEO CREATIVE');
+  });
+});
+
 describe('targetingSheet', () => {
   it('states the category and the restrictions it forces', () => {
     const s = targetingSheet(kit());

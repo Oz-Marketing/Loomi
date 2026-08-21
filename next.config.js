@@ -8,7 +8,9 @@ const nextConfig = {
   // working git tree there for `git pull`). Without this hint Next.js
   // tries to auto-detect and emits a noisy warning every boot.
   outputFileTracingRoot: __dirname,
-  serverExternalPackages: ['yaml', 'puppeteer', 'puppeteer-core', 'sharp'],
+  // ffmpeg-static ships an ~80MB native binary that must stay on disk, not be
+  // traced into the bundle — same reason puppeteer and sharp are here.
+  serverExternalPackages: ['yaml', 'puppeteer', 'puppeteer-core', 'sharp', 'ffmpeg-static'],
   // Baseline security headers. `headers()` applies to every response Next
   // serves — success, redirect, 401 and 5xx alike — which is the point: an
   // audit found these absent on BOTH a 200 login page and a 401 API response,

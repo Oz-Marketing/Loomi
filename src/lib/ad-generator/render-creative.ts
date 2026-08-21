@@ -5,6 +5,7 @@ import { embedAccountFontCss, googleFontFaceCss } from './render-fonts';
 import { usedGoogleFontFamilies } from './google-fonts';
 import type { TemplateDoc } from './doc-types';
 import type { AdData } from './types';
+import { stillRenderFor } from './posterize';
 import { buildS3Key, isS3Configured, s3PublicUrl, uploadToS3 } from '@/lib/s3';
 
 /**
@@ -28,6 +29,41 @@ import { buildS3Key, isS3Configured, s3PublicUrl, uploadToS3 } from '@/lib/s3';
  *  unmerged data would therefore miss exactly the leak preflight exists to stop. */
 export function mergeRenderData(doc: TemplateDoc, data: AdData): AdData {
   return { ...doc.defaults, ...data };
+}
+
+/**
+ * Merge the data and inline every font the design uses — the shared preamble of
+ * any headless render.
+ *
+ * Extracted because the MP4 pipeline needs the identical treatment: its plates are
+ * the same design rasterised by the same renderer, so a font resolved differently
+ * there would make the video and the PNG two different ads.
+ */
+export async function prepareRenderData(
+  doc: TemplateDoc,
+  data: AdData,
+  accountKey?: string,
+  opts?: {
+    /** Roll up every account's fonts (an admin acting across accounts), instead of
+     *  scoping to `accountKey`. Never set from a worker: there is no session for a
+     *  worker to be unrestricted on behalf of. */
+    unrestricted?: boolean;
+  },
+): Promise<AdData> {
+  const merged = mergeRenderData(doc, data);
+
+  // Embed the fonts the design actually uses. Scoped to this sub-account rather
+  // than the admin-style roll-up the interactive route can do: a worker has no
+  // session to be "unrestricted" on behalf of, and an account's own brand fonts
+  // are what its ads should render in.
+  const families = usedFontFamilies(doc.elements, [merged.fontFamily]);
+  const withFonts = await embedAccountFontCss(accountKey, { ...merged }, { families, unrestricted: opts?.unrestricted });
+
+  // Inline any curated Google fonts too — a one-shot screenshot must never race
+  // a stylesheet fetch.
+  const googleCss = await googleFontFaceCss(usedGoogleFontFamilies(doc.elements, withFonts.fontFamily));
+  if (googleCss) withFonts.fontFaceCss = `${withFonts.fontFaceCss ?? ''}\n${googleCss}`;
+  return withFonts;
 }
 
 export interface RenderedSize {
@@ -62,27 +98,22 @@ export async function renderCreativeSizes({
   sizeIds,
   scale = 2,
 }: RenderCreativeInput): Promise<RenderedSize[]> {
-  const template = adTemplateFromDoc(doc.id, doc);
-  const sizes = sizeIds?.length ? template.sizes.filter((s) => sizeIds.includes(s.id)) : template.sizes;
+  // Checked before any work: posterizing and embedding fonts for a size list that
+  // matches nothing is wasted effort.
+  const sizes = sizeIds?.length ? doc.sizes.filter((s) => sizeIds.includes(s.id)) : doc.sizes;
   if (sizes.length === 0) throw new Error('No sizes to render');
 
-  const merged = mergeRenderData(doc, data);
+  const withFonts = await prepareRenderData(doc, data, accountKey);
 
-  // Embed the fonts the design actually uses. Scoped to this sub-account rather
-  // than the admin-style roll-up the interactive route can do: a worker has no
-  // session to be "unrestricted" on behalf of, and an account's own brand fonts
-  // are what its ads should render in.
-  const families = usedFontFamilies(doc.elements, [merged.fontFamily]);
-  const withFonts = await embedAccountFontCss(accountKey, { ...merged }, { families });
-
-  // Inline any curated Google fonts too — a one-shot screenshot must never race
-  // a stylesheet fetch.
-  const googleCss = await googleFontFaceCss(usedGoogleFontFamilies(doc.elements, withFonts.fontFamily));
-  if (googleCss) withFonts.fontFaceCss = `${withFonts.fontFaceCss ?? ''}\n${googleCss}`;
+  // A clip becomes its poster frame before Chromium sees it — production's
+  // headless browser has no H.264 decoder, so a video layer would otherwise
+  // rasterise as a hole. No-op for a still ad. See lib/ad-generator/posterize.ts.
+  const still = await stillRenderFor({ doc, template: adTemplateFromDoc(doc.id, doc), data: withFonts });
+  const template = still.template;
 
   const pngs = await renderAdBatch(
     sizes.map((size) => ({
-      html: template.render({ ...template.defaults, ...withFonts }, size),
+      html: template.render(still.data, size),
       width: size.width,
       height: size.height,
       scale,

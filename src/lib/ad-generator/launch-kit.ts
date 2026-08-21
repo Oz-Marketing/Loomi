@@ -37,6 +37,15 @@ export interface LaunchKitInput {
   approval?: ApprovalStatus | null;
   /** Rendered file names in the archive, so the text refers to real files. */
   imageFiles: string[];
+  /**
+   * MP4 file names, for an ad with a moving layer.
+   *
+   * Listed separately because they change what the person does with the kit: on a
+   * video ad the images are the poster frame and the placements that don't take
+   * video, and uploading only those would publish a still of an ad that was
+   * designed to move.
+   */
+  videoFiles?: string[];
   expiresAt?: string | null;
   generatedAt: string;
 }
@@ -140,6 +149,15 @@ export function targetingSheet(input: LaunchKitInput): string {
     'CREATIVE FILES',
     ...(input.imageFiles.length ? input.imageFiles.map((f) => `  · ${f}`) : ['  —']),
   );
+
+  if (input.videoFiles?.length) {
+    out.push(
+      '',
+      'VIDEO CREATIVE — upload these, not the stills',
+      ...input.videoFiles.map((f) => `  · ${f}`),
+      '  The images above are this ad\'s poster frame; use one as the video thumbnail.',
+    );
+  }
 
   if (l.notices.length) {
     out.push('', 'NOTES', ...l.notices.map((n) => `  · ${n}`));

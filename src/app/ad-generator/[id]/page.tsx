@@ -19,14 +19,15 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, ExclamationTriangleIcon, PencilIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, ExclamationTriangleIcon, PencilIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon, RocketLaunchIcon, FilmIcon } from '@heroicons/react/24/outline';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { AccountLogo } from '@/components/account-logo';
 import { MultiSelect } from '@/components/ui/multi-select';
-import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
+import { AD_TEMPLATES, ALL_TEMPLATES, getTemplateDoc } from '@/lib/ad-generator/templates';
+import { docHasMotion } from '@/lib/ad-generator/motion-plan';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -549,6 +550,81 @@ export default function AdGeneratorPage() {
         }),
     [template, data, isDual, dualVehicleMode, boundKeys],
   );
+
+  /**
+   * Does this ad move?
+   *
+   * Answered from the ad's own doc and its CURRENT values, because a clip can
+   * arrive through the form (a video in an image field) as easily as from the
+   * design — so "is this a video ad" is not a property of the template.
+   */
+  const motionDoc = docSnapshot ?? getTemplateDoc(template.id) ?? null;
+  const hasMotion = useMemo(
+    () => (motionDoc ? docHasMotion(motionDoc, renderData, selectedSizeIds) : false),
+    [motionDoc, renderData, selectedSizeIds],
+  );
+  /** Whether the SERVER can encode video (ffmpeg). Asked only when it matters, so
+   *  a still-only ad never pays for the round trip. */
+  const [videoReady, setVideoReady] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!hasMotion || videoReady !== null) return;
+    let alive = true;
+    fetch('/api/ad-generator/render-motion')
+      .then((r) => (r.ok ? r.json() : { available: false }))
+      .then((j) => alive && setVideoReady(Boolean(j?.available)))
+      .catch(() => alive && setVideoReady(false));
+    return () => {
+      alive = false;
+    };
+  }, [hasMotion, videoReady]);
+
+  /**
+   * Export the MP4 (one size) or a ZIP of MP4s + posters (several).
+   *
+   * The same body as the PNG export, plus the doc — the compositor needs the
+   * design's layer structure, not just its rendered HTML.
+   */
+  async function downloadVideo() {
+    setBusy('video');
+    try {
+      const res = await fetch('/api/ad-generator/render-motion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateId: template.id,
+          sizeIds: selectedSizeIds,
+          accountKey,
+          data: renderData,
+          name: creativeName.trim() || undefined,
+          ...(docSnapshot ? { doc: docSnapshot } : {}),
+        }),
+      });
+      if (!res.ok) {
+        throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      }
+      // Fidelity notes (a blend mode the MP4 can't apply, say) come back beside
+      // the file rather than instead of it.
+      try {
+        const warn = res.headers.get('X-Loomi-Motion-Warnings');
+        for (const w of warn ? (JSON.parse(warn) as string[]) : []) toast.warning(w);
+      } catch {
+        /* a malformed header must not lose the download */
+      }
+      const isZip = res.headers.get('Content-Type') === 'application/zip';
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const stem = creativeName.trim() || template.id;
+      a.download = isZip ? `${stem}-video-all-sizes.zip` : `${stem}.mp4`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(`Couldn't render the video: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function download(targetSizeId: string) {
     setBusy(targetSizeId);
@@ -1167,6 +1243,29 @@ export default function AdGeneratorPage() {
               >
                 {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${selectedSizeIds.length} size${selectedSizeIds.length !== 1 ? 's' : ''} (ZIP)`}
               </button>
+              {/* Video export — offered only when something in the ad actually
+                  moves. The PNG buttons above stay: a motion ad still needs its
+                  still for placements that don't take video. */}
+              {hasMotion && (
+                <button
+                  onClick={downloadVideo}
+                  disabled={busy !== null || missing.length > 0 || coopBlocking > 0 || videoReady === false}
+                  title={
+                    videoReady === false
+                      ? 'This server has no video encoder installed, so an MP4 cannot be produced here.'
+                      : exportBlockedReason ||
+                        'Renders your design over the clip as an MP4 — one file per size, with a matching poster frame'
+                  }
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FilmIcon className="h-4 w-4" />
+                  {busy === 'video'
+                    ? 'Encoding video…'
+                    : videoReady === false
+                      ? 'Video export unavailable'
+                      : `Export video (MP4${selectedSizeIds.length > 1 ? ' × ' + selectedSizeIds.length : ''})`}
+                </button>
+              )}
               {/* The Launch Kit is the campaign-ready bundle rather than just the
                   artwork: creative + copy already fitted to each platform's limits
                   + the targeting sheet, including the restrictions Meta forces on

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut } from 'next-auth/react';
@@ -18,10 +18,10 @@ import { useTheme } from '@/contexts/theme-context';
 import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
-import { hasUnseenChangelog } from '@/lib/changelog';
 import { NotificationsPanel } from '@/components/notifications-panel';
 import { openSupportModal } from '@/lib/ui-events';
 import type { UserRole } from '@/lib/roles';
+import { useTopBarBadges } from '@/hooks/use-top-bar-badges';
 
 /**
  * Reporting surface utility bar. Mirrors the studio
@@ -74,41 +74,17 @@ export function ReportingTopBar({
   const canViewRoleBadge =
     userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
 
-  // Notifications
   const [showNotifications, setShowNotifications] = useState(false);
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
-  const checkUnreadNotifications = useCallback(async () => {
-    try {
-      const res = await fetch('/api/notifications?unreadOnly=1&limit=1');
-      if (!res.ok) return;
-      const data = (await res.json()) as { unreadCount: number };
-      setUnreadNotifications(data.unreadCount ?? 0);
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  useEffect(() => {
-    checkUnreadNotifications();
-    const id = setInterval(checkUnreadNotifications, 60_000);
-    return () => clearInterval(id);
-  }, [checkUnreadNotifications]);
-
-  // Changelog
   const [showChangelog, setShowChangelog] = useState(false);
-  const [hasChangelogUnread, setHasChangelogUnread] = useState(false);
-  const checkChangelogUnread = useCallback(async () => {
-    try {
-      const res = await fetch('/api/changelog');
-      if (!res.ok) return;
-      const data = await res.json();
-      setHasChangelogUnread(hasUnseenChangelog(data.entries || []));
-    } catch {
-      /* ignore */
-    }
-  }, []);
-  useEffect(() => {
-    checkChangelogUnread();
-  }, [checkChangelogUnread]);
+
+  // Both badges, session-gated and visibility-aware. See use-top-bar-badges —
+  // this was three copies of the same ungated 60s interval.
+  const {
+    unreadNotifications,
+    refreshNotifications: checkUnreadNotifications,
+    hasUnseenChangelogEntry: hasChangelogUnread,
+    setHasUnseenChangelogEntry: setHasChangelogUnread,
+  } = useTopBarBadges();
 
   // Close user menu on outside click + Escape
   useEffect(() => {

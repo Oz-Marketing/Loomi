@@ -503,6 +503,7 @@ function CampaignTableRow({
   onArchive,
   onRestore,
   onDelete,
+  onDuplicate,
   onOpenSentDetail,
   showRestore,
 }: {
@@ -524,6 +525,7 @@ function CampaignTableRow({
   onArchive: (item: Campaign) => void;
   onRestore: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
+  onDuplicate: (item: Campaign) => void;
   onOpenSentDetail: (item: Campaign) => void;
   /** When true, the row sits in the archived view — show Restore in
    *  the menu instead of Archive. */
@@ -705,6 +707,17 @@ function CampaignTableRow({
                   {downloading ? 'Downloading...' : 'Download Email'}
                   <ArrowDownTrayIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                 </button>
+
+                {isLoomi && (
+                  <button
+                    type="button"
+                    onClick={() => onDuplicate(item)}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                  >
+                    Duplicate
+                    <DocumentDuplicateIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                )}
 
                 {isLoomi && <div className="my-1 border-t border-[var(--border)] " />}
 
@@ -1304,6 +1317,30 @@ export function BlastPageList({
     if (url) router.push(url);
   }
 
+  async function handleDuplicateCampaign(campaign: Campaign) {
+    if (!isLoomiCampaign(campaign)) return;
+    const id = campaign.campaignId || campaign.id;
+    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    try {
+      const res = await fetch(
+        `/api/blasts/${path}/${encodeURIComponent(id)}/duplicate`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      await alert({
+        title: 'Duplicate failed',
+        message: err instanceof Error ? err.message : 'Failed to duplicate blast.',
+      });
+      return;
+    }
+    // The parent owns the campaigns array, so reload to surface the new draft.
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
   async function handleArchiveCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
@@ -1836,6 +1873,7 @@ export function BlastPageList({
                           onArchive={handleArchiveCampaign}
                           onRestore={handleRestoreCampaign}
                           onDelete={handleDeleteCampaign}
+                          onDuplicate={handleDuplicateCampaign}
                           onOpenSentDetail={openSentDetail}
                           showRestore={statusFilter === 'archived'}
                         />

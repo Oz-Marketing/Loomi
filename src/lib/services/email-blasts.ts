@@ -8,8 +8,10 @@ import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
+  type UnsubscribeFooterConfig,
   type UnsubscribeFooterInput,
 } from '@/lib/sending/unsubscribe-footer';
+import { resolveAccountFooters } from '@/lib/sending/account-footer';
 import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
 import {
   applyBlastMergetags,
@@ -412,6 +414,8 @@ interface AccountSenderIdentity {
    *  sends in that case but skips the subscription_tracking block. */
   /** Account data the compliance footer is built from, per send. */
   unsubscribeFooter: UnsubscribeFooterInput | null;
+  /** Resolved footer styling — this account's, or an ancestor's. */
+  footerConfig: UnsubscribeFooterConfig | null;
 }
 
 function formatFromHeader(email: string, name: string | null | undefined): string {
@@ -447,6 +451,9 @@ async function buildSenderMap(
   });
 
   const lookup = new Map(accounts.map((a) => [a.key, a]));
+  // One batched resolution for the whole blast — inheritance walks the
+  // parent chain, which must not happen inside the per-recipient loop.
+  const footers = await resolveAccountFooters(accountKeys);
   for (const key of accountKeys) {
     const account = lookup.get(key);
     let sendgridApiKey: string | null = null;
@@ -477,6 +484,8 @@ async function buildSenderMap(
         }
       : null;
 
+    const footerConfig = footers.get(key)?.config ?? null;
+
     if (account?.senderEmail) {
       map.set(key, {
         from: formatFromHeader(account.senderEmail, account.senderName),
@@ -485,6 +494,7 @@ async function buildSenderMap(
         senderName: account.senderName || null,
         sendgridApiKey,
         unsubscribeFooter,
+        footerConfig,
       });
     } else {
       map.set(key, {
@@ -494,6 +504,7 @@ async function buildSenderMap(
         senderName: null,
         sendgridApiKey,
         unsubscribeFooter,
+        footerConfig,
       });
     }
   }
@@ -1555,6 +1566,7 @@ export async function processEmailBlast(
       senderName: null,
       sendgridApiKey: null,
       unsubscribeFooter: null,
+      footerConfig: null,
     };
 
     // Dispatch is SendGrid-only for bulk blasts.
@@ -1618,6 +1630,7 @@ export async function processEmailBlast(
             html: mergedHtml,
             text: mergedText,
             account: sender.unsubscribeFooter,
+            config: sender.footerConfig,
           })
         : { html: mergedHtml, text: mergedText };
       const personalizedHtml = withFooter.html;

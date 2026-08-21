@@ -169,6 +169,24 @@ describe('account settings sections', () => {
     }
   });
 
+  it('keeps the sending sections to Studio', () => {
+    // Reporting and Projects don't send anything, so a SendGrid key or a
+    // suppression list there would be a dead panel.
+    for (const key of ['sending', 'email-footer', 'sms', 'suppressions'] as const) {
+      expect(sectionKeys('studio')).toContain(key);
+      for (const surface of ['reporting', 'app'] as const) {
+        expect(sectionKeys(surface)).not.toContain(key);
+      }
+    }
+  });
+
+  it('groups the sending sections together, after Custom Fields', () => {
+    // Order is what the sidebar renders, and these four read as one block.
+    const keys = sectionKeys('studio');
+    expect(keys.slice(keys.indexOf('contact-fields') + 1, keys.indexOf('contact-fields') + 5))
+      .toEqual(['sending', 'email-footer', 'sms', 'suppressions']);
+  });
+
   it('offers Notifications everywhere but Reporting', () => {
     expect(sectionKeys('studio')).toContain('notifications');
     expect(sectionKeys('app')).toContain('notifications');

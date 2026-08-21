@@ -69,11 +69,11 @@ model User {
   budgetLineEvents BudgetLineEvent[] @relation("BudgetLineEventAuthor")
 
   // Permissions
-  sectorRoles       UserSectorRole[]
-  capabilityGrants  UserCapabilityGrant[]      @relation("CapabilityGrantSubject")
-  capabilitiesGiven UserCapabilityGrant[]      @relation("CapabilityGrantedBy")
-  auditEntriesMade     PermissionAuditLog[]    @relation("PermissionAuditActor")
-  auditEntriesReceived PermissionAuditLog[]    @relation("PermissionAuditSubject")
+  sectorRoles          UserSectorRole[]
+  capabilityGrants     UserCapabilityGrant[] @relation("CapabilityGrantSubject")
+  capabilitiesGiven    UserCapabilityGrant[] @relation("CapabilityGrantedBy")
+  auditEntriesMade     PermissionAuditLog[]  @relation("PermissionAuditActor")
+  auditEntriesReceived PermissionAuditLog[]  @relation("PermissionAuditSubject")
 }
 
 // ─────────────────────────────────────────────────────
@@ -489,6 +489,7 @@ model Account {
   reviews                  ReviewEvent[]
   mailerCampaigns          MailerCampaign[]
   billboards               Billboard[]
+  emailFooter              AccountEmailFooter?
 
   @@index([accountRepId])
   @@index([parentAccountKey])
@@ -2175,6 +2176,40 @@ model EmailSuppression {
 }
 
 // ─────────────────────────────────────────────────────
+// Per-account email compliance footer
+// ─────────────────────────────────────────────────────
+//
+// Styling for the CAN-SPAM block appended to every blast and flow email.
+//
+// STRUCTURED, NOT HTML — on purpose. `config` holds presentation plus two
+// copy strings; the dealer name, postal address, and unsubscribe link are
+// emitted by the renderer in lib/sending/unsubscribe-footer.ts and cannot be
+// configured away. A free-text HTML column here would be one paste away from
+// shipping a blast with no address, which is exactly the bug this whole area
+// was built to close. resolveFooterConfig() validates every field on read, so
+// a hand-edited row still can't inject markup or break a style attribute.
+//
+// INHERITANCE — a row is an OVERRIDE, and absence is meaningful. Resolution
+// walks up Account.parentAccountKey and takes the first row it finds, so a
+// footer saved on a group account applies to every rooftop beneath it until
+// that rooftop saves its own. Deleting a rooftop's row re-inherits rather
+// than reverting to the built-in default.
+model AccountEmailFooter {
+  id String @id @default(cuid())
+
+  // One override per account — the resolver wants at most one row to find.
+  accountKey String  @unique
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  /// Partial UnsubscribeFooterConfig. Partial by design: fields the account
+  /// never touched should follow the default if the default ever changes.
+  config Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────────────
 // Changelog
 // ─────────────────────────────────────────────────────
 
@@ -3266,12 +3301,12 @@ model Notification {
 }
 
 model NotificationPreference {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type   String
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String
   /// In-app: show this kind in the bell panel.
-  enabled Boolean @default(true)
+  enabled      Boolean  @default(true)
   /// Email: also send it to the user's inbox. Independent of `enabled` — a
   /// user can keep the panel entry and mute the email, or vice versa.
   /// Backfilled from `enabled` for rows that predate the split, so nobody
@@ -4215,7 +4250,7 @@ model Playbook {
   /// JSON: { adTemplateId, sizeIds[], emailTemplateSlug, emailMaxOffers }.
   /// Text + JSON rather than columns because the step list is meant to grow;
   /// see `src/lib/playbooks/creative.ts` for the parsed shape.
-  definition String @db.Text
+  definition     String @db.Text
   /// Hash of `definition`, the staleness test — same discipline as
   /// `AdTemplateCoopCheck.docHash`. Lets "this rooftop is on an older version"
   /// be a fact rather than a guess.

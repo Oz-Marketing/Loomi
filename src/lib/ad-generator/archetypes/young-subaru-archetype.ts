@@ -37,7 +37,7 @@ const SUBARU_DEFAULTS = {
 
 /** The doc, for whatever set of boards Young wants — defaults to the five they run. */
 export function youngSubaruSingleOffer(sizes: AdSize[] = YOUNG_SUBARU_SIZES): TemplateDoc {
-  return buildArchetypeDoc(vehicleOfferArchetype, YOUNG_SUBARU_THEME, sizes, {
+  return buildArchetypeDoc(vehicleOfferArchetype(1), YOUNG_SUBARU_THEME, sizes, {
     id: 'young-subaru-single-offer-arch',
     name: 'Young Subaru — Single Offer',
     description:
@@ -45,4 +45,33 @@ export function youngSubaruSingleOffer(sizes: AdSize[] = YOUNG_SUBARU_SIZES): Te
     industries: ['Automotive'],
     defaults: SUBARU_DEFAULTS,
   });
+}
+
+/**
+ * The dual, from the SAME archetype with a different offer count — and the same
+ * theme. The hand-built pair states these as two docs with two sets of elements
+ * and ten hand-authored layouts between them; here the difference is the number 2
+ * and a fade angle.
+ */
+export function youngSubaruDualOffer(sizes: AdSize[] = YOUNG_SUBARU_SIZES): TemplateDoc {
+  return buildArchetypeDoc(
+    vehicleOfferArchetype(2),
+    // The dual's fade runs as a top band rather than a diagonal, matching the
+    // hand-built treatment — a theme choice, which is where it belongs.
+    { ...YOUNG_SUBARU_THEME, fade: { angle: 180, end: 45 } },
+    sizes,
+    {
+      id: 'young-subaru-dual-offer-arch',
+      name: 'Young Subaru — Dual Offer',
+      description: 'Two offers on the Young Subaru background, laid out per channel.',
+      industries: ['Automotive'],
+      defaults: {
+        ...SUBARU_DEFAULTS,
+        tagline: 'Two Ways to Adventure',
+        vehicleName: '2026 Outback',
+        o2_vehicleName: '2026 Forester',
+        o2_financialInstitution: 'Subaru Motors Finance',
+      },
+    },
+  );
 }

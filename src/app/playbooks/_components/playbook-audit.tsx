@@ -13,6 +13,8 @@ import { PageHeader } from '@/components/page-header';
 import { HelpTip } from '@/components/ui/help-tip';
 import { getAppUrl } from '@/lib/cross-site';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { toast } from 'sonner';
 import type {
   AccountCoverage,
   AuditPayload,
@@ -20,6 +22,7 @@ import type {
   CheckSeverity,
   CheckStatus,
   PlaybookResult,
+  SweepSummary,
 } from '@/lib/playbooks/types';
 
 const fetcher = (url: string) =>
@@ -98,6 +101,64 @@ export function PlaybookAudit() {
     { revalidateOnFocus: false },
   );
   const [tab, setTab] = useState<Tab>('accounts');
+  const { prompt, confirm } = useLoomiDialog();
+
+  /**
+   * Waive a check on one account — record "this is not a question here" instead
+   * of leaving a red nobody can act on (docs/playbooks.md §4.3).
+   *
+   * The reason is REQUIRED, and asked for before anything is written. A waiver
+   * with no reason is indistinguishable from ignoring the row, and the person
+   * reading it in six months has no way to tell a considered exemption from a
+   * shrug — so the prompt is the feature, not a formality.
+   */
+  async function waiveCheck(account: AccountCoverage, check: CheckResult) {
+    const reason = await prompt({
+      title: `Waive "${check.label}"`,
+      message:
+        `Why does this not apply to ${account.dealer}? This is recorded against your name, ` +
+        'and the check stops counting toward coverage until someone lifts it.',
+      placeholder: 'e.g. this rooftop does not run Google — handled by the OEM',
+      confirmLabel: 'Waive',
+      required: true,
+      multiline: true,
+    });
+    if (!reason?.trim()) return;
+    try {
+      const res = await fetch('/api/playbooks/waivers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey: account.accountKey, checkId: check.id, reason }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await mutate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the waiver');
+    }
+  }
+
+  /** Put a waived check back in the score. */
+  async function liftWaiver(account: AccountCoverage, check: CheckResult) {
+    const ok = await confirm({
+      title: `Score "${check.label}" again`,
+      message: `${account.dealer} will be measured on this check again, and its coverage will change.`,
+      confirmLabel: 'Score it again',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(
+        `/api/playbooks/waivers?accountKey=${encodeURIComponent(account.accountKey)}` +
+          `&checkId=${encodeURIComponent(check.id)}`,
+        { method: 'DELETE' },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await mutate();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not lift the waiver');
+    }
+  }
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -154,6 +215,8 @@ export function PlaybookAudit() {
           is still running or has failed. */}
       {tab !== 'library' && <PhaseNotice />}
 
+      {tab !== 'library' && data && <SweepStatus sweep={data.lastSweep ?? null} />}
+
       {tab === 'library' && <PlaybookLibrary />}
 
       {tab !== 'library' && error && (
@@ -195,7 +258,12 @@ export function PlaybookAudit() {
           ) : tab === 'accounts' ? (
             <div className="mt-4 space-y-2">
               {data.accounts.map((account) => (
-                <AccountRow key={account.accountKey} account={account} />
+                <AccountRow
+                  key={account.accountKey}
+                  account={account}
+                  onWaive={waiveCheck}
+                  onLift={liftWaiver}
+                />
               ))}
             </div>
           ) : (
@@ -243,11 +311,71 @@ function TabButton({
 function PhaseNotice() {
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3 text-xs leading-relaxed text-[var(--muted-foreground)]">
-      <span className="font-medium text-[var(--foreground)]">Read-only.</span> Nothing here changes an
-      account. Which playbooks apply is <em>inferred</em> from what each account has configured —
-      a rooftop that deliberately doesn&apos;t run a channel can still show as missing it. Applying
-      playbooks explicitly, so applicability is a recorded fact rather than a guess, is Phase 1.
+      Which playbooks apply is <em>inferred</em> from what each account has configured, so a
+      rooftop that deliberately doesn&apos;t run a channel can still show as missing it. When
+      that happens, use <span className="font-medium text-[var(--foreground)]">Not
+      applicable</span> on the check and say why — it stops counting toward that account&apos;s
+      coverage, and the reason is kept. Applying playbooks explicitly, so applicability is a
+      recorded fact rather than a guess, is Phase 1.
     </div>
+  );
+}
+
+/**
+ * The nightly sweep's heartbeat.
+ *
+ * Without this line, a sweep that has been dead for three weeks and a week where
+ * nothing drifted look exactly the same — the page renders a fresh on-demand
+ * audit either way, so the screen stays reassuring while the alerting behind it
+ * is gone. This is the only thing that tells them apart.
+ */
+function SweepStatus({ sweep }: { sweep: SweepSummary | null }) {
+  if (!sweep) {
+    return (
+      <p className="mt-2 text-xs text-[var(--muted-foreground)]">
+        The nightly sweep hasn&apos;t run yet. Everything below was computed just now, on demand.
+      </p>
+    );
+  }
+
+  const started = new Date(sweep.startedAt);
+  const hours = (Date.now() - started.getTime()) / 3_600_000;
+  // A daily job gets a day and a half before it counts as late — a sweep that
+  // ran 25 hours ago is a clock skew, not an incident.
+  const late = hours > 36;
+  const when = started.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  if (sweep.error) {
+    return (
+      <p className="mt-2 text-xs" style={{ color: STATUS_COLOR.fail }}>
+        The nightly sweep failed on {when}: {sweep.error}
+      </p>
+    );
+  }
+  if (!sweep.finishedAt) {
+    return (
+      <p className="mt-2 text-xs" style={{ color: STATUS_COLOR.warn }}>
+        The sweep started on {when} and never finished — it may still be running, or it died
+        mid-run.
+      </p>
+    );
+  }
+
+  return (
+    <p
+      className="mt-2 text-xs"
+      style={late ? { color: STATUS_COLOR.warn } : { color: 'var(--muted-foreground)' }}
+    >
+      Nightly sweep {late ? 'last ran' : 'ran'} {when} · {sweep.accountsAudited} account
+      {sweep.accountsAudited === 1 ? '' : 's'} · {sweep.blockingFails} blocking
+      {sweep.coveragePct == null ? '' : ` · ${sweep.coveragePct}% average coverage`}
+      {late ? ' — that is more than a day ago.' : ''}
+    </p>
   );
 }
 
@@ -297,9 +425,25 @@ function StatusDot({ status }: { status: CheckStatus }) {
   );
 }
 
-function AccountRow({ account }: { account: AccountCoverage }) {
+function AccountRow({
+  account,
+  onWaive,
+  onLift,
+}: {
+  account: AccountCoverage;
+  onWaive: (account: AccountCoverage, check: CheckResult) => void;
+  onLift: (account: AccountCoverage, check: CheckResult) => void;
+}) {
   const [open, setOpen] = useState(false);
   const applied = account.playbooks.filter((p) => p.applies);
+  // Waivers are counted on the collapsed row: a rooftop at 100% because six
+  // checks were waived is a different fact from one at 100% outright, and
+  // hiding that behind an expander is how a waiver becomes a way to make a
+  // number look good.
+  const waivedCount = applied.reduce(
+    (n, p) => n + p.checks.filter((c) => c.waived).length,
+    0,
+  );
 
   return (
     <div className="rounded-2xl border border-[var(--border)]">
@@ -334,6 +478,14 @@ function AccountRow({ account }: { account: AccountCoverage }) {
             {account.blockingFails} blocking
           </span>
         )}
+        {waivedCount > 0 && (
+          <span
+            className="shrink-0 rounded border border-[var(--border)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]"
+            title={`${waivedCount} check${waivedCount === 1 ? '' : 's'} waived — excluded from this account's coverage`}
+          >
+            {waivedCount} waived
+          </span>
+        )}
         <div className="w-20 shrink-0 text-right">
           <div className="text-lg font-semibold tabular-nums">
             {account.coveragePct == null ? '—' : `${account.coveragePct}%`}
@@ -353,7 +505,13 @@ function AccountRow({ account }: { account: AccountCoverage }) {
           ) : (
             <div className="space-y-5">
               {applied.map((playbook) => (
-                <PlaybookSection key={playbook.key} playbook={playbook} account={account} />
+                <PlaybookSection
+                  key={playbook.key}
+                  playbook={playbook}
+                  account={account}
+                  onWaive={onWaive}
+                  onLift={onLift}
+                />
               ))}
             </div>
           )}
@@ -366,9 +524,13 @@ function AccountRow({ account }: { account: AccountCoverage }) {
 function PlaybookSection({
   playbook,
   account,
+  onWaive,
+  onLift,
 }: {
   playbook: PlaybookResult;
   account: AccountCoverage;
+  onWaive: (account: AccountCoverage, check: CheckResult) => void;
+  onLift: (account: AccountCoverage, check: CheckResult) => void;
 }) {
   return (
     <div>
@@ -378,30 +540,65 @@ function PlaybookSection({
       </div>
       <div className="mt-2 divide-y divide-[var(--border)]">
         {playbook.checks.map((check) => (
-          <CheckLine key={check.id} check={check} account={account} />
+          <CheckLine
+            key={check.id}
+            check={check}
+            account={account}
+            onWaive={onWaive}
+            onLift={onLift}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function CheckLine({ check, account }: { check: CheckResult; account: AccountCoverage }) {
+function CheckLine({
+  check,
+  account,
+  onWaive,
+  onLift,
+}: {
+  check: CheckResult;
+  account: AccountCoverage;
+  onWaive: (account: AccountCoverage, check: CheckResult) => void;
+  onLift: (account: AccountCoverage, check: CheckResult) => void;
+}) {
   const href = check.fix && check.status !== 'pass' ? fixHref(check.fix, account) : null;
+  // Only a red or an amber can be waived. Waiving a PASS would shrink the
+  // denominator and inflate coverage, and waiving an already-inapplicable check
+  // asserts nothing.
+  const waivable = !check.waived && (check.status === 'fail' || check.status === 'warn');
 
   return (
     <div className="flex items-start gap-3 py-2">
       <StatusDot status={check.status} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <span className="text-sm">{check.label}</span>
+          <span className={`text-sm ${check.waived ? 'text-[var(--muted-foreground)]' : ''}`}>
+            {check.label}
+          </span>
           <HelpTip title={check.label} iconClassName="h-3.5 w-3.5">
             <p>{check.why}</p>
             <p>
               <strong>{SEVERITY_LABEL[check.severity]}</strong> check.
             </p>
           </HelpTip>
+          {check.waived && (
+            <span className="rounded border border-[var(--border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+              Waived
+            </span>
+          )}
         </div>
+        {/* The OBSERVED state is still shown on a waived check. A waiver says
+            "we accept this", so hiding what was accepted defeats the point. */}
         <div className="text-xs text-[var(--muted-foreground)]">{check.detail}</div>
+        {check.waived && (
+          <div className="mt-0.5 text-xs italic text-[var(--muted-foreground)]">
+            &ldquo;{check.waived.reason}&rdquo;
+            {check.waived.waivedByName ? ` — ${check.waived.waivedByName}` : ''}
+          </div>
+        )}
       </div>
       {href && (
         <a
@@ -411,6 +608,24 @@ function CheckLine({ check, account }: { check: CheckResult; account: AccountCov
           {check.fix!.label}
           <ArrowTopRightOnSquareIcon className="h-3 w-3" />
         </a>
+      )}
+      {waivable && (
+        <button
+          type="button"
+          onClick={() => onWaive(account, check)}
+          className="shrink-0 whitespace-nowrap text-xs text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] hover:underline"
+        >
+          Not applicable
+        </button>
+      )}
+      {check.waived && (
+        <button
+          type="button"
+          onClick={() => onLift(account, check)}
+          className="shrink-0 whitespace-nowrap text-xs text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] hover:underline"
+        >
+          Score it again
+        </button>
       )}
     </div>
   );

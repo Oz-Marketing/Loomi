@@ -6,6 +6,7 @@ import {
   isFullySynced,
   applyDefinition,
   resetStep,
+  resolveVersionBump,
   type CreativeDefinition,
   type ConfigCreative,
 } from './creative';
@@ -136,5 +137,110 @@ describe('applyDefinition', () => {
     const applied = applyDefinition(DEF);
     applied.sizeIds.push('leaked');
     expect(DEF.sizeIds).toEqual(['sq', 'story']);
+  });
+});
+
+/**
+ * The version number is the whole staleness story: "this rooftop is on v2, the
+ * playbook is on v4" is the only thing that will ever tell someone their
+ * creative is behind. So a bump that fires on a RENAME poisons the signal, and
+ * a bump that fails to fire on a real edit hides it — and neither shows up on
+ * screen until a rooftop has silently drifted for a month.
+ */
+describe('resolveVersionBump', () => {
+  const at = (def: CreativeDefinition) => definitionHash(def);
+
+  it('does not bump on a save that never touched the bundle (a rename)', () => {
+    const out = resolveVersionBump({
+      currentVersion: 3,
+      currentHash: at(DEF),
+      nextDefinition: undefined,
+    });
+    expect(out).toEqual({ version: 3, hash: at(DEF), bumped: false });
+  });
+
+  it('does not bump when the same definition is re-saved', () => {
+    const out = resolveVersionBump({
+      currentVersion: 3,
+      currentHash: at(DEF),
+      nextDefinition: { ...DEF },
+    });
+    expect(out.bumped).toBe(false);
+    expect(out.version).toBe(3);
+  });
+
+  it('does not bump when only the SIZE ORDER changed', () => {
+    // The hash normalizes order, and the settings form can hand back a
+    // differently-ordered array for reasons that have nothing to do with intent.
+    const out = resolveVersionBump({
+      currentVersion: 3,
+      currentHash: at(DEF),
+      nextDefinition: { ...DEF, sizeIds: [...DEF.sizeIds].reverse() },
+    });
+    expect(out.bumped).toBe(false);
+    expect(out.version).toBe(3);
+  });
+
+  it('bumps once for a real edit, and carries the new hash', () => {
+    const next = { ...DEF, adTemplateId: 'tpl_other' };
+    const out = resolveVersionBump({
+      currentVersion: 3,
+      currentHash: at(DEF),
+      nextDefinition: next,
+    });
+    expect(out).toEqual({ version: 4, hash: at(next), bumped: true });
+  });
+
+  it('bumps for every field the bundle actually holds', () => {
+    const edits: CreativeDefinition[] = [
+      { ...DEF, adTemplateId: 'tpl_other' },
+      { ...DEF, sizeIds: ['sq'] },
+      { ...DEF, sizeIds: [...DEF.sizeIds, 'landscape'] },
+      { ...DEF, emailTemplateSlug: 'ford-offers' },
+      { ...DEF, emailMaxOffers: 4 },
+    ];
+    for (const next of edits) {
+      const out = resolveVersionBump({
+        currentVersion: 1,
+        currentHash: at(DEF),
+        nextDefinition: next,
+      });
+      expect(out.bumped, JSON.stringify(next)).toBe(true);
+      expect(out.version).toBe(2);
+    }
+  });
+
+  it('bumps by one, not to the edit count — two saves of the same edit land on the same version', () => {
+    const next = { ...DEF, emailMaxOffers: 4 };
+    const first = resolveVersionBump({
+      currentVersion: 1,
+      currentHash: at(DEF),
+      nextDefinition: next,
+    });
+    const second = resolveVersionBump({
+      currentVersion: first.version,
+      currentHash: first.hash,
+      nextDefinition: next,
+    });
+    expect(first.version).toBe(2);
+    expect(second.version).toBe(2);
+    expect(second.bumped).toBe(false);
+  });
+
+  it('bumps back up when an edit is reverted, rather than restoring the old number', () => {
+    // A revert is a change too: rooftops sitting on the edited version need to
+    // be told to come back, and versions must never move backwards.
+    const edited = resolveVersionBump({
+      currentVersion: 1,
+      currentHash: at(DEF),
+      nextDefinition: { ...DEF, emailMaxOffers: 4 },
+    });
+    const reverted = resolveVersionBump({
+      currentVersion: edited.version,
+      currentHash: edited.hash,
+      nextDefinition: { ...DEF },
+    });
+    expect(reverted.version).toBe(3);
+    expect(reverted.hash).toBe(at(DEF));
   });
 });

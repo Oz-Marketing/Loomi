@@ -12,7 +12,9 @@ import type {
   AccountAuditContext,
   AccountCoverage,
   AuditPayload,
+  CheckOutcome,
   CheckResult,
+  CheckWaiver,
   PlaybookResult,
 } from './types';
 
@@ -35,6 +37,30 @@ export function coveragePct(counts: { pass: number; warn: number; fail: number }
   return Math.round((counts.pass / scored) * 100);
 }
 
+/**
+ * Fold a waiver into a check's outcome.
+ *
+ * The check still RUNS and its observed detail is still carried — a waiver is
+ * "we accept this", not "don't look". What changes is the score: a waived check
+ * counts as `na`, excluded from coverage entirely, the same as a playbook that
+ * doesn't apply. That is what the person waiving it asserted.
+ *
+ * A waiver on a check that is currently PASSING is left alone. Scoring a pass as
+ * `na` would quietly shrink the denominator and inflate coverage, and a waiver
+ * that outlived the problem it excused should read as spent, not as credit.
+ */
+export function applyWaiver(outcome: CheckOutcome, waiver: CheckWaiver | undefined): {
+  outcome: CheckOutcome;
+  waived?: CheckWaiver;
+} {
+  if (!waiver) return { outcome };
+  if (outcome.status === 'pass' || outcome.status === 'na') return { outcome };
+  return {
+    outcome: { status: 'na', detail: outcome.detail },
+    waived: waiver,
+  };
+}
+
 function runPlaybook(ctx: AccountAuditContext, definition: (typeof PLAYBOOKS)[number]): PlaybookResult {
   const applies = definition.appliesTo(ctx);
   const counts = zeroCounts();
@@ -45,7 +71,8 @@ function runPlaybook(ctx: AccountAuditContext, definition: (typeof PLAYBOOKS)[nu
     // should cost one row rather than the whole audit.
     .filter((c): c is NonNullable<typeof c> => !!c)
     .map((check) => {
-      const outcome = applies ? check.run(ctx) : { status: 'na' as const, detail: 'playbook does not apply' };
+      const raw = applies ? check.run(ctx) : { status: 'na' as const, detail: 'playbook does not apply' };
+      const { outcome, waived } = applyWaiver(raw, ctx.waivers[check.id]);
       counts[outcome.status] += 1;
       return {
         id: check.id,
@@ -53,6 +80,7 @@ function runPlaybook(ctx: AccountAuditContext, definition: (typeof PLAYBOOKS)[nu
         why: check.why,
         severity: check.severity,
         ...(check.fix ? { fix: check.fix } : {}),
+        ...(waived ? { waived } : {}),
         ...outcome,
       };
     })

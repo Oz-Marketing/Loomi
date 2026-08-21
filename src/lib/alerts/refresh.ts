@@ -6,11 +6,24 @@
 // silent) on old numbers. The on-load auto-refresh only freshens an account
 // when a human opens its pacer, which doesn't help unattended accounts.
 //
-// This pulls a fresh Meta sync for every linked account's CURRENT month right
-// before the scan, so the daily alerts evaluate accurate spend. It's cheap
-// because it runs once a day, and deliberately SEQUENTIAL to stay gentle on the
-// shared agency system-user token. Per-account failures are collected and never
-// abort the batch.
+// This pulls a fresh Meta sync for linked accounts' CURRENT month right before
+// the scan, so the daily alerts evaluate accurate spend. Deliberately
+// SEQUENTIAL to stay gentle on the shared agency system-user token.
+// Per-account failures are collected and never abort the batch.
+//
+// ── Why it works to a BUDGET ──
+//
+// It used to walk every plan unconditionally. That is O(accounts x Meta
+// latency) inside a single HTTP request, and the whole scan sits behind a 60s
+// gateway, so past a certain number of linked accounts the request was killed
+// mid-loop — and the ALERTS never ran at all. Production returned 504 four days
+// running: no pace alerts, no budget-burn alerts, nothing, because an
+// optimisation was starving the work it exists to improve.
+//
+// So: spend at most `budgetMs` here, refresh the stalest accounts first, and
+// hand the rest of the request back to the passes that actually notify people.
+// A partially-fresh dataset beats a fresh one nobody ever evaluates, and
+// stalest-first means the backlog rotates instead of the tail being starved.
 
 import { prisma } from '@/lib/prisma';
 import {
@@ -25,6 +38,22 @@ export interface AlertPreSyncResult {
   accountsSynced: number;
   skipped: number;
   errors: string[];
+  /** Plans left unvisited because the budget ran out — the rotation backlog. */
+  deferred: number;
+  /** How long the pass actually took, so the caller can log the fit. */
+  elapsedMs: number;
+}
+
+/**
+ * Wall-clock budget for the pre-sync. The rest of the scan is DB-only but not
+ * free, so this leaves the bulk of a 60s gateway window to it.
+ *
+ * `META_PACER_ALERT_PRESYNC_BUDGET_MS` tunes it without a deploy — raise it if
+ * the gateway timeout is raised too, lower it if the scan starts running close.
+ */
+function budgetMs(): number {
+  const raw = Number(process.env.META_PACER_ALERT_PRESYNC_BUDGET_MS);
+  return Number.isFinite(raw) && raw >= 1000 ? Math.floor(raw) : 25_000;
 }
 
 /**
@@ -39,21 +68,39 @@ export interface AlertPreSyncResult {
  * it did before).
  */
 export async function refreshLinkedAccountsForAlerts(): Promise<AlertPreSyncResult> {
-  const result: AlertPreSyncResult = { accountsSynced: 0, skipped: 0, errors: [] };
+  const startedAt = Date.now();
+  const result: AlertPreSyncResult = {
+    accountsSynced: 0,
+    skipped: 0,
+    errors: [],
+    deferred: 0,
+    elapsedMs: 0,
+  };
 
   if (process.env.META_PACER_ALERT_PRESYNC === 'off') return result;
   if (!isMetaConfigured()) return result; // no token → nothing to pull
 
+  // Stalest first, nulls before any timestamp: an account never pre-synced
+  // outranks one done yesterday, so the rotation covers everyone over time.
   const plans = await prisma.metaAdsPacerPlan.findMany({
+    orderBy: [{ alertPreSyncAt: { sort: 'asc', nulls: 'first' } }],
     select: {
       id: true,
       accountKey: true,
+      alertPreSyncAt: true,
       account: { select: { metaAdAccountId: true } },
     },
   });
 
+  const deadline = startedAt + budgetMs();
   const nowMs = Date.now();
-  for (const plan of plans) {
+  for (const [index, plan] of plans.entries()) {
+    // Out of budget: leave the remainder for tomorrow's run, which will see
+    // them as the stalest and take them first.
+    if (Date.now() >= deadline) {
+      result.deferred = plans.length - index;
+      break;
+    }
     const { accountKey } = plan;
     // Only accounts linked to a Meta ad account have anything to pull.
     if (!plan.account?.metaAdAccountId?.trim()) {
@@ -77,6 +124,12 @@ export async function refreshLinkedAccountsForAlerts(): Promise<AlertPreSyncResu
       await reconcileCompletedRuns(accountKey, plan.id, period, null);
       if (sync.matched > 0) result.accountsSynced += 1;
       else result.skipped += 1;
+      // Stamp only on a real attempt, so a failure retries tomorrow rather
+      // than going to the back of the queue.
+      await prisma.metaAdsPacerPlan.update({
+        where: { id: plan.id },
+        data: { alertPreSyncAt: new Date() },
+      });
     } catch (err) {
       // A single account's Meta failure (no ad account, rate limit, graph
       // error) must not sink the batch — record it and move on.
@@ -86,5 +139,6 @@ export async function refreshLinkedAccountsForAlerts(): Promise<AlertPreSyncResu
     }
   }
 
+  result.elapsedMs = Date.now() - startedAt;
   return result;
 }

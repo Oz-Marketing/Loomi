@@ -2721,6 +2721,16 @@ model MetaAdsPacerPlan {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  // When the daily alert pre-sync last pulled this account from Meta.
+  //
+  // The pre-sync is network-bound and sequential, and the whole scan answers
+  // one HTTP request behind a 60s gateway — so it works to a wall-clock budget
+  // and refreshes the STALEST accounts first, stamping this as it goes. Nulls
+  // sort first, so an account that has never been pre-synced is picked up
+  // before one that was done yesterday. That's what stops a fixed slice
+  // starving the tail of the list forever.
+  alertPreSyncAt DateTime?
+
   ads                   MetaAdsPacerAd[]
   periodBudgets         MetaAdsPacerPeriodBudget[]
   monthSnapshots        MetaAdsPacerMonthSnapshot[]

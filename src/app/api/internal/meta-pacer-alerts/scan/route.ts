@@ -10,9 +10,13 @@ import { settleClosedMonths } from '@/lib/services/budget';
  * POST /api/internal/meta-pacer-alerts/scan
  *
  * Cron-triggered scan of the Meta Ads Pacer dataset. Runs:
- *  - refreshLinkedAccountsForAlerts(): step 0 — pull fresh Meta spend for every
- *    linked account's live month so both passes evaluate current numbers, not
- *    stored data that's stale for accounts nobody has opened.
+ *  - refreshLinkedAccountsForAlerts(): step 0 — pull fresh Meta spend for the
+ *    STALEST linked accounts' live month, within a wall-clock budget, so both
+ *    passes evaluate current numbers rather than data that's stale for accounts
+ *    nobody has opened. Budgeted because it's the only network-bound phase here
+ *    and this whole handler answers one request behind a 60s gateway: unbounded,
+ *    it spent the entire window and the alert passes below never ran. Production
+ *    returned 504 for four days on exactly that.
  *  - scanPacerAlerts(): the built-in operational alerts (due dates, approvals,
  *    stuck, dark, over-allocation, per-ad pacing) + per-recipient digest email.
  *  - evaluateAlertRules(): the §9 config-driven engine (account pace, budget
@@ -81,6 +85,15 @@ export async function POST(req: NextRequest) {
       ('errors' in taskDueDates ? taskDueDates.errors.length : 0) +
       (budgetSettlement.errors?.length ?? 0);
     const status = errorCount > 0 ? 207 : 200;
+    // One line per run in the pm2 log. `deferred` is the number of accounts the
+    // pre-sync budget didn't reach — a few is the rotation working, a number
+    // that only grows means the budget (or the gateway) needs raising.
+    if ('elapsedMs' in presync) {
+      console.log(
+        `[pacer-scan] presync ${presync.accountsSynced} synced, ${presync.skipped} skipped, ` +
+          `${presync.deferred} deferred, ${presync.elapsedMs}ms`,
+      );
+    }
     return NextResponse.json(
       { presync, scan, engine, projects, taskDueDates, budgetSettlement },
       { status },

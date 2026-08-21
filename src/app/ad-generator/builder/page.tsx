@@ -172,9 +172,19 @@ const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope';
  * the default here, with the safe-area margin box as the third option (align to
  * the guide you already set rather than to the bleed edge).
  */
-type ArrangeTarget = 'selection' | 'artboard' | 'margins';
+/**
+ * What Arrange measures against.
+ *
+ * `group` is only reachable while DRILLED INTO a group: there, the group is the
+ * frame you are working inside, so "centre" means centre of the lockup. Aligning
+ * a member to the artboard from inside a group is what breaks the lockup, which
+ * is the one thing the group is there to prevent — step out of the group to do
+ * that deliberately.
+ */
+type ArrangeTarget = 'selection' | 'artboard' | 'margins' | 'group';
 const ARRANGE_TARGET_KEY = 'loomi.adBuilder.arrangeTarget';
 const ARRANGE_TARGETS: { value: ArrangeTarget; label: string; hint: string }[] = [
+  { value: 'group', label: 'Group', hint: "Align within the group's own bounds" },
   { value: 'artboard', label: 'Artboard', hint: 'Align to the full artboard edges' },
   { value: 'margins', label: 'Margins', hint: 'Align to the safe-area margin box' },
   { value: 'selection', label: 'Selection', hint: "Align within the selection's own bounds" },
@@ -3736,12 +3746,31 @@ export default function AdBuilderPage() {
   );
 
   /**
-   * `arrangeTarget`, corrected for what the selection can actually support: with
-   * one element there is no selection bounding box, so fall back to the artboard
-   * rather than leaving the buttons inert.
+   * Drilled into a group, working on its members — double-click, then click a
+   * member. The whole group is NOT what's selected here.
    */
-  const arrangeTargetEff: ArrangeTarget =
-    arrangeTarget === 'selection' && arrangeUnits(selectedIds).length < 2 ? 'artboard' : arrangeTarget;
+  const inFocusedGroup =
+    !!focusedGroupId &&
+    selectedIds.length > 0 &&
+    selectedIds.every((id) => ancestorChain(id).includes(focusedGroupId));
+
+  /**
+   * `arrangeTarget`, corrected for what the selection can actually support.
+   *
+   * Inside a group the GROUP is the frame: centring a member means centring it in
+   * the lockup, not on the board — aligning a child to the artboard is precisely
+   * what pulls a saved block apart. Selection-relative still applies there when
+   * two or more members are selected. Outside a group, `group` isn't reachable,
+   * and Selection needs a second unit to have any bounds at all.
+   */
+  const arrangeUnitCount = arrangeUnits(selectedIds).length;
+  const arrangeTargetEff: ArrangeTarget = inFocusedGroup
+    ? arrangeTarget === 'selection' && arrangeUnitCount >= 2
+      ? 'selection'
+      : 'group'
+    : (arrangeTarget === 'selection' && arrangeUnitCount < 2) || arrangeTarget === 'group'
+      ? 'artboard'
+      : arrangeTarget;
 
   /** Pick what Arrange aligns to. Choosing Margins with no margin set seeds the
    *  default and turns the guide on, so the target is visible on the canvas. */
@@ -3755,14 +3784,30 @@ export default function AdBuilderPage() {
   }
 
   /**
-   * The rectangle Arrange aligns against, in 0–1 fractions of the current size.
+   * The rectangle Arrange aligns against, in 0–1 fractions of the given size.
    *
-   * Artboard = the whole board; Margins = inset by the safe-area guide (falling
-   * back to the full board when no margin is set, so the buttons still do
-   * something sane); Selection = the union of the selected boxes (the old
-   * behaviour, which needs 2+ to mean anything).
+   * Group = the focused group's own bounds ON THAT BOARD (so a member centres in
+   * the lockup); Artboard = the whole board; Margins = inset by the safe-area
+   * guide (falling back to the full board when no margin is set, so the buttons
+   * still do something sane); Selection = the union of the selected boxes, which
+   * needs 2+ to mean anything.
    */
-  function arrangeBounds(boxes: { box: DocLayoutBox }[], sz: AdSize) {
+  function arrangeBounds(boxes: { box: DocLayoutBox }[], sz: AdSize, lay?: Record<string, DocLayoutBox>) {
+    if (arrangeTargetEff === 'group' && focusedGroupId) {
+      const members = membersOf(focusedGroupId)
+        .map((id) => (lay ?? doc.layouts[sz.id] ?? {})[id])
+        .filter((b): b is DocLayoutBox => Boolean(b));
+      // A group with nothing placed on this board has no bounds to align to;
+      // the artboard is the honest fallback rather than a zero-size rectangle.
+      if (members.length > 0) {
+        return {
+          left: Math.min(...members.map((b) => b.x)),
+          right: Math.max(...members.map((b) => b.x + b.w)),
+          top: Math.min(...members.map((b) => b.y)),
+          bottom: Math.max(...members.map((b) => b.y + b.h)),
+        };
+      }
+    }
     if (arrangeTargetEff !== 'selection') {
       const sa = arrangeTargetEff === 'margins' ? safeAreaFractions(doc.safeArea, sz.width, sz.height) : null;
       const mx = sa?.x ?? 0;
@@ -3801,7 +3846,7 @@ export default function AdBuilderPage() {
       // alignment needs a second unit to mean anything. Artboard / margins are
       // absolute, so one unit is enough (the common case — "centre this block").
       if (units.length < (arrangeTargetEff === 'selection' ? 2 : 1)) return null;
-      const { left, right, top, bottom } = arrangeBounds(units.flat(), sz);
+      const { left, right, top, bottom } = arrangeBounds(units.flat(), sz, lay);
       const cx = (left + right) / 2;
       const cy = (top + bottom) / 2;
       const patch: Record<string, DocLayoutBox> = {};
@@ -3837,7 +3882,7 @@ export default function AdBuilderPage() {
       // span and don't move). Against the artboard / margins the span is given,
       // so two units is enough — they land flush against each edge.
       if (units.length < (arrangeTargetEff === 'selection' ? 3 : 2)) return null;
-      const bounds = arrangeBounds(units.flatMap((u) => u.members), sz);
+      const bounds = arrangeBounds(units.flatMap((u) => u.members), sz, lay);
       const patch: Record<string, DocLayoutBox> = {};
       const shift = (members: { id: string; box: DocLayoutBox }[], key: 'x' | 'y', d: number) => {
         for (const { id, box } of members) patch[id] = { ...box, [key]: box[key] + d };
@@ -4844,68 +4889,13 @@ export default function AdBuilderPage() {
                     if (e.target === e.currentTarget) startMarquee(e);
                   }}
                 >
-                  {/* Empty-canvas onboarding — lives INSIDE the artboard frame so
-                      it pans/moves with the canvas (not a detached center modal).
-                      Clears the moment a first element is added. Wrapper is
-                      click-through so pan/marquee still work; only the card is
-                      interactive. */}
+                  {/* Empty-canvas hint — just the dashed frame, which is ABOUT
+                      the board and so belongs on it. The onboarding card itself
+                      is a sibling of this whole viewport (see below): sized by
+                      the artboard, it was unreadable on anything narrow — a 160
+                      wide skyscraper crushed the palette into two-letter columns. */}
                   {placed.length === 0 && !viewAll && (
-                    <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6">
-                      {/* faint dashed frame hinting the design area */}
-                      <div className="pointer-events-none absolute inset-3 rounded-2xl border border-dashed border-[var(--primary)]/20" />
-                      <div className="pointer-events-auto relative w-full max-w-[26rem] animate-fade-in-up">
-                        {/* Soft glow in the four element-palette colours so a blank
-                            canvas still feels alive + on-brand. */}
-                        <div
-                          aria-hidden
-                          className="pointer-events-none absolute -inset-8 -z-10 opacity-70 blur-3xl"
-                          style={{
-                            background:
-                              'radial-gradient(38% 38% at 22% 18%, #3b82f655, transparent 70%), radial-gradient(38% 38% at 82% 16%, #ec489955, transparent 70%), radial-gradient(42% 42% at 78% 88%, #a855f755, transparent 70%), radial-gradient(38% 38% at 18% 86%, #f9731655, transparent 70%)',
-                          }}
-                        />
-                        <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
-                          <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-3 pt-7 text-center">
-                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
-                              <PaintBrushIcon className="h-7 w-7" />
-                            </div>
-                            <h3 className="text-lg font-bold text-[var(--foreground)]">Design your ad</h3>
-                            <p className="max-w-[17rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
-                              Drop in your first element to start — text, image, button, or shape.
-                            </p>
-                          </div>
-                          <div className="px-5 pb-5 pt-3">
-                            <AdderGrid adders={adders} variant="onboarding" />
-                            {/* Start from a saved block — begin a blank canvas from
-                                a pre-wired cluster instead of single elements. */}
-                            {insertableBlocks.length > 0 && (
-                              <div className="mt-4">
-                                <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Or start from a block</p>
-                                <div className="flex flex-col gap-1.5">
-                                  {insertableBlocks.map((b) => (
-                                    <button
-                                      key={b.id}
-                                      type="button"
-                                      onClick={() => insertBlock(b.doc)}
-                                      title="Insert this block"
-                                      className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
-                                    >
-                                      <span className="truncate">{b.name}</span>
-                                      <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
-                                        {b.accountKeys?.length ? `${b.accountKeys.length} acct${b.accountKeys.length > 1 ? 's' : ''}` : 'Global'}
-                                      </span>
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
-                            Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <div className="pointer-events-none absolute inset-3 z-40 rounded-2xl border border-dashed border-[var(--primary)]/20" />
                   )}
                   {/* Safe-area margin boundary (a builder-only guide) */}
                   {(() => {
@@ -5149,6 +5139,71 @@ export default function AdBuilderPage() {
                 )}
               </div>
 
+              {/* Empty-canvas onboarding, over the WHOLE editor pane rather than
+                  the artboard, so a narrow board can't squeeze it. Click-through
+                  wrapper (pan and marquee still work through it); only the card
+                  takes pointer events. Hidden in multi-artboard view, where there
+                  is no single board to be onboarding for. */}
+              {placed.length === 0 && !viewAll && (
+                <div
+                  className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6"
+                  style={{ paddingRight: rightReserve ? rightReserve + 24 : undefined }}
+                >
+                  <div className="pointer-events-auto relative w-full max-w-[26rem] animate-fade-in-up">
+                    {/* Soft glow in the four element-palette colours so a blank
+                        canvas still feels alive + on-brand. */}
+                    <div
+                      aria-hidden
+                      className="pointer-events-none absolute -inset-8 -z-10 opacity-70 blur-3xl"
+                      style={{
+                        background:
+                          'radial-gradient(38% 38% at 22% 18%, #3b82f655, transparent 70%), radial-gradient(38% 38% at 82% 16%, #ec489955, transparent 70%), radial-gradient(42% 42% at 78% 88%, #a855f755, transparent 70%), radial-gradient(38% 38% at 18% 86%, #f9731655, transparent 70%)',
+                      }}
+                    />
+                    <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
+                      <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-3 pt-7 text-center">
+                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
+                          <PaintBrushIcon className="h-7 w-7" />
+                        </div>
+                        <h3 className="text-lg font-bold text-[var(--foreground)]">Design your ad</h3>
+                        <p className="max-w-[17rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
+                          Drop in your first element to start — text, image, button, or shape.
+                        </p>
+                      </div>
+                      <div className="px-5 pb-5 pt-3">
+                        <AdderGrid adders={adders} variant="onboarding" />
+                        {/* Start from a saved block — begin a blank canvas from
+                            a pre-wired cluster instead of single elements. */}
+                        {insertableBlocks.length > 0 && (
+                          <div className="mt-4">
+                            <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Or start from a block</p>
+                            <div className="flex flex-col gap-1.5">
+                              {insertableBlocks.map((b) => (
+                                <button
+                                  key={b.id}
+                                  type="button"
+                                  onClick={() => insertBlock(b.doc)}
+                                  title="Insert this block"
+                                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
+                                >
+                                  <span className="truncate">{b.name}</span>
+                                  <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                    {b.accountKeys?.length ? `${b.accountKeys.length} acct${b.accountKeys.length > 1 ? 's' : ''}` : 'Global'}
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                      <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
+                        Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Zoom — a vertical stack pinned inside the canvas, bottom-left.
                   Fit-relative; the % click resets to fit. */}
               <div className="absolute bottom-3 left-3 z-20 flex flex-col items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 px-1 py-1 backdrop-blur-md">
@@ -5334,6 +5389,7 @@ export default function AdBuilderPage() {
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
                   offerTypes={docKind.offerTypes}
                   arrangeTarget={arrangeTargetEff}
+                  arrangeInGroup={inFocusedGroup}
                   onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
                   onClose={clearSelection}
@@ -5370,6 +5426,7 @@ export default function AdBuilderPage() {
                   multiSize={doc.sizes.length > 1}
                   unitCount={arrangeUnits(selectedIds).length}
                   arrangeTarget={arrangeTargetEff}
+                  arrangeInGroup={inFocusedGroup}
                   onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
                   onDistribute={distributeSelected}
@@ -6073,6 +6130,7 @@ function MultiSelectPanel({
   multiSize,
   unitCount,
   arrangeTarget,
+  arrangeInGroup,
   onArrangeTarget,
   onAlign,
   onDistribute,
@@ -6103,8 +6161,10 @@ function MultiSelectPanel({
    * unit, i.e. a button with nothing to do.
    */
   unitCount: number;
-  /** What align/distribute measure against (artboard / margins / selection). */
+  /** What align/distribute measure against — the EFFECTIVE target. */
   arrangeTarget: ArrangeTarget;
+  /** Drilled into a group, so the group is the frame. */
+  arrangeInGroup: boolean;
   onArrangeTarget: (t: ArrangeTarget) => void;
   /** Position-align the whole selection to a shared edge/center. */
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
@@ -6134,7 +6194,7 @@ function MultiSelectPanel({
         {/* Position align / distribute — applies to any 2+ selection (all element
             types), mirroring the right-click menu. The target picker decides
             whether that means the selection, the artboard, or the margin box. */}
-        <ArrangeSection count={unitCount} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
+        <ArrangeSection count={unitCount} target={arrangeTarget} inGroup={arrangeInGroup} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={onDistribute} />
         {/* Show for — per-offer-type visibility, applied to the WHOLE selection at
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
@@ -6310,6 +6370,7 @@ function SelectionPanel({
   hasOfferField,
   offerTypes,
   arrangeTarget,
+  arrangeInGroup,
   onArrangeTarget,
   onAlign,
   onClose,
@@ -6356,9 +6417,12 @@ function SelectionPanel({
   hasOfferField: boolean;
   /** The doc kind's offer types, for the "Show for" toggles. */
   offerTypes: { value: string; label: string }[];
-  /** What Arrange aligns this element to (artboard / margins). "Selection" is
-   *  meaningless for one element, so the picker hides it here. */
+  /** What Arrange aligns this element to — the EFFECTIVE target (group while
+   *  drilled in, otherwise artboard / margins). "Selection" is meaningless for
+   *  one element, so the picker hides it here. */
   arrangeTarget: ArrangeTarget;
+  /** Drilled into a group: this member aligns inside the lockup, not the board. */
+  arrangeInGroup: boolean;
   onArrangeTarget: (t: ArrangeTarget) => void;
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onClose: () => void;
@@ -6749,7 +6813,7 @@ function SelectionPanel({
 
         {/* Snap this one element to an artboard (or margin-box) edge/centre —
             the single-element half of the multi-select Arrange controls. */}
-        <ArrangeSection count={1} target={arrangeTarget} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} />
+        <ArrangeSection count={1} target={arrangeTarget} inGroup={arrangeInGroup} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} />
 
         {/* Show for — per-offer-type visibility (element `visibleWhen`). Only for
             templates with an offerType question. All checked = always shown; check
@@ -7253,21 +7317,34 @@ function PanelSection({ title, action, children }: { title: string; action?: Rea
 function ArrangeSection({
   count,
   target,
+  inGroup,
   onTargetChange,
   onAlign,
   onDistribute,
 }: {
-  /** How many elements are selected — gates Selection + the distribute buttons. */
+  /** How many UNITS are selected — gates Selection + the distribute buttons. */
   count: number;
+  /** The EFFECTIVE target, so the highlighted chip is what will actually happen. */
   target: ArrangeTarget;
+  /** Drilled into a group: the group is the frame, and the board is out of reach. */
+  inGroup: boolean;
   onTargetChange: (t: ArrangeTarget) => void;
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onDistribute: (axis: 'h' | 'v') => void;
 }) {
-  // Selection-relative needs a real bounding box, so hide it for one element.
-  const options = ARRANGE_TARGETS.filter((o) => o.value !== 'selection' || count >= 2);
+  // Inside a group, Artboard and Margins are deliberately absent: aligning a
+  // member to the board is what breaks a lockup, and offering a chip that the
+  // effective target would override anyway is worse than not offering it. Step
+  // out of the group to align against the board.
+  // Selection-relative needs a real bounding box, so it needs two units.
+  const options = ARRANGE_TARGETS.filter((o) => {
+    if (o.value === 'selection') return count >= 2;
+    if (o.value === 'group') return inGroup;
+    return !inGroup;
+  });
   const canDistribute = count >= (target === 'selection' ? 3 : 2);
-  const targetWord = target === 'selection' ? 'selection' : target === 'margins' ? 'margins' : 'artboard';
+  const targetWord =
+    target === 'selection' ? 'selection' : target === 'group' ? 'the group' : target === 'margins' ? 'margins' : 'artboard';
   return (
     <PanelSection
       title="Arrange"

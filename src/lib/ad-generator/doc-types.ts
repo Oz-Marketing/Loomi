@@ -78,6 +78,12 @@ export interface GradientFill {
 }
 
 /**
+ * Whether an element is sized relative to its artboard or pinned to real pixels.
+ * See {@link DocElement.sizeMode}.
+ */
+export type SizeMode = 'scale' | 'fixed';
+
+/**
  * A shared element: its identity, binding, and base style. Position + size
  * live PER SIZE in `layouts` (so a designer tunes each aspect ratio
  * independently) — an element is the same thing across sizes, just placed
@@ -97,6 +103,23 @@ export interface DocElement {
   /** Group membership — elements sharing a groupId move/select together and nest
    *  under the group in the Layers panel. The group list lives on the doc. */
   groupId?: string;
+  /**
+   * How this element's SIZE travels between artboards.
+   *
+   * `'scale'` (the default) — the element is sized RELATIVE to the board: its
+   * width stays the same fraction of the board's width and its height is
+   * re-derived so the shape holds. A headline that spans 80% of the square spans
+   * 80% of the story too, just bigger or smaller in pixels.
+   *
+   * `'fixed'` — the element keeps its PIXEL width and height on every board. A
+   * 200×200 badge is 200×200 on the 500×500 and on the 2000×500, because a logo
+   * lockup, a QR code or a legal plate has a size that is correct in absolute
+   * terms and wrong when a wide board inflates it.
+   *
+   * Shared, never per-size: it says what the element IS, so letting it drift per
+   * board would mean "fixed" only held on the boards that happened to agree.
+   */
+  sizeMode?: SizeMode;
   /** What the element displays. Omitted for plain shapes. */
   binding?: Binding;
   /** Conditional visibility: render this element ONLY when the value of field

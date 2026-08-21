@@ -99,13 +99,17 @@ import {
   effectiveElement,
   overriddenKeys,
   refitAllSizes,
+  refitElementAcrossSizes,
+  rescaleBox,
+  sizeFitOf,
+  sizeModeOf,
   styleVariants,
   type EditScope,
 } from '@/lib/ad-generator/size-scope';
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
+import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
@@ -1775,7 +1779,15 @@ export default function AdBuilderPage() {
   // The full-bleed COVER image in the doc — the pannable background photo, if
   // any. Found regardless of selection so it's pannable on the first click.
   const bgImageId = useMemo(() => {
-    const cand = doc.elements.find((e) => e.type === 'image' && (e.fit ?? 'cover') === 'cover' && isFullBleed(e.id));
+    // A `background` element counts too — it is a full-bleed cover photo by
+    // definition, and leaving it out meant the one layer most likely to BE the
+    // background was the one you couldn't drag to reframe.
+    const cand = doc.elements.find(
+      (e) =>
+        ((e.type === 'image' && (e.fit ?? 'cover') === 'cover') ||
+          (e.type === 'background' && (e.fit ?? 'cover') === 'cover')) &&
+        isFullBleed(e.id),
+    );
     return cand?.id ?? null;
   }, [doc.elements, isFullBleed]);
 
@@ -1946,17 +1958,22 @@ export default function AdBuilderPage() {
 
     // Seed the node with the real value (not the dimmed placeholder label) and
     // make it editable in place.
-    const prevOutline = node.style.outline;
-    const prevOffset = node.style.outlineOffset;
     const prevCursor = node.style.cursor;
     node.textContent = editingText.value;
     node.style.color = color;
     node.style.caretColor = color;
-    // Editor chrome, not ad content — follows the user's accent. (The `#4f46e5`
-    // defaults elsewhere in this file are the ADVERTISER's brand colour and must
-    // stay fixed, or the accent would leak into generated creative.)
-    node.style.outline = '2px solid var(--primary)';
-    node.style.outlineOffset = '1px';
+    // NO outline is drawn on this node. The frame the designer sees while editing
+    // is the overlay's own selection ring, which stays up for the whole session
+    // (see `placed.map` below).
+    //
+    // It used to be drawn here, as `2px solid var(--primary)` — and was invisible,
+    // which is why double-clicking a text box looked like it ERASED the outline.
+    // Two reasons it can't live in here: this node is in the canvas iframe, whose
+    // document is written by `renderDoc` and defines no app CSS variables, so
+    // `var(--primary)` was invalid at computed-value time and the whole `outline`
+    // shorthand collapsed to `outline-style:none`; and the iframe is `scale()`d to
+    // fit the pane, so even a working 2px outline would render at 0.6px on a 30%
+    // zoom. The overlay sits outside both problems.
     node.style.cursor = 'text';
     node.setAttribute('contenteditable', 'true');
     node.spellcheck = false;
@@ -2014,8 +2031,6 @@ export default function AdBuilderPage() {
       node.removeEventListener('keydown', onKeyDown);
       node.removeEventListener('blur', onBlur);
       node.removeAttribute('contenteditable');
-      node.style.outline = prevOutline;
-      node.style.outlineOffset = prevOffset;
       node.style.cursor = prevCursor;
     };
     // Keyed on id only: value changes must NOT re-run this (would reset the caret).
@@ -2675,13 +2690,22 @@ export default function AdBuilderPage() {
     if (sizeId === targetId) setSizeId(doc.sizes.find((s) => s.id !== targetId)!.id);
   }
 
-  // Copy another size's full layout into the current size (fractions are
-  // size-independent; font sizes carry over as a starting point to tune).
+  // Copy another size's full layout into the current size, re-derived for THIS
+  // board's aspect ratio by each element's own sizing mode (see rescaleBox) —
+  // copying the fractions verbatim is what stretched everything. Font sizes carry
+  // over as a starting point to tune.
   function copyLayoutFrom(srcId: string) {
-    setDoc((prev) => ({
-      ...prev,
-      layouts: { ...prev.layouts, [sizeId]: structuredClone(prev.layouts[srcId] ?? {}) },
-    }));
+    setDoc((prev) => {
+      const from = prev.sizes.find((s) => s.id === srcId);
+      const to = prev.sizes.find((s) => s.id === sizeId);
+      const source = prev.layouts[srcId] ?? {};
+      if (!from || !to) return prev;
+      const copied: Record<string, DocLayoutBox> = {};
+      for (const [elId, box] of Object.entries(source)) {
+        copied[elId] = rescaleBox(box, from, to, sizeFitOf(prev.elements.find((e) => e.id === elId)));
+      }
+      return { ...prev, layouts: { ...prev.layouts, [sizeId]: copied } };
+    });
   }
 
   // Safe-area margin (value + unit, builder-only guide).
@@ -2753,6 +2777,39 @@ export default function AdBuilderPage() {
     setDoc((prev) => refitAllSizes(prev, size.id), 'refit');
     toast.success(`Re-fitted ${others} other size${others === 1 ? '' : 's'} from ${size.label.split(' ')[0]}. ⌘Z to undo.`);
     setSettingsOpen(false);
+  }
+
+  /**
+   * Switch one element between Scale (a proportion of each board) and Fixed (the
+   * same pixels on every board), and re-fit it on the other boards right away.
+   *
+   * The re-fit is the point. The flag alone would only bite on the element's next
+   * geometry edit — a designer would tick Fixed, look at the board that was
+   * stretching their 200×200 badge, see it still stretched, and conclude the
+   * switch does nothing. This board is the source of truth: whatever the element
+   * measures HERE is what the other boards take.
+   */
+  function setSizeMode(target: string | string[], mode: SizeMode) {
+    const ids = Array.isArray(target) ? target : [target];
+    if (!ids.length) return;
+    const idSet = new Set(ids);
+    setDoc((prev) => {
+      const elements = prev.elements.map((e) =>
+        idSet.has(e.id) ? { ...e, sizeMode: mode === 'scale' ? undefined : mode } : e,
+      );
+      // One updater for the whole selection, so a lockup pinned together is a
+      // single ⌘Z rather than one undo step per piece.
+      return ids.reduce((d, id) => refitElementAcrossSizes(d, id, size.id), { ...prev, elements });
+    }, `sizemode:${ids.join(',')}`);
+    if (doc.sizes.length <= 1) return;
+    const one = ids.length === 1 ? doc.layouts[size.id]?.[ids[0]] : null;
+    const px = one ? `${Math.round(one.w * size.width)}×${Math.round(one.h * size.height)}` : null;
+    const subject = px ? 'This element' : `${ids.length} elements`;
+    toast.success(
+      mode === 'fixed'
+        ? `${px ? `Pinned to ${px}` : `Pinned ${ids.length} elements`} on every size. ⌘Z to undo.`
+        : `${subject} now ${px ? 'scales' : 'scale'} with each artboard. ⌘Z to undo.`,
+    );
   }
 
   // Publish schedule (lives in the doc JSON). Undefined = live indefinitely.
@@ -4448,7 +4505,7 @@ export default function AdBuilderPage() {
                       [
                         'all',
                         'All sizes',
-                        `Changes affect all ${doc.sizes.length} sizes. Position and size travel, and type scales by the same proportion on each board; stacking and image framing stay per size.`,
+                        `Changes affect all ${doc.sizes.length} sizes. Position travels, and each element's size travels the way its "Across sizes" setting says — scaling with the board, or holding the same pixels everywhere. Type scales by the same proportion on each board; stacking and image framing stay per size.`,
                       ],
                     ] as const).map(([value, label, hint]) => (
                       <button
@@ -4684,10 +4741,13 @@ export default function AdBuilderPage() {
                   {placed.map(({ el, box }) => {
                     const isSel = selectedIds.includes(el.id);
                     const isSingleSel = el.id === selectedId;
-                    // While text-editing, the box grows live but its stored size
-                    // (and thus the handles) can't update until commit — so hide
-                    // the resize handles during the edit; the caret's own outline
-                    // shows the live bounds. They reappear hugging on commit.
+                    // While text-editing, the resize handles come down: a pointer
+                    // press on one would blur the contenteditable and commit
+                    // mid-drag. The RING stays up — every text box is a fixed W×H
+                    // frame now (the auto-hugging "Hug" mode is retired), so the
+                    // stored box is exactly where the text is being typed, and an
+                    // outline that vanishes the moment you double-click into a box
+                    // is just a lost frame of reference.
                     const isEditingThis = editingText?.id === el.id;
                     const isCropping = cropId === el.id;
                     const singleDragging = dragBox != null && dragRef.current?.kind === 'single' && dragRef.current.elId === el.id;
@@ -4763,35 +4823,34 @@ export default function AdBuilderPage() {
                         {/* Detached elements are clipped out of the iframe, so
                             render their actual content here on the canvas. */}
                         {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={canvasData} resolveUrl={resolveBindingUrl} />}
-                        {/* Selection ring + fill. Hidden while editing this element:
-                            the stored box can't resize mid-keystroke, so it'd sit
-                            stale around the live-shrinking text. The editing effect's
-                            own outline (on the max-content node) hugs the text live. */}
-                        {!isEditingThis && (
-                          <span
-                            className={`pointer-events-none absolute inset-0 rounded-[2px] ring-inset transition-colors ${
-                              isCropping
+                        {/* Selection ring + fill. Stays up through an inline text
+                            edit (see isEditingThis) — the frame is fixed, so it
+                            marks exactly the box being typed into. The translucent
+                            fill does come off during the edit, so it can't wash out
+                            the text you're reading as you type. */}
+                        <span
+                          className={`pointer-events-none absolute inset-0 rounded-[2px] ring-inset transition-colors ${
+                            isCropping
+                              ? 'ring-2 ring-[var(--kind)]'
+                              : isSel
                                 ? 'ring-2 ring-[var(--kind)]'
-                                : isSel
-                                  ? 'ring-2 ring-[var(--kind)]'
-                                  : detached
-                                    ? 'ring-1 ring-dashed ring-amber-500/70 group-hover:ring-amber-500'
-                                    : box.hidden
-                                      // A hidden layer is off the artboard entirely: no
-                                      // persistent marker by default (hover reveals a faint
-                                      // ring so it's still selectable). In Outlines mode —
-                                      // where the point is to see every element's box — it
-                                      // shows a faint dashed ring like the rest.
-                                      ? showOutlines
-                                        ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/40 group-hover:ring-[var(--muted-foreground)]/70'
-                                        : 'group-hover:ring-1 group-hover:ring-dashed group-hover:ring-[var(--muted-foreground)]/70'
-                                      : showOutlines
-                                        ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
-                                        : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'
-                            }`}
-                            style={isSel && !isCropping ? { backgroundColor: `${kindColor}1a` } : undefined}
-                          />
-                        )}
+                                : detached
+                                  ? 'ring-1 ring-dashed ring-amber-500/70 group-hover:ring-amber-500'
+                                  : box.hidden
+                                    // A hidden layer is off the artboard entirely: no
+                                    // persistent marker by default (hover reveals a faint
+                                    // ring so it's still selectable). In Outlines mode —
+                                    // where the point is to see every element's box — it
+                                    // shows a faint dashed ring like the rest.
+                                    ? showOutlines
+                                      ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/40 group-hover:ring-[var(--muted-foreground)]/70'
+                                      : 'group-hover:ring-1 group-hover:ring-dashed group-hover:ring-[var(--muted-foreground)]/70'
+                                    : showOutlines
+                                      ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
+                                      : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'
+                          }`}
+                          style={isSel && !isCropping && !isEditingThis ? { backgroundColor: `${kindColor}1a` } : undefined}
+                        />
                         {isSingleSel && !isEditingThis && (
                           <>
                             <span
@@ -5060,6 +5119,8 @@ export default function AdBuilderPage() {
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onSetSizing={(mode) => updEl({ shrink: mode === 'shrink' ? true : undefined, wrap: undefined, autoSize: undefined })}
+                  onSetSizeMode={(mode) => setSizeMode(selected.id, mode)}
+                  multiSize={doc.sizes.length > 1}
                   fitFontPx={fitFontPx}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
                   offerTypes={docKind.offerTypes}
@@ -5096,6 +5157,8 @@ export default function AdBuilderPage() {
                   onElAll={patchSelectedElements}
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
+                  onSetSizeModeAll={(mode) => setSizeMode(selectedIds, mode)}
+                  multiSize={doc.sizes.length > 1}
                   arrangeTarget={arrangeTargetEff}
                   onArrangeTarget={chooseArrangeTarget}
                   onAlign={alignSelected}
@@ -5683,6 +5746,8 @@ function MultiSelectPanel({
   onElAll,
   onBoxAll,
   onBumpSize,
+  onSetSizeModeAll,
+  multiSize,
   arrangeTarget,
   onArrangeTarget,
   onAlign,
@@ -5703,6 +5768,11 @@ function MultiSelectPanel({
   onElAll: (patch: Partial<DocElement>) => void;
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
+  /** Set every selected element's Scale/Fixed sizing, re-fitting each on the
+   *  other boards from the one on screen. */
+  onSetSizeModeAll: (mode: SizeMode) => void;
+  /** More than one artboard — gates the Across-sizes control. */
+  multiSize: boolean;
   /** What align/distribute measure against (artboard / margins / selection). */
   arrangeTarget: ArrangeTarget;
   onArrangeTarget: (t: ArrangeTarget) => void;
@@ -5740,6 +5810,39 @@ function MultiSelectPanel({
         {hasOfferField && (
           <PanelSection title="Show for">
             <ShowForControl visibleWhen={elements[0]?.visibleWhen} offerTypes={offerTypes} onChange={(v) => onElAll({ visibleWhen: v })} />
+          </PanelSection>
+        )}
+        {/* Scale vs Fixed for the whole selection — pinning a lockup of several
+            pieces is the common case, and doing it one element at a time is how a
+            designer ends up with half a lockup pinned. `mixed` when they disagree,
+            which either button resolves. */}
+        {multiSize && (
+          <PanelSection
+            title="Across sizes"
+            action={
+              <Tooltip label="Scale: each element's W×H is a proportion of the artboard, so it grows and shrinks with each board while keeping its shape. Fixed: the W×H is a real measurement, held on every board — for logo lockups, badges, QR codes, legal plates. Applies to all selected elements and re-fits them on the other boards straight away.">
+                <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+              </Tooltip>
+            }
+          >
+            <div className="flex items-center gap-0.5 rounded-lg bg-[var(--muted)]/60 p-0.5">
+              {([['scale', 'Scale'], ['fixed', 'Fixed']] as const).map(([m, labelText]) => {
+                const all = elements.every((e) => sizeModeOf(e) === m);
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => onSetSizeModeAll(m)}
+                    aria-pressed={all}
+                    className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                      all ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {labelText}
+                  </button>
+                );
+              })}
+            </div>
           </PanelSection>
         )}
         {textEls.length > 0 ? (
@@ -5869,6 +5972,8 @@ function SelectionPanel({
   onEl,
   onBox,
   onSetSizing,
+  onSetSizeMode,
+  multiSize,
   fitFontPx,
   hasOfferField,
   offerTypes,
@@ -5902,6 +6007,12 @@ function SelectionPanel({
   /** Text only: set the sizing mode — hug (box follows text) / wrap (fixed frame,
    *  fixed font, wraps) / fit (fixed frame, font auto-scales). Re-hugs on hug. */
   onSetSizing: (mode: 'fit' | 'shrink') => void;
+  /** Whether this element's W×H is a proportion of the board or a real
+   *  measurement held on every board. Re-fits the other boards immediately. */
+  onSetSizeMode: (mode: SizeMode) => void;
+  /** More than one artboard — gates the Across-sizes control, which has nothing
+   *  to say about a single-board template. */
+  multiSize: boolean;
   /** Text/Fit-to-box only: the measured auto-scaled font size (px), for a
    *  read-only readout. Null when unavailable (not yet fit / not fit mode). */
   fitFontPx: number | null;
@@ -5938,6 +6049,8 @@ function SelectionPanel({
   // fill it (the font stepper becomes an "auto" note). Retired Wrap/Hug
   // (`wrap`/`autoSize`) fold into Shrink.
   const sizingMode: 'fit' | 'shrink' = el.shrink || el.wrap || el.autoSize ? 'shrink' : 'fit';
+  // Scale (proportional to the board) vs Fixed (the same pixels everywhere).
+  const elSizeMode = sizeModeOf(el);
   // Only FILL fully auto-sizes the font (the stepper is replaced by the measured
   // px). Shrink keeps an editable font size (the cap) even though it may render
   // smaller.
@@ -6162,6 +6275,42 @@ function SelectionPanel({
               <MiniNum title="Height (px)" value={Math.round(box.h * sizeH)} onChange={(v) => onBox({ h: Math.max(1, v) / sizeH })} />
             </label>
           </div>
+
+          {/* Whether that W×H is a proportion of this board or a real measurement.
+              Only asked on multi-size templates — with one board there is no
+              "across sizes" for the answer to differ on. */}
+          {multiSize && (
+            <div className="mt-3">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                  Across sizes
+                </span>
+                <Tooltip label="Scale: the W×H above is a proportion of this artboard, so the element grows and shrinks with each board while keeping its shape — right for headlines, hero images, anything that should feel proportionally the same. Fixed: the W×H is a real measurement, held on every board — right for a logo lockup, a badge, a QR code or a legal plate, whose correct size a wide board has no business inflating. Switching re-fits this element on the other boards straight away.">
+                  <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                </Tooltip>
+              </div>
+              <div className="flex items-center gap-0.5 rounded-lg bg-[var(--muted)]/60 p-0.5">
+                {([
+                  ['scale', 'Scale'],
+                  ['fixed', `Fixed ${Math.round(box.w * sizeW)}×${Math.round(box.h * sizeH)}`],
+                ] as const).map(([m, labelText]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => onSetSizeMode(m)}
+                    aria-pressed={elSizeMode === m}
+                    className={`flex-1 truncate rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                      elSizeMode === m
+                        ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
+                        : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {labelText}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </PanelSection>
 
         {/* Snap this one element to an artboard (or margin-box) edge/centre —
@@ -6400,6 +6549,35 @@ function SelectionPanel({
                     />
                   </label>
                 </div>
+                {/* Framing — per artboard, and the reason a background can serve
+                    several sizes at once. A photo that's right on the square is
+                    almost never right on a leaderboard: this is where you zoom in
+                    and choose which part of it the short board keeps. Tile has no
+                    focal point (it repeats), and contain shows the whole image, so
+                    only cover is framed. */}
+                {(el.fit ?? 'cover') === 'cover' && (
+                  <div className="mt-3 border-t border-[var(--border)] pt-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                        Framing on {sizeLabel}
+                      </span>
+                      <Tooltip label="Where this artboard sits in the photo, and how far in it's zoomed. Set per size: the same background can hold a wide crop on a leaderboard and a tight one on a story, from one image. Drag the background on the canvas to reposition it.">
+                        <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                      </Tooltip>
+                    </div>
+                    <FramingFields box={box} onBox={onBox} />
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the background on the canvas to reposition it.</p>
+                      <button
+                        type="button"
+                        onClick={() => onBox({ objectX: undefined, objectY: undefined, objectScale: undefined })}
+                        className="flex-shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Pick a texture in the Content section above — the Textures tab has your brand patterns.</p>
               </PanelSection>
               {/* Fade — a gradient overlay on top (e.g. white→transparent scrim). */}
@@ -6521,38 +6699,7 @@ function SelectionPanel({
               // Crop mode — the box IS the crop window. Drag the image on the
               // canvas to reposition; zoom scales it in; X/Y are precise framing.
               <div className="mt-3 rounded-xl border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3">
-                <div className="flex flex-wrap items-center gap-4">
-                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                    Zoom
-                    <MiniNum
-                      title="Crop zoom (%) — 100 = fit, higher crops in"
-                      value={Math.round((box.objectScale ?? 1) * 100)}
-                      step={10}
-                      onChange={(v) => {
-                        const s = Math.max(100, Math.min(400, v)) / 100;
-                        onBox({ objectScale: s > 1 ? +s.toFixed(2) : undefined });
-                      }}
-                    />
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                    X
-                    <MiniNum
-                      title="Horizontal framing (%) — 0 = left, 100 = right"
-                      value={Math.round((box.objectX ?? 0.5) * 100)}
-                      step={5}
-                      onChange={(v) => onBox({ objectX: Math.max(0, Math.min(100, v)) / 100 })}
-                    />
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                    Y
-                    <MiniNum
-                      title="Vertical framing (%) — 0 = top, 100 = bottom"
-                      value={Math.round((box.objectY ?? 0.5) * 100)}
-                      step={5}
-                      onChange={(v) => onBox({ objectY: Math.max(0, Math.min(100, v)) / 100 })}
-                    />
-                  </label>
-                </div>
+                <FramingFields box={box} onBox={onBox} />
                 <div className="mt-2.5 flex items-center justify-between gap-2">
                   <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the image on the canvas to reposition. Resize the box to change the crop shape.</p>
                   <button
@@ -6581,6 +6728,52 @@ function SelectionPanel({
           onClose={() => setPicking(false)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Zoom + focal point for a `cover` image or a background texture — HOW the photo
+ * sits inside its frame, as opposed to where the frame sits on the board.
+ *
+ * These live on the per-size BOX, and that is the whole point: one photo has to
+ * survive a 1080×1080 square and a 970×250 leaderboard, and the only way it can
+ * is by being framed differently on each. Shared by the image Crop panel and the
+ * background's Texture panel, which used to have no framing at all.
+ */
+function FramingFields({ box, onBox }: { box: DocLayoutBox; onBox: (patch: Partial<DocLayoutBox>) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-4">
+      <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+        Zoom
+        <MiniNum
+          title="Zoom (%) — 100 = fit the frame, higher crops in"
+          value={Math.round((box.objectScale ?? 1) * 100)}
+          step={10}
+          onChange={(v) => {
+            const s = Math.max(100, Math.min(400, v)) / 100;
+            onBox({ objectScale: s > 1 ? +s.toFixed(2) : undefined });
+          }}
+        />
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+        X
+        <MiniNum
+          title="Horizontal framing (%) — 0 = left, 100 = right"
+          value={Math.round((box.objectX ?? 0.5) * 100)}
+          step={5}
+          onChange={(v) => onBox({ objectX: Math.max(0, Math.min(100, v)) / 100 })}
+        />
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+        Y
+        <MiniNum
+          title="Vertical framing (%) — 0 = top, 100 = bottom"
+          value={Math.round((box.objectY ?? 0.5) * 100)}
+          step={5}
+          onChange={(v) => onBox({ objectY: Math.max(0, Math.min(100, v)) / 100 })}
+        />
+      </label>
     </div>
   );
 }
@@ -7547,89 +7740,197 @@ function SizesManager({
     setPicked({});
     setAddSizeOpen(false);
   };
+
+  /**
+   * Two views, one at a time — NOT a list with a drawer under it.
+   *
+   * The add-a-size panel used to expand below the list inside the same column.
+   * Both wanted to scroll, the drawer's natural height won, and the list above it
+   * collapsed to a sliver: the size you were actually on was sliced in half at the
+   * top of the modal with no indication anything was above it. Tabs give each view
+   * the whole body, so neither can crush the other.
+   */
+  const tab: 'current' | 'add' = addSizeOpen ? 'add' : 'current';
+  const TABS = [
+    { key: 'current' as const, label: 'In this design', count: doc.sizes.length },
+    { key: 'add' as const, label: 'Add sizes', count: null as number | null },
+  ];
+
   return (
     <section
       onPointerDown={(e) => e.stopPropagation()}
-      className="flex max-h-[85vh] w-[640px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl"
+      className="flex h-[min(85vh,660px)] w-[680px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl"
     >
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="flex items-center gap-1.5 text-sm font-bold text-[var(--foreground)]">
-          <DashboardLayoutIcon className="h-4 w-4" />
-          Sizes
-        </h2>
-        <div className="flex items-center gap-1.5">
-          <Link href="/ad-generator/sizes" className="text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]">
-            Library
+      {/* Header — fixed, never scrolls away. */}
+      <header className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+            <DashboardLayoutIcon className="h-4 w-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-bold leading-tight text-[var(--foreground)]">Sizes</h2>
+            <p className="truncate text-[11px] leading-tight text-[var(--muted-foreground)]">
+              {doc.sizes.length} artboard{doc.sizes.length === 1 ? '' : 's'} in this design
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <Link
+            href="/ad-generator/sizes"
+            className="rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            Manage library
           </Link>
           <button
-            onClick={() => setAddSizeOpen((v) => !v)}
-            className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+            onClick={onClose}
+            title="Close"
+            aria-label="Close"
+            className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
           >
-            <PlusIcon className="h-3 w-3" />
-            Add
-          </button>
-          <button onClick={onClose} title="Close" aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
             <XMarkIcon className="h-4 w-4" />
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Lay every size out together on one canvas. */}
-      {doc.sizes.length > 1 && !viewAll && (
-        <button
-          onClick={onViewAll}
-          className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-        >
-          <Squares2X2Icon className="h-4 w-4" />
-          View all sizes together
-        </button>
-      )}
-
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-        {doc.sizes.map((s) => {
-          const count = Object.keys(doc.layouts[s.id] ?? {}).length;
-          const active = s.id === sizeId;
-          // A ratio-accurate swatch (max 44px on the long edge) so each size is
-          // recognizable at a glance without reading the dimensions.
-          const long = 44;
-          const tw = s.width >= s.height ? long : Math.round((long * s.width) / s.height);
-          const th = s.height >= s.width ? long : Math.round((long * s.height) / s.width);
+      {/* Tabs — the drawer that used to crush the list is now a peer view. */}
+      <div className="flex flex-shrink-0 items-center gap-1 border-b border-[var(--border)] px-3 pt-2">
+        {TABS.map((t) => {
+          const on = tab === t.key;
           return (
-            <div key={s.id} className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${active ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}>
-              <button
-                onClick={() => {
-                  setSizeId(s.id);
-                  onClose();
-                }}
-                className="flex flex-1 items-center gap-3 px-2 py-2 text-left"
-              >
-                <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center">
-                  <span
-                    className={`rounded-[3px] border shadow-sm ${active ? 'border-[var(--primary)]' : 'border-[var(--border)]'}`}
-                    style={{ width: tw, height: th, background: previewFill }}
-                  />
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setAddSizeOpen(t.key === 'add')}
+              aria-pressed={on}
+              className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                on
+                  ? 'border-[var(--primary)] text-[var(--foreground)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {t.key === 'add' && <PlusIcon className="h-3.5 w-3.5" />}
+              {t.label}
+              {t.count != null && (
+                <span className="rounded-full bg-[var(--muted)] px-1.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                  {t.count}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className={`block truncate text-xs font-medium ${active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{s.label}</span>
-                  <span className="block text-[10px] text-[var(--muted-foreground)]">
-                    {s.width}×{s.height} · {count} {count === 1 ? 'layer' : 'layers'}
-                  </span>
-                </span>
-              </button>
-              {doc.sizes.length > 1 && (
-                <button onClick={() => removeSize(s.id)} title="Remove size" className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
-                  <TrashIcon className="h-3.5 w-3.5" />
-                </button>
               )}
-            </div>
+            </button>
           );
         })}
       </div>
 
-      {addSizeOpen && (
-        <div className="mt-2 flex min-h-0 flex-col rounded-lg border border-dashed border-[var(--border)]">
-          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
-            <p className="text-[11px] text-[var(--muted-foreground)]">Select one or more sizes to add, then hit Add.</p>
+      {tab === 'current' ? (
+        <>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            {/* Lay every size out together on one canvas. */}
+            {doc.sizes.length > 1 && !viewAll && (
+              <button
+                onClick={onViewAll}
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                <Squares2X2Icon className="h-4 w-4" />
+                View all sizes together
+              </button>
+            )}
+
+            <div className="space-y-1">
+              {doc.sizes.map((s) => {
+                const count = Object.keys(doc.layouts[s.id] ?? {}).length;
+                const active = s.id === sizeId;
+                // A ratio-accurate swatch (max 44px on the long edge) so each size is
+                // recognizable at a glance without reading the dimensions.
+                const long = 44;
+                const tw = s.width >= s.height ? long : Math.round((long * s.width) / s.height);
+                const th = s.height >= s.width ? long : Math.round((long * s.height) / s.width);
+                return (
+                  <div
+                    key={s.id}
+                    className={`flex items-center gap-1 rounded-lg border pr-1 transition-colors ${
+                      active
+                        ? 'border-[var(--primary)]/40 bg-[var(--primary)]/10'
+                        : 'border-transparent hover:border-[var(--border)] hover:bg-[var(--muted)]/60'
+                    }`}
+                  >
+                    <button
+                      onClick={() => {
+                        setSizeId(s.id);
+                        onClose();
+                      }}
+                      className="flex flex-1 items-center gap-3 px-2 py-2 text-left"
+                    >
+                      <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center">
+                        <span
+                          className={`rounded-[3px] border shadow-sm ${active ? 'border-[var(--primary)]' : 'border-[var(--border)]'}`}
+                          style={{ width: tw, height: th, background: previewFill }}
+                        />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className={`block truncate text-xs font-medium ${active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>
+                          {s.label}
+                        </span>
+                        <span className="block text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                          {s.width}×{s.height} · {count} {count === 1 ? 'layer' : 'layers'}
+                        </span>
+                      </span>
+                      {active && (
+                        <span className="flex-shrink-0 rounded-full bg-[var(--primary)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--primary)]">
+                          Editing
+                        </span>
+                      )}
+                    </button>
+                    {doc.sizes.length > 1 && (
+                      <button
+                        onClick={() => removeSize(s.id)}
+                        title="Remove size"
+                        aria-label={`Remove ${s.label}`}
+                        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {doc.sizes.length > 1 && (
+              <div className="mt-4 border-t border-[var(--border)] pt-3">
+                <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">
+                  Copy layout into {sizeLabel.split(' ')[0]} from
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {doc.sizes
+                    .filter((s) => s.id !== sizeId)
+                    .map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => copyLayoutFrom(s.id)}
+                        title={`Replace ${sizeLabel.split(' ')[0]}'s layout with ${s.label.split(' ')[0]}'s, re-fitted to this board's shape`}
+                        className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                      >
+                        {s.label.split(' ')[0]}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <footer className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] px-3 py-2.5">
+            <span className="text-[11px] text-[var(--muted-foreground)]">Pick a size to edit it, or add more.</span>
+            <button
+              onClick={() => setAddSizeOpen(true)}
+              className="flex items-center gap-1 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              Add sizes
+            </button>
+          </footer>
+        </>
+      ) : (
+        <>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
             {/* The whole size library, filtered by what each size is used for. */}
             <SizePicker
               sizes={libSizes}
@@ -7638,12 +7939,13 @@ function SizesManager({
               selectedIds={pickedIds}
               onToggle={togglePick}
               previewFill={previewFill}
-              dense
             />
 
             {/* Create a brand-new size — saved to the library + added here */}
-            <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5">
-              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">New size</div>
+            <div className="space-y-1.5 rounded-lg border border-dashed border-[var(--border)] p-2.5">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Not in the library? Create a size
+              </div>
               <input
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
@@ -7677,44 +7979,36 @@ function SizesManager({
                 <button
                   onClick={createLibrarySize}
                   title="Save to the size library and add it here"
-                  className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  className="flex-shrink-0 rounded-md border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                 >
                   Create
                 </button>
               </div>
             </div>
           </div>
-          {/* Add-selected footer — always visible below the scroll area. */}
-          <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] p-2">
-            <span className="text-[11px] text-[var(--muted-foreground)]">{pickedCount ? `${pickedCount} selected` : 'None selected'}</span>
-            <button
-              onClick={addPicked}
-              disabled={!pickedCount}
-              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-            >
-              Add {pickedCount || ''} {pickedCount === 1 ? 'size' : 'sizes'}
-            </button>
-          </div>
-        </div>
-      )}
 
-      {doc.sizes.length > 1 && (
-        <div className="mt-3 border-t border-[var(--border)] pt-3">
-          <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">Copy layout into {sizeLabel.split(' ')[0]} from</label>
-          <div className="flex flex-wrap gap-1.5">
-            {doc.sizes
-              .filter((s) => s.id !== sizeId)
-              .map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => copyLayoutFrom(s.id)}
-                  className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                >
-                  {s.label.split(' ')[0]}
-                </button>
-              ))}
-          </div>
-        </div>
+          {/* Add-selected footer — always visible below the scroll area. */}
+          <footer className="flex flex-shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] px-3 py-2.5">
+            <span className="text-[11px] text-[var(--muted-foreground)]">
+              {pickedCount ? `${pickedCount} selected` : 'Select one or more sizes to add'}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setAddSizeOpen(false)}
+                className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={addPicked}
+                disabled={!pickedCount}
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                Add {pickedCount || ''} {pickedCount === 1 ? 'size' : 'sizes'}
+              </button>
+            </div>
+          </footer>
+        </>
       )}
     </section>
   );

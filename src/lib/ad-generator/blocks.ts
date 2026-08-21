@@ -14,7 +14,7 @@ import type { AdData, FieldSpec } from './types';
 import type { DocElement, DocLayoutBox, TemplateDoc } from './doc-types';
 import { addFieldKit } from './vehicle-fields';
 import { offerKindForDoc, type OfferKind } from './offer-kinds';
-import { rescaleBox } from './size-scope';
+import { rescaleBox, sizeFitOf } from './size-scope';
 
 export const BLOCK_PAYLOAD_VERSION = 1;
 
@@ -175,14 +175,27 @@ export function insertBlockIntoDoc(
       const box = payload.boxes[el.id];
       const newId = idMap.get(el.id);
       if (!box || !newId) continue;
-      // Re-derive the box for THIS board so the block keeps its shape.
-      const fitted = rescaleBox(box, from, size);
+      // Re-derive the box for THIS board by the element's own sizing mode, so a
+      // scale element keeps its shape and a fixed one keeps its pixels.
+      const fit = sizeFitOf(el);
+      const fitted = rescaleBox(box, from, size, fit);
+      // Fixed type is pinned with the frame; scale type follows the width ratio.
+      const fontSize = box.fontSize != null
+        ? fit.mode === 'fixed'
+          ? box.fontSize
+          : Math.max(1, Math.round(box.fontSize * scale))
+        : null;
+      // The anti-overlap nudge must not undo a deliberate bleed: an element wider
+      // or taller than the board has no in-bounds position to be clamped to, and
+      // clamping it to 0 would slam a centred background against the top-left.
+      const nudge = (pos: number, extent: number) =>
+        extent >= 1 ? pos : clamp(pos + OFFSET, 0, 1 - extent);
       next[newId] = {
         ...fitted,
-        x: clamp(fitted.x + OFFSET, 0, Math.max(0, 1 - fitted.w)),
-        y: clamp(fitted.y + OFFSET, 0, Math.max(0, 1 - fitted.h)),
+        x: nudge(fitted.x, fitted.w),
+        y: nudge(fitted.y, fitted.h),
         z: (box.z ?? 0) + maxZ + 1,
-        ...(box.fontSize != null ? { fontSize: Math.max(1, Math.round(box.fontSize * scale)) } : {}),
+        ...(fontSize != null ? { fontSize } : {}),
       };
     }
     layouts[sid] = next;

@@ -1,4 +1,5 @@
-import type { TemplateDoc } from './doc-types';
+import type { DocLayoutBox, TemplateDoc } from './doc-types';
+import { rescaleBox, sizeFitOf } from './size-scope';
 
 /**
  * Size ids: assigning them without collisions, and repairing docs that already
@@ -35,6 +36,12 @@ export interface SizeToAdd {
  * read the same pre-batch size list and dedupe against a doc that doesn't yet
  * contain its siblings. Each new board starts from `fromSizeId`'s layout (or
  * empty) so it isn't blank.
+ *
+ * That starting layout is RE-DERIVED for the new board's aspect ratio, not
+ * copied. Cloning the fractions was the same arithmetic mistake broadcasting
+ * used to make: a 200×200 badge cloned from a 500×500 onto a 2000×500 arrived
+ * 800×500. Each element is re-fitted by its own `sizeMode` — scale elements keep
+ * their shape, fixed elements keep their pixels.
  */
 export function addSizesToDoc(
   doc: TemplateDoc,
@@ -44,6 +51,8 @@ export function addSizesToDoc(
   if (!sizes.length) return { doc, addedIds: [] };
 
   const source = (fromSizeId && doc.layouts[fromSizeId]) || {};
+  const from = fromSizeId ? doc.sizes.find((s) => s.id === fromSizeId) : undefined;
+  const fitOf = new Map(doc.elements.map((e) => [e.id, sizeFitOf(e)]));
   const taken = new Set(doc.sizes.map((s) => s.id));
   const nextSizes = [...doc.sizes];
   const nextLayouts: TemplateDoc['layouts'] = { ...doc.layouts };
@@ -54,7 +63,24 @@ export function addSizesToDoc(
     taken.add(id);
     addedIds.push(id);
     nextSizes.push({ id, label: `${s.label} ${s.width}×${s.height}`, width: s.width, height: s.height });
-    nextLayouts[id] = structuredClone(source);
+    // Type follows the frame: a scale element gets the board's width ratio (a
+    // 108px headline off a 1080 board would otherwise bury a 300×250 banner),
+    // while a fixed element keeps its own px like the rest of its geometry.
+    const fontScale = from && from.width > 0 ? s.width / from.width : 1;
+    const layout: Record<string, DocLayoutBox> = {};
+    for (const [elId, box] of Object.entries(source)) {
+      if (!from) {
+        layout[elId] = { ...box };
+        continue;
+      }
+      const fit = fitOf.get(elId) ?? { mode: 'scale' as const, bleed: false };
+      const fitted = rescaleBox(box, from, s, fit);
+      if (fit.mode === 'scale' && fitted.fontSize != null) {
+        fitted.fontSize = Math.max(1, Math.round(fitted.fontSize * fontScale));
+      }
+      layout[elId] = fitted;
+    }
+    nextLayouts[id] = layout;
   }
 
   return { doc: { ...doc, sizes: nextSizes, layouts: nextLayouts }, addedIds };

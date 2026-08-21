@@ -313,7 +313,11 @@ export async function proxy(request: NextRequest) {
     // anonymous visitor's browser on the customer's own site, so gating
     // it redirects the <script> request to /login — the browser blocks
     // the HTML response and no form ever mounts.
-    pathname === '/loomi-form.js'
+    pathname === '/loomi-form.js' ||
+    // CSP violation reports. The BROWSER posts these by itself, with no
+    // credentials and no way to attach any — gating it would collect nothing.
+    // The route touches no data and echoes nothing back.
+    pathname === '/api/csp-report'
   ) {
     return NextResponse.next();
   }

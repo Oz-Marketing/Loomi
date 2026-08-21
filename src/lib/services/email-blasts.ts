@@ -1586,7 +1586,7 @@ export async function processEmailBlast(
         data: {
           status: 'failed',
           error:
-            'Account is not configured for bulk email. Add a SendGrid API key and a From address in Settings → Sending.',
+            'Account is not configured for bulk email. Add a SendGrid API key and a From address in Settings → Email & Texts → Sending Config.',
         },
       });
       return;

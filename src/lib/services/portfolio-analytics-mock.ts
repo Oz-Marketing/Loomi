@@ -431,7 +431,7 @@ function buildAnomalies(): AnomalyAlert[] {
       detail: '86 new suppressions in 7d (0.6% of list).',
       accountKey: 'bmwSaltlake',
       dealer: 'BMW of Salt Lake',
-      href: '/settings/suppressions',
+      href: '/settings/email-texts?section=suppressions',
       timestamp: now,
     },
     {

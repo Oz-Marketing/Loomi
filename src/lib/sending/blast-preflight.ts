@@ -212,7 +212,7 @@ export async function preflightEmailBlast(
         code: PREFLIGHT_CODES.NO_SENDGRID_KEY,
         accountKey: key,
         message: `${label} has no SendGrid API key, so this blast has no compliant way to send.`,
-        remedy: `Add a SendGrid API key under Settings → Sending for ${label}.`,
+        remedy: `Add a SendGrid API key under Settings → Email & Texts → Sending Config for ${label}.`,
       });
     } else {
       // Ciphertext that won't decrypt is as good as absent — the worker
@@ -225,7 +225,7 @@ export async function preflightEmailBlast(
           code: PREFLIGHT_CODES.BAD_SENDGRID_KEY,
           accountKey: key,
           message: `${label}'s stored SendGrid key can't be decrypted.`,
-          remedy: `Re-enter the API key under Settings → Sending for ${label}.`,
+          remedy: `Re-enter the API key under Settings → Email & Texts → Sending Config for ${label}.`,
         });
       }
     }
@@ -238,7 +238,7 @@ export async function preflightEmailBlast(
         code: PREFLIGHT_CODES.NO_SENDER_EMAIL,
         accountKey: key,
         message: `${label} has no From address, so the blast would send from the shared Loomi address.`,
-        remedy: `Set the From address under Settings → Sending for ${label}.`,
+        remedy: `Set the From address under Settings → Email & Texts → Sending Config for ${label}.`,
       });
     } else if (!account.sendgridFromDomain) {
       issues.push({
@@ -246,7 +246,7 @@ export async function preflightEmailBlast(
         code: PREFLIGHT_CODES.NO_FROM_DOMAIN,
         accountKey: key,
         message: `${label} has no authenticated sending domain recorded, so SPF/DKIM alignment can't be confirmed.`,
-        remedy: `Add the authenticated domain under Settings → Sending, then run Verify Connection.`,
+        remedy: `Add the authenticated domain under Settings → Email & Texts → Sending Config, then run Verify Connection.`,
       });
     } else if (!domainCovers(account.sendgridFromDomain, domainOf(senderEmail))) {
       // A From domain outside the authenticated one means the DKIM
@@ -256,7 +256,7 @@ export async function preflightEmailBlast(
         code: PREFLIGHT_CODES.SENDER_DOMAIN_MISMATCH,
         accountKey: key,
         message: `${label} sends from ${senderEmail} but only ${account.sendgridFromDomain} is authenticated — DKIM won't align.`,
-        remedy: `Either send from an address on ${account.sendgridFromDomain}, or authenticate ${domainOf(senderEmail)} in SendGrid and record it under Settings → Sending.`,
+        remedy: `Either send from an address on ${account.sendgridFromDomain}, or authenticate ${domainOf(senderEmail)} in SendGrid and record it under Settings → Email & Texts → Sending Config.`,
       });
     }
 
@@ -276,7 +276,7 @@ export async function preflightEmailBlast(
         code: PREFLIGHT_CODES.NO_PHYSICAL_ADDRESS,
         accountKey: key,
         message: `${label} has no complete mailing address, which CAN-SPAM requires in the footer of every commercial email.`,
-        remedy: `Add street, city, state, and ZIP under Settings → Sending for ${label}.`,
+        remedy: `Add street, city, state, and ZIP under Settings → Email & Texts → Sending Config for ${label}.`,
       });
     }
   }

@@ -27,10 +27,7 @@ import { UsersTab } from '@/components/settings/users-tab';
 import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
-import { SendingTab } from '@/components/settings/sending-tab';
-import { EmailFooterTab } from '@/components/settings/email-footer-tab';
-import { SmsTab } from '@/components/settings/sms-tab';
-import { SuppressionsTab } from '@/components/settings/suppressions-tab';
+import { EmailTextsTab } from '@/components/settings/email-texts-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import {
   canonicalSubaccountSection,
@@ -39,9 +36,8 @@ import {
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
-// Sending / SMS / Suppressions render below in settings mode; they came
-// back here from /messaging/settings (2026-08-20) so Settings actually
-// contains the settings its own error messages point at.
+// Email & Texts renders below in settings mode — sending identity, SMS,
+// the compliance footer, and suppressions, all behind one nav entry.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -100,10 +96,7 @@ type DetailTab =
   | 'domains'
   | 'integrations'
   | 'users'
-  | 'sending'
-  | 'email-footer'
-  | 'sms'
-  | 'suppressions'
+  | 'email-texts'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -129,10 +122,10 @@ const TABS: TabDef[] = [
 // hand-synced copies.
 //
 // Sending / SMS / Suppressions briefly lived at /messaging/settings on the
-// grounds that they're coupled to the send engine. They're back here: they're
-// per-account config people look for under Settings, and every preflight
-// remedy already told them to go to "Settings → Sending". The messaging URLs
-// now redirect here.
+// grounds that they're coupled to the send engine. They're back here, merged
+// into a single "Email & Texts" section with sub-tabs: they're per-account
+// config people look for under Settings, and four sibling nav entries read as
+// four unrelated pages. The messaging URLs now redirect here.
 
 // Settings mode lives at two URL shapes:
 //   • Studio scoped:  /subaccount/<slug>/settings/<tab>            (section in path)
@@ -1682,28 +1675,12 @@ export function SubAccountDetailPage({
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}
 
-        {/* ════════════ EMAIL SENDING TAB (settings mode only) ════════════
-            SendGrid key, From identity, authenticated domain, and the
-            CAN-SPAM postal address. Every one of these is a hard preflight
-            blocker, so this is the page a blocked send sends you to. */}
-        {settingsMode && activeTab === 'sending' && key && (
-          <SendingTab accountKey={key} />
-        )}
-
-        {/* ════════════ EMAIL FOOTER TAB (settings mode only) ════════════
-            Styling for the CAN-SPAM block. Inherits from the parent account
-            until this one saves an override. */}
-        {settingsMode && activeTab === 'email-footer' && key && (
-          <EmailFooterTab accountKey={key} />
-        )}
-
-        {/* ════════════ SMS TAB (settings mode only) ════════════ */}
-        {settingsMode && activeTab === 'sms' && key && <SmsTab accountKey={key} />}
-
-        {/* ════════════ SUPPRESSIONS TAB (settings mode only) ════════════
-            Removing a row here also clears SendGrid's own list. */}
-        {settingsMode && activeTab === 'suppressions' && key && (
-          <SuppressionsTab accountKey={key} />
+        {/* ════════════ EMAIL & TEXTS TAB (settings mode only) ════════════
+            Sending identity + SMS, the CAN-SPAM footer, and the suppression
+            list, behind sub-tabs. Every field under Sending Config is a hard
+            preflight blocker, so this is where a blocked send sends you. */}
+        {settingsMode && activeTab === 'email-texts' && key && (
+          <EmailTextsTab accountKey={key} />
         )}
 
         </div>{/* end tab content */}

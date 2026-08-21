@@ -19,6 +19,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowUturnLeftIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { Select } from '@/components/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { HelpTip } from '@/components/ui/help-tip';
 import { useAccount } from '@/contexts/account-context';
 import {
@@ -293,21 +295,20 @@ export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
           </div>
 
           <div>
-            <label className={labelClass} htmlFor="footer-font">Font</label>
-            <select
-              id="footer-font"
+            <label className={labelClass}>Font</label>
+            <Select
               value={config.fontFamily}
-              onChange={(e) => set('fontFamily', e.target.value)}
-              className={inputClass}
-            >
-              {FONT_STACKS.map((f) => (
-                <option key={f.value} value={f.value}>{f.label}</option>
-              ))}
-              {/* A stack saved before this list existed stays selectable. */}
-              {!FONT_STACKS.some((f) => f.value === config.fontFamily) && (
-                <option value={config.fontFamily}>{config.fontFamily}</option>
-              )}
-            </select>
+              onChange={(v) => set('fontFamily', v)}
+              options={[
+                ...FONT_STACKS.map((f) => ({ value: f.value, label: f.label })),
+                // A stack saved before this list existed stays selectable.
+                ...(FONT_STACKS.some((f) => f.value === config.fontFamily)
+                  ? []
+                  : [{ value: config.fontFamily, label: config.fontFamily }]),
+              ]}
+              previewFont={false}
+              ariaLabel="Footer font"
+            />
           </div>
 
           <div>
@@ -375,14 +376,10 @@ export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
               </HelpTip>
             </label>
             <div className="flex items-center gap-2">
-              <input
-                id="footer-bg-toggle"
-                type="checkbox"
+              <Checkbox
                 checked={config.backgroundColor !== null}
-                onChange={(e) =>
-                  set('backgroundColor', e.target.checked ? '#f5f5f5' : null)
-                }
-                className="w-4 h-4 accent-[var(--primary)]"
+                onChange={(on) => set('backgroundColor', on ? '#f5f5f5' : null)}
+                aria-label="Use a background colour behind the footer"
               />
               <input
                 id="footer-bg"
@@ -399,16 +396,12 @@ export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
           </div>
 
           <div>
-            <label className={labelClass} htmlFor="footer-border-toggle">
-              Divider line
-            </label>
+            <label className={labelClass}>Divider line</label>
             <div className="flex items-center gap-2">
-              <input
-                id="footer-border-toggle"
-                type="checkbox"
+              <Checkbox
                 checked={config.showTopBorder}
-                onChange={(e) => set('showTopBorder', e.target.checked)}
-                className="w-4 h-4 accent-[var(--primary)]"
+                onChange={(on) => set('showTopBorder', on)}
+                aria-label="Show a divider line above the footer"
               />
               <input
                 type="color"

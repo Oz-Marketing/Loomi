@@ -278,7 +278,13 @@ export function Sidebar() {
   // config is the cog's modal, never a page in this shell — so this never
   // points at the agency directories (`/settings/subaccounts`, `/settings/users`)
   // again. `/settings` alone resolves to the first tab this scope can see.
-  const settingsHref = slug ? `/subaccount/${slug}/settings` : '/settings';
+  // The footer Settings link goes to THIS SECTOR's settings, never to one
+  // account's. An account's own configuration lives on the account (Agency
+  // Settings → Accounts → the account); pointing here at
+  // /settings/subaccounts/<key> is what made the sector's own screens —
+  // Markup, Channels, Alerts, Client Reports — unreachable from the surface
+  // that owns them.
+  const settingsHref = '/settings';
 
 
   // Settings lives in the footer (where the account switcher briefly was).
@@ -290,7 +296,12 @@ export function Sidebar() {
       account={
         // Account switcher sits under the logo (admins/non-clients). Opens
         // downward — clients don't get a switcher (Settings is in the footer).
-        !isClientRole ? (
+        // No switcher in settings: the rail IS the settings nav here, and the
+        // sections it lists belong to whichever account you arrived from —
+        // leaving a picker above them invites changing account mid-edit, which
+        // silently repoints the form. Dropping it also lifts "Back to <sector>"
+        // to the top, which is the way out of this mode.
+        !isClientRole && !isSettingsPath(normalizedPath) ? (
           collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />
         ) : null
       }

@@ -9,7 +9,7 @@ export default function SubAccountSettingsPage() {
   return (
     <SubAccountDetailPage
       basePath="/settings/subaccounts"
-      settingsMode
+     
       accountKeyProp={accountKey || ''}
     />
   );

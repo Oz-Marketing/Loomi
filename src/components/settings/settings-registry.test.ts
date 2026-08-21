@@ -89,11 +89,9 @@ describe('settings registry', () => {
       'teams',
       'knowledge',
     ]);
-    expect(groups[1].items.map((i) => i.key)).toEqual([
-      'industries',
-      'notifications',
-      'appearance',
-    ]);
+    // Notifications is sector-owned now (its categories ARE a sector's);
+    // Appearance stays because it follows the USER across all three surfaces.
+    expect(groups[1].items.map((i) => i.key)).toEqual(['industries', 'appearance']);
   });
 
   it('points rail hrefs at the browser-facing /settings path', () => {
@@ -118,22 +116,36 @@ describe('settings registry', () => {
     );
   });
 
-  it('keeps agency-only platform config out of an account', () => {
+  it('keeps AGENCY-tier directories out of an account scope', () => {
+    // The agency roster and platform tables stay in the modal. Sector config
+    // is NOT in this list: having an account in scope is the normal case, and
+    // the sector rail no longer carries that account's own settings, so gating
+    // sector entries on it emptied the rail in every real session.
     const keys = keysOf(SUBACCOUNT_ADMIN);
     for (const agencyOnly of [
       'subaccounts',
       'users',
+      'client-users',
       'teams',
-      'contact-field-blueprints',
       'knowledge',
       'industries',
-      'markup',
-      'alerts',
-      'coop-guidelines',
     ]) {
       expect(keys).not.toContain(agencyOnly);
     }
-    expect(keys).toEqual(['subaccount', 'integrations', 'contact-fields', 'notifications', 'appearance']);
+  });
+
+  it('still offers a sector its own config while an account is in scope', () => {
+    // The regression this pins: Markup, Channels and Alerts vanished from the
+    // Projects rail the moment anyone picked an account.
+    const projectsInAccount = scope({
+      isAccount: true,
+      hasAdminAccess: true,
+      isElevated: true,
+      surface: 'app',
+    });
+    for (const own of ['markup', 'budget-channels', 'alerts']) {
+      expect(keysOf(projectsInAccount), own).toContain(own);
+    }
   });
 
   it('keeps Custom Fields to Studio', () => {
@@ -168,10 +180,13 @@ describe('settings registry', () => {
   });
 });
 
-// The sub-account tier is CORE + SECTOR: the same five sections wherever you
-// are, plus whatever that sector owns.
+// The sub-account rail is SECTOR-ONLY now. General, Users, Branding and
+// Integrations moved onto the account (Agency Settings → Accounts → the
+// account, where the drill-in already rendered the same screens), and
+// Appearance moved to Agency Settings because it follows the USER across every
+// surface. What's left on this rail is only what a sector adds to an account.
 
-const CORE = ['general', 'users', 'branding', 'integrations', 'appearance'];
+const GONE_FROM_THE_RAIL = ['general', 'users', 'branding', 'integrations', 'appearance'];
 
 const sectionKeys = (surface: 'studio' | 'reporting' | 'app') =>
   subaccountSectionsForScope(scope({ isAccount: true, hasAdminAccess: true, surface })).map(
@@ -179,13 +194,14 @@ const sectionKeys = (surface: 'studio' | 'reporting' | 'app') =>
   );
 
 describe('account settings sections', () => {
-  it('offers the same core sections in every sector', () => {
+  it('no longer carries the account tier or Appearance', () => {
     for (const surface of ['studio', 'reporting', 'app'] as const) {
-      for (const key of CORE) {
-        expect(sectionKeys(surface)).toContain(key);
+      for (const moved of GONE_FROM_THE_RAIL) {
+        expect(sectionKeys(surface), `${surface}/${moved}`).not.toContain(moved);
       }
     }
   });
+
 
   it('keeps Domains and Custom Fields to Studio', () => {
     expect(sectionKeys('studio')).toContain('domains');
@@ -221,16 +237,11 @@ describe('account settings sections', () => {
     expect(sectionKeys('reporting')).not.toContain('notifications');
   });
 
-  it('gives Reporting the core plus Reports, and nothing else', () => {
+  it('gives Reporting just Reports', () => {
     expect(sectionKeys('reporting')).toEqual([
-      'general',
-      'users',
-      'branding',
-      'integrations',
       // Which reports this sub-account's client users see — see
       // components/settings/report-access-tab.
       'reports',
-      'appearance',
     ]);
   });
 

@@ -4,7 +4,12 @@ import { getPublishedFormBySlug } from '@/lib/services/forms';
 import { FormPublic } from '@/components/forms/form-public';
 import { getTurnstileSiteKey } from '@/lib/forms/turnstile';
 import { collectFieldBlocks, getFieldName } from '@/lib/forms/types';
-import { parseEmbedParams, type RawSearchParams } from '@/lib/forms/embed-params';
+import {
+  parseEmbedParams,
+  parseUtmParams,
+  type RawSearchParams,
+} from '@/lib/forms/embed-params';
+import { publicFormChromeCss } from '@/lib/forms/page-chrome';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -53,15 +58,34 @@ export default async function PublicFormPage({ params, searchParams }: PageProps
   // too but have no help text — harmless to include.
   const fieldNames = new Set(collectFieldBlocks(form.schema).map(getFieldName));
   const { noteOverrides, metadata } = parseEmbedParams(sp, fieldNames);
+  // Campaign params off this page's own URL. For an embedded form that's
+  // the only channel available — the iframe can't read the host page's
+  // query string, so the embed loader copies them onto our URL for us.
+  const utm = parseUtmParams(sp);
 
   return (
-    <FormPublic
-      slug={form.slug}
-      template={form.schema}
-      embed={embed}
-      turnstileSiteKey={turnstileSiteKey}
-      helpTextOverrides={noteOverrides}
-      metadata={metadata}
-    />
+    <>
+      {/* Strips the app's dark chrome off <body> so an embed shows the host
+          page through any leftover frame height instead of a black slab.
+          See lib/forms/page-chrome.ts. */}
+      <style
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{
+          __html: publicFormChromeCss({
+            embed,
+            bodyBg: form.schema.settings?.bodyBg,
+          }),
+        }}
+      />
+      <FormPublic
+        slug={form.slug}
+        template={form.schema}
+        embed={embed}
+        turnstileSiteKey={turnstileSiteKey}
+        helpTextOverrides={noteOverrides}
+        metadata={metadata}
+        utm={utm}
+      />
+    </>
   );
 }

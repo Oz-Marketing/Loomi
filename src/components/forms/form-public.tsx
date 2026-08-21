@@ -4,7 +4,7 @@ import * as React from 'react';
 import { formContentMaxWidth, type FormTemplate } from '@/lib/forms/types';
 import { FormRenderer } from '@/lib/forms/render';
 import { FormInteractiveContext } from '@/lib/forms/components/FieldFileInput';
-import { META_FIELD_PREFIX } from '@/lib/forms/embed-params';
+import { META_FIELD_PREFIX, UTM_KEYS, type UtmParams } from '@/lib/forms/embed-params';
 
 interface FormPublicProps {
   slug: string;
@@ -47,6 +47,14 @@ interface FormPublicProps {
    * the submission row.
    */
   metadata?: Record<string, string>;
+  /**
+   * Campaign params read off this page's own `?utm_*` query string — how
+   * an embedded form learns its attribution, since it can't see the host
+   * page's URL from inside the iframe. Takes precedence over the
+   * `loomi_lp_utm` cookie: these describe the load that's happening now,
+   * where the cookie may be left over from an earlier landing-page visit.
+   */
+  utm?: UtmParams;
 }
 
 const TURNSTILE_API_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -85,18 +93,17 @@ interface SubmitResponse {
 type Phase = 'idle' | 'submitting' | 'success' | 'error';
 
 /**
- * The app's global `<body>` is `flex min-h-screen`, so anything the
- * public form route renders is a flex item — and a flex item's default
- * `flex: 0 1 auto` sizes it to its *content*, not to the line. Without
- * this, the form card collapsed to whatever the inputs happened to need
- * (~440px) and the Form Width setting had no visible effect at any
- * value: `max-width: 1024px` can't widen a box the parent never let
- * grow. Applies on `/f/[slug]` and, because the script embed iframes
- * that same page, in every embedded form too.
+ * Make the form fill its parent's width whatever that parent is.
  *
- * `width: 100%` (not `flex: 1`) so the same wrapper still behaves
- * inside a plain block parent — e.g. the landing-page Embedded Form
- * block, which constrains the form with its own max-width.
+ * Originally this existed because the app's global `<body>` is
+ * `flex min-h-screen`, which made everything the public form route
+ * renders a flex item — and a flex item's default `flex: 0 1 auto` sizes
+ * it to its *content*, not to the line, collapsing the form card to
+ * ~440px and making the Form Width setting look broken. `/f/[slug]` now
+ * overrides <body> back to a plain block (see `lib/forms/page-chrome.ts`),
+ * but this stays: the same component also renders inside the landing-page
+ * Embedded Form block, and `width: 100%` (rather than `flex: 1`) is the
+ * one declaration that behaves correctly in both parents.
  */
 const FILL_WIDTH: React.CSSProperties = { width: '100%', minWidth: 0 };
 
@@ -124,6 +131,7 @@ export function FormPublic({
   turnstileSiteKey,
   helpTextOverrides,
   metadata,
+  utm,
 }: FormPublicProps) {
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
@@ -289,13 +297,13 @@ export function FormPublic({
       }
     }
 
-    const utms = readLpUtmCookie();
-    if (utms) {
-      if (utms.source) formData.set('__loomi_utm_source', utms.source);
-      if (utms.medium) formData.set('__loomi_utm_medium', utms.medium);
-      if (utms.campaign) formData.set('__loomi_utm_campaign', utms.campaign);
-      if (utms.term) formData.set('__loomi_utm_term', utms.term);
-      if (utms.content) formData.set('__loomi_utm_content', utms.content);
+    // This page's own `?utm_*` wins per field, with the landing-page
+    // cookie filling any gap: the URL describes the load happening right
+    // now, the cookie may be a leftover from an earlier LP visit.
+    const cookieUtms = readLpUtmCookie();
+    for (const key of UTM_KEYS) {
+      const value = utm?.[key] ?? cookieUtms?.[key];
+      if (value) formData.set(`__loomi_utm_${key}`, value);
     }
 
     let res: Response;
@@ -501,13 +509,7 @@ export function FormPublic({
  * submission without round-tripping through React context. Returns
  * null when the cookie is missing or malformed.
  */
-interface LpUtm {
-  source?: string;
-  medium?: string;
-  campaign?: string;
-  term?: string;
-  content?: string;
-}
+type LpUtm = UtmParams;
 
 function readLpUtmCookie(): LpUtm | null {
   if (typeof document === 'undefined') return null;

@@ -49,6 +49,7 @@ export async function PATCH(
       notificationEmail: body?.notificationEmail,
       listId: body?.listId,
       forwardToCrm: body?.forwardToCrm,
+      crmVehicleContext: body?.crmVehicleContext,
       category: body?.category,
       tags: body?.tags,
     });

@@ -144,6 +144,38 @@ export function sanitizeMetadataRecord(raw: Record<string, unknown>): Record<str
   return out;
 }
 
+/** The five UTM fields `FormSubmission` stores, keyed as they arrive. */
+export const UTM_KEYS = ['source', 'medium', 'campaign', 'term', 'content'] as const;
+
+export type UtmKey = (typeof UTM_KEYS)[number];
+export type UtmParams = Partial<Record<UtmKey, string>>;
+
+/**
+ * Pull `?utm_*` off a public form URL.
+ *
+ * A form embedded on a third-party page can't see the host page's URL —
+ * it's a different origin. The embed loader copies the campaign params
+ * onto the iframe's own URL (see `lib/forms/embed-loader.ts`), and this
+ * is the end that reads them back. Without it the params ride along in
+ * the address bar and land nowhere, and only visitors who passed through
+ * a Loomi landing page (which sets the `loomi_lp_utm` cookie) carry any
+ * attribution at all.
+ *
+ * Values go through the same sanitizer as `meta_*`: these arrive from a
+ * page we don't control.
+ */
+export function parseUtmParams(searchParams: RawSearchParams): UtmParams {
+  const out: UtmParams = {};
+  for (const key of UTM_KEYS) {
+    const value = sanitizeEmbedValue(
+      firstValue(searchParams[`utm_${key}`]),
+      MAX_META_VALUE_LENGTH,
+    );
+    if (value) out[key] = value;
+  }
+  return out;
+}
+
 /**
  * Read a persisted `FormSubmission.metadata` column back into a flat
  * string map. Rows written before this feature (and any hand-edited

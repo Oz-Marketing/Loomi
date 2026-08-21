@@ -296,7 +296,7 @@ function AccountCampaignsPage() {
                     them, rather than buried in the global account
                     settings page. */}
                 <Link
-                  href={subHref('/settings/sending')}
+                  href={subHref('/settings/email-texts?section=sending')}
                   aria-label="Email settings"
                   title="Email settings"
                   className="inline-flex items-center justify-center h-10 w-10 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] transition-colors"

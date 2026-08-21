@@ -264,7 +264,7 @@ export function SendingTab({ accountKey }: SendingTabProps) {
             <EnvelopeIcon className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-semibold text-[var(--foreground)]">Sender Identity</h3>
+            <h3 className="text-base font-semibold text-[var(--foreground)]">Email Identity</h3>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
               The From address and reply-to used when Loomi sends email campaigns for this subaccount.
               When blank, sends fall back to the global default.

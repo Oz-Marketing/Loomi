@@ -169,22 +169,23 @@ describe('account settings sections', () => {
     }
   });
 
-  it('keeps the sending sections to Studio', () => {
+  it('keeps Email & Texts to Studio', () => {
     // Reporting and Projects don't send anything, so a SendGrid key or a
     // suppression list there would be a dead panel.
-    for (const key of ['sending', 'email-footer', 'sms', 'suppressions'] as const) {
-      expect(sectionKeys('studio')).toContain(key);
-      for (const surface of ['reporting', 'app'] as const) {
-        expect(sectionKeys(surface)).not.toContain(key);
-      }
+    expect(sectionKeys('studio')).toContain('email-texts');
+    for (const surface of ['reporting', 'app'] as const) {
+      expect(sectionKeys(surface)).not.toContain('email-texts');
     }
   });
 
-  it('groups the sending sections together, after Custom Fields', () => {
-    // Order is what the sidebar renders, and these four read as one block.
+  it('exposes email settings as ONE nav entry, not four', () => {
+    // Email identity, SMS, the footer, and suppressions are sub-tabs of
+    // Email & Texts. Four sibling entries read as four unrelated pages.
     const keys = sectionKeys('studio');
-    expect(keys.slice(keys.indexOf('contact-fields') + 1, keys.indexOf('contact-fields') + 5))
-      .toEqual(['sending', 'email-footer', 'sms', 'suppressions']);
+    for (const retired of ['sending', 'sms', 'email-footer', 'suppressions']) {
+      expect(keys).not.toContain(retired);
+    }
+    expect(keys[keys.indexOf('contact-fields') + 1]).toBe('email-texts');
   });
 
   it('offers Notifications everywhere but Reporting', () => {

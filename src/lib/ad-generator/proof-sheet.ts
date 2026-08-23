@@ -8,6 +8,7 @@ import { enrichOfferFields } from './offer-text';
 import { offerKindForDoc } from './offer-kinds';
 import { offerTypeAccent, offerTypeShort } from './offer-type-style';
 import { preflight, type CoopDesignVerdict, type PreflightIssue } from './preflight';
+import { auditTemplate, type AuditFinding } from './template-audit';
 
 /**
  * THE PROOF SHEET — every offer type this template claims to serve, on every board
@@ -78,6 +79,17 @@ export interface ProofTemplateFault {
   citation?: string;
   /** Offer types this fault was observed under. Empty means every type. */
   offerTypes: string[];
+  /** Boards it was observed on. Empty means every board. */
+  sizes: string[];
+  /** What to do about it, where the fault itself doesn't say. */
+  fix?: string;
+  /**
+   * Where the fault came from: a manufacturer's transcribed rules, or Loomi's own
+   * design audit. Worth saying, because a reader treats "Mazda says so" and "this
+   * disclaimer is nine pixels tall" differently — and only one of them has a
+   * citation to check.
+   */
+  source: 'coop' | 'audit';
 }
 
 export interface ProofSheet {
@@ -193,7 +205,12 @@ export function buildProofSheet(input: ProofSheetInput): ProofSheet {
     };
   });
 
-  const templateFaults = collectTemplateFaults(coopDesign);
+  // Both halves of the design-time answer, in one list: the manufacturer's rules
+  // where a pack exists, and the house audit, which holds whether one does or not.
+  const templateFaults = [
+    ...collectTemplateFaults(coopDesign),
+    ...auditAsFaults(auditTemplate({ doc, oemRule, sizeIds: sizes.map((s) => s.id) })),
+  ];
   const all = [
     ...rows.flatMap((r) => r.issues),
     // Counted once each, matching what the reader is shown.
@@ -203,7 +220,10 @@ export function buildProofSheet(input: ProofSheetInput): ProofSheet {
     rows,
     sizes,
     templateFaults,
-    ok: rows.every((r) => r.ok),
+    // A blocking DESIGN fault fails the sheet even when every row's data checks
+    // out: a template with no disclaimer makes nothing shippable, and preflight
+    // would never say so because there is no ad-level value at fault.
+    ok: rows.every((r) => r.ok) && !templateFaults.some((f) => f.severity === 'error'),
     errorCount: all.filter((i) => i.severity === 'error').length,
     warningCount: all.filter((i) => i.severity === 'warning').length,
     notes: proofNotes({ doc, coopPack, coopDesign, rows, templateFaults }),
@@ -223,7 +243,10 @@ function collectTemplateFaults(coopDesign?: CoopDesignVerdict | null): ProofTemp
   const by = new Map<string, ProofTemplateFault>();
   for (const f of coopDesign.findings) {
     // Keyed on rule AND wording: one rule can fail for more than one reason.
-    const key = `${f.ruleId} ${f.description}`;
+    // `JSON.stringify` rather than joining on a separator byte — a raw NUL in a
+    // key literal makes the whole FILE read as binary, and grep then skips it
+    // silently (`meta-ads-pacer.ts` is invisible to search for exactly that).
+    const key = JSON.stringify([f.ruleId, f.description]);
     const seen = by.get(key);
     const type = f.offerType && f.offerType !== 'any' ? f.offerType : '';
     if (seen) {
@@ -237,6 +260,10 @@ function collectTemplateFaults(coopDesign?: CoopDesignVerdict | null): ProofTemp
         severity: f.severity,
         citation: f.citation,
         offerTypes: type ? [type] : [],
+        // A design rule is geometry, so it holds on every board the verdict
+        // covered — the verdict does not carry a board list.
+        sizes: [],
+        source: 'coop',
       });
     }
   }
@@ -291,8 +318,16 @@ function proofNotes(args: {
 
   if (templateFaults.length) {
     const errs = templateFaults.filter((f) => f.severity === 'error').length;
+    const oem = templateFaults.filter((f) => f.source === 'coop').length;
+    // Name the source in the count: "3 rules the design fails" reads as
+    // manufacturer authority, and half of these are our own legibility bar.
+    const where = oem === templateFaults.length
+      ? 'manufacturer rules'
+      : oem === 0
+        ? 'design checks'
+        : `checks (${oem} of them a manufacturer's)`;
     notes.push(
-      `${templateFaults.length} manufacturer rule${templateFaults.length === 1 ? '' : 's'} the DESIGN fails${errs ? `, ${errs} of them blocking` : ''}. Listed once below — they apply to every ad off this template, so they are the designer's to fix, not the data's.`,
+      `${templateFaults.length} ${where} the DESIGN fails${errs ? `, ${errs} of them blocking` : ''}. Listed once below — they apply to every ad off this template, so they are the designer's to fix, not the data's.`,
     );
   }
 
@@ -303,6 +338,25 @@ function proofNotes(args: {
     );
   }
   return notes;
+}
+
+/**
+ * The house audit's findings, in the shape the faults list already renders.
+ *
+ * The audit is not a manufacturer's rule, so it has no citation — and saying so
+ * plainly is better than borrowing the authority of one. `check` stands in for
+ * `ruleId`: it is stable, and it is what a bug report should name.
+ */
+function auditAsFaults(findings: AuditFinding[]): ProofTemplateFault[] {
+  return findings.map((f) => ({
+    ruleId: f.check,
+    description: f.message,
+    severity: f.severity,
+    offerTypes: f.offerTypes,
+    sizes: f.sizes,
+    fix: f.fix,
+    source: 'audit' as const,
+  }));
 }
 
 /** One line for a header or a page title: "4 offer types × 5 boards". */

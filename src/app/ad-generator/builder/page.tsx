@@ -83,7 +83,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
-import { enrichOfferFields, offerTokenFields, primaryOfferField } from '@/lib/ad-generator/offer-text';
+import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { offerKindForDoc, type OfferKind } from '@/lib/ad-generator/offer-kinds';
 import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
@@ -121,6 +121,7 @@ import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
 import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
 import { offerTypeAccent, offerTypePill, offerTypeShort } from '@/lib/ad-generator/offer-type-style';
+import { surfacedFields } from '@/lib/ad-generator/template-audit';
 import { roleNote } from '@/lib/ad-generator/archetypes/roles';
 import { applyTheme } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
@@ -345,15 +346,9 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // vehicle-only maps here. Derived from each offer type's spec, so a service
 // template's compliance check works without either being extended.
 
-/** The field keys an element actually renders — a direct field binding, or the
- *  `{{tokens}}` inside typed static content. Used to tell whether a required OEM
- *  field is surfaced on the artboard. */
-function elementFieldRefs(el: DocElement): string[] {
-  const b = el.binding;
-  if (b?.kind === 'field') return [b.key];
-  if (b?.kind === 'static') return (b.value.match(/\{\{\s*([\w.]+)\s*\}\}/g) ?? []).map((m) => m.replace(/[{}\s]/g, ''));
-  return [];
-}
+// `elementFieldRefs` was a helper here. It moved to `template-audit.ts` with
+// `surfacedFields`, its only real caller — and the audit needs it server-side,
+// where a helper in a page component cannot go.
 
 /** Whether an element is part of an OFFER — gated by offer type, or bound to /
  *  typing a computed offer token. Drives the offer-type preview tabs + the
@@ -893,25 +888,15 @@ export default function AdBuilderPage() {
     return docKind.offerTypes.map((t) => {
       const required = requiredFieldsFor(t.value, oemRule);
       if (required.length === 0) return { type: t, missing: [] };
-      const surfaced = new Set<string>();
-      let hasDisclaimer = false;
-      for (const el of doc.elements) {
-        const vw = el.visibleWhen;
-        if (vw?.field === 'offerType' && !vw.in.includes(t.value)) continue; // not shown for this type
-        for (const key of elementFieldRefs(el)) {
-          if (key === 'disclaimer') { hasDisclaimer = true; surfaced.add('disclaimer'); }
-          else if (/^_(?:o2_)?offer/.test(key)) {
-            for (const f of offerTokenFields(t.value)[key.replace(/^_o2_/, '_')] ?? []) surfaced.add(f);
-          } else surfaced.add(key);
-        }
-      }
-      // A disclaimer element discloses the fine-print legal fields — everything
-      // the OEM disclaimer composes — except the headline amount, which must be
-      // shown on its own (via the offer block or a direct binding).
-      if (hasDisclaimer) for (const k of required) if (k !== primaryOfferField(t.value)) surfaced.add(k);
+      // `surfacedFields` used to be this loop, inline. It moved to
+      // `template-audit.ts` so the proof sheet and any server-side gate answer
+      // "does the design show this field" the same way the chip does — one claim,
+      // one implementation. Same semantics, including the rule that a disclaimer
+      // layer discloses the fine print but never stands in for the headline.
+      const surfaced = surfacedFields(doc, t.value, required);
       return { type: t, missing: required.filter((k) => !surfaced.has(k)) };
     }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
-  }, [doc.make, doc.elements, oemRule, docKind]);
+  }, [doc, oemRule, docKind]);
   const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
   // Compliance "insert": drop a text element bound to the missing field onto the
   // artboard, shown for that offer type — so the ad now surfaces it and the

@@ -219,6 +219,59 @@ describe('a fault in the DESIGN is stated once, not once per ad', () => {
   });
 });
 
+describe('the house design audit rides along with the co-op rules', () => {
+  const doc = youngSubaruSingleOffer();
+
+  it('adds nothing to a design that passes both', () => {
+    expect(buildProofSheet({ doc, data: SAMPLE }).templateFaults).toEqual([]);
+  });
+
+  it('reports a missing disclaimer with no co-op pack in sight', () => {
+    // The case the co-op engine cannot catch: no pack for the make, so its design
+    // check is a no-op, and the template ships legal-line-free.
+    const noDisclaimer = { ...doc, elements: doc.elements.filter((e) => e.role !== 'disclaimer') };
+    const sheet = buildProofSheet({ doc: noDisclaimer, data: SAMPLE });
+    const f = sheet.templateFaults.find((x) => x.ruleId === 'disclaimer_absent')!;
+    expect(f.severity).toBe('error');
+    expect(f.source).toBe('audit');
+    expect(f.citation).toBeUndefined();
+    expect(f.fix).toBeTruthy();
+  });
+
+  it('fails the sheet on a design fault even when every row of data checks out', () => {
+    const noDisclaimer = { ...doc, elements: doc.elements.filter((e) => e.role !== 'disclaimer') };
+    const sheet = buildProofSheet({ doc: noDisclaimer, data: SAMPLE });
+    // Preflight has no ad-level value at fault, so the rows pass...
+    expect(sheet.rows.every((r) => r.ok)).toBe(true);
+    // ...and the sheet still must not read as shippable.
+    expect(sheet.ok).toBe(false);
+    expect(sheet.errorCount).toBeGreaterThan(0);
+  });
+
+  it('names the board a fault was found on', () => {
+    const layouts = structuredClone(doc.layouts);
+    const id = doc.elements.find((e) => e.role === 'disclaimer')!.id;
+    layouts.google[id] = { ...layouts.google[id], h: 0.02 };
+    const sheet = buildProofSheet({ doc: { ...doc, layouts }, data: SAMPLE });
+    const f = sheet.templateFaults.find((x) => x.ruleId === 'disclaimer_illegible')!;
+    expect(f.sizes).toEqual(['google']);
+  });
+
+  it('audits only the boards the sheet is drawing', () => {
+    const layouts = structuredClone(doc.layouts);
+    const id = doc.elements.find((e) => e.role === 'disclaimer')!.id;
+    layouts.google[id] = { ...layouts.google[id], h: 0.02 };
+    const sheet = buildProofSheet({ doc: { ...doc, layouts }, data: SAMPLE, sizeIds: ['fb'] });
+    expect(sheet.templateFaults).toEqual([]);
+  });
+
+  it('tells a manufacturer rule from a house check in its notes', () => {
+    const noDisclaimer = { ...doc, elements: doc.elements.filter((e) => e.role !== 'disclaimer') };
+    const notes = buildProofSheet({ doc: noDisclaimer, data: SAMPLE }).notes.join(' ');
+    expect(notes).toContain('design checks the DESIGN fails');
+  });
+});
+
 describe('it works on the templates that already exist', () => {
   it('draws the hand-built Young Subaru template, Show For gates and all', () => {
     const doc: TemplateDoc = youngSubaruSingleOfferDoc;

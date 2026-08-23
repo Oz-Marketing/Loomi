@@ -347,34 +347,53 @@ export default function ProofSheetPage() {
         <section className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
           <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
             <ExclamationTriangleIcon className="h-4 w-4 text-amber-400" />
-            The design fails {sheet.templateFaults.length} manufacturer rule
+            The design fails {sheet.templateFaults.length} check
             {sheet.templateFaults.length === 1 ? '' : 's'}
           </h2>
           <p className="mb-3 text-[12px] text-[var(--muted-foreground)]">
             These are properties of the template, not of any one ad — fixing the design clears
             them for every ad it makes.
           </p>
-          <ul className="space-y-2">
+          <ul className="space-y-2.5">
             {sheet.templateFaults.map((f) => (
-              <li key={`${f.ruleId}-${f.description}`} className="text-[12px] leading-snug">
+              <li key={`${f.source}-${f.ruleId}-${f.description}`} className="text-[12px] leading-snug">
                 <span className={f.severity === 'error' ? 'text-red-400' : 'text-amber-400'}>
                   {f.description}
                 </span>
-                {f.offerTypes.length > 0 && (
-                  <span className="ml-1.5 inline-flex flex-wrap gap-1">
-                    {f.offerTypes.map((t) => (
-                      <span
-                        key={t}
-                        className="rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
-                        style={offerTypePill(t)}
-                      >
-                        {offerTypeShort(t)}
-                      </span>
-                    ))}
-                  </span>
-                )}
-                {f.citation && (
+                {/* Boards, then offer types: which of the twenty ads this is about. */}
+                <span className="ml-1.5 inline-flex flex-wrap items-center gap-1">
+                  {f.sizes.map((id) => (
+                    <span
+                      key={id}
+                      className="rounded-full border border-[var(--border)] px-1.5 py-px font-mono text-[9px] leading-tight text-[var(--muted-foreground)]"
+                    >
+                      {sheet.sizes.find((s) => s.id === id)?.label.replace(/\s*\(.*\)$/, '') ?? id}
+                    </span>
+                  ))}
+                  {f.offerTypes.map((t) => (
+                    <span
+                      key={t}
+                      className="rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
+                      style={offerTypePill(t)}
+                    >
+                      {offerTypeShort(t)}
+                    </span>
+                  ))}
+                </span>
+                {/* Where the fault comes from. A manufacturer's rule cites its own
+                    document; the house audit says so instead of borrowing that
+                    authority. */}
+                {f.citation ? (
                   <span className="ml-1 text-[var(--muted-foreground)]">({f.citation})</span>
+                ) : (
+                  f.source === 'audit' && (
+                    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]/70">
+                      design check
+                    </span>
+                  )
+                )}
+                {f.fix && (
+                  <span className="mt-0.5 block text-[11px] text-[var(--muted-foreground)]">{f.fix}</span>
                 )}
               </li>
             ))}

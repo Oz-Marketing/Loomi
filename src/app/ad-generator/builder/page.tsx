@@ -378,6 +378,16 @@ function isBrandLogoBinding(b: Binding | undefined): b is { kind: 'brand'; key: 
   return b?.kind === 'brand' && b.key === 'logoUrl';
 }
 
+/**
+ * What a brand-new text box says before anybody types in it.
+ *
+ * Named because two places have to agree on it: the element factory writes it, and
+ * inserting a variable REPLACES it rather than appending to it. Young's designers
+ * asked for the second — "it will save a lot of disclaimers from accidentally
+ * starting with 'new text'" — and they were describing real published ads.
+ */
+const NEW_TEXT_PLACEHOLDER = 'New text';
+
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
   if (b.kind === 'field') return `field:${b.key}`;
@@ -754,12 +764,29 @@ function computeBox(handle: Handle, start: DocLayoutBox, dxF: number, dyF: numbe
 }
 
 /**
- * Constrain a resize to the element's starting aspect ratio (Shift+drag), keeping
+ * Constrain a resize to the element's starting aspect ratio, keeping
  * the anchor (the edge/corner opposite the dragged handle) fixed. Works in PIXEL
  * space (w is a fraction of canvas width, h of height, so their aspect only makes
  * sense once scaled by nw/nh). Edge handles adjust the perpendicular dimension
  * about the box center; corner handles drive off width and derive height.
  */
+/**
+ * Should this drag hold the element's proportions?
+ *
+ * A CORNER holds them, and Shift lets go. An EDGE stretches, and Shift holds.
+ *
+ * That is the reverse of what this did, and it comes from Young's designers: "if
+ * the corners could Shift+drag automatically that would save a lot of undoing."
+ * They are right about the intent — dragging a corner means "make this bigger",
+ * and the only way to mean "distort this" is to drag a side. Shift stays as the
+ * escape hatch in both directions, so nothing became impossible.
+ */
+function holdsAspect(handle: Handle, shift: boolean): boolean {
+  if (handle === 'move') return false;
+  const corner = handle.length === 2; // ne / nw / se / sw
+  return corner ? !shift : shift;
+}
+
 function lockAspect(handle: Handle, start: DocLayoutBox, box: DocLayoutBox, nw: number, nh: number): DocLayoutBox {
   if (handle === 'move') return box;
   const aspect = (start.w * nw) / (start.h * nh); // pixel w/h of the element
@@ -805,7 +832,7 @@ function isDetached(b: { x: number; y: number; w: number; h: number }): boolean 
 function makeDefaultElement(id: string, type: DocElementType): DocElement {
   switch (type) {
     case 'text':
-      return { id, type, binding: { kind: 'static', value: 'New text' }, fontWeight: 700, color: '#0f172a', align: 'left' };
+      return { id, type, binding: { kind: 'static', value: NEW_TEXT_PLACEHOLDER }, fontWeight: 700, color: '#0f172a', align: 'left' };
     case 'logo':
       return { id, type, binding: { kind: 'brand', key: 'logoUrl' }, fit: 'contain' };
     case 'image':
@@ -3413,8 +3440,8 @@ export default function AdBuilderPage() {
       // fixed text box resizes freely, and ⌘/Ctrl scales its font instead. Either
       // Text boxes are fixed W×H frames now (Shrink / Fill) — resizing just changes
       // the frame: both re-fit the font to the new frame (via moveNode / fitTextNode).
-      // Only Shift locks the aspect ratio (for any element).
-      if (d.handle !== 'move' && e.shiftKey) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
+      // Corners keep the proportions, sides stretch — see `holdsAspect`.
+      if (holdsAspect(d.handle, e.shiftKey)) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
       let gy: number | null = null;
       if (d.handle === 'move') {
@@ -3452,8 +3479,9 @@ export default function AdBuilderPage() {
       const h0 = d.bounds.bottom - d.bounds.top;
       const startBounds = { x: d.bounds.left, y: d.bounds.top, w: w0, h: h0 };
       let rect = computeBox(d.handle, startBounds, dxF, dyF);
-      // Shift = lock the group's aspect ratio too (scales everything uniformly).
-      if (d.handle !== 'move' && e.shiftKey) rect = lockAspect(d.handle, startBounds, rect, d.nw, d.nh);
+      // Same rule for a group: a corner scales the whole lockup uniformly, a side
+      // stretches it. Uniform is nearly always what a designer means for a group.
+      if (holdsAspect(d.handle, e.shiftKey)) rect = lockAspect(d.handle, startBounds, rect, d.nw, d.nh);
       const scaleX = w0 > 0 ? rect.w / w0 : 1;
       const scaleY = h0 > 0 ? rect.h / h0 : 1;
       const live: Record<string, DocLayoutBox> = {};
@@ -6040,9 +6068,14 @@ function TokenTextArea({
   }, [pickOpen]);
   const insertToken = (opt: SearchableSelectOption) => {
     const key = opt.value.replace(/^field:/, '');
-    const pos = Math.min(caret || value.length, value.length);
-    const before = value.slice(0, pos);
-    const after = value.slice(pos);
+    // An untouched placeholder is REPLACED, not appended to: nobody means "New
+    // text {{disclaimer}}", and that is how a legal line ends up starting with
+    // "New text" on a live ad.
+    const untouched = value.trim() === NEW_TEXT_PLACEHOLDER;
+    const base = untouched ? '' : value;
+    const pos = untouched ? 0 : Math.min(caret || base.length, base.length);
+    const before = base.slice(0, pos);
+    const after = base.slice(pos);
     const injected = `${before && !/\s$/.test(before) ? ' ' : ''}{{${key}}}`;
     onChange(before + injected + after);
     setPickOpen(false);
@@ -6068,6 +6101,12 @@ function TokenTextArea({
       <textarea
         ref={taRef}
         value={value}
+        // An untouched placeholder is selected on focus, so typing replaces it
+        // rather than typing around it. The same reason the token insert replaces
+        // it: nobody wants a disclaimer that starts "New text".
+        onFocus={(e) => {
+          if (value.trim() === NEW_TEXT_PLACEHOLDER) e.currentTarget.select();
+        }}
         onChange={(e) => {
           onChange(e.target.value);
           setCaret(e.target.selectionStart ?? 0);
@@ -6075,6 +6114,14 @@ function TokenTextArea({
           setAcIdx(0);
         }}
         onClick={(e) => {
+          // Clicking into an untouched placeholder selects it, so the first thing
+          // typed replaces it. Doing this on focus alone did not survive: this
+          // handler runs immediately after and would put the caret back.
+          if (value.trim() === NEW_TEXT_PLACEHOLDER) {
+            (e.target as HTMLTextAreaElement).select();
+            setCaret(0);
+            return;
+          }
           const pos = (e.target as HTMLTextAreaElement).selectionStart ?? 0;
           setCaret(pos);
           // Clicking inside a {{token}} jumps to its field. Scan the value for the
@@ -8856,8 +8903,9 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
         ['↑ ↓ ← →', 'Nudge 1px'],
         ['⇧ + arrows', 'Nudge 10px'],
         ['Drag', 'Move element'],
-        ['Drag handles', 'Resize'],
-        ['⇧ drag', 'Lock aspect ratio'],
+        ['Drag a corner', 'Resize, keeping proportions'],
+        ['Drag a side', 'Stretch that edge'],
+        ['⇧ drag', 'Swap the two — free a corner, hold a side'],
         [`${mod} drag`, 'Scale text font'],
       ],
     },

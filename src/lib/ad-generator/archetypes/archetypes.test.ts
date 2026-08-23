@@ -437,3 +437,36 @@ describe('the dual is complete and clean on every board', () => {
     expect(single.slots.filter((s) => /offerMain$/.test(s.id))).toHaveLength(1);
   });
 });
+
+describe('nothing an archetype builds is sized in fixed pixels', () => {
+  /**
+   * The trap this catches, found on the Google 300×250: `padding` is emitted as
+   * literal px on every board, so a pill inset that is comfortable at 1200×628
+   * ate 24 of the 30 pixels the same pill gets at 300×250 and shrank the
+   * expiration date to six. Every inset an archetype wants has to come from the
+   * layout (which knows the board) or from the renderer's board-relative default —
+   * never from a number on the element.
+   */
+  for (const [label, arch] of [
+    ['single', vehicleOfferArchetype(1)],
+    ['dual', vehicleOfferArchetype(2)],
+  ] as const) {
+    it(`${label}: no slot sets padding`, () => {
+      for (const slot of arch.slots) {
+        const el = slot.build(YOUNG_SUBARU_THEME);
+        expect(el.padding, `${slot.id} padding`).toBeUndefined();
+        expect(el.paddingTop, `${slot.id} paddingTop`).toBeUndefined();
+        expect(el.paddingRight, `${slot.id} paddingRight`).toBeUndefined();
+        expect(el.paddingBottom, `${slot.id} paddingBottom`).toBeUndefined();
+        expect(el.paddingLeft, `${slot.id} paddingLeft`).toBeUndefined();
+      }
+    });
+
+    it(`${label}: no slot sets a font size`, () => {
+      // Same reason. Type is fitted to its box, which is where board size lives.
+      for (const slot of arch.slots) {
+        expect(slot.build(YOUNG_SUBARU_THEME).fontSize, slot.id).toBeUndefined();
+      }
+    });
+  }
+});

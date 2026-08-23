@@ -118,6 +118,7 @@ import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/typ
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
+import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -2374,6 +2375,50 @@ export default function AdBuilderPage() {
   useEffect(() => {
     refreshBlocks();
   }, [refreshBlocks]);
+
+  /**
+   * Start from an ARCHETYPE: replace the blank design with a laid-out one.
+   *
+   * The archetype produces an ordinary `TemplateDoc` — elements, every board's
+   * layout, the offer fields — so this is one `setDoc`, it lands in undo like any
+   * other edit, and everything downstream (renderer, preflight, compliance,
+   * export) sees a doc it already understands.
+   *
+   * The template's own identity is kept: its id, and its name unless it is still
+   * the untouched placeholder — in which case the starting point names it, since a
+   * design that arrives complete should not also arrive called "Untitled". Boards
+   * the designer already added are kept too, and the archetype lays those out
+   * instead of bringing its own channel set.
+   */
+  const startFromArchetype = useCallback(
+    (start: ArchetypeStart) => {
+      const untouched = !templateName.trim() || templateName === 'Untitled template';
+      const name = untouched ? start.name : templateName;
+      setDoc((prev) => {
+        // A doc still on its single default board takes the archetype's channels;
+        // one the designer has already shaped keeps them.
+        const chosen = prev.sizes.length > 1 ? prev.sizes : undefined;
+        return {
+          ...docFromStart(start, { id: prev.id, name, sizes: chosen }),
+          // Template-level settings belong to the template, not the composition.
+          make: prev.make,
+          usage: prev.usage,
+          category: prev.category,
+          tags: prev.tags,
+          schedule: prev.schedule,
+        };
+      });
+      if (untouched) setTemplateName(start.name);
+      setSelectedIds([]);
+      toast.success(`Started from ${start.name}`);
+    },
+    [setDoc, templateName],
+  );
+
+  // Keep the edited board valid after an archetype swaps the size list out.
+  useEffect(() => {
+    if (!doc.sizes.some((s) => s.id === sizeId)) setSizeId(doc.sizes[0].id);
+  }, [doc.sizes, sizeId]);
 
   // Insert a saved block: clone its elements onto every size + re-seed the
   // fields its bindings need, then select the new elements.
@@ -5199,6 +5244,47 @@ export default function AdBuilderPage() {
                       </div>
                       <div className="px-5 pb-5 pt-3">
                         <AdderGrid adders={adders} variant="onboarding" />
+                        {/* Start from an ARCHETYPE — a whole laid-out design for
+                            every board, rather than one element at a time. This is
+                            the path an OEM offer template should take; the element
+                            palette above is for one-off work.
+                            See docs/ad-generator-archetypes.md §8 Phase 3. */}
+                        <div className="mt-4">
+                          <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                            Or start from a layout
+                          </p>
+                          <div className="flex flex-col gap-2.5">
+                            {archetypeStartGroups().map(({ group, items }) => (
+                              <div key={group}>
+                                <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
+                                  {group}
+                                </p>
+                                <div className="flex flex-col gap-1.5">
+                                  {items.map((st) => (
+                                    <button
+                                      key={st.id}
+                                      type="button"
+                                      onClick={() => startFromArchetype(st)}
+                                      aria-label={`Start from ${st.name}`}
+                                      className="group/arch w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left transition-colors hover:border-[var(--primary)]"
+                                    >
+                                      <span className="flex items-baseline gap-2">
+                                        <span className="truncate text-sm text-[var(--foreground)]">{st.name}</span>
+                                        <span className="ml-auto shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                          {st.sizes.length} sizes
+                                        </span>
+                                      </span>
+                                      <span className="mt-0.5 block text-[11px] leading-snug text-[var(--muted-foreground)]">
+                                        {st.hint}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
                         {/* Start from a saved block — begin a blank canvas from
                             a pre-wired cluster instead of single elements. */}
                         {insertableBlocks.length > 0 && (

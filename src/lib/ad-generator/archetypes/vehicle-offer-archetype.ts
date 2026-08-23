@@ -169,7 +169,12 @@ function slotsFor(offers: OfferCount): ArchetypeSlot[] {
       id: 'expiration',
       role: 'expiration',
       shedAt: 5,
-      build: (t) => ({ id: 'expiration', type: 'text', name: 'Expiration', binding: { kind: 'field', key: 'expiration' }, fontWeight: 700, color: t.onBrand, bg: t.brand, radius: 999, padding: 12, align: 'center', shrink: true }),
+      // NO `padding`. An element's padding is emitted as literal pixels on every
+      // board, so a 12px pill inset is comfortable inside a 72px pill on Facebook
+      // and eats 24 of the 30 pixels the same pill gets on a 300×250 — which left
+      // the expiration date rendering at six pixels. Omitting it lets the renderer
+      // apply its board-relative inset instead (see doc-renderer `fitPad`).
+      build: (t) => ({ id: 'expiration', type: 'text', name: 'Expiration', binding: { kind: 'field', key: 'expiration' }, fontWeight: 700, color: t.onBrand, bg: t.brand, radius: 999, align: 'center', shrink: true }),
     },
     {
       id: 'disclaimer',

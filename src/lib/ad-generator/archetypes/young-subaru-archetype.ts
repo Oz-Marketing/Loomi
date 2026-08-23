@@ -26,13 +26,22 @@ export const YOUNG_SUBARU_THEME: Theme = {
   fade: { angle: 135, end: 70 },
 };
 
-const SUBARU_DEFAULTS = {
+/** Young's own sample content — what the boards are filled with before real data. */
+export const SUBARU_DEFAULTS = {
   dealerName: 'Young Subaru',
   brandColor: YOUNG_SUBARU_THEME.brand,
   financialInstitution: 'Subaru Motors Finance',
   vehicleName: '2026 Subaru Outback',
   tagline: 'Adventure Starts Here',
   vehicleImageUrl: '',
+};
+
+/** What a second offer changes about that sample content. */
+export const SUBARU_DUAL_DEFAULTS = {
+  tagline: 'Two Ways to Adventure',
+  vehicleName: '2026 Outback',
+  o2_vehicleName: '2026 Forester',
+  o2_financialInstitution: 'Subaru Motors Finance',
 };
 
 /** The doc, for whatever set of boards Young wants — defaults to the five they run. */
@@ -65,13 +74,7 @@ export function youngSubaruDualOffer(sizes: AdSize[] = YOUNG_SUBARU_SIZES): Temp
       name: 'Young Subaru — Dual Offer',
       description: 'Two offers on the Young Subaru background, laid out per channel.',
       industries: ['Automotive'],
-      defaults: {
-        ...SUBARU_DEFAULTS,
-        tagline: 'Two Ways to Adventure',
-        vehicleName: '2026 Outback',
-        o2_vehicleName: '2026 Forester',
-        o2_financialInstitution: 'Subaru Motors Finance',
-      },
+      defaults: { ...SUBARU_DEFAULTS, ...SUBARU_DUAL_DEFAULTS },
     },
   );
 }

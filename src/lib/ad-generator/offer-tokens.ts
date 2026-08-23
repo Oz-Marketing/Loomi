@@ -36,7 +36,7 @@ export const OFFER_TOKENS: OfferToken[] = [
   {
     key: '_offerMain',
     label: 'Offer amount',
-    hint: 'The whole amount, formatted — $299/mo · 1.9% APR · $28,995. On APR this already ends in "APR", so pairing it with the offer label repeats the word.',
+    hint: 'The whole amount, formatted — $299/mo · 1.9% · $28,995. Pairs with the offer label above it.',
   },
   {
     key: '_offerValue',

@@ -12,6 +12,7 @@ describe('assembleOffer', () => {
     expect(o).toEqual({
       label: 'PER MONTH LEASE',
       main: '$299/mo',
+      prose: '$299/mo',
       value: '299',
       currency: '$',
       percent: '',
@@ -27,7 +28,8 @@ describe('assembleOffer', () => {
       financialInstitution: 'Toyota Financial',
     });
     expect(o?.label).toBe('APR');
-    expect(o?.main).toBe('1.9% APR');
+    expect(o?.main).toBe('1.9%'); // the creative: the label beside it says APR
+    expect(o?.prose).toBe('1.9% APR'); // a sentence has no label, so it says it
     expect(o?.value).toBe('1.9');
     expect(o?.currency).toBe('');
     expect(o?.percent).toBe('%');
@@ -36,7 +38,7 @@ describe('assembleOffer', () => {
 
   it('handles discount Off-MSRP vs Cash Back styles', () => {
     const off = assembleOffer({ offerType: 'discount', discountAmount: '3000', msrp: '42000', discountLabelStyle: 'off_msrp' });
-    expect(off).toEqual({ label: 'OFF MSRP', main: '$3,000', value: '3,000', currency: '$', percent: '', terms: 'MSRP of $42,000' });
+    expect(off).toEqual({ label: 'OFF MSRP', main: '$3,000', prose: '$3,000', value: '3,000', currency: '$', percent: '', terms: 'MSRP of $42,000' });
 
     const cash = assembleOffer({ offerType: 'discount', discountAmount: '3000', msrp: '42000', discountLabelStyle: 'cash_back' });
     expect(cash?.label).toBe('CASH BACK'); // label still distinguishes; terms are just the MSRP
@@ -45,7 +47,7 @@ describe('assembleOffer', () => {
 
   it('assembles a sales-price offer', () => {
     const o = assembleOffer({ offerType: 'sales_price', salePrice: '28995', msrp: '34000' });
-    expect(o).toEqual({ label: 'SALES PRICE', main: '$28,995', value: '28,995', currency: '$', percent: '', terms: 'MSRP of $34,000' });
+    expect(o).toEqual({ label: 'SALES PRICE', main: '$28,995', prose: '$28,995', value: '28,995', currency: '$', percent: '', terms: 'MSRP of $34,000' });
   });
 
   it('lets offerLabel override the default label', () => {
@@ -71,7 +73,7 @@ describe('assembleOffer', () => {
     expect(lease?.value).toBe('XXX');
     expect(lease?.terms).toBe('XX-month lease · $X,XXX due at signing');
     const apr = assembleOffer({ offerType: 'apr', aprRate: 'X.X', aprTerm: 'XX' });
-    expect(apr?.main).toBe('X.X% APR');
+    expect(apr?.main).toBe('X.X%');
     expect(apr?.value).toBe('X.X');
     expect(apr?.terms).toBe('for XX months');
   });
@@ -108,14 +110,14 @@ describe('assembleOffer', () => {
   it('enriches the second offer (o2_) when present', () => {
     const e = enrichOfferFields({ offerType: 'lease', monthlyPayment: '299', o2_offerType: 'apr', o2_aprRate: '0', o2_aprTerm: '60' });
     expect(e._offerMain).toBe('$299/mo');
-    expect(e._o2_offerMain).toBe('0% APR');
+    expect(e._o2_offerMain).toBe('0%');
   });
 
   it('assembles a second offer from a prefixed field set (dual offers)', () => {
     const data = { offerType: 'lease', monthlyPayment: '299', o2_offerType: 'apr', o2_aprRate: '0', o2_aprTerm: '60' };
     expect(assembleOffer(data)?.main).toBe('$299/mo'); // default prefix → offer 1
     const offer2 = assembleOffer(data, 'o2_');
-    expect(offer2?.main).toBe('0% APR');
+    expect(offer2?.main).toBe('0%');
     expect(offer2?.terms).toContain('60 months');
   });
 });

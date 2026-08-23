@@ -119,7 +119,7 @@ describe('one offer plate, four offer types', () => {
     };
     const expected: Record<string, string[]> = {
       lease: ['PER MONTH LEASE', '$299/mo', '36-month lease'],
-      apr: ['APR', '1.9% APR', 'for 60 months'],
+      apr: ['APR', '1.9%', 'for 60 months'], // the label carries the word, the figure doesn't repeat it
       discount: ['OFF MSRP', '$3,000', 'MSRP of $34,995'],
       sales_price: ['SALES PRICE', '$28,995', 'MSRP of $34,995'],
     };
@@ -311,7 +311,7 @@ describe('two offers are the same archetype, not a second implementation', () =>
     );
     expect(html).toContain('$299/mo');
     expect(html).toContain('PER MONTH LEASE');
-    expect(html).toContain('1.9% APR');
+    expect(html).toContain('1.9%');
   });
 });
 

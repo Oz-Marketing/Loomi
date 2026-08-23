@@ -113,12 +113,14 @@ import {
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
+import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
 import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
+import { roleNote } from '@/lib/ad-generator/archetypes/roles';
+import { applyTheme } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -4247,6 +4249,18 @@ export default function AdBuilderPage() {
                 <>
                   <div className="fixed inset-0 z-[90]" onClick={() => setSettingsOpen(false)} />
                   <div className="absolute right-0 top-11 z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
+                    {/* Theme first, and only for a design an archetype produced:
+                        it is the control a designer reaches for most, and the one
+                        that replaces recolouring every layer on every board.
+                        See docs/ad-generator-archetypes.md §8 Phase 3. */}
+                    {doc.archetype && (
+                      <div className="mb-4 border-b border-[var(--border)] pb-3">
+                        <ThemeEditor
+                          theme={doc.archetype.theme}
+                          onChange={(next) => setDoc((prev) => applyTheme(prev, next), 'theme')}
+                        />
+                      </div>
+                    )}
                     <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h3>
                     <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
                       Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
@@ -6641,6 +6655,32 @@ function SelectionPanel({
         </div>
       </div>
 
+      {/* THE SLOT INSPECTOR: what this layer IS, when an archetype placed it.
+          A generic builder can only say what a layer is bound to — "text,
+          {{_offerMain}}" — which is the implementation, not the intent, and is
+          why the same lockup got rebuilt once per offer type. A role can be
+          explained: this is the offer, it carries whichever type the ad runs, and
+          the layout will not let it go under 34px.
+          See docs/ad-generator-archetypes.md §8 Phase 3. */}
+      {(() => {
+        const note = roleNote(el.role);
+        if (!note) return null;
+        return (
+          <div className="mx-3 mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-2.5 py-2">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--foreground)]">
+              <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+              {note.label}
+            </p>
+            <p className="mt-1 text-[11px] leading-snug text-[var(--muted-foreground)]">{note.what}</p>
+            {note.rule && (
+              <p className="mt-1.5 border-t border-[var(--border)] pt-1.5 text-[10px] leading-snug text-[var(--muted-foreground)]">
+                {note.rule}
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Per-size divergence, stated rather than left to be discovered. Without
           this, a value that looks global (it sits in the same field as every other)
           would quietly be local to one board, and there'd be no way back. */}
@@ -7861,6 +7901,76 @@ function BarBtn({
  *  colors" link that opens the subaccount's branding settings in a new tab.
  *  Used by every color control (fill, background, text, button, gradient stops)
  *  so brand colors are one click away wherever a color is set. */
+/**
+ * THE THEME EDITOR — the designer-owned half of an archetype.
+ *
+ * An archetype derives every board from five colours and a fade, so this is the
+ * whole styling surface for a composition: change the brand blue here and eleven
+ * layers on five boards follow, instead of being recoloured fifty-five times.
+ *
+ * Editing is a RECOLOUR, not a rebuild (see `archetypes/theme.ts`): geometry,
+ * bindings, additions and per-board overrides all survive it.
+ */
+function ThemeEditor({ theme, onChange }: { theme: Theme; onChange: (next: Theme) => void }) {
+  const set = (patch: Partial<Theme>) => onChange({ ...theme, ...patch });
+  const usesAccountBrand = theme.brand === 'brand';
+  const rows: { key: 'base' | 'brand' | 'ink' | 'muted' | 'onBrand'; label: string; hint: string }[] = [
+    { key: 'base', label: 'Background', hint: 'The fill behind everything' },
+    { key: 'brand', label: 'Brand', hint: 'The offer figure and the expiration pill' },
+    { key: 'ink', label: 'Headings', hint: 'Tagline and vehicle name' },
+    { key: 'muted', label: 'Supporting text', hint: 'Offer label, terms, disclaimer' },
+    { key: 'onBrand', label: 'On brand', hint: 'Text sitting on the brand colour' },
+  ];
+  const fade = theme.fade ?? { angle: 135, end: 70 };
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Theme</h3>
+        <Tooltip label="An archetype styles every layer on every board from these five colours and the fade. Changing one recolours the whole design and keeps your layout, bindings and per-size overrides.">
+          <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+        </Tooltip>
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => {
+          const token = theme[r.key] === 'brand';
+          return (
+            <div key={r.key} className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-medium text-[var(--foreground)]">{r.label}</p>
+                <p className="truncate text-[10px] text-[var(--muted-foreground)]">{token ? "The account's brand color" : r.hint}</p>
+              </div>
+              <ColorSwatchInput
+                title={`${r.label} color`}
+                value={token ? '#4f46e5' : theme[r.key]}
+                onChange={(v) => set({ [r.key]: v } as Partial<Theme>)}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* The one theme value that isn't a colour: how far the white wash runs
+          across the backdrop, and at what angle. */}
+      <div className="mt-2 flex items-end gap-2 border-t border-[var(--border)] pt-2">
+        <label className="flex-1">
+          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade angle</span>
+          <NumberInput value={fade.angle} onChange={(v) => set({ fade: { ...fade, angle: clamp(Math.round(v), 0, 360) } })} min={0} max={360} unit="°" />
+        </label>
+        <label className="flex-1">
+          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade reach</span>
+          <NumberInput value={fade.end} onChange={(v) => set({ fade: { ...fade, end: clamp(Math.round(v), 0, 100) } })} min={0} max={100} unit="%" />
+        </label>
+      </div>
+      {/* Only ever true for the generic starting points, which is the point of
+          them: one composition that paints itself for every rooftop. */}
+      {usesAccountBrand && (
+        <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+          The brand color follows whichever account the ad is for. Pick a color to fix it to this template instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ColorSwatchInput({ title, value, onChange }: { title: string; value: string; onChange: (v: string) => void }) {
   const { accountData, accountKey } = useAccount();
   const [open, setOpen] = useState(false);

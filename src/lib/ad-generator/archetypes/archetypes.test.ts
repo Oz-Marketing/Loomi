@@ -462,10 +462,18 @@ describe('nothing an archetype builds is sized in fixed pixels', () => {
       }
     });
 
-    it(`${label}: no slot sets a font size`, () => {
-      // Same reason. Type is fitted to its box, which is where board size lives.
-      for (const slot of arch.slots) {
-        expect(slot.build(YOUNG_SUBARU_THEME).fontSize, slot.id).toBeUndefined();
+    it(`${label}: no box states a font size`, () => {
+      // Same reason, one level up: `fontSize` on a layout box is px on that board.
+      // Type is FITTED to its frame instead, so the frame is the only thing an
+      // archetype has to get right and the size follows from the board.
+      const doc = buildArchetypeDoc(arch, YOUNG_SUBARU_THEME, YOUNG_SUBARU_SIZES, {
+        id: 't',
+        name: 'T',
+      });
+      for (const [sizeId, boxes] of Object.entries(doc.layouts)) {
+        for (const [id, b] of Object.entries(boxes)) {
+          expect(b.fontSize, `${sizeId}/${id}`).toBeUndefined();
+        }
       }
     });
   }

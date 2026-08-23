@@ -107,6 +107,16 @@ export interface DocElement {
   type: DocElementType;
   /** Designer-set layer name (overrides the binding-derived label). */
   name?: string;
+  /**
+   * What this element IS in the composition, when an archetype placed it: the
+   * offer figure, the disclaimer, the vehicle shot. See `archetypes/types.ts`.
+   *
+   * Kept on the element rather than derived from its id so it survives everything
+   * a designer does afterwards — restyling, renaming, moving between boards — and
+   * so the inspector can say what a layer is for instead of only what it is bound
+   * to. Absent on anything hand-placed, which is not a role, just a box.
+   */
+  role?: string;
   /** Builder-only: a locked element can't be selected, moved, or edited on the
    *  canvas until unlocked. Never affects export. */
   locked?: boolean;
@@ -390,10 +400,43 @@ export function templateInSchedule(doc: Pick<TemplateDoc, 'schedule'>, date: Dat
   return true;
 }
 
+/**
+ * The designer-owned styling surface of an archetype — five colours and a fade.
+ *
+ * It lives on the doc, not only in the call that built it, so it stays editable:
+ * a designer who wants the Subaru blue a shade darker changes one value and every
+ * board follows, instead of recolouring eleven layers five times. See
+ * `archetypes/theme.ts` for how a change is applied, and `archetypes/types.ts`
+ * for what each colour is for.
+ */
+export interface Theme {
+  /** Base fill behind everything. */
+  base: string;
+  /** Accent used for the offer figure and the expiration pill. */
+  brand: string;
+  /** Body/heading ink. */
+  ink: string;
+  /** Secondary ink — labels, terms, disclaimer. */
+  muted: string;
+  /** Ink used ON the brand colour (the expiration pill's text). */
+  onBrand: string;
+  /** The white-fade angle + how far across it runs. */
+  fade?: { angle: number; end: number };
+}
+
 export interface TemplateDoc {
   id: string;
   name: string;
   description?: string;
+  /**
+   * The archetype this design came from, and the theme it was built with.
+   *
+   * Recorded so the theme stays editable and so the builder can tell a designer
+   * what they are looking at. NOT a constraint: everything after the doc is
+   * produced is an ordinary edit, and a doc whose layout has been reworked by hand
+   * keeps this record — it says where the design started, not what it must remain.
+   */
+  archetype?: { id: string; offers: number; theme: Theme };
   /** Industries this template is offered to (account `category` values, e.g.
    *  'Automotive', 'Powersports'). Empty/undefined → derived from content
    *  (vehicle templates default to Automotive + Powersports). Drives which

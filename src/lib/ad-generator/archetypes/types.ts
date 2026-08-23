@@ -1,5 +1,5 @@
 import type { AdSize, AdData, FieldSpec } from '../types';
-import type { DocElement, DocLayoutBox, TemplateDoc } from '../doc-types';
+import type { DocElement, DocLayoutBox, TemplateDoc, Theme } from '../doc-types';
 
 /**
  * ARCHETYPES — a named automotive ad composition that lays itself out.
@@ -25,21 +25,15 @@ import type { DocElement, DocLayoutBox, TemplateDoc } from '../doc-types';
  * per-board overrides on the doc it produces, which are ordinary doc edits.
  */
 
-/** The designer-owned surface: everything an archetype styles itself from. */
-export interface Theme {
-  /** Base fill behind everything. */
-  base: string;
-  /** Accent used for the offer figure and the expiration pill. */
-  brand: string;
-  /** Body/heading ink. */
-  ink: string;
-  /** Secondary ink — labels, terms, disclaimer. */
-  muted: string;
-  /** Ink used ON the brand colour (the expiration pill's text). */
-  onBrand: string;
-  /** The white-fade angle + how far across it runs, per the Subaru treatment. */
-  fade?: { angle: number; end: number };
-}
+/**
+ * The designer-owned surface: everything an archetype styles itself from.
+ *
+ * Declared in `doc-types` because a doc an archetype produced STORES its theme —
+ * that is what makes the theme editable after the fact instead of a build-time
+ * argument nobody can get back to. Re-exported here because this is where it is
+ * documented and where every archetype reads it.
+ */
+export type { Theme } from '../doc-types';
 
 /**
  * A named role in an automotive offer ad.
@@ -100,7 +94,15 @@ export function buildArchetypeDoc(
   arch: Archetype,
   theme: Theme,
   sizes: AdSize[],
-  meta: { id: string; name: string; description?: string; industries?: string[]; defaults?: AdData },
+  meta: {
+    id: string;
+    name: string;
+    description?: string;
+    industries?: string[];
+    defaults?: AdData;
+    /** How many offers this archetype was asked for, recorded on the doc. */
+    offers?: number;
+  },
 ): TemplateDoc {
   // Every slot the archetype could place on ANY of these boards becomes an
   // element. A slot shed on one board simply has no box there — which is exactly
@@ -109,9 +111,11 @@ export function buildArchetypeDoc(
   const used = new Set<string>();
   for (const size of sizes) for (const id of arch.present(size, arch.slots)) used.add(id);
 
+  // The role travels ON the element: it is what the inspector reads to tell a
+  // designer what a layer is for, and it survives every later edit to the doc.
   const elements: DocElement[] = arch.slots
     .filter((s) => used.has(s.id))
-    .map((s) => ({ ...s.build(theme), id: s.id }));
+    .map((s) => ({ ...s.build(theme), id: s.id, role: s.role }));
 
   const layouts: TemplateDoc['layouts'] = {};
   for (const size of sizes) {
@@ -129,6 +133,12 @@ export function buildArchetypeDoc(
     name: meta.name,
     description: meta.description ?? arch.description,
     industries: meta.industries ?? ['Automotive'],
+    // Where this design came from, so the theme stays editable afterwards.
+    archetype: {
+      id: arch.id,
+      offers: meta.offers ?? arch.slots.filter((s) => /offerMain$/.test(s.id)).length,
+      theme,
+    },
     sizes,
     fields: arch.fields,
     elements,

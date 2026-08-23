@@ -38,8 +38,16 @@ export const OFFER_TYPES: { value: OfferType; label: string }[] = VEHICLE_OFFER_
 export interface OfferBlock {
   /** Small label above the number (e.g. "PER MONTH LEASE"). */
   label: string;
-  /** The big headline number, symbols included (e.g. "$299/mo", "1.9% APR"). */
+  /** The big headline number, symbols included (e.g. "$299/mo", "1.9%"). */
   main: string;
+  /**
+   * The headline as it reads in a SENTENCE — "1.9% APR" where `main` is "1.9%".
+   *
+   * On the creative the figure sits under a label element carrying the word APR,
+   * so repeating it there reads "APR / 1.9% APR". A caption has no label, so it
+   * needs the word back. Equal to `main` for every type that doesn't need one.
+   */
+  prose: string;
   /** Supporting line(s), joined (e.g. "36-month lease · $2,999 due at signing"). */
   terms: string;
   /** The bare headline NUMBER only, no symbols (e.g. "299", "1.9", "40,000") — so
@@ -217,6 +225,10 @@ export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
     label: override || swapped || spec.defaultLabel || '',
     // A missing figure reads as the bare placeholder — never `—/mo`.
     main: figure ? `${figure}${spec.main.suffix ?? ''}` : PLACEHOLDER,
+    // Only ever differs where the spec says the figure is ambiguous alone.
+    prose: figure
+      ? `${figure}${spec.main.suffix ?? ''}${spec.main.proseSuffix ?? ''}`
+      : PLACEHOLDER,
     // Always the bare number, whatever the headline format: the `$` / `%` are
     // separate styled elements.
     value: bareValue(g(spec.main.field), spec.main.format) ?? PLACEHOLDER,

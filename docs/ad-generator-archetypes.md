@@ -1,9 +1,12 @@
 # Ad Generator — Archetypes
 
-Status: **Prototype built, product not started** 2026-08-22. The layout engine is
-proven against both real Young Subaru templates (§5) with 32 tests; nothing is
-wired into the builder, the seed, or any UI. Both hand-built templates still
-ship unchanged. Phases 1–5 in §8 are the remaining work.
+Status: **Phases 1–3 shipped** 2026-08-23. The layout engine is proven against
+both real Young Subaru templates (§5), and archetypes are now in the builder: a
+designer picks a layout, gets every board, and edits the theme. Both hand-built
+templates still ship unchanged and untouched — nothing has been migrated onto an
+archetype, and nothing has to be. **Phases 4–6 in §8 are the remaining work**,
+and they are the deletions: the three confusing controls, the `o2_` twins, and
+compliance moving to design time.
 
 ⚠️ **Read §6 before changing any number in `vehicle-offer-archetype.ts`.** Four
 of those constants are craft decisions recovered from the designer's hand-tuned
@@ -99,10 +102,17 @@ indexed offer list is Phase 5.
 | File | Lines | What |
 |---|---|---|
 | [`archetypes/layout.ts`](../src/lib/ad-generator/archetypes/layout.ts) | 151 | `pad`, `splitH`, `column`, `isWide`, `floorFrac`. Pure arithmetic, no rendering. `column` pays pixel floors first and squeezes proportionally when they don't fit rather than overflowing. |
-| [`archetypes/types.ts`](../src/lib/ad-generator/archetypes/types.ts) | 148 | The contract + `buildArchetypeDoc` + `shedOrder`. |
-| [`archetypes/vehicle-offer-archetype.ts`](../src/lib/ad-generator/archetypes/vehicle-offer-archetype.ts) | 461 | The archetype family. Slots, floors, the shed rule, the two layout branches. |
-| [`archetypes/young-subaru-archetype.ts`](../src/lib/ad-generator/archetypes/young-subaru-archetype.ts) | 77 | Young Subaru as a **theme**. Two colours and a fade angle is the whole of what a designer chose. |
-| [`archetypes/archetypes.test.ts`](../src/lib/ad-generator/archetypes/archetypes.test.ts) | 439 | 32 tests. The invariants the hand-authored layouts had no way to state. |
+| [`archetypes/types.ts`](../src/lib/ad-generator/archetypes/types.ts) | 158 | The contract + `buildArchetypeDoc` + `shedOrder`. `Theme` itself lives in `doc-types` now, because a produced doc stores the theme it wears. |
+| [`archetypes/vehicle-offer-archetype.ts`](../src/lib/ad-generator/archetypes/vehicle-offer-archetype.ts) | 466 | The archetype family. Slots, floors, the shed rule, the two layout branches. |
+| [`archetypes/young-subaru-archetype.ts`](../src/lib/ad-generator/archetypes/young-subaru-archetype.ts) | 80 | Young Subaru as a **theme**. Two colours and a fade angle is the whole of what a designer chose. |
+| [`archetypes/registry.ts`](../src/lib/ad-generator/archetypes/registry.ts) | 156 | The starting points the builder offers, and `docFromStart`. An entry is an archetype + a theme + a channel set + a rooftop. |
+| [`archetypes/theme.ts`](../src/lib/ad-generator/archetypes/theme.ts) | 89 | `applyTheme` — a retheme as a recolour, keeping every later edit. |
+| [`archetypes/roles.ts`](../src/lib/ad-generator/archetypes/roles.ts) | 79 | What each role IS, in a designer's words. The copy behind the slot inspector. |
+| [`archetypes/archetypes.test.ts`](../src/lib/ad-generator/archetypes/archetypes.test.ts) | 480 | The invariants the hand-authored layouts had no way to state. |
+| [`archetypes/registry.test.ts`](../src/lib/ad-generator/archetypes/registry.test.ts) | 157 | Every starting point is complete, renders, and matches the archetype doc it names. |
+| [`archetypes/theme.test.ts`](../src/lib/ad-generator/archetypes/theme.test.ts) | 111 | A recolour repaints the design and keeps the designer's work. |
+
+76 tests across the five suites.
 
 ## 5. Verification — it matches the designer on all ten boards
 
@@ -179,7 +189,7 @@ its own would make two plates that exist to be compared disagree.
 
 ## 8. Phases
 
-### Phase 1 — expose the computed offer label *(additive, hours)*
+### Phase 1 — expose the computed offer label — **SHIPPED**
 
 Add `_offerLabel` to `OFFER_TOKENS` (builder:322) with a per-type override on the
 element. Removes one of the four hand-built copies from **every** template
@@ -188,7 +198,7 @@ immediately, including existing ones.
 *Done when:* a designer can bind a text element to the offer label and it reads
 "PER MONTH LEASE" on a lease and "APR" on an APR ad without a second element.
 
-### Phase 2 — the offer plate element *(additive)*
+### Phase 2 — the offer plate element — **SHIPPED**
 
 Promote the plate to a first-class element with slots (label / symbol / figure /
 suffix / terms) and per-type typography, so APR can be set larger than a lease
@@ -199,17 +209,43 @@ the engine already returns them empty for the types that don't use them.
 no `visibleWhen`; and the 16 `visibleWhen` references in the builder are only
 about genuinely per-type *content*, not about switching plate copies.
 
-### Phase 3 — archetypes in the builder *(the product)*
+### Phase 3 — archetypes in the builder *(the product)* — **SHIPPED**
 
-- A picker: "start from an archetype" listing Vehicle Offer, Two Vehicles, and
-  per-store themed variants.
-- A theme editor for the `Theme` surface (5 colours + fade).
-- Seed the archetype docs (`scripts/seed-docs.ts` pattern) per rooftop.
-- A **slot inspector**: selecting a slot shows what it is, not what it's bound to.
+- ✅ A picker: **"Or start from a layout"** on the blank-canvas card, from
+  `archetypes/registry.ts`. Four starting points: Vehicle Offer and Two Vehicles
+  (which use `brand: 'brand'`, so they paint themselves from whichever account
+  the ad is for), plus the two Young Subaru presets on their five channels.
+  Picking one is a single `setDoc`, so it lands in undo.
+- ✅ A theme editor, in Template settings, for any doc an archetype produced. The
+  doc now RECORDS its theme (`doc.archetype`), which is what makes it editable
+  after the fact.
+- ✅ A slot inspector: elements carry their `role`, and the selection panel reads
+  `archetypes/roles.ts` to say what the layer is *for* — with the rule the layout
+  applies to it and the pixel floor it will not go under.
+- ✅ Seeding: `scripts/seed-archetype-templates.ts`, per rooftop, drafts only.
+  Deliberately **not** in the deploy chain — same rule as every other Ad
+  Generator seed.
 
-*Done when:* a designer can produce the Young Subaru single-offer template for
-five channels without typing a coordinate, and the result is byte-comparable to
-`youngSubaruSingleOffer()`.
+*Done:* one click produces the Young Subaru template on all five channels, and
+`registry.test.ts` asserts the result is byte-comparable to
+`youngSubaruSingleOffer()` / `youngSubaruDualOffer()` in everything but the
+template's own id and name.
+
+**A retheme is a recolour, not a rebuild.** `archetypes/theme.ts` re-runs the
+slots against the new theme and copies across only the four keys a theme owns
+(`color`, `fill`, `bg`, `gradientFill`), matching by element id. Geometry,
+bindings, layer names, hand-placed layers and non-colour overrides all survive.
+A per-size override that PINNED a colour is dropped — otherwise the retheme would
+appear to fail on exactly the one board the designer was not looking at.
+
+**Found while verifying, and fixed:** the expiration pill set `padding: 12`, and
+an element's padding is emitted as literal pixels on every board. Comfortable
+inside a 72px pill on Facebook; it ate 24 of the 30 pixels the same pill gets on
+the Google 300×250 and shrank the date to **six pixels**. Dropping it lets the
+renderer's board-relative inset do the work (6.4px → 15.8px, measured). A test
+now refuses any archetype slot that states padding, or any layout box that states
+a font size, for the same reason: a number in pixels is a number that only ever
+suited one board.
 
 ### Phase 4 — retire the three controls *(mostly deletion)*
 

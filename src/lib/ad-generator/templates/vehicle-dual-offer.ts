@@ -22,7 +22,7 @@ function offerFields(prefix: string, group: string): FieldSpec[] {
     { key: `${prefix}vehicleName`, label: 'Vehicle', type: 'text', group, placeholder: '2024 Toyota Camry SE' },
     { key: `${prefix}vehicleImageUrl`, label: 'Vehicle image URL', type: 'image', group, placeholder: 'https://…/camry.png', help: 'Transparent PNG (EVOX) looks best.' },
     { key: t, label: 'Offer type', type: 'select', group, options: OFFER_TYPES, help: 'Drives this offer block + which fields show.' },
-    { key: `${prefix}offerLabel`, label: 'Offer label', type: 'text', group, placeholder: 'auto (e.g. LEASE FOR)', copy: true, maxLength: 18 },
+    { key: `${prefix}offerLabel`, label: 'Custom offer label', type: 'text', group, placeholder: 'auto (e.g. LEASE FOR)', copy: true, maxLength: 18 },
     { key: `${prefix}monthlyPayment`, label: 'Monthly payment ($)', type: 'text', group, placeholder: '299', visibleWhen: { field: t, in: ['lease'] } },
     { key: `${prefix}leaseTerm`, label: 'Lease term (months)', type: 'text', group, placeholder: '36', visibleWhen: { field: t, in: ['lease'] } },
     { key: `${prefix}dueAtSigning`, label: 'Due at signing ($)', type: 'text', group, placeholder: '2999', visibleWhen: { field: t, in: ['lease', 'apr', 'discount', 'sales_price'] } },

@@ -31,6 +31,9 @@ export type EditScope = 'size' | 'all';
 const NEVER_OVERRIDE = new Set<keyof DocElement>([
   'id',
   'type',
+  // What an element IS cannot differ per board — a layer that is the disclaimer
+  // on the square and something else on the story is not a thing.
+  'role',
   'groupId',
   'locked',
   'name',

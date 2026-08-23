@@ -119,7 +119,7 @@ describe('one offer plate, four offer types', () => {
     };
     const expected: Record<string, string[]> = {
       lease: ['PER MONTH LEASE', '$299/mo', '36-month lease'],
-      apr: ['APR', '1.9% APR', 'for 60 months'],
+      apr: ['APR', '1.9%', 'for 60 months'], // the label carries the word, the figure doesn't repeat it
       discount: ['OFF MSRP', '$3,000', 'MSRP of $34,995'],
       sales_price: ['SALES PRICE', '$28,995', 'MSRP of $34,995'],
     };
@@ -311,7 +311,7 @@ describe('two offers are the same archetype, not a second implementation', () =>
     );
     expect(html).toContain('$299/mo');
     expect(html).toContain('PER MONTH LEASE');
-    expect(html).toContain('1.9% APR');
+    expect(html).toContain('1.9%');
   });
 });
 
@@ -436,4 +436,45 @@ describe('the dual is complete and clean on every board', () => {
     expect(dual.slots.filter((s) => /offerMain$/.test(s.id))).toHaveLength(2);
     expect(single.slots.filter((s) => /offerMain$/.test(s.id))).toHaveLength(1);
   });
+});
+
+describe('nothing an archetype builds is sized in fixed pixels', () => {
+  /**
+   * The trap this catches, found on the Google 300×250: `padding` is emitted as
+   * literal px on every board, so a pill inset that is comfortable at 1200×628
+   * ate 24 of the 30 pixels the same pill gets at 300×250 and shrank the
+   * expiration date to six. Every inset an archetype wants has to come from the
+   * layout (which knows the board) or from the renderer's board-relative default —
+   * never from a number on the element.
+   */
+  for (const [label, arch] of [
+    ['single', vehicleOfferArchetype(1)],
+    ['dual', vehicleOfferArchetype(2)],
+  ] as const) {
+    it(`${label}: no slot sets padding`, () => {
+      for (const slot of arch.slots) {
+        const el = slot.build(YOUNG_SUBARU_THEME);
+        expect(el.padding, `${slot.id} padding`).toBeUndefined();
+        expect(el.paddingTop, `${slot.id} paddingTop`).toBeUndefined();
+        expect(el.paddingRight, `${slot.id} paddingRight`).toBeUndefined();
+        expect(el.paddingBottom, `${slot.id} paddingBottom`).toBeUndefined();
+        expect(el.paddingLeft, `${slot.id} paddingLeft`).toBeUndefined();
+      }
+    });
+
+    it(`${label}: no box states a font size`, () => {
+      // Same reason, one level up: `fontSize` on a layout box is px on that board.
+      // Type is FITTED to its frame instead, so the frame is the only thing an
+      // archetype has to get right and the size follows from the board.
+      const doc = buildArchetypeDoc(arch, YOUNG_SUBARU_THEME, YOUNG_SUBARU_SIZES, {
+        id: 't',
+        name: 'T',
+      });
+      for (const [sizeId, boxes] of Object.entries(doc.layouts)) {
+        for (const [id, b] of Object.entries(boxes)) {
+          expect(b.fontSize, `${sizeId}/${id}`).toBeUndefined();
+        }
+      }
+    });
+  }
 });

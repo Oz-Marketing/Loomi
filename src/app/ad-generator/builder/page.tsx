@@ -53,6 +53,7 @@ import {
   MagnifyingGlassPlusIcon,
   MagnifyingGlassMinusIcon,
   SwatchIcon,
+  TagIcon,
   Cog6ToothIcon,
   PaintBrushIcon,
   RocketLaunchIcon,
@@ -112,10 +113,14 @@ import {
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
+import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
+import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
+import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
+import { roleNote } from '@/lib/ad-generator/archetypes/roles';
+import { applyTheme } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -316,21 +321,15 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // field, a computed offer value, brand data, or a static literal — so a
 // from-scratch layout can be wired to the offer engine (no code template needed).
 // Options are encoded as `static` | `field:<key>` | `brand:<key>` strings.
-// Computed offer tokens are DATA only (numbers + the terms line the numbers
-// build). The offer LABEL — "APR", "PER MONTH LEASE", "SALES PRICE" — is
-// editorial text the designer types statically per offer type, NOT computed.
-const OFFER_TOKENS: { key: string; label: string; hint: string }[] = [
-  { key: '_offerMain', label: 'Offer amount', hint: 'The whole amount, formatted — $299/mo · 1.9% · $28,995' },
-  { key: '_offerValue', label: 'Offer number (no symbol)', hint: 'Just the digits — 299 · 1.9 · 28,995. Pair with the symbols below to style them separately.' },
-  { key: '_offerCurrency', label: 'Offer $ symbol', hint: 'A “$”, and only when the offer is an amount' },
-  { key: '_offerPercent', label: 'Offer % symbol', hint: 'A “%”, and only when the offer is a rate' },
-  { key: '_offerTerms', label: 'Offer terms', hint: 'The small line under the number — 36 months, $2,999 due at signing' },
-];
-const OFFER_TOKENS_O2: { key: string; label: string; hint: string }[] = OFFER_TOKENS.map((t) => ({
-  key: t.key.replace('_offer', '_o2_offer'),
-  label: t.label.replace('Offer', 'Offer 2'),
-  hint: t.hint,
-}));
+//
+// The computed offer fields themselves live in `lib/ad-generator/offer-tokens`,
+// where a test can assert the picker offers every one the engine publishes. The
+// LABEL used to be missing from this list on the reasoning that "APR" /
+// "PER MONTH LEASE" is editorial text a designer types per offer type — but
+// `assembleOffer` has always resolved it, the code templates have always bound
+// it, and the `offerLabel` field already overrides it per ad. Withholding it was
+// the single reason a template needed a hand-built label element per offer type,
+// gated by Show For. See docs/ad-generator-archetypes.md §8 Phase 1.
 
 // Per-offer-type accent color + short label — drives the color-coded preview
 // tabs on the canvas action bar (each tab tinted to its offer type).
@@ -475,9 +474,7 @@ function buildContentSources(
     // (otherwise these tokens resolve to nothing). Name Offer 1's tokens
     // explicitly when a second offer exists.
     if (hasOffer) {
-      const offer1Tokens = hasO2
-        ? OFFER_TOKENS.map((t) => ({ ...t, label: t.label.replace('Offer', 'Offer 1') }))
-        : OFFER_TOKENS;
+      const offer1Tokens = hasO2 ? offerTokensNumbered() : OFFER_TOKENS;
       for (const t of offer1Tokens)
         opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text', hint: t.hint });
       if (hasO2)
@@ -540,23 +537,28 @@ const TYPE_ICON: Record<DocElementType, React.ComponentType<{ className?: string
   logo: BuildingStorefrontIcon,
   shape: ShapeElementIcon,
   background: SwatchIcon,
+  offer: TagIcon,
 };
 
 // Element colour coding, used everywhere an element is referenced (Insert
 // palette, canvas selection outline + handles, Layers rows, the inspector type
 // badge): Text = blue, Image = pink, Button = purple, Shape = orange. A
 // "button" is a styled text element (a text el with a background pill).
-type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo';
+type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo' | 'offer';
 const KIND_COLOR: Record<ElementKind, string> = {
   text: '#3b82f6', // blue
   image: '#ec4899', // pink
   button: '#a855f7', // purple
   shape: '#f97316', // orange
   logo: '#14b8a6', // teal
+  // The offer plate gets its own colour rather than reading as text: it is the
+  // one element whose content the designer does not type.
+  offer: '#0ea5e9', // sky
 };
 function elementKind(el: { type: DocElementType; bg?: string }): ElementKind {
   if (el.type === 'shape') return 'shape';
   if (el.type === 'logo') return 'logo';
+  if (el.type === 'offer') return 'offer';
   if (el.type === 'image' || el.type === 'background') return 'image';
   return el.bg ? 'button' : 'text'; // text with a pill background reads as a Button
 }
@@ -643,6 +645,11 @@ function elName(el: DocElement): string {
  *  selection badge so a long text value doesn't render as a full-width banner. */
 function layerName(el: DocElement): string {
   if (el.name && el.name.trim()) return el.name.trim();
+  if (el.type === 'offer') {
+    // Which offer, on a dual — "Offer" alone would name two different plates the
+    // same thing in the Layers panel.
+    return (el.offerIndex ?? 0) > 0 ? `Offer ${(el.offerIndex ?? 0) + 1}` : 'Offer';
+  }
   return el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
 }
 
@@ -813,6 +820,11 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
       return { id, type, binding: { kind: 'static', value: '' }, fit: 'contain' };
     case 'shape':
       return { id, type, fill: 'brand', radius: 8 };
+    case 'offer':
+      // No binding: a plate reads the assembled offer, not one field. The figure
+      // takes the element's colour + weight; the label and terms are supporting
+      // type the renderer sets.
+      return { id, type, offerIndex: 0, color: 'brand', fontWeight: 800, align: 'left' };
     case 'background':
       // Full-bleed background: base fill + a white→transparent top fade. Texture
       // is added on demand from the inspector. Placement (full-bleed, back z) is
@@ -1753,6 +1765,20 @@ export default function AdBuilderPage() {
     const b = selected.binding;
     const isImage = selected.type === 'image' || selected.type === 'logo' || selected.type === 'background';
     if (selected.type === 'shape') return { mode: 'none', value: '' };
+    // An offer plate has nothing to type: it draws whatever the offer engine
+    // assembled. Showing it a text box invited a designer to type over the one
+    // element whose content is the point of not typing it.
+    if (selected.type === 'offer') {
+      const p = selected.offerIndex && selected.offerIndex > 0 ? `o${selected.offerIndex + 1}_` : '';
+      const label = String(previewData[`_${p}offerLabel`] ?? '');
+      const figure = String(previewData[`_${p}offerMain`] ?? '');
+      const terms = String(previewData[`_${p}offerTerms`] ?? '');
+      return {
+        mode: 'text-readonly',
+        value: [label, figure, terms].filter(Boolean).join(' · '),
+        note: 'Assembled from the offer type and its numbers, so this one plate covers lease, APR, discount and sale price. Edit the values in the Fields panel.',
+      };
+    }
     if (isImage) {
       if (!b) return { mode: 'image-edit', value: '' };
       const value = b.kind === 'static' ? b.value : String(previewData[b.key] ?? '');
@@ -2297,13 +2323,13 @@ export default function AdBuilderPage() {
         // fractions and this font size verbatim to every size is what made a new
         // element land in a different shape — and render at a different size — on
         // each aspect ratio.
-        const box: DocLayoutBox = {
-          x: 0.3,
-          y: 0.44,
-          w: 0.4,
-          h: 0.12,
-          ...(type === 'text' ? { fontSize: 48 } : {}),
-        };
+        // An offer plate is three stacked rows, so it needs real height — at a
+        // text element's 12% every row lands under its legibility floor and the
+        // label collides with the figure.
+        const box: DocLayoutBox =
+          type === 'offer'
+            ? { x: 0.28, y: 0.38, w: 0.44, h: 0.26 }
+            : { x: 0.3, y: 0.44, w: 0.4, h: 0.12, ...(type === 'text' ? { fontSize: 48 } : {}) };
         // New text defaults to SHRINK — holds its font size, scales down to fit
         // only if a value overflows the frame.
         const el = type === 'text' ? { ...makeDefaultElement(id, type), shrink: true } : makeDefaultElement(id, type);
@@ -2351,6 +2377,50 @@ export default function AdBuilderPage() {
   useEffect(() => {
     refreshBlocks();
   }, [refreshBlocks]);
+
+  /**
+   * Start from an ARCHETYPE: replace the blank design with a laid-out one.
+   *
+   * The archetype produces an ordinary `TemplateDoc` — elements, every board's
+   * layout, the offer fields — so this is one `setDoc`, it lands in undo like any
+   * other edit, and everything downstream (renderer, preflight, compliance,
+   * export) sees a doc it already understands.
+   *
+   * The template's own identity is kept: its id, and its name unless it is still
+   * the untouched placeholder — in which case the starting point names it, since a
+   * design that arrives complete should not also arrive called "Untitled". Boards
+   * the designer already added are kept too, and the archetype lays those out
+   * instead of bringing its own channel set.
+   */
+  const startFromArchetype = useCallback(
+    (start: ArchetypeStart) => {
+      const untouched = !templateName.trim() || templateName === 'Untitled template';
+      const name = untouched ? start.name : templateName;
+      setDoc((prev) => {
+        // A doc still on its single default board takes the archetype's channels;
+        // one the designer has already shaped keeps them.
+        const chosen = prev.sizes.length > 1 ? prev.sizes : undefined;
+        return {
+          ...docFromStart(start, { id: prev.id, name, sizes: chosen }),
+          // Template-level settings belong to the template, not the composition.
+          make: prev.make,
+          usage: prev.usage,
+          category: prev.category,
+          tags: prev.tags,
+          schedule: prev.schedule,
+        };
+      });
+      if (untouched) setTemplateName(start.name);
+      setSelectedIds([]);
+      toast.success(`Started from ${start.name}`);
+    },
+    [setDoc, templateName],
+  );
+
+  // Keep the edited board valid after an archetype swaps the size list out.
+  useEffect(() => {
+    if (!doc.sizes.some((s) => s.id === sizeId)) setSizeId(doc.sizes[0].id);
+  }, [doc.sizes, sizeId]);
 
   // Insert a saved block: clone its elements onto every size + re-seed the
   // fields its bindings need, then select the new elements.
@@ -4046,6 +4116,10 @@ export default function AdBuilderPage() {
     { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton, color: KIND_COLOR.button },
     { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape'), color: KIND_COLOR.shape },
     { label: 'Logo', Icon: BuildingStorefrontIcon, onAdd: () => addElement('logo'), color: KIND_COLOR.logo },
+    // The offer plate. Placed once, it renders correctly for lease, APR, discount
+    // and sale price — which is four hand-built, Show-For-gated copies replaced by
+    // one element. See docs/ad-generator-archetypes.md §8 Phase 2.
+    { label: 'Offer', Icon: TagIcon, onAdd: () => addElement('offer'), color: KIND_COLOR.offer },
     // No separate "Background": a background is a full-bleed Image (photo/texture)
     // or Shape (solid/gradient) — use those + the "Fill artboard & send to back"
     // action on the element's inspector.
@@ -4175,6 +4249,18 @@ export default function AdBuilderPage() {
                 <>
                   <div className="fixed inset-0 z-[90]" onClick={() => setSettingsOpen(false)} />
                   <div className="absolute right-0 top-11 z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
+                    {/* Theme first, and only for a design an archetype produced:
+                        it is the control a designer reaches for most, and the one
+                        that replaces recolouring every layer on every board.
+                        See docs/ad-generator-archetypes.md §8 Phase 3. */}
+                    {doc.archetype && (
+                      <div className="mb-4 border-b border-[var(--border)] pb-3">
+                        <ThemeEditor
+                          theme={doc.archetype.theme}
+                          onChange={(next) => setDoc((prev) => applyTheme(prev, next), 'theme')}
+                        />
+                      </div>
+                    )}
                     <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h3>
                     <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
                       Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
@@ -5172,6 +5258,47 @@ export default function AdBuilderPage() {
                       </div>
                       <div className="px-5 pb-5 pt-3">
                         <AdderGrid adders={adders} variant="onboarding" />
+                        {/* Start from an ARCHETYPE — a whole laid-out design for
+                            every board, rather than one element at a time. This is
+                            the path an OEM offer template should take; the element
+                            palette above is for one-off work.
+                            See docs/ad-generator-archetypes.md §8 Phase 3. */}
+                        <div className="mt-4">
+                          <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                            Or start from a layout
+                          </p>
+                          <div className="flex flex-col gap-2.5">
+                            {archetypeStartGroups().map(({ group, items }) => (
+                              <div key={group}>
+                                <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
+                                  {group}
+                                </p>
+                                <div className="flex flex-col gap-1.5">
+                                  {items.map((st) => (
+                                    <button
+                                      key={st.id}
+                                      type="button"
+                                      onClick={() => startFromArchetype(st)}
+                                      aria-label={`Start from ${st.name}`}
+                                      className="group/arch w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left transition-colors hover:border-[var(--primary)]"
+                                    >
+                                      <span className="flex items-baseline gap-2">
+                                        <span className="truncate text-sm text-[var(--foreground)]">{st.name}</span>
+                                        <span className="ml-auto shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                          {st.sizes.length} sizes
+                                        </span>
+                                      </span>
+                                      <span className="mt-0.5 block text-[11px] leading-snug text-[var(--muted-foreground)]">
+                                        {st.hint}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
                         {/* Start from a saved block — begin a blank canvas from
                             a pre-wired cluster instead of single elements. */}
                         {insertableBlocks.length > 0 && (
@@ -6438,7 +6565,13 @@ function SelectionPanel({
   onToggleCrop: () => void;
 }) {
   const fontSize = box.fontSize ?? 16;
-  const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
+  const typeLabel =
+    el.type === 'text' ? 'Text'
+    : el.type === 'image' ? 'Image'
+    : el.type === 'logo' ? 'Logo'
+    : el.type === 'background' ? 'Background'
+    : el.type === 'offer' ? 'Offer'
+    : 'Shape';
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';
@@ -6521,6 +6654,32 @@ function SelectionPanel({
           </button>
         </div>
       </div>
+
+      {/* THE SLOT INSPECTOR: what this layer IS, when an archetype placed it.
+          A generic builder can only say what a layer is bound to — "text,
+          {{_offerMain}}" — which is the implementation, not the intent, and is
+          why the same lockup got rebuilt once per offer type. A role can be
+          explained: this is the offer, it carries whichever type the ad runs, and
+          the layout will not let it go under 34px.
+          See docs/ad-generator-archetypes.md §8 Phase 3. */}
+      {(() => {
+        const note = roleNote(el.role);
+        if (!note) return null;
+        return (
+          <div className="mx-3 mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-2.5 py-2">
+            <p className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--foreground)]">
+              <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--primary)]" />
+              {note.label}
+            </p>
+            <p className="mt-1 text-[11px] leading-snug text-[var(--muted-foreground)]">{note.what}</p>
+            {note.rule && (
+              <p className="mt-1.5 border-t border-[var(--border)] pt-1.5 text-[10px] leading-snug text-[var(--muted-foreground)]">
+                {note.rule}
+              </p>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Per-size divergence, stated rather than left to be discovered. Without
           this, a value that looks global (it sits in the same field as every other)
@@ -7742,6 +7901,76 @@ function BarBtn({
  *  colors" link that opens the subaccount's branding settings in a new tab.
  *  Used by every color control (fill, background, text, button, gradient stops)
  *  so brand colors are one click away wherever a color is set. */
+/**
+ * THE THEME EDITOR — the designer-owned half of an archetype.
+ *
+ * An archetype derives every board from five colours and a fade, so this is the
+ * whole styling surface for a composition: change the brand blue here and eleven
+ * layers on five boards follow, instead of being recoloured fifty-five times.
+ *
+ * Editing is a RECOLOUR, not a rebuild (see `archetypes/theme.ts`): geometry,
+ * bindings, additions and per-board overrides all survive it.
+ */
+function ThemeEditor({ theme, onChange }: { theme: Theme; onChange: (next: Theme) => void }) {
+  const set = (patch: Partial<Theme>) => onChange({ ...theme, ...patch });
+  const usesAccountBrand = theme.brand === 'brand';
+  const rows: { key: 'base' | 'brand' | 'ink' | 'muted' | 'onBrand'; label: string; hint: string }[] = [
+    { key: 'base', label: 'Background', hint: 'The fill behind everything' },
+    { key: 'brand', label: 'Brand', hint: 'The offer figure and the expiration pill' },
+    { key: 'ink', label: 'Headings', hint: 'Tagline and vehicle name' },
+    { key: 'muted', label: 'Supporting text', hint: 'Offer label, terms, disclaimer' },
+    { key: 'onBrand', label: 'On brand', hint: 'Text sitting on the brand colour' },
+  ];
+  const fade = theme.fade ?? { angle: 135, end: 70 };
+  return (
+    <div>
+      <div className="mb-1 flex items-center gap-1.5">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Theme</h3>
+        <Tooltip label="An archetype styles every layer on every board from these five colours and the fade. Changing one recolours the whole design and keeps your layout, bindings and per-size overrides.">
+          <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+        </Tooltip>
+      </div>
+      <div className="space-y-1">
+        {rows.map((r) => {
+          const token = theme[r.key] === 'brand';
+          return (
+            <div key={r.key} className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-medium text-[var(--foreground)]">{r.label}</p>
+                <p className="truncate text-[10px] text-[var(--muted-foreground)]">{token ? "The account's brand color" : r.hint}</p>
+              </div>
+              <ColorSwatchInput
+                title={`${r.label} color`}
+                value={token ? '#4f46e5' : theme[r.key]}
+                onChange={(v) => set({ [r.key]: v } as Partial<Theme>)}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* The one theme value that isn't a colour: how far the white wash runs
+          across the backdrop, and at what angle. */}
+      <div className="mt-2 flex items-end gap-2 border-t border-[var(--border)] pt-2">
+        <label className="flex-1">
+          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade angle</span>
+          <NumberInput value={fade.angle} onChange={(v) => set({ fade: { ...fade, angle: clamp(Math.round(v), 0, 360) } })} min={0} max={360} unit="°" />
+        </label>
+        <label className="flex-1">
+          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade reach</span>
+          <NumberInput value={fade.end} onChange={(v) => set({ fade: { ...fade, end: clamp(Math.round(v), 0, 100) } })} min={0} max={100} unit="%" />
+        </label>
+      </div>
+      {/* Only ever true for the generic starting points, which is the point of
+          them: one composition that paints itself for every rooftop. */}
+      {usesAccountBrand && (
+        <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+          The brand color follows whichever account the ad is for. Pick a color to fix it to this template instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ColorSwatchInput({ title, value, onChange }: { title: string; value: string; onChange: (v: string) => void }) {
   const { accountData, accountKey } = useAccount();
   const [open, setOpen] = useState(false);

@@ -11,6 +11,9 @@ import type { TemplateDoc } from './doc-types';
  * reports a clean bill it hasn't earned.
  */
 
+/** Every note's prose, for the assertions that only care what it says. */
+const noteText = (sheet: { notes: { text: string }[] }) => sheet.notes.map((n) => n.text).join(' ');
+
 const SAMPLE = {
   brandColor: '#0a3d8f',
   logoUrl: 'https://example.invalid/lockup.png',
@@ -86,12 +89,12 @@ describe('it does not report a clean bill it has not earned', () => {
 
   it('says so when no co-op pack is on file', () => {
     const sheet = buildProofSheet({ doc: { ...doc, make: 'Subaru' }, data: SAMPLE });
-    expect(sheet.notes.join(' ')).toContain('No Subaru co-op rule pack is on file');
-    expect(sheet.notes.join(' ')).toContain('not a compliance sign-off');
+    expect(noteText(sheet)).toContain('No Subaru co-op rule pack is on file');
+    expect(noteText(sheet)).toContain('not a compliance sign-off');
   });
 
   it('says a template naming no make had no manufacturer rules applied', () => {
-    expect(buildProofSheet({ doc, data: SAMPLE }).notes.join(' ')).toContain('names no make');
+    expect(buildProofSheet({ doc, data: SAMPLE }).notes.map((n) => n.text).join(' ')).toContain('names no make');
   });
 
   it('warns that an unverified pack downgrades its own errors', () => {
@@ -102,7 +105,7 @@ describe('it does not report a clean bill it has not earned', () => {
       rules: [],
     } as unknown as CoopRulePack;
     const sheet = buildProofSheet({ doc: { ...doc, make: 'Subaru' }, data: SAMPLE, coopPack: pack });
-    expect(sheet.notes.join(' ')).toContain('unverified');
+    expect(noteText(sheet)).toContain('unverified');
   });
 
   it('warns when the design-time verdict is stale', () => {
@@ -111,12 +114,12 @@ describe('it does not report a clean bill it has not earned', () => {
       data: SAMPLE,
       coopDesign: { make: 'Subaru', packVersion: '2026-01', findings: [], stale: true },
     });
-    expect(sheet.notes.join(' ')).toContain('predates the current design');
+    expect(noteText(sheet)).toContain('predates the current design');
   });
 
   it('names the account-supplied art that is missing, so a hole is not read as a fault', () => {
     const sheet = buildProofSheet({ doc });
-    expect(sheet.notes.join(' ')).toContain('vehicle photo and dealer logo come from the account');
+    expect(noteText(sheet)).toContain('Vehicle photo and dealer logo come from the account');
   });
 
   it('names the offer types that are blocked, and blocks the sheet with them', () => {
@@ -126,7 +129,7 @@ describe('it does not report a clean bill it has not earned', () => {
     expect(lease.ok).toBe(false);
     expect(sheet.ok).toBe(false);
     expect(sheet.errorCount).toBeGreaterThan(0);
-    expect(sheet.notes.join(' ')).toContain('Blocked for Lease');
+    expect(noteText(sheet)).toContain('Blocked for Lease');
   });
 
   it('passes a fully-filled design', () => {
@@ -134,6 +137,50 @@ describe('it does not report a clean bill it has not earned', () => {
     const blocking = sheet.rows.filter((r) => !r.ok).map((r) => r.label);
     expect(blocking, sheet.rows.flatMap((r) => r.issues.map((i) => i.message)).join(' | ')).toEqual([]);
     expect(sheet.ok).toBe(true);
+  });
+});
+
+describe('the notes say how much they matter', () => {
+  const doc = youngSubaruSingleOffer();
+
+  it('marks what stops an export as blocking, and what merely looks wrong as context', () => {
+    const sheet = buildProofSheet({ doc, data: { ...SAMPLE, monthlyPayment: '', leaseTerm: '' } });
+    const byLabel = new Map(sheet.notes.map((n) => [n.label, n]));
+    expect(byLabel.get('Cannot export')!.tone).toBe('blocking');
+    // The blank photo is not a fault, and reading like one is how a designer ends
+    // up "fixing" the template.
+    expect(sheet.notes.find((n) => n.text.includes('come from the account'))!.tone).toBe('context');
+  });
+
+  it('marks a missing rule pack as a caution, not a pass and not a fault', () => {
+    const sheet = buildProofSheet({ doc: { ...doc, make: 'Subaru' }, data: SAMPLE });
+    expect(sheet.notes.find((n) => n.label === 'Not checked')!.tone).toBe('caution');
+  });
+
+  it('reads blocking first, whatever order the checks ran in', () => {
+    const noDisclaimer = { ...doc, elements: doc.elements.filter((e) => e.role !== 'disclaimer') };
+    const sheet = buildProofSheet({
+      doc: { ...noDisclaimer, make: 'Subaru' },
+      data: { ...SAMPLE, monthlyPayment: '' },
+    });
+    const rank = { blocking: 0, caution: 1, context: 2 } as const;
+    const order = sheet.notes.map((n) => rank[n.tone]);
+    expect(order, sheet.notes.map((n) => `${n.tone}:${n.label}`).join(' | ')).toEqual([...order].sort());
+    expect(sheet.notes[0].tone).toBe('blocking');
+  });
+
+  it('gives every note a short badge label', () => {
+    const sheet = buildProofSheet({ doc, data: { ...SAMPLE, monthlyPayment: '' } });
+    for (const n of sheet.notes) {
+      expect(n.label.length, n.label).toBeGreaterThan(2);
+      expect(n.label.split(' ').length, n.label).toBeLessThanOrEqual(3);
+      expect(n.text.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('starts every note with a capital, since each one is a sentence', () => {
+    const sheet = buildProofSheet({ doc, data: SAMPLE });
+    for (const n of sheet.notes) expect(n.text[0], n.text).toBe(n.text[0].toUpperCase());
   });
 });
 
@@ -210,8 +257,8 @@ describe('a fault in the DESIGN is stated once, not once per ad', () => {
   });
 
   it('says in its notes that these belong to the designer', () => {
-    expect(sheet.notes.join(' ')).toContain('the DESIGN fails');
-    expect(sheet.notes.join(' ')).toContain("designer's to fix");
+    expect(noteText(sheet)).toContain('the DESIGN fails');
+    expect(noteText(sheet)).toContain("designer's to fix");
   });
 
   it('has no faults section when the design has no verdict', () => {
@@ -267,7 +314,7 @@ describe('the house design audit rides along with the co-op rules', () => {
 
   it('tells a manufacturer rule from a house check in its notes', () => {
     const noDisclaimer = { ...doc, elements: doc.elements.filter((e) => e.role !== 'disclaimer') };
-    const notes = buildProofSheet({ doc: noDisclaimer, data: SAMPLE }).notes.join(' ');
+    const notes = buildProofSheet({ doc: noDisclaimer, data: SAMPLE }).notes.map((n) => n.text).join(' ');
     expect(notes).toContain('design checks the DESIGN fails');
   });
 });

@@ -114,7 +114,7 @@ import {
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
+import { bindsOfferToken, templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
@@ -361,6 +361,11 @@ function isOfferElement(el: DocElement): boolean {
   return false;
 }
 
+
+// `bindsOfferToken` (imported) answers "does this layer render the offer itself".
+// It lives in `doc-types.ts` because the answer is a property of the DOC, and
+// because the Show For narrowing it drives needs testing — see
+// docs/ad-generator-archetypes.md §8 Phase 4b.
 
 /** Narrowing helper: is this element showing the account logo? */
 function isBrandLogoBinding(b: Binding | undefined): b is { kind: 'brand'; key: 'logoUrl'; variant?: LogoVariant } {
@@ -6196,15 +6201,46 @@ function TokenTextArea({
 /** Per-offer-type visibility toggles (element `visibleWhen`). All selected =
  *  always shown; a subset shows the element(s) only for those offer types.
  *  Shared by the single-element inspector and the multi-select panel. */
-function ShowForControl({ visibleWhen, offerTypes, onChange }: {
+function ShowForControl({ visibleWhen, offerTypes, offerBound, onChange }: {
   visibleWhen?: { field: string; in: string[] };
   /** The offer types of the doc's KIND — a service template gates on
    *  `flat_price` / `percent_off`, not on `lease` / `apr`. */
   offerTypes: { value: string; label: string }[];
+  /**
+   * The selection renders the offer itself, so gating it can only blank the ad
+   * for the excluded types. The control is withheld and says why.
+   */
+  offerBound?: boolean;
   onChange: (v: { field: string; in: string[] } | undefined) => void;
 }) {
   const all = offerTypes.map((x) => x.value);
   const cur = visibleWhen?.field === 'offerType' ? visibleWhen.in : all;
+
+  // What Show For is FOR, now that the plate handles per-type copy: a line one
+  // offer type has to carry and another does not — the cost per $1,000 on an APR
+  // ad, the source of a discount. Not a way to build four plates.
+  if (offerBound) {
+    const gated = visibleWhen?.field === 'offerType';
+    return (
+      <div className="space-y-1.5">
+        <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+          This layer shows the offer, so it already says the right thing for every offer type —
+          the label, the figure and the terms all come from whichever offer the ad is running.
+          Restricting it here would blank the ad for the other types.
+        </p>
+        {gated && (
+          <button
+            type="button"
+            onClick={() => onChange(undefined)}
+            className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-400 transition-colors hover:border-amber-500"
+          >
+            Shown only for {visibleWhen.in.map((v) => offerTypeShort(v)).join(', ')} — show for all
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-1">
       {offerTypes.map((t) => {
@@ -6227,7 +6263,7 @@ function ShowForControl({ visibleWhen, offerTypes, onChange }: {
           </button>
         );
       })}
-      <Tooltip label="These element(s) render only for the checked offer types (hidden on export, dimmed in the editor). All checked = always shown.">
+      <Tooltip label="For a line one offer type has to carry and another does not — a cost per $1,000 on APR, the source of a discount. These element(s) render only for the checked types (hidden on export, dimmed in the editor). All checked = always shown.">
         <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
       </Tooltip>
     </div>
@@ -6323,7 +6359,15 @@ function MultiSelectPanel({
             once (any element type). Reflects the first selected element. */}
         {hasOfferField && (
           <PanelSection title="Show for">
-            <ShowForControl visibleWhen={elements[0]?.visibleWhen} offerTypes={offerTypes} onChange={(v) => onElAll({ visibleWhen: v })} />
+            {/* Withheld only when EVERY selected layer shows the offer. A mixed
+                selection keeps the control, since one of them may legitimately
+                be a per-type disclosure. */}
+            <ShowForControl
+              visibleWhen={elements[0]?.visibleWhen}
+              offerTypes={offerTypes}
+              offerBound={elements.length > 0 && elements.every(bindsOfferToken)}
+              onChange={(v) => onElAll({ visibleWhen: v })}
+            />
           </PanelSection>
         )}
         {/* Scale vs Fixed for the whole selection — pinning a lockup of several
@@ -6976,7 +7020,12 @@ function SelectionPanel({
             a subset to show this element only for those offer types. */}
         {hasOfferField && (
           <PanelSection title="Show for">
-            <ShowForControl visibleWhen={el.visibleWhen} offerTypes={offerTypes} onChange={(v) => onEl({ visibleWhen: v })} />
+            <ShowForControl
+              visibleWhen={el.visibleWhen}
+              offerTypes={offerTypes}
+              offerBound={bindsOfferToken(el)}
+              onChange={(v) => onEl({ visibleWhen: v })}
+            />
           </PanelSection>
         )}
 

@@ -370,6 +370,26 @@ export function offerFieldPrefix(el: Pick<DocElement, 'offerIndex'>): string {
   return i <= 0 ? '' : `o${i + 1}_`;
 }
 
+/**
+ * Does this layer render the OFFER ITSELF — a computed offer token, or a plate?
+ *
+ * Such a layer must never be gated by offer type. The offer engine already
+ * resolves the label, the figure and the terms for whichever type an ad is
+ * running, so gating one to `lease` does not make a lease-specific layer; it makes
+ * the ad blank for the other three. That was the mechanism behind per-type plate
+ * copies, and behind the builder's Show For control being "extremely finicky".
+ *
+ * The builder withholds Show For on these layers and says why. See
+ * docs/ad-generator-archetypes.md §8 Phase 4b.
+ */
+export function bindsOfferToken(el: Pick<DocElement, 'type' | 'binding'>): boolean {
+  if (el.type === 'offer') return true;
+  const b = el.binding;
+  if (b?.kind === 'field') return /^_(?:o\d+_)?offer/.test(b.key);
+  if (b?.kind === 'static') return /\{\{\s*_(?:o\d+_)?offer/i.test(b.value);
+  return false;
+}
+
 /** The plate's default proportions, as shares of its own height. */
 export const OFFER_PLATE_DEFAULTS = { labelShare: 0.17, termsShare: 0.22, gapPx: 4 } as const;
 

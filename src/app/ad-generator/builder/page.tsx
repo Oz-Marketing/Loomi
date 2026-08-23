@@ -431,8 +431,8 @@ function buildContentSources(
   ];
   // A field conditioned on `offerType` only fills for those types — the thing a
   // designer most needs to know when a template has to serve lease AND apr, and
-  // the reason the flat list was a guessing game.
-  const typeLabel = new Map(kind.offerTypes.map((t) => [t.value, t.label]));
+  // the reason the flat list was a guessing game. The badge names come from
+  // `offerTypeShort`, so a kind's own labels no longer need collecting here.
   // Scoped by the element's OWN "Show for": an APR-only text box can never
   // display a lease-only field, so offering it is offering a blank. All types
   // selected (or none set, which means the same) filters nothing.

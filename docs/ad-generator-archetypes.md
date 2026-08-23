@@ -307,12 +307,44 @@ the disclaimer tokens and MarketCheck ingest are not.
 
 *Done when:* a three-offer template needs no new fields and no new template.
 
-### Phase 6 — compliance at design time
+### Phase 6 — compliance at design time — **SHIPPED**
 
-Named slots let the co-op engine check the **template** — disclaimer present and
-legible at every size, OEM logo present, the fields this make requires actually
-placed — instead of only checking rendered ads. This is the check that stops a
-non-compliant template before it makes three hundred ads.
+`lib/ad-generator/template-audit.ts` — the house minimum, checked on the
+TEMPLATE. Pure, and pack-independent, which is the whole point: most makes have
+no transcribed co-op pack, so for most templates every co-op check is a no-op and
+a design with no disclaimer on the 300×250 passes for want of anything to check
+it against.
+
+What it holds a template to:
+
+| Check | Severity | Rests on |
+|---|---|---|
+| `disclaimer_absent` | error | no element renders `disclaimer` |
+| `disclaimer_off_board` | error | no box on some board, or hidden there |
+| `disclaimer_illegible` | error under 10px, warning under 22px | declared font size, else box height |
+| `required_field_unplaced` | error | the type's own required fields + the make's |
+| `dealer_unidentified` | warning | no logo and no dealer name anywhere |
+| `element_off_board` | warning | box outside 0..1 by >20% of its own extent |
+| `text_illegible` | error | same ceiling rule as the disclaimer |
+
+**An error means IMPOSSIBLE, not "probably bad."** There is no browser here, so
+nothing measures a glyph. A declared font size is a fact, and a text box's height
+in pixels is a hard ceiling on how tall one line inside it can be — every error
+rests on one of those two. Anything softer is a warning, and anything needing real
+measurement belongs to the proof sheet's eyes.
+
+The findings surface in the proof sheet's fault list beside the co-op ones, tagged
+`source: 'audit'` and drawn as **design check** rather than borrowing a
+manufacturer's citation. A blocking design fault now fails the whole sheet even
+when every row's data checks out — a template with no disclaimer makes nothing
+shippable, and preflight would never say so, because no ad-level *value* is at
+fault.
+
+**One claim, one implementation.** `surfacedFields` and `elementFieldRefs` were a
+`useMemo` and a helper inside the builder page, so nothing else could ask "does
+this design actually show the field this make requires". They moved into the audit
+module; the builder's compliance chip now calls the same function, and the answer
+is available server-side, where a page component's helper could never go.
 
 ## 9. Traps
 

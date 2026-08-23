@@ -1,9 +1,12 @@
 # Ad Generator — Archetypes
 
-Status: **Prototype built, product not started** 2026-08-22. The layout engine is
-proven against both real Young Subaru templates (§5) with 32 tests; nothing is
-wired into the builder, the seed, or any UI. Both hand-built templates still
-ship unchanged. Phases 1–5 in §8 are the remaining work.
+Status: **Phases 1–3 shipped** 2026-08-23. The layout engine is proven against
+both real Young Subaru templates (§5), and archetypes are now in the builder: a
+designer picks a layout, gets every board, and edits the theme. Both hand-built
+templates still ship unchanged and untouched — nothing has been migrated onto an
+archetype, and nothing has to be. **Phases 4–6 in §8 are the remaining work**,
+and they are the deletions: the three confusing controls, the `o2_` twins, and
+compliance moving to design time.
 
 ⚠️ **Read §6 before changing any number in `vehicle-offer-archetype.ts`.** Four
 of those constants are craft decisions recovered from the designer's hand-tuned
@@ -186,7 +189,7 @@ its own would make two plates that exist to be compared disagree.
 
 ## 8. Phases
 
-### Phase 1 — expose the computed offer label *(additive, hours)*
+### Phase 1 — expose the computed offer label — **SHIPPED**
 
 Add `_offerLabel` to `OFFER_TOKENS` (builder:322) with a per-type override on the
 element. Removes one of the four hand-built copies from **every** template
@@ -195,7 +198,7 @@ immediately, including existing ones.
 *Done when:* a designer can bind a text element to the offer label and it reads
 "PER MONTH LEASE" on a lease and "APR" on an APR ad without a second element.
 
-### Phase 2 — the offer plate element *(additive)*
+### Phase 2 — the offer plate element — **SHIPPED**
 
 Promote the plate to a first-class element with slots (label / symbol / figure /
 suffix / terms) and per-type typography, so APR can be set larger than a lease

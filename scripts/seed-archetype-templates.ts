@@ -16,54 +16,76 @@
  * so this never publishes and never un-publishes. An existing row's status,
  * sharing and taxonomy are left exactly as they are.
  *
- * Re-running is safe: the doc and name are rewritten from code (that is the
- * point — an archetype fix should reach the seeded rows), everything a person
- * chose in the app is preserved. Pass --dry-run to see what would change.
+ * RE-RUNNING NEVER OVERWRITES A DESIGNER. The point of seeding is that an
+ * archetype fix reaches the seeded rows — but only the rows nobody has touched.
+ * Each seeded doc records the design hash it was written with; on a re-run, a row
+ * whose current design still matches that hash is rewritten from code, and one
+ * that has moved is LEFT ALONE and reported. A designer who opens a seeded
+ * template and repositions half of it owns it from that moment.
+ *
+ * Status, sharing, category and tags are never touched either way. Pass --dry-run
+ * to see what would change.
  *
  * NOT in the build or deploy chain, on purpose and like every other Ad Generator
  * seed: which rooftops get which templates is a per-environment decision, and a
  * deploy that quietly creates template rows in production is not one.
  *
  * Run (droplet or local):
- *   DOTENV_CONFIG_PATH=.env.local npx tsx -r dotenv/config scripts/seed-archetype-templates.ts [accountKey] [--dry-run]
+ *   DOTENV_CONFIG_PATH=.env.local npx tsx -r dotenv/config scripts/seed-archetype-templates.ts [--dry-run] [--force]
  *
- * With no accountKey: every starting point, each to the rooftop it belongs to
- * (the generic compositions are account-less, so every account sees them).
- * With one: only the starting points for that rooftop.
+ * Every starting point is seeded once, globally: the compositions paint from
+ * whichever account an ad is for, so there is nothing per-rooftop to seed.
+ * `--force` rewrites even an edited row — say it deliberately, and only when the
+ * archetype fix matters more than whatever a designer did to that template.
  */
 import { prisma } from '../src/lib/prisma';
 import { ARCHETYPE_STARTS, docFromStart, type ArchetypeStart } from '../src/lib/ad-generator/archetypes/registry';
+import {
+  keepContent,
+  parseStoredDoc,
+  seedOwnership,
+  stampSeeded,
+} from '../src/lib/ad-generator/archetypes/seed-stamp';
 
 /** Stable, and obviously an archetype row rather than a hand-built one. */
 function docId(start: ArchetypeStart): string {
   return `arch-${start.id}`;
 }
 
+// `stampSeeded` / `seedOwnership` (imported) decide whether a row is still this
+// script's to rewrite. They live in `archetypes/seed-stamp.ts` so they can be
+// tested — silently reverting a designer's afternoon is the worst thing this
+// script could do, which makes it the last logic that should sit untested here.
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const only = args.find((a) => !a.startsWith('--'))?.trim();
-
-  const starts = only ? ARCHETYPE_STARTS.filter((s) => s.accountKey === only) : ARCHETYPE_STARTS;
-  if (starts.length === 0) {
-    console.log(
-      `No starting points for account "${only}". Known rooftops: ${[
-        ...new Set(ARCHETYPE_STARTS.map((s) => s.accountKey).filter(Boolean)),
-      ].join(', ')}`,
-    );
-    return;
-  }
+  const force = args.includes('--force');
+  const starts = ARCHETYPE_STARTS;
 
   let created = 0;
   let updated = 0;
+  let skipped = 0;
   for (const start of starts) {
     const id = docId(start);
-    const doc = docFromStart(start, { id });
+    const fresh = docFromStart(start, { id });
     const existing = await prisma.adTemplateDoc.findUnique({
       where: { id },
-      select: { id: true, status: true },
+      select: { id: true, status: true, doc: true },
     });
-    const where = `account=${start.accountKey ?? 'global'}, ${doc.sizes.length} sizes`;
+    // The design comes from code; the sample content stays whatever the row has.
+    const doc = stampSeeded(keepContent(fresh, existing ? parseStoredDoc(existing.doc) : null));
+    const where = `${doc.sizes.length} sizes`;
+
+    // A row a designer has worked on is theirs. The archetype fix does not reach
+    // it, and saying so is the point — silently reverting somebody's afternoon is
+    // the worst outcome available here.
+    const hand = existing ? seedOwnership(existing.doc) : { edited: false, reason: '' };
+    if (existing && hand.edited && !force) {
+      skipped++;
+      console.log(`skipped ${id} — ${hand.reason}. Pass --force to overwrite it.`);
+      continue;
+    }
 
     if (dryRun) {
       console.log(`${existing ? 'would update' : 'would create'} ${id} (${where})`);
@@ -82,7 +104,9 @@ async function main() {
         },
       });
       updated++;
-      console.log(`updated ${id} (${where}, still ${existing.status})`);
+      console.log(
+        `updated ${id} (${where}, still ${existing.status})${hand.edited ? ' — FORCED over a designer edit' : ''}`,
+      );
       continue;
     }
 
@@ -93,7 +117,7 @@ async function main() {
         description: doc.description,
         doc: JSON.stringify(doc),
         status: 'draft',
-        accountKey: start.accountKey ?? null,
+        accountKey: null,
         createdBy: 'seed-archetype-templates',
       },
     });
@@ -101,7 +125,11 @@ async function main() {
     console.log(`created ${id} (${where}, draft)`);
   }
 
-  if (!dryRun) console.log(`Archetype templates: ${created} created, ${updated} updated.`);
+  if (!dryRun) {
+    console.log(
+      `Archetype templates: ${created} created, ${updated} updated, ${skipped} left to their designer.`,
+    );
+  }
 }
 
 main()

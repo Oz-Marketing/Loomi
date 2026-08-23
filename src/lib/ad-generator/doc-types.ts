@@ -456,7 +456,21 @@ export interface TemplateDoc {
    * produced is an ordinary edit, and a doc whose layout has been reworked by hand
    * keeps this record — it says where the design started, not what it must remain.
    */
-  archetype?: { id: string; offers: number; theme: Theme };
+  archetype?: {
+    id: string;
+    offers: number;
+    theme: Theme;
+    /**
+     * The design hash this doc was SEEDED with, when it came from
+     * `scripts/seed-archetype-templates.ts`.
+     *
+     * How that script tells "nobody has touched this row" from "a designer has
+     * been working on it": a stamp that still matches the row's own design means
+     * the archetype fix is safe to write, and one that doesn't means the template
+     * belongs to whoever edited it. Absent on anything a person created.
+     */
+    seedHash?: string;
+  };
   /** Industries this template is offered to (account `category` values, e.g.
    *  'Automotive', 'Powersports'). Empty/undefined → derived from content
    *  (vehicle templates default to Automotive + Powersports). Drives which

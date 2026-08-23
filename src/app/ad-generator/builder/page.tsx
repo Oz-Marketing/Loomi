@@ -5299,11 +5299,15 @@ export default function AdBuilderPage() {
                             Or start from a layout
                           </p>
                           <div className="flex flex-col gap-2.5">
-                            {archetypeStartGroups().map(({ group, items }) => (
+                            {archetypeStartGroups().map(({ group, items }, _i, groups) => (
                               <div key={group}>
-                                <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
-                                  {group}
-                                </p>
+                                {/* One group needs no heading — "Compositions" under
+                                    "start from a layout" is the same word twice. */}
+                                {groups.length > 1 && (
+                                  <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
+                                    {group}
+                                  </p>
+                                )}
                                 <div className="flex flex-col gap-1.5">
                                   {items.map((st) => (
                                     <button

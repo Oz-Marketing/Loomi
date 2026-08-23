@@ -1,7 +1,5 @@
 import type { AdData, AdSize } from '../types';
 import type { TemplateDoc } from '../doc-types';
-import { YOUNG_SUBARU_SIZES } from '../templates/young-subaru-offers';
-import { SUBARU_DEFAULTS, SUBARU_DUAL_DEFAULTS, YOUNG_SUBARU_THEME } from './young-subaru-archetype';
 import { vehicleOfferArchetype, type OfferCount } from './vehicle-offer-archetype';
 import { buildArchetypeDoc, type Theme } from './types';
 
@@ -17,6 +15,23 @@ import { buildArchetypeDoc, type Theme } from './types';
  * CODE-OWNED, like the archetypes themselves and for the same reason — see
  * docs/ad-generator-archetypes.md §7.2. What a designer owns is everything they
  * do to the doc after it lands: restyle, reposition, add layers, override a board.
+ *
+ * ── NO STORE PRESETS HERE ──
+ *
+ * This list is offered to EVERY account, so a rooftop's own palette does not
+ * belong in it. It briefly carried two Young Subaru entries — the prototype that
+ * proved an archetype could reproduce a hand-built template — and the result was a
+ * Ford dealer being shown "Young Subaru" as a way to start an ad.
+ *
+ * They were also redundant: the compositions below use `brand: 'brand'`, so they
+ * already paint themselves from whichever account the ad is for. What a store
+ * preset added beyond that was a hard-coded palette (which belongs in the
+ * account's branding), a channel size list (which belongs in the ad size library)
+ * and sample content (which a designer edits on the template).
+ *
+ * `youngSubaruSingleOffer()` / `youngSubaruDualOffer()` still exist as the
+ * archetype's proof, asserted in `archetypes.test.ts`. They are just not a menu
+ * item.
  */
 
 /**
@@ -58,12 +73,6 @@ export interface ArchetypeStart {
    * leaves the archetype's placeholders in place.
    */
   defaults?: AdData;
-  /**
-   * The rooftop this preset belongs to, when it is one. Seeded to that account
-   * only; the generic compositions have no account and are offered to everyone
-   * the industry filter allows.
-   */
-  accountKey?: string;
 }
 
 export const ARCHETYPE_STARTS: ArchetypeStart[] = [
@@ -84,29 +93,6 @@ export const ARCHETYPE_STARTS: ArchetypeStart[] = [
     offers: 2,
     theme: BRAND_THEME,
     sizes: DEFAULT_SIZES,
-  },
-  {
-    id: 'young-subaru-single',
-    name: 'Young Subaru — One Offer',
-    hint: 'The Subaru palette across the five channels Young runs: Facebook, email, Google and both KSL formats.',
-    group: 'Young Automotive',
-    offers: 1,
-    theme: YOUNG_SUBARU_THEME,
-    sizes: YOUNG_SUBARU_SIZES,
-    defaults: SUBARU_DEFAULTS,
-    accountKey: 'youngSubaru',
-  },
-  {
-    id: 'young-subaru-dual',
-    name: 'Young Subaru — Two Offers',
-    hint: 'Two Subaru offers, same five channels.',
-    group: 'Young Automotive',
-    // The dual's fade runs as a top band rather than a diagonal — a theme choice.
-    offers: 2,
-    theme: { ...YOUNG_SUBARU_THEME, fade: { angle: 180, end: 45 } },
-    sizes: YOUNG_SUBARU_SIZES,
-    defaults: { ...SUBARU_DEFAULTS, ...SUBARU_DUAL_DEFAULTS },
-    accountKey: 'youngSubaru',
   },
 ];
 

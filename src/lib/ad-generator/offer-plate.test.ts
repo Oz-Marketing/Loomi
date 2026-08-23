@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { renderDoc } from './doc-renderer';
 import { enrichOfferFields, OFFER_TYPES } from './offer-text';
-import { boundFieldKeys, offerFieldPrefix, OFFER_PLATE_DEFAULTS } from './doc-types';
+import { bindsOfferToken, boundFieldKeys, offerFieldPrefix, OFFER_PLATE_DEFAULTS } from './doc-types';
 import { vehicleOffer } from './templates/vehicle-offer';
 import type { TemplateDoc } from './doc-types';
 import type { AdData, AdSize } from './types';
@@ -186,5 +186,49 @@ describe('a plate with no number behaves like every other element', () => {
     const html = renderDoc(bare, enrichOfferFields({}), SIZE, { preview: true });
     expect(html).toContain('data-el-id="offer"');
     expect(html).toContain('$X,XXX/mo'); // the engine's own placeholder figure
+  });
+});
+
+describe('a layer that renders the offer must never be gated by offer type', () => {
+  /**
+   * `bindsOfferToken` is what withholds Show For in the builder. The offer engine
+   * already resolves the label, figure and terms per type, so gating such a layer
+   * to `lease` does not make a lease-specific layer — it blanks the ad for the
+   * other three. That mechanism is what per-type plate copies were built out of.
+   */
+  it('is true for a plate', () => {
+    expect(bindsOfferToken({ type: 'offer' })).toBe(true);
+  });
+
+  it('is true for any computed offer token, first offer or second', () => {
+    for (const key of ['_offerMain', '_offerLabel', '_offerTerms', '_offerCurrency']) {
+      expect(bindsOfferToken({ type: 'text', binding: { kind: 'field', key } }), key).toBe(true);
+    }
+    expect(bindsOfferToken({ type: 'text', binding: { kind: 'field', key: '_o2_offerMain' } })).toBe(true);
+  });
+
+  it('is true for typed text that interpolates one', () => {
+    expect(
+      bindsOfferToken({ type: 'text', binding: { kind: 'static', value: '{{_offerMain}} for 36 months' } }),
+    ).toBe(true);
+  });
+
+  it('is FALSE for a per-type disclosure, which is what Show For is now for', () => {
+    // The cost per $1,000 belongs on an APR ad and nowhere else, and no plate
+    // renders it — so this layer keeps its gate.
+    expect(bindsOfferToken({ type: 'text', binding: { kind: 'field', key: 'costPerThousand' } })).toBe(false);
+    expect(bindsOfferToken({ type: 'text', binding: { kind: 'field', key: 'discountSource' } })).toBe(false);
+  });
+
+  it('is false for a raw offer figure bound directly', () => {
+    // A hand-built per-type plate binds `monthlyPayment` itself. The engine is NOT
+    // handling the per-type difference for it, so the gate is load-bearing until
+    // the design is migrated — `show-for-survey.ts` is what reports those.
+    expect(bindsOfferToken({ type: 'text', binding: { kind: 'field', key: 'monthlyPayment' } })).toBe(false);
+  });
+
+  it('is false for an unbound layer and for plain typed text', () => {
+    expect(bindsOfferToken({ type: 'shape' })).toBe(false);
+    expect(bindsOfferToken({ type: 'text', binding: { kind: 'static', value: 'Adventure Starts Here' } })).toBe(false);
   });
 });

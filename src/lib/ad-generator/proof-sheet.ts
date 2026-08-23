@@ -92,6 +92,21 @@ export interface ProofTemplateFault {
   source: 'coop' | 'audit';
 }
 
+/**
+ * One line of "what you need to know to read this sheet honestly".
+ *
+ * Typed rather than plain prose because a reader should not have to parse a
+ * paragraph to find out which of these stops an ad shipping. `blocking` is a fact
+ * about export; `caution` is a limit on what was checked; `context` explains
+ * something that LOOKS wrong and is not.
+ */
+export interface ProofNote {
+  tone: 'blocking' | 'caution' | 'context';
+  /** A short label for the badge — two or three words. */
+  label: string;
+  text: string;
+}
+
 export interface ProofSheet {
   rows: ProofRow[];
   sizes: AdSize[];
@@ -104,9 +119,10 @@ export interface ProofSheet {
   /**
    * What the reader should know to read the sheet honestly: that no co-op pack
    * exists for the make, that a pack is unverified, that the design's own photo
-   * and logo come from the account. Prose, in reading order.
+   * and logo come from the account. Ordered by severity, so what blocks an export
+   * is read first.
    */
-  notes: string[];
+  notes: ProofNote[];
 }
 
 export interface ProofSheetInput {
@@ -283,26 +299,32 @@ function proofNotes(args: {
   coopDesign?: CoopDesignVerdict | null;
   rows: ProofRow[];
   templateFaults: ProofTemplateFault[];
-}): string[] {
+}): ProofNote[] {
   const { doc, coopPack, coopDesign, rows, templateFaults } = args;
-  const notes: string[] = [];
+  const notes: ProofNote[] = [];
   const make = (doc.make ?? '').trim();
 
   if (!coopPack) {
-    notes.push(
-      make
+    notes.push({
+      tone: 'caution',
+      label: 'Not checked',
+      text: make
         ? `No ${make} co-op rule pack is on file, so no manufacturer advertising rules were checked. A clean sheet here is not a compliance sign-off.`
         : 'This template names no make, so no manufacturer advertising rules were checked.',
-    );
+    });
   } else if (!coopPack.verified) {
-    notes.push(
-      `The ${make || coopPack.make} co-op pack is unverified — its rules report as warnings rather than blocking, so an error you would expect may appear as a warning below.`,
-    );
+    notes.push({
+      tone: 'caution',
+      label: 'Unverified pack',
+      text: `The ${make || coopPack.make} co-op pack is unverified — its rules report as warnings rather than blocking, so an error you would expect may appear as a warning below.`,
+    });
   }
   if (coopDesign?.stale) {
-    notes.push(
-      'The design-time co-op verdict predates the current design or rule pack, so its findings are replayed as warnings. Re-run the template check for a definite answer.',
-    );
+    notes.push({
+      tone: 'caution',
+      label: 'Out of date',
+      text: 'The design-time co-op verdict predates the current design or rule pack, so its findings are replayed as warnings. Re-run the template check for a definite answer.',
+    });
   }
 
   // The two things that are always the account's rather than the template's, and
@@ -311,9 +333,13 @@ function proofNotes(args: {
   if (!doc.defaults?.vehicleImageUrl) missing.push('vehicle photo');
   if (!doc.defaults?.logoUrl) missing.push('dealer logo');
   if (missing.length) {
-    notes.push(
-      `${missing.join(' and ')} come from the account, not the template — ${missing.length > 1 ? 'they are' : 'it is'} blank here unless a sample was supplied.`,
-    );
+    // Capitalised: it is a sentence, and it read as a fragment before.
+    const what = missing.join(' and ');
+    notes.push({
+      tone: 'context',
+      label: 'Blank on purpose',
+      text: `${what[0].toUpperCase()}${what.slice(1)} come from the account, not the template — ${missing.length > 1 ? 'they are' : 'it is'} blank here unless a sample was supplied.`,
+    });
   }
 
   if (templateFaults.length) {
@@ -326,18 +352,26 @@ function proofNotes(args: {
       : oem === 0
         ? 'design checks'
         : `checks (${oem} of them a manufacturer's)`;
-    notes.push(
-      `${templateFaults.length} ${where} the DESIGN fails${errs ? `, ${errs} of them blocking` : ''}. Listed once below — they apply to every ad off this template, so they are the designer's to fix, not the data's.`,
-    );
+    notes.push({
+      tone: errs ? 'blocking' : 'caution',
+      label: 'Design faults',
+      text: `${templateFaults.length} ${where} the DESIGN fails${errs ? `, ${errs} of them blocking` : ''}. Listed once below — they apply to every ad off this template, so they are the designer's to fix, not the data's.`,
+    });
   }
 
   const failing = rows.filter((r) => !r.ok).map((r) => r.label);
   if (failing.length) {
-    notes.push(
-      `Blocked for ${failing.join(', ')}. An ad of ${failing.length > 1 ? 'those types' : 'that type'} cannot be exported off this template until the errors below are cleared.`,
-    );
+    notes.push({
+      tone: 'blocking',
+      label: 'Cannot export',
+      text: `Blocked for ${failing.join(', ')}. An ad of ${failing.length > 1 ? 'those types' : 'that type'} cannot be exported off this template until the errors below are cleared.`,
+    });
   }
-  return notes;
+
+  // Severity order, not the order the checks happen to run in: what stops an ad
+  // shipping is the first thing a reader needs.
+  const rank = { blocking: 0, caution: 1, context: 2 } as const;
+  return notes.sort((a, b) => rank[a.tone] - rank[b.tone]);
 }
 
 /**

@@ -26,16 +26,26 @@ import {
   ArrowLeftIcon,
   ArrowPathIcon,
   CheckCircleIcon,
+  ChevronRightIcon,
   ExclamationTriangleIcon,
+  InformationCircleIcon,
+  NoSymbolIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { HelpTip } from '@/components/ui/help-tip';
+import { Collapse } from '@/components/ui/collapse';
 import { brandLogoData } from '@/lib/ad-generator/brand-logos';
 import { offerTypePill, offerTypeShort } from '@/lib/ad-generator/offer-type-style';
-import type { ProofBoard, ProofRow, ProofSheet } from '@/lib/ad-generator/proof-sheet';
+import type {
+  ProofBoard,
+  ProofNote,
+  ProofRow,
+  ProofSheet,
+  ProofTemplateFault,
+} from '@/lib/ad-generator/proof-sheet';
 import type { PreflightIssue } from '@/lib/ad-generator/preflight';
-import type { AdData } from '@/lib/ad-generator/types';
+import type { AdData, AdSize } from '@/lib/ad-generator/types';
 
 interface Sheet extends ProofSheet {
   templateName: string;
@@ -79,6 +89,162 @@ function Severity({ issues }: { issues: PreflightIssue[] }) {
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * How each note tone is drawn.
+ *
+ * The notes used to be a stack of identical grey sentences, which meant the one
+ * that says "this cannot be exported" read exactly like the one that says "the
+ * photo is blank on purpose". Tone, icon and a two-word badge give the reader the
+ * severity before they read the sentence — and the list is already sorted so the
+ * blocking ones come first.
+ */
+const NOTE_TONE = {
+  blocking: {
+    Icon: NoSymbolIcon,
+    ring: 'border-red-500/30 bg-red-500/[0.07]',
+    accent: 'text-red-400',
+    badge: 'border-red-500/40 bg-red-500/10 text-red-400',
+  },
+  caution: {
+    Icon: ExclamationTriangleIcon,
+    ring: 'border-amber-500/30 bg-amber-500/[0.06]',
+    accent: 'text-amber-400',
+    badge: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
+  },
+  context: {
+    Icon: InformationCircleIcon,
+    ring: 'border-[var(--border)] bg-[var(--muted)]/30',
+    accent: 'text-[var(--muted-foreground)]',
+    badge: 'border-[var(--border)] text-[var(--muted-foreground)]',
+  },
+} as const;
+
+/**
+ * One design fault: what is wrong, which of the twenty ads it is about, and where
+ * the claim comes from.
+ */
+function Fault({ fault, sizes }: { fault: ProofTemplateFault; sizes: AdSize[] }) {
+  return (
+    <li className="text-[12px] leading-snug">
+      <span className={fault.severity === 'error' ? 'text-red-400' : 'text-amber-400'}>
+        {fault.description}
+      </span>
+      {/* Boards, then offer types: which of the ads on this sheet it is about. */}
+      <span className="ml-1.5 inline-flex flex-wrap items-center gap-1">
+        {fault.sizes.map((id) => (
+          <span
+            key={id}
+            className="rounded-full border border-[var(--border)] px-1.5 py-px font-mono text-[9px] leading-tight text-[var(--muted-foreground)]"
+          >
+            {sizes.find((s) => s.id === id)?.label.replace(/\s*\(.*\)$/, '') ?? id}
+          </span>
+        ))}
+        {fault.offerTypes.map((t) => (
+          <span
+            key={t}
+            className="rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
+            style={offerTypePill(t)}
+          >
+            {offerTypeShort(t)}
+          </span>
+        ))}
+      </span>
+      {/* Where the claim comes from. A manufacturer's rule cites its own document;
+          the house audit says so instead of borrowing that authority. */}
+      {fault.citation ? (
+        <span className="ml-1 text-[var(--muted-foreground)]">({fault.citation})</span>
+      ) : (
+        fault.source === 'audit' && (
+          <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]/70">
+            design check
+          </span>
+        )
+      )}
+      {fault.fix && (
+        <span className="mt-0.5 block text-[11px] text-[var(--muted-foreground)]">{fault.fix}</span>
+      )}
+    </li>
+  );
+}
+
+/**
+ * A group of faults behind a disclosure.
+ *
+ * Blocking and non-blocking are separate groups because they call for different
+ * things: one is "this cannot ship", the other is "look at this when you can".
+ * Thirteen findings in one undifferentiated list made the reader do that sorting
+ * themselves — and blocking opens by default for the same reason.
+ */
+function FaultGroup({
+  title,
+  hint,
+  faults,
+  sizes,
+  tone,
+  defaultOpen,
+}: {
+  title: string;
+  hint: string;
+  faults: ProofTemplateFault[];
+  sizes: AdSize[];
+  tone: 'blocking' | 'warning';
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  if (!faults.length) return null;
+  const style =
+    tone === 'blocking'
+      ? { ring: 'border-red-500/30 bg-red-500/[0.07]', accent: 'text-red-400', Icon: XCircleIcon }
+      : { ring: 'border-amber-500/30 bg-amber-500/[0.06]', accent: 'text-amber-400', Icon: ExclamationTriangleIcon };
+  return (
+    <section className={`rounded-lg border ${style.ring}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left"
+      >
+        <ChevronRightIcon
+          className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+        <style.Icon className={`h-4 w-4 shrink-0 ${style.accent}`} />
+        <span className="text-sm font-semibold text-[var(--foreground)]">
+          {faults.length} {title}
+        </span>
+        <span className="ml-auto hidden text-[11px] text-[var(--muted-foreground)] sm:inline">{hint}</span>
+      </button>
+      <Collapse open={open}>
+        <ul className="space-y-2.5 px-4 pb-3.5 pl-[2.3rem]">
+          {faults.map((f) => (
+            <Fault key={`${f.source}-${f.ruleId}-${f.description}`} fault={f} sizes={sizes} />
+          ))}
+        </ul>
+      </Collapse>
+    </section>
+  );
+}
+
+function Note({ note }: { note: ProofNote }) {
+  const tone = NOTE_TONE[note.tone];
+  return (
+    <li className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 ${tone.ring}`}>
+      <tone.Icon className={`mt-px h-4 w-4 shrink-0 ${tone.accent}`} />
+      <div className="min-w-0">
+        <span
+          className={`mb-0.5 mr-2 inline-block rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide ${tone.badge}`}
+        >
+          {note.label}
+        </span>
+        <span
+          className={`text-[12.5px] leading-relaxed ${note.tone === 'context' ? 'text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}`}
+        >
+          {note.text}
+        </span>
+      </div>
+    </li>
   );
 }
 
@@ -301,21 +467,33 @@ export default function ProofSheetPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {sheet && (
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium ${
-                sheet.ok
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
-                  : 'border-red-500/40 bg-red-500/10 text-red-400'
-              }`}
-            >
-              {sheet.ok ? (
-                <CheckCircleIcon className="h-4 w-4" />
-              ) : (
-                <XCircleIcon className="h-4 w-4" />
-              )}
-              {sheet.ok ? 'Every type clears' : `${sheet.errorCount} blocking`}
-              {sheet.warningCount > 0 && ` · ${sheet.warningCount} warning${sheet.warningCount === 1 ? '' : 's'}`}
+          {/* Blocking and warnings are separate chips, in their own colours: one
+              red badge reading "7 blocking · 17 warnings" made 17 things that
+              block nothing look like part of the emergency. */}
+          {sheet && sheet.ok && sheet.warningCount === 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-400">
+              <CheckCircleIcon className="h-4 w-4" />
+              Every type clears
+            </span>
+          )}
+          {sheet && sheet.errorCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-400">
+              <XCircleIcon className="h-4 w-4" />
+              {sheet.errorCount} blocking
+            </span>
+          )}
+          {sheet && sheet.warningCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-sm font-medium text-amber-400">
+              <ExclamationTriangleIcon className="h-4 w-4" />
+              {sheet.warningCount} warning{sheet.warningCount === 1 ? '' : 's'}
+            </span>
+          )}
+          {/* Clean of errors but carrying warnings: say the ads can ship, since
+              that is the question the sheet exists to answer. */}
+          {sheet && sheet.ok && sheet.warningCount > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-emerald-400">
+              <CheckCircleIcon className="h-3.5 w-3.5" />
+              Nothing blocked
             </span>
           )}
           <button
@@ -330,75 +508,43 @@ export default function ProofSheetPage() {
         </div>
       </div>
 
-      {/* What the reader needs in order not to over-trust a clean sheet. */}
+      {/* What the reader needs in order not to over-trust a clean sheet. Sorted
+          blocking → caution → context by `buildProofSheet`. */}
       {sheet && sheet.notes.length > 0 && (
-        <ul className="mb-6 space-y-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
+        <ul className="mb-6 space-y-2">
           {sheet.notes.map((n) => (
-            <li key={n} className="text-[12.5px] leading-relaxed text-[var(--muted-foreground)]">
-              {n}
-            </li>
+            <Note key={`${n.tone}-${n.label}`} note={n} />
           ))}
         </ul>
       )}
 
       {/* Faults in the DESIGN — stated once, because every ad off this template
-          reports them identically and the fix is in the design. */}
+          reports them identically and the fix is in the design. Split by whether
+          they stop an export, and collapsible: thirteen findings in one list made
+          the reader do that sorting themselves. */}
       {sheet && sheet.templateFaults.length > 0 && (
-        <section className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
-          <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
-            <ExclamationTriangleIcon className="h-4 w-4 text-amber-400" />
-            The design fails {sheet.templateFaults.length} check
-            {sheet.templateFaults.length === 1 ? '' : 's'}
-          </h2>
-          <p className="mb-3 text-[12px] text-[var(--muted-foreground)]">
+        <div className="mb-6 space-y-2">
+          <p className="text-[12px] text-[var(--muted-foreground)]">
             These are properties of the template, not of any one ad — fixing the design clears
             them for every ad it makes.
           </p>
-          <ul className="space-y-2.5">
-            {sheet.templateFaults.map((f) => (
-              <li key={`${f.source}-${f.ruleId}-${f.description}`} className="text-[12px] leading-snug">
-                <span className={f.severity === 'error' ? 'text-red-400' : 'text-amber-400'}>
-                  {f.description}
-                </span>
-                {/* Boards, then offer types: which of the twenty ads this is about. */}
-                <span className="ml-1.5 inline-flex flex-wrap items-center gap-1">
-                  {f.sizes.map((id) => (
-                    <span
-                      key={id}
-                      className="rounded-full border border-[var(--border)] px-1.5 py-px font-mono text-[9px] leading-tight text-[var(--muted-foreground)]"
-                    >
-                      {sheet.sizes.find((s) => s.id === id)?.label.replace(/\s*\(.*\)$/, '') ?? id}
-                    </span>
-                  ))}
-                  {f.offerTypes.map((t) => (
-                    <span
-                      key={t}
-                      className="rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
-                      style={offerTypePill(t)}
-                    >
-                      {offerTypeShort(t)}
-                    </span>
-                  ))}
-                </span>
-                {/* Where the fault comes from. A manufacturer's rule cites its own
-                    document; the house audit says so instead of borrowing that
-                    authority. */}
-                {f.citation ? (
-                  <span className="ml-1 text-[var(--muted-foreground)]">({f.citation})</span>
-                ) : (
-                  f.source === 'audit' && (
-                    <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]/70">
-                      design check
-                    </span>
-                  )
-                )}
-                {f.fix && (
-                  <span className="mt-0.5 block text-[11px] text-[var(--muted-foreground)]">{f.fix}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
+          <FaultGroup
+            title="blocking design faults"
+            hint="No ad can ship until these are cleared"
+            faults={sheet.templateFaults.filter((f) => f.severity === 'error')}
+            sizes={sheet.sizes}
+            tone="blocking"
+            defaultOpen
+          />
+          <FaultGroup
+            title="design warnings"
+            hint="Worth fixing; nothing is blocked"
+            faults={sheet.templateFaults.filter((f) => f.severity !== 'error')}
+            sizes={sheet.sizes}
+            tone="warning"
+            defaultOpen={false}
+          />
+        </div>
       )}
 
       {error && (

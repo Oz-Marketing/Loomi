@@ -2721,6 +2721,16 @@ model MetaAdsPacerPlan {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  // When the daily alert pre-sync last pulled this account from Meta.
+  //
+  // The pre-sync is network-bound and sequential, and the whole scan answers
+  // one HTTP request behind a 60s gateway — so it works to a wall-clock budget
+  // and refreshes the STALEST accounts first, stamping this as it goes. Nulls
+  // sort first, so an account that has never been pre-synced is picked up
+  // before one that was done yesterday. That's what stops a fixed slice
+  // starving the tail of the list forever.
+  alertPreSyncAt DateTime?
+
   ads                   MetaAdsPacerAd[]
   periodBudgets         MetaAdsPacerPeriodBudget[]
   monthSnapshots        MetaAdsPacerMonthSnapshot[]
@@ -4260,6 +4270,10 @@ model Playbook {
   publishedAt DateTime?
 
   createdByUserId String?
+  /// Who last saved it. A playbook is platform configuration that reaches every
+  /// rooftop following it, so "who changed this, and when" has to survive the
+  /// change itself — `createdByUserId` alone answers neither.
+  updatedByUserId String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -4267,6 +4281,83 @@ model Playbook {
 
   @@index([scope, scopeValue])
   @@index([publishedAt])
+}
+
+// A check deliberately marked "not a question here".
+//
+// The audit infers which playbooks apply from observable account facts (see
+// docs/playbooks.md §4.3), so it is wrong in both directions: a rooftop that
+// deliberately doesn't run a channel still shows as missing it, and
+// `budget.managed` is red almost everywhere on purpose. An audit nobody trusts
+// is an audit nobody reads, and the fix people reach for — ignoring the reds —
+// is the failure mode.
+//
+// So a waiver records the judgement instead of losing it. A waived check scores
+// as `na`: excluded from coverage entirely, the same as a playbook that doesn't
+// apply, because that is exactly what the person is asserting.
+//
+// `reason` is NOT NULL by design. A waiver with no reason is how a real red gets
+// buried, and the next person to read the row has no way to tell a considered
+// exemption from a shrug.
+//
+// This is deliberately NOT PlaybookApplication (§5 Phase 1). It records one
+// account-and-check exemption, needs none of Phase 1's three open decisions, and
+// is the kind of fact an explicit application would later absorb rather than
+// contradict.
+model PlaybookCheckWaiver {
+  id         String @id @default(cuid())
+  accountKey String
+  /// Check id from the registry, e.g. `budget.managed`. Not a foreign key —
+  /// checks are code constants, and a renamed check should leave a dangling
+  /// waiver that reads as expired rather than blocking a deploy.
+  checkId    String
+
+  reason         String  @db.Text
+  waivedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountKey, checkId])
+  @@index([accountKey])
+}
+
+// One execution of the nightly coverage sweep.
+//
+// A row is written on EVERY run including a clean one, exactly like `IngestRun`
+// and `AdAutomationRun`. Without heartbeat rows, "nothing drifted this week" and
+// "the sweep has been dead for three weeks" render identically — and the second
+// one is the state that actually costs money.
+//
+// `kind` is `sweep` today. Phase 1's apply/sync runs land here too (§5), which
+// is why it is a column rather than implied by the table.
+model PlaybookRun {
+  id   String @id @default(cuid())
+  kind String @default("sweep")
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  accountsAudited Int @default(0)
+  checksRun       Int @default(0)
+  passCount       Int @default(0)
+  warnCount       Int @default(0)
+  failCount       Int @default(0)
+  /// Failing checks whose severity is `blocking` — the triage number, tracked
+  /// over time so a trend is visible without recomputing history.
+  blockingFails   Int @default(0)
+  /// Mean coverage across scored accounts, 0-100. Null when nothing scored.
+  coveragePct     Int?
+
+  /// JSON string[] of `accountKey:checkId` for every blocking failure this run.
+  /// The next run diffs against it so an alert fires on what is NEW rather than
+  /// re-reporting a backlog every morning until someone mutes it.
+  blockingKeys String? @db.Text
+
+  error String? @db.Text
+
+  @@index([kind, startedAt])
+  @@index([startedAt])
 }
 
 // One OEM offer as last seen by the poll, keyed by a fingerprint of its

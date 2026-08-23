@@ -61,6 +61,7 @@ function ctx(overrides: Partial<AccountAuditContext> = {}): AccountAuditContext 
       { name: 'VLA', isActive: true, lastSyncedAt: daysAgo(1), lastSyncStatus: 'ok', vehicleCount: 320 },
     ],
     coop: [{ templateId: 'tpl_1', templateName: 'Offer Headline', state: 'approved' }],
+    waivers: {},
     lastAutomationRunAt: daysAgo(1),
     lastIngestRunAt: daysAgo(2),
     now: NOW,
@@ -374,5 +375,126 @@ describe('the payload', () => {
     expect(row.failingAccounts).toEqual([
       { accountKey: 'broken', dealer: 'Broken Motors', detail: expect.any(String) },
     ]);
+  });
+});
+
+/**
+ * Waivers — "this check is not a question for this rooftop".
+ *
+ * Phase 0 INFERS applicability, so the audit is wrong in both directions and a
+ * red nobody can act on is a red everyone learns to skip. A waiver records the
+ * judgement instead of losing it.
+ *
+ * The two ways this feature could quietly go wrong are both pinned below: a
+ * waiver that hides the observed state (then nobody can review what was
+ * accepted), and a waiver on a PASS (which would shrink the denominator and
+ * inflate coverage — a way to make a number look good rather than a way to
+ * record a decision).
+ */
+describe('waivers', () => {
+  const waiver = (checkId: string, reason = 'this rooftop does not run Google') => ({
+    [checkId]: {
+      checkId,
+      reason,
+      waivedByUserId: 'user_9',
+      waivedByName: 'Dana',
+      at: daysAgo(3),
+    },
+  });
+
+  /** Find one check's result wherever it sits in the account's playbooks. */
+  const find = (coverage: ReturnType<typeof auditAccount>, id: string) =>
+    coverage.playbooks.flatMap((p) => p.checks).find((c) => c.id === id);
+
+  it('turns a failing check into an unscored one', () => {
+    const broken = ctx({ google: { customerId: null, conversionAction: null } });
+    const before = find(auditAccount(broken), 'google.conversion_action');
+    expect(before?.status).toBe('fail');
+
+    const after = find(
+      auditAccount(ctx({ ...broken, waivers: waiver('google.conversion_action') })),
+      'google.conversion_action',
+    );
+    expect(after?.status).toBe('na');
+    expect(after?.waived?.reason).toBe('this rooftop does not run Google');
+  });
+
+  it('keeps the OBSERVED detail, so what was accepted stays reviewable', () => {
+    const broken = ctx({ automation: { ...ctx().automation, notifyUserCount: 0 } });
+    const raw = find(auditAccount(broken), 'adgen.notify');
+    const waived = find(
+      auditAccount(ctx({ ...broken, waivers: waiver('adgen.notify', 'alerts go to the group inbox') })),
+      'adgen.notify',
+    );
+    // Same sentence about the account, different score.
+    expect(waived?.detail).toBe(raw?.detail);
+    expect(waived?.status).toBe('na');
+  });
+
+  it('lifts coverage by removing the question, not by answering it', () => {
+    const broken = ctx({ google: { customerId: '123', conversionAction: null } });
+    const plain = auditAccount(broken);
+    const waived = auditAccount(ctx({ ...broken, waivers: waiver('google.conversion_action') }));
+
+    expect(waived.counts.fail).toBe(plain.counts.fail - 1);
+    expect(waived.counts.na).toBe(plain.counts.na + 1);
+    // The pass count is untouched — a waiver is not a pass.
+    expect(waived.counts.pass).toBe(plain.counts.pass);
+    expect(waived.coveragePct!).toBeGreaterThan(plain.coveragePct!);
+  });
+
+  it('does NOT waive a check that is already passing', () => {
+    // Otherwise a stale waiver silently shrinks the denominator and reads as
+    // credit for something that is simply working.
+    const healthy = ctx({ waivers: waiver('google.conversion_action') });
+    const result = auditAccount(healthy);
+    const check = find(result, 'google.conversion_action');
+    expect(check?.status).toBe('pass');
+    expect(check?.waived).toBeUndefined();
+    expect(result.coveragePct).toBe(auditAccount(ctx()).coveragePct);
+  });
+
+  it('does not mark an inapplicable check as waived', () => {
+    // The playbook already doesn't apply; a waiver adds nothing and claiming it
+    // did would misreport why the row is grey.
+    const noGoogle = ctx({
+      google: { customerId: null, conversionAction: null },
+      pacer: { ...ctx().pacer, googleBudgetGoal: 0 },
+      waivers: waiver('google.conversion_action'),
+    });
+    const check = find(auditAccount(noGoogle), 'google.conversion_action');
+    expect(check?.status).toBe('na');
+    expect(check?.waived).toBeUndefined();
+    expect(check?.detail).toBe('playbook does not apply');
+  });
+
+  it('drops a waived blocking failure out of the triage number', () => {
+    const broken = ctx({ meta: { ...ctx().meta, pageId: null, assetsConfirmedAt: null } });
+    expect(auditAccount(broken).blockingFails).toBeGreaterThan(0);
+    const waived = auditAccount(
+      ctx({ ...broken, waivers: waiver('meta.page_confirmed', 'publishes from the group Page') }),
+    );
+    expect(waived.blockingFails).toBe(auditAccount(broken).blockingFails - 1);
+  });
+
+  it('ignores a waiver naming a check that no longer exists', () => {
+    // Checks are code constants, so a renamed one leaves dangling waivers. They
+    // should read as spent, never break the audit.
+    const result = auditAccount(
+      ctx({ waivers: waiver('meta.retired_check_that_never_existed') }),
+    );
+    expect(result.coveragePct).toBe(auditAccount(ctx()).coveragePct);
+  });
+
+  it('keeps a waived check out of the by-check failing list', () => {
+    const broken = ctx({ google: { customerId: '123', conversionAction: null } });
+    const waived = buildAuditPayload(
+      [ctx({ ...broken, waivers: waiver('google.conversion_action') })],
+      { period: '2026-08', generatedAt: NOW },
+    );
+    const row = waived.byCheck.find((r) => r.id === 'google.conversion_action');
+    expect(row?.fail).toBe(0);
+    expect(row?.na).toBe(1);
+    expect(row?.failingAccounts).toEqual([]);
   });
 });

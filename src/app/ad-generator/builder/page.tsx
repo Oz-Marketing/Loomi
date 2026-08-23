@@ -170,7 +170,13 @@ const HISTORY_LIMIT = 60;
 const COALESCE_MS = 450; // window in which same-key edits (typing, a slider drag) merge
 // Remembered across sessions: a designer who works one board at a time (or always
 // pushes globally) shouldn't re-pick on every open.
-const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope';
+/**
+ * `v2` because the DEFAULT changed, and a remembered `size` from before that
+ * would keep the old behaviour for exactly the people who complained about it.
+ * Bumping the key forgets the stored preference once; the control is still there
+ * to set it again.
+ */
+const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope.v2';
 /**
  * What the Arrange buttons align/distribute AGAINST.
  *
@@ -1069,13 +1075,27 @@ export default function AdBuilderPage() {
   /**
    * Whether an edit lands on this board or on all of them.
    *
-   * Defaults to THIS SIZE, and is remembered per browser: editing one artboard
-   * must never silently rewrite the other fourteen, and per-aspect-ratio placement
-   * is hand-tuned work to lose. Flip it deliberately to push a change everywhere.
+   * DEFAULTS TO ALL SIZES, which reverses the original default, and the reason is
+   * worth writing down. It used to default to this-size-only on the grounds that
+   * editing one artboard must never silently rewrite the other fourteen. That was
+   * the right call while broadcasting was unreliable — position travelled as a
+   * coordinate rather than a displacement, z-order and hidden state didn't travel
+   * at all, and a group member nudged on the square jumped on the story board.
+   *
+   * Those are fixed (`size-scope.ts`: `placeExtent`, `applyStackOrder`,
+   * `scaleDelta`), and broadcasting is now the tested path. Meanwhile the
+   * this-size default was producing the complaint it was meant to prevent: a
+   * designer moves a box, the other boards don't follow, and the template drifts
+   * apart board by board. "When I'm placing blocks onto one ad size, it should
+   * ALWAYS stay consistent across all" is the actual requirement.
+   *
+   * The control stays, because per-board work is legitimate — see the deliberate
+   * exceptions in docs/ad-generator-archetypes.md §5. It is now a deliberate act
+   * rather than the resting state.
    */
   // Show every offer block at once (off-type ghosted) vs only the previewed type.
   const [showAllOfferTypes, setShowAllOfferTypes] = useState(false);
-  const [editScope, setEditScope] = useState<EditScope>('size');
+  const [editScope, setEditScope] = useState<EditScope>('all');
   useEffect(() => {
     const stored = window.localStorage.getItem(EDIT_SCOPE_KEY);
     if (stored === 'all' || stored === 'size') setEditScope(stored);
@@ -4846,7 +4866,11 @@ export default function AdBuilderPage() {
                   <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Edits apply to</span>
                   <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
                     {([
-                      ['size', 'This size', 'Changes affect only the board you are looking at.'],
+                      [
+                        'size',
+                        'This size',
+                        'Changes affect only the board you are looking at — the other boards keep what they have. Use it for a deliberate per-board exception; it is how a template drifts apart if left on.',
+                      ],
                       [
                         'all',
                         'All sizes',

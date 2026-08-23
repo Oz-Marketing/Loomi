@@ -1,5 +1,6 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
+import { offerFieldPrefix, OFFER_PLATE_DEFAULTS } from './doc-types';
 import { logoVariantDataKey } from './brand-logos';
 import { effectiveElements } from './size-scope';
 import { cssSafeFamily } from './fonts';
@@ -428,6 +429,78 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
         : '';
     const inner = `width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}`;
     return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${mediaTag(url, el, inner)}</div>`;
+  }
+
+  if (el.type === 'offer') {
+    // ── THE OFFER PLATE ────────────────────────────────────────────────────
+    //
+    // One element, three assembled rows: the label, the figure, the terms. The
+    // values come from whatever `assembleOffer` made of this ad's offer, so the
+    // same plate renders "PER MONTH LEASE / $299/mo / 36-month lease · $2,999
+    // due at signing" and "APR / 1.9% / for 60 months" with no per-type copies
+    // and no `visibleWhen`.
+    //
+    // The rows are shares of the plate's own height and each fits its own text,
+    // which is where per-type emphasis comes from for free: "1.9%" is a shorter
+    // string than "$299/mo", so it fills its row at a larger size. Nobody
+    // configures a font size per offer type.
+    const p = offerFieldPrefix(el);
+    const parts = {
+      label: esc(String(data[`_${p}offerLabel`] ?? '')),
+      figure: esc(String(data[`_${p}offerMain`] ?? '')),
+      terms: esc(String(data[`_${p}offerTerms`] ?? '')),
+    };
+    // An empty plate would be an invisible element on the canvas, so preview
+    // shows what it IS. Export renders nothing rather than a placeholder.
+    if (!parts.figure) {
+      if (!ctx.preview) return '';
+      parts.label = parts.label || 'OFFER LABEL';
+      parts.figure = '$&mdash;';
+    }
+
+    const plate = { ...OFFER_PLATE_DEFAULTS, ...(el.offerPlate ?? {}) };
+    const family = el.fontFamily ? `'${cssSafeFamily(el.fontFamily)}', ${brandStack}` : brandStack;
+    const figureColor = resolveColor(el.color, brand, '#0f172a');
+    // The label and terms are supporting type. `bg`, padding and radius belong to
+    // the plate as a whole rather than to any one row.
+    const mutedColor = '#475569';
+    const align = el.align ?? 'left';
+    const items = align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start';
+    const plateBg = el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
+
+    const row = (
+      text: string,
+      share: number | null,
+      opts: { color: string; weight: number; upper?: boolean; spacing?: number; line?: number },
+    ): string => {
+      if (!text) return '';
+      // `share: null` is the figure — it takes whatever the other two leave.
+      const size = share == null ? 'flex:1 1 auto;min-height:0;' : `flex:0 0 ${(share * 100).toFixed(2)}%;`;
+      const style =
+        `${size}display:flex;flex-direction:column;justify-content:center;align-items:${items};overflow:hidden;` +
+        `font-family:${family};font-weight:${opts.weight};color:${esc(opts.color)};` +
+        `text-align:${align};line-height:${opts.line ?? 1.05};` +
+        (opts.upper ? 'text-transform:uppercase;' : '') +
+        (opts.spacing ? `letter-spacing:${opts.spacing}px;` : '');
+      // Same fit contract as a text element: the value sits in a trimmed inner
+      // box so the row hugs the glyph ink rather than the font's line box.
+      const inner = `<div data-fit-inner style="display:inline-block;max-width:100%;white-space:pre-wrap;text-box:trim-both cap alphabetic;">${text}</div>`;
+      return `<div data-fit style="${style}">${inner}</div>`;
+    };
+
+    const body =
+      row(parts.label, plate.labelShare, { color: mutedColor, weight: 700, upper: true, spacing: el.letterSpacing ?? 1.5 }) +
+      row(parts.figure, null, { color: figureColor, weight: el.fontWeight ?? 800, line: el.lineHeight ?? 0.95 }) +
+      row(parts.terms, plate.termsShare, { color: mutedColor, weight: 500, line: 1.25 });
+
+    const styles =
+      pos +
+      `display:flex;flex-direction:column;justify-content:center;gap:${Math.max(0, plate.gapPx)}px;` +
+      plateBg +
+      paddingCss(el) +
+      borderRadiusCss(el) +
+      'overflow:hidden;';
+    return `<div${idAttr} style="${dim}${fx}${styles}">${body}</div>`;
   }
 
   // text

@@ -22,7 +22,17 @@ export type Binding =
   | { kind: 'brand'; key: 'dealerName' | 'logoUrl' | 'brandColor'; variant?: LogoVariant }
   | { kind: 'static'; value: string }; // a literal baked into the template
 
-export type DocElementType = 'text' | 'image' | 'logo' | 'shape' | 'background';
+/**
+ * `offer` is THE OFFER PLATE: one element that draws the label, the figure and the
+ * terms line together, reading the values the offer engine assembles.
+ *
+ * It exists because a plate built from three separate text elements has to be
+ * rebuilt — and kept in sync — for every offer type a template serves, each copy
+ * gated by `visibleWhen`. One element covers lease, APR, discount and sale price,
+ * because `assembleOffer` has already decided what each of them says. See
+ * docs/ad-generator-archetypes.md §8 Phase 2.
+ */
+export type DocElementType = 'text' | 'image' | 'logo' | 'shape' | 'background' | 'offer';
 
 /** CSS mix-blend-mode values — how an element composites over what's beneath it.
  *  Lets a gradient/color layer tint a texture (multiply/overlay), knock lines
@@ -120,8 +130,25 @@ export interface DocElement {
    * board would mean "fixed" only held on the boards that happened to agree.
    */
   sizeMode?: SizeMode;
-  /** What the element displays. Omitted for plain shapes. */
+  /** What the element displays. Omitted for plain shapes and offer plates. */
   binding?: Binding;
+  /**
+   * `offer` only: which offer in the list this plate shows. 0 (or absent) is the
+   * first; 1 is the second, reading the `o2_` field set.
+   *
+   * This is what makes a dual template two plates rather than a second set of
+   * hand-wired elements — see `offerFieldPrefix`.
+   */
+  offerIndex?: number;
+  /**
+   * `offer` only: the plate's internal proportions, as shares of its own height.
+   * Absent parts fall back to {@link OFFER_PLATE_DEFAULTS}.
+   *
+   * The figure takes whatever the label and terms don't, and each of the three
+   * rows fits its own text — so a short figure like "1.9%" comes out larger than
+   * "$299/mo" on the same plate without anybody configuring per-type type sizes.
+   */
+  offerPlate?: { labelShare?: number; termsShare?: number; gapPx?: number };
   /** Conditional visibility: render this element ONLY when the value of field
    *  `field` is one of `in` (e.g. `{ field: 'offerType', in: ['apr'] }` shows a
    *  `%` badge only for APR offers). Lets one template carry all offer types —
@@ -314,9 +341,27 @@ export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> 
     // A condition names a field the form still has to expose, or the user can
     // never satisfy it.
     if (el.visibleWhen?.field) keys.add(el.visibleWhen.field);
+    // An offer plate has no single binding — it shows three assembled values, and
+    // the form has to expose the offer TYPE that decides what they say. Without
+    // this, a template whose only offer is a plate looks like it displays no
+    // offer at all, and field prefs could hide the inputs that fill it.
+    if (el.type === 'offer') {
+      const p = offerFieldPrefix(el);
+      keys.add(`${p}offerType`);
+      for (const k of ['offerLabel', 'offerMain', 'offerTerms']) keys.add(`_${p}${k}`);
+    }
   }
   return keys;
 }
+
+/** The field prefix an offer plate reads — '' for the first offer, 'o2_' for the second. */
+export function offerFieldPrefix(el: Pick<DocElement, 'offerIndex'>): string {
+  const i = el.offerIndex ?? 0;
+  return i <= 0 ? '' : `o${i + 1}_`;
+}
+
+/** The plate's default proportions, as shares of its own height. */
+export const OFFER_PLATE_DEFAULTS = { labelShare: 0.17, termsShare: 0.22, gapPx: 4 } as const;
 
 /** Can a person build a custom ad from this template? */
 export function usableForCustom(doc: Pick<TemplateDoc, 'usage'>): boolean {

@@ -53,6 +53,7 @@ import {
   MagnifyingGlassPlusIcon,
   MagnifyingGlassMinusIcon,
   SwatchIcon,
+  TagIcon,
   Cog6ToothIcon,
   PaintBrushIcon,
   RocketLaunchIcon,
@@ -533,23 +534,28 @@ const TYPE_ICON: Record<DocElementType, React.ComponentType<{ className?: string
   logo: BuildingStorefrontIcon,
   shape: ShapeElementIcon,
   background: SwatchIcon,
+  offer: TagIcon,
 };
 
 // Element colour coding, used everywhere an element is referenced (Insert
 // palette, canvas selection outline + handles, Layers rows, the inspector type
 // badge): Text = blue, Image = pink, Button = purple, Shape = orange. A
 // "button" is a styled text element (a text el with a background pill).
-type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo';
+type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo' | 'offer';
 const KIND_COLOR: Record<ElementKind, string> = {
   text: '#3b82f6', // blue
   image: '#ec4899', // pink
   button: '#a855f7', // purple
   shape: '#f97316', // orange
   logo: '#14b8a6', // teal
+  // The offer plate gets its own colour rather than reading as text: it is the
+  // one element whose content the designer does not type.
+  offer: '#0ea5e9', // sky
 };
 function elementKind(el: { type: DocElementType; bg?: string }): ElementKind {
   if (el.type === 'shape') return 'shape';
   if (el.type === 'logo') return 'logo';
+  if (el.type === 'offer') return 'offer';
   if (el.type === 'image' || el.type === 'background') return 'image';
   return el.bg ? 'button' : 'text'; // text with a pill background reads as a Button
 }
@@ -636,6 +642,11 @@ function elName(el: DocElement): string {
  *  selection badge so a long text value doesn't render as a full-width banner. */
 function layerName(el: DocElement): string {
   if (el.name && el.name.trim()) return el.name.trim();
+  if (el.type === 'offer') {
+    // Which offer, on a dual — "Offer" alone would name two different plates the
+    // same thing in the Layers panel.
+    return (el.offerIndex ?? 0) > 0 ? `Offer ${(el.offerIndex ?? 0) + 1}` : 'Offer';
+  }
   return el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
 }
 
@@ -806,6 +817,11 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
       return { id, type, binding: { kind: 'static', value: '' }, fit: 'contain' };
     case 'shape':
       return { id, type, fill: 'brand', radius: 8 };
+    case 'offer':
+      // No binding: a plate reads the assembled offer, not one field. The figure
+      // takes the element's colour + weight; the label and terms are supporting
+      // type the renderer sets.
+      return { id, type, offerIndex: 0, color: 'brand', fontWeight: 800, align: 'left' };
     case 'background':
       // Full-bleed background: base fill + a white→transparent top fade. Texture
       // is added on demand from the inspector. Placement (full-bleed, back z) is
@@ -1746,6 +1762,20 @@ export default function AdBuilderPage() {
     const b = selected.binding;
     const isImage = selected.type === 'image' || selected.type === 'logo' || selected.type === 'background';
     if (selected.type === 'shape') return { mode: 'none', value: '' };
+    // An offer plate has nothing to type: it draws whatever the offer engine
+    // assembled. Showing it a text box invited a designer to type over the one
+    // element whose content is the point of not typing it.
+    if (selected.type === 'offer') {
+      const p = selected.offerIndex && selected.offerIndex > 0 ? `o${selected.offerIndex + 1}_` : '';
+      const label = String(previewData[`_${p}offerLabel`] ?? '');
+      const figure = String(previewData[`_${p}offerMain`] ?? '');
+      const terms = String(previewData[`_${p}offerTerms`] ?? '');
+      return {
+        mode: 'text-readonly',
+        value: [label, figure, terms].filter(Boolean).join(' · '),
+        note: 'Assembled from the offer type and its numbers, so this one plate covers lease, APR, discount and sale price. Edit the values in the Fields panel.',
+      };
+    }
     if (isImage) {
       if (!b) return { mode: 'image-edit', value: '' };
       const value = b.kind === 'static' ? b.value : String(previewData[b.key] ?? '');
@@ -2290,13 +2320,13 @@ export default function AdBuilderPage() {
         // fractions and this font size verbatim to every size is what made a new
         // element land in a different shape — and render at a different size — on
         // each aspect ratio.
-        const box: DocLayoutBox = {
-          x: 0.3,
-          y: 0.44,
-          w: 0.4,
-          h: 0.12,
-          ...(type === 'text' ? { fontSize: 48 } : {}),
-        };
+        // An offer plate is three stacked rows, so it needs real height — at a
+        // text element's 12% every row lands under its legibility floor and the
+        // label collides with the figure.
+        const box: DocLayoutBox =
+          type === 'offer'
+            ? { x: 0.28, y: 0.38, w: 0.44, h: 0.26 }
+            : { x: 0.3, y: 0.44, w: 0.4, h: 0.12, ...(type === 'text' ? { fontSize: 48 } : {}) };
         // New text defaults to SHRINK — holds its font size, scales down to fit
         // only if a value overflows the frame.
         const el = type === 'text' ? { ...makeDefaultElement(id, type), shrink: true } : makeDefaultElement(id, type);
@@ -4039,6 +4069,10 @@ export default function AdBuilderPage() {
     { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton, color: KIND_COLOR.button },
     { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape'), color: KIND_COLOR.shape },
     { label: 'Logo', Icon: BuildingStorefrontIcon, onAdd: () => addElement('logo'), color: KIND_COLOR.logo },
+    // The offer plate. Placed once, it renders correctly for lease, APR, discount
+    // and sale price — which is four hand-built, Show-For-gated copies replaced by
+    // one element. See docs/ad-generator-archetypes.md §8 Phase 2.
+    { label: 'Offer', Icon: TagIcon, onAdd: () => addElement('offer'), color: KIND_COLOR.offer },
     // No separate "Background": a background is a full-bleed Image (photo/texture)
     // or Shape (solid/gradient) — use those + the "Fill artboard & send to back"
     // action on the element's inspector.
@@ -6431,7 +6465,13 @@ function SelectionPanel({
   onToggleCrop: () => void;
 }) {
   const fontSize = box.fontSize ?? 16;
-  const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
+  const typeLabel =
+    el.type === 'text' ? 'Text'
+    : el.type === 'image' ? 'Image'
+    : el.type === 'logo' ? 'Logo'
+    : el.type === 'background' ? 'Background'
+    : el.type === 'offer' ? 'Offer'
+    : 'Shape';
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';

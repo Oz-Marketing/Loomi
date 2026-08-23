@@ -116,11 +116,11 @@ export const customOfferFields: FieldSpec[] = [
   },
   {
     key: 'offerLabel',
-    label: 'Offer label',
+    label: 'Custom offer label',
     type: 'text',
     group: 'Offer',
     placeholder: 'auto (e.g. SERVICE SPECIAL)',
-    help: 'Optional — overrides the default label. AI can write this.',
+    help: 'Optional. Leave blank and the ad uses the label that matches the offer type. AI can write this.',
     copy: true,
     maxLength: 18,
     visibleWhen: { field: 'offerType', in: WITH_OFFER },

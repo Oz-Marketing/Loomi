@@ -116,6 +116,7 @@ import { templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, t
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
+import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -316,21 +317,15 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // field, a computed offer value, brand data, or a static literal — so a
 // from-scratch layout can be wired to the offer engine (no code template needed).
 // Options are encoded as `static` | `field:<key>` | `brand:<key>` strings.
-// Computed offer tokens are DATA only (numbers + the terms line the numbers
-// build). The offer LABEL — "APR", "PER MONTH LEASE", "SALES PRICE" — is
-// editorial text the designer types statically per offer type, NOT computed.
-const OFFER_TOKENS: { key: string; label: string; hint: string }[] = [
-  { key: '_offerMain', label: 'Offer amount', hint: 'The whole amount, formatted — $299/mo · 1.9% · $28,995' },
-  { key: '_offerValue', label: 'Offer number (no symbol)', hint: 'Just the digits — 299 · 1.9 · 28,995. Pair with the symbols below to style them separately.' },
-  { key: '_offerCurrency', label: 'Offer $ symbol', hint: 'A “$”, and only when the offer is an amount' },
-  { key: '_offerPercent', label: 'Offer % symbol', hint: 'A “%”, and only when the offer is a rate' },
-  { key: '_offerTerms', label: 'Offer terms', hint: 'The small line under the number — 36 months, $2,999 due at signing' },
-];
-const OFFER_TOKENS_O2: { key: string; label: string; hint: string }[] = OFFER_TOKENS.map((t) => ({
-  key: t.key.replace('_offer', '_o2_offer'),
-  label: t.label.replace('Offer', 'Offer 2'),
-  hint: t.hint,
-}));
+//
+// The computed offer fields themselves live in `lib/ad-generator/offer-tokens`,
+// where a test can assert the picker offers every one the engine publishes. The
+// LABEL used to be missing from this list on the reasoning that "APR" /
+// "PER MONTH LEASE" is editorial text a designer types per offer type — but
+// `assembleOffer` has always resolved it, the code templates have always bound
+// it, and the `offerLabel` field already overrides it per ad. Withholding it was
+// the single reason a template needed a hand-built label element per offer type,
+// gated by Show For. See docs/ad-generator-archetypes.md §8 Phase 1.
 
 // Per-offer-type accent color + short label — drives the color-coded preview
 // tabs on the canvas action bar (each tab tinted to its offer type).
@@ -475,9 +470,7 @@ function buildContentSources(
     // (otherwise these tokens resolve to nothing). Name Offer 1's tokens
     // explicitly when a second offer exists.
     if (hasOffer) {
-      const offer1Tokens = hasO2
-        ? OFFER_TOKENS.map((t) => ({ ...t, label: t.label.replace('Offer', 'Offer 1') }))
-        : OFFER_TOKENS;
+      const offer1Tokens = hasO2 ? offerTokensNumbered() : OFFER_TOKENS;
       for (const t of offer1Tokens)
         opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text', hint: t.hint });
       if (hasO2)

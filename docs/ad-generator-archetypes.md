@@ -281,23 +281,47 @@ means APR. `lib/ad-generator/offer-type-style.ts` owns it now, with the short
 labels the builder shipped with, and a test that every type any kind offers can
 be drawn.
 
-### Phase 4b — retire the three controls *(mostly deletion)*
+### Phase 4b — retire the three controls *(surveyed, and smaller than it looked)*
 
-Show For, "Edits apply to" and the load-bearing Preview tabs have nothing left to
-do once a design serves every offer type from one plate and the proof sheet is
-the pre-publish check.
+"Edits apply to" and the load-bearing Preview tabs have nothing left to do once a
+design serves every offer type from one plate and the proof sheet is the
+pre-publish check. **Show For is a different matter, and the survey changed the
+plan.**
 
-⚠️ **This one is not additive, and it needs a decision first.** Every hand-built
-template in the library still uses Show For to switch its per-type plates, so
-deleting it breaks them unless they are migrated onto offer plates first. That is
-a call about the existing library, not a mechanical step. The migration itself is
-mostly mechanical — a plate replaces each set of gated label/figure/terms
-elements — but which templates are worth migrating versus re-cutting from an
-archetype is a judgement about the library.
+`scripts/survey-show-for.ts` classifies every template — code-defined always, and
+saved ones wherever `DATABASE_URL` points — into three buckets. Against the code
+library plus a dev database (15 templates):
+
+| | |
+|---|---|
+| 11 | no offer-type gating at all — the deletion costs them nothing |
+| 2 | mechanical: the only gated layers are a currency mark and a percent mark, which the plate renders on its own (`_offerCurrency` comes back empty for the types that don't use it) |
+| 2 | carry content in the gate |
+
+⚠️ **Run it against staging and prod before acting** — a dev database is not the
+library. The number that matters is the third bucket's, wherever the real
+templates live.
+
+**What the third bucket actually contains matters more than its size.** Not plate
+copies: `costPerThousand` shown only on an APR ad, `discountSource` only on a
+discount, `msrp` only where a saving is claimed. Those are per-type DISCLOSURES,
+and no plate renders them, because they are not part of the offer figure — they
+are extra legal lines that one offer type requires and another does not.
+
+**So the original plan was wrong.** Deleting Show For outright would delete the
+only way to say "this line appears on APR ads". What Phase 2 removed was the
+*need* to use Show For for plate switching; the residual use is legitimate and
+should stay. The work left is:
+
+1. Retire "Edits apply to" — the archetype layout makes the scope question moot.
+2. Replace the Preview tabs with the proof sheet (**done**, Phase 4a).
+3. Migrate the two mechanical templates, then rename Show For to what it now
+   means — a per-type *disclosure*, not a layout switch — and stop offering it on
+   layers bound to offer tokens, where it can only cause the old confusion.
 
 *Done when:* the builder has no edit-scope mode, the Layers panel is the design's
-own layer list, and no template in the library depends on `visibleWhen` for
-offer-type switching.
+own layer list, and Show For appears only where a per-type disclosure is what a
+designer actually means.
 
 ### Phase 5 — offers as a list
 

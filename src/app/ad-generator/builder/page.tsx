@@ -48,6 +48,7 @@ import {
   ChevronRightIcon,
   RectangleStackIcon,
   Squares2X2Icon,
+  TableCellsIcon,
   QuestionMarkCircleIcon,
   InformationCircleIcon,
   MagnifyingGlassPlusIcon,
@@ -119,6 +120,7 @@ import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
 import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
+import { offerTypeAccent, offerTypePill, offerTypeShort } from '@/lib/ad-generator/offer-type-style';
 import { roleNote } from '@/lib/ad-generator/archetypes/roles';
 import { applyTheme } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
@@ -331,22 +333,10 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // the single reason a template needed a hand-built label element per offer type,
 // gated by Show For. See docs/ad-generator-archetypes.md §8 Phase 1.
 
-// Per-offer-type accent color + short label — drives the color-coded preview
-// tabs on the canvas action bar (each tab tinted to its offer type).
-const OFFER_TYPE_COLOR: Record<string, string> = {
-  lease: '#3b82f6', // blue
-  apr: '#8b5cf6', // violet
-  discount: '#f59e0b', // amber
-  sales_price: '#10b981', // emerald
-  custom: '#64748b', // slate
-};
-const OFFER_TYPE_SHORT: Record<string, string> = {
-  lease: 'Lease',
-  apr: 'APR',
-  discount: 'Discount',
-  sales_price: 'Sale price',
-  custom: 'Custom',
-};
+// The per-offer-type accent and short name now live in `offer-type-style.ts`, so
+// the canvas tabs, the variable-picker pills and the proof sheet's rows are the
+// same violet for APR. They used to be a table here, which meant the proof sheet
+// had to restate the palette — two copies of a claim of identity.
 
 // Which offer-input field each computed offer token surfaces, per offer type —
 // so binding an element to `_offerValue`/`_offerTerms`/… counts as *showing*
@@ -441,8 +431,8 @@ function buildContentSources(
   ];
   // A field conditioned on `offerType` only fills for those types — the thing a
   // designer most needs to know when a template has to serve lease AND apr, and
-  // the reason the flat list was a guessing game.
-  const typeLabel = new Map(kind.offerTypes.map((t) => [t.value, t.label]));
+  // the reason the flat list was a guessing game. The badge names come from
+  // `offerTypeShort`, so a kind's own labels no longer need collecting here.
   // Scoped by the element's OWN "Show for": an APR-only text box can never
   // display a lease-only field, so offering it is offering a blank. All types
   // selected (or none set, which means the same) filters nothing.
@@ -466,7 +456,7 @@ function buildContentSources(
       group: f.group?.trim() || 'Fields',
       hint: f.help,
       example: f.placeholder,
-      offerTypes: badges ? badges.map((v) => ({ value: v, label: OFFER_TYPE_SHORT[v] ?? typeLabel.get(v) ?? v })) : undefined,
+      offerTypes: badges ? badges.map((v) => ({ value: v, label: offerTypeShort(v) })) : undefined,
     });
   }
   if (!isImage) {
@@ -4384,6 +4374,33 @@ export default function AdBuilderPage() {
                     )}
 
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                      {/* The PROOF SHEET: every offer type × every board, drawn by
+                          the exporter's renderer and checked by the compliance gate
+                          that generation runs. The pre-publish read the preview tabs
+                          can only give one cell at a time.
+
+                          Opens in its own tab, and reads the SAVED design — so it
+                          needs a row, same as sharing does. Autosave means the save
+                          is a moment old, not a step the designer has to think
+                          about. See docs/ad-generator-archetypes.md §8 Phase 4. */}
+                      <button
+                        onClick={() => {
+                          if (!templateId) {
+                            toast.error('Save this template first, then you can proof it.');
+                            return;
+                          }
+                          // `account` so the new tab draws with the same rooftop's
+                          // branding — the account context reads it from the URL.
+                          const q = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
+                          window.open(`/ad-generator/proof/${templateId}${q}`, '_blank', 'noopener');
+                          setSettingsOpen(false);
+                        }}
+                        title="Every offer type on every board, with its compliance check"
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                      >
+                        <TableCellsIcon className="h-4 w-4" />
+                        Proof sheet
+                      </button>
                       {/* Access is stored on the template row, so there has to BE a
                           row — an unsaved draft has nothing to share yet. */}
                       <button
@@ -4806,7 +4823,7 @@ export default function AdBuilderPage() {
                       All
                     </button>
                     {usedOfferTypes.map((t) => {
-                      const color = OFFER_TYPE_COLOR[t.value] ?? '#64748b';
+                      const color = offerTypeAccent(t.value);
                       const active =
                         !showAllOfferTypes && String(previewData.offerType ?? 'lease') === t.value;
                       return (
@@ -4825,7 +4842,7 @@ export default function AdBuilderPage() {
                           style={active ? { backgroundColor: `${color}1f`, color } : undefined}
                         >
                           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
-                          {OFFER_TYPE_SHORT[t.value] ?? t.label}
+                          {offerTypeShort(t.value)}
                         </button>
                       );
                     })}
@@ -5861,15 +5878,10 @@ const VAR_GROUP_RANK = (g: string) => {
  * "this is the APR one" is the same violet in both places.
  */
 function VarBadge({ type, children }: { type: string; children: React.ReactNode }) {
-  const color = OFFER_TYPE_COLOR[type];
   return (
     <span
       className="shrink-0 rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
-      style={
-        color
-          ? { color, borderColor: `${color}66`, backgroundColor: `${color}1f` }
-          : undefined
-      }
+      style={offerTypePill(type)}
     >
       {children}
     </span>

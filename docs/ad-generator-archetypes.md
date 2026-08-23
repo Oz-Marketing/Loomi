@@ -247,16 +247,57 @@ now refuses any archetype slot that states padding, or any layout box that state
 a font size, for the same reason: a number in pixels is a number that only ever
 suited one board.
 
-### Phase 4 — retire the three controls *(mostly deletion)*
+### Phase 4a — the proof sheet — **SHIPPED**
 
-Once slots and archetype layout exist, Show For, "Edits apply to" and the
-load-bearing Preview tabs have nothing left to do. Replace the preview tabs with
-the **proof sheet** — every offer type × every board with its compliance check.
-A throwaway generator for this already exists in this session's scratch; make it
-a real route.
+The additive half of Phase 4, taken first because it stands on its own: the
+scratch generator is now a route.
+
+- ✅ `lib/ad-generator/proof-sheet.ts` — `buildProofSheet` is pure, and takes the
+  doc, the OEM rule, the co-op pack and the replayed design verdict exactly as the
+  preflight endpoint does. So the sheet and the generation pipeline cannot
+  disagree about the same template.
+- ✅ `POST /api/ad-generator/templates-doc/[id]/proof` — read-only, `persist:
+  false` on the verdict, and it accepts an in-flight `doc` so a future in-builder
+  panel needs no new endpoint.
+- ✅ `/ad-generator/proof/[id]` — the grid, at **one shared scale** for every
+  board. Reachable from the builder's cog and from the template row menu.
+
+*Done:* the pre-publish read is one page. Verified against the local library —
+the sheet draws every board, attributes each finding to the ad it happened in,
+and states the six Mazda design rules that template fails once each, with
+citations.
+
+**A design fault is stated once.** The design-time co-op verdict is replayed into
+every ad, so filing those findings per row printed the same six rules **105
+times**. `PreflightIssue.scope: 'design'` marks them; the sheet hoists them into
+one list keyed by rule, each line carrying the offer types it failed under. 105
+warnings became 16, and they now point at the designer instead of at the data.
+Rows still block on them: the fault being the template's does not make the ad
+shippable.
+
+**The offer-type palette is shared.** It lived in a table in the builder page, so
+the sheet would have needed a second copy of the same claim of identity — violet
+means APR. `lib/ad-generator/offer-type-style.ts` owns it now, with the short
+labels the builder shipped with, and a test that every type any kind offers can
+be drawn.
+
+### Phase 4b — retire the three controls *(mostly deletion)*
+
+Show For, "Edits apply to" and the load-bearing Preview tabs have nothing left to
+do once a design serves every offer type from one plate and the proof sheet is
+the pre-publish check.
+
+⚠️ **This one is not additive, and it needs a decision first.** Every hand-built
+template in the library still uses Show For to switch its per-type plates, so
+deleting it breaks them unless they are migrated onto offer plates first. That is
+a call about the existing library, not a mechanical step. The migration itself is
+mostly mechanical — a plate replaces each set of gated label/figure/terms
+elements — but which templates are worth migrating versus re-cutting from an
+archetype is a judgement about the library.
 
 *Done when:* the builder has no edit-scope mode, the Layers panel is the design's
-own layer list, and the proof sheet is the pre-publish check.
+own layer list, and no template in the library depends on `visibleWhen` for
+offer-type switching.
 
 ### Phase 5 — offers as a list
 

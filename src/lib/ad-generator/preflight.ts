@@ -50,6 +50,14 @@ export interface PreflightIssue {
   ruleId?: string;
   /** co-op only: the source-document reference, so a block can be audited. */
   citation?: string;
+  /**
+   * `design` marks an issue that belongs to the TEMPLATE rather than to this ad —
+   * the replayed design-time co-op verdict. Every ad off the template reports it
+   * identically, so a surface showing many ads at once (the proof sheet) can state
+   * it once instead of once per ad, and point the reader at the designer rather
+   * than at the data.
+   */
+  scope?: 'design';
 }
 
 export interface PreflightResult {
@@ -419,6 +427,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       issues.push({
         code: 'coop_design_stale',
         severity: 'warning',
+        scope: 'design',
         message:
           `${coopDesign.make} co-op: this template's layout check is out of date ` +
           `(design or rules changed since it was last run). Re-check it from the OEM guidelines page.`,
@@ -428,6 +437,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       issues.push({
         code: 'coop_violation',
         severity: f.severity,
+        scope: 'design',
         ruleId: f.ruleId,
         citation: f.citation,
         message:

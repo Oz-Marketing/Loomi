@@ -1,0 +1,313 @@
+import type { AdData, AdSize } from './types';
+import type { TemplateDoc } from './doc-types';
+import type { OemOfferRule } from './compliance';
+import type { CoopRulePack } from './coop-rules';
+import { renderDoc } from './doc-renderer';
+import { mergeRenderData } from './render-creative';
+import { enrichOfferFields } from './offer-text';
+import { offerKindForDoc } from './offer-kinds';
+import { offerTypeAccent, offerTypeShort } from './offer-type-style';
+import { preflight, type CoopDesignVerdict, type PreflightIssue } from './preflight';
+
+/**
+ * THE PROOF SHEET — every offer type this template claims to serve, on every board
+ * it defines, drawn by the real renderer and checked by the real compliance gate.
+ *
+ * ── WHY A SHEET AND NOT TABS ──
+ *
+ * The builder's preview tabs answer "what does this look like as a lease ad, on
+ * this board" — one cell of a grid, one at a time, from memory. The question a
+ * designer actually has to answer before publishing is the whole grid: does this
+ * design hold for four offer types across five channels, and would compliance let
+ * any of those twenty ads out the door. Tabs make that twenty clicks and a memory
+ * test, which is why templates shipped with a lease board nobody had looked at.
+ *
+ * Showing them all at once also makes a specific class of fault visible that no
+ * single preview can: the plate that reads beautifully for a lease and overflows
+ * for a sale price, the board where the disclaimer is legible for three types and
+ * eleven pixels for the fourth. Those are the faults the archetype work was for,
+ * so this is the sheet that proves it.
+ *
+ * ── PURE ──
+ *
+ * No DB, no network, no clock. The caller supplies the OEM rule, the co-op pack
+ * and the design verdict exactly as the preflight endpoint does, so the sheet and
+ * the pipeline cannot disagree about the same template. That also means this file
+ * is testable arithmetic-and-strings: the tests render real docs and assert on the
+ * markup and the issues, with nothing stubbed.
+ */
+
+export interface ProofBoard {
+  sizeId: string;
+  label: string;
+  width: number;
+  height: number;
+  /** A complete HTML document, for an iframe `srcdoc`. */
+  html: string;
+  /** Issues observed on THIS board (a size-scoped subset of the row's issues). */
+  issues: PreflightIssue[];
+}
+
+export interface ProofRow {
+  offerType: string;
+  /** "Lease", "APR" — the short name, for a pill. */
+  label: string;
+  /** The type's own accent, shared with the builder's pills and tabs. */
+  accent: string;
+  boards: ProofBoard[];
+  /** Every issue for this offer type, board-scoped or not. */
+  issues: PreflightIssue[];
+  /** True when nothing at `error` severity fired for this offer type. */
+  ok: boolean;
+}
+
+/**
+ * A fault in the TEMPLATE, stated once.
+ *
+ * The design-time co-op verdict is replayed into every ad, so a sheet that filed
+ * these per row printed the same handful of design faults twenty times over — a
+ * hundred lines of warning that were really five. Worse, it filed them next to the
+ * ad that happened to be checked, when the fix is in the design and belongs to the
+ * designer. So they are hoisted here, deduplicated by rule, carrying the offer
+ * types each was observed under.
+ */
+export interface ProofTemplateFault {
+  ruleId: string;
+  description: string;
+  severity: 'error' | 'warning';
+  citation?: string;
+  /** Offer types this fault was observed under. Empty means every type. */
+  offerTypes: string[];
+}
+
+export interface ProofSheet {
+  rows: ProofRow[];
+  sizes: AdSize[];
+  /** Design faults, one line each — see {@link ProofTemplateFault}. */
+  templateFaults: ProofTemplateFault[];
+  /** True when every row is ok — this template can ship for every type it claims. */
+  ok: boolean;
+  errorCount: number;
+  warningCount: number;
+  /**
+   * What the reader should know to read the sheet honestly: that no co-op pack
+   * exists for the make, that a pack is unverified, that the design's own photo
+   * and logo come from the account. Prose, in reading order.
+   */
+  notes: string[];
+}
+
+export interface ProofSheetInput {
+  doc: TemplateDoc;
+  /**
+   * Values over the template's own defaults — the account's brand colour, logo and
+   * fonts, and a sample vehicle. Absent, the sheet draws the template's defaults,
+   * which is a legitimate view of the DESIGN and an unhelpful one of a real ad.
+   */
+  data?: AdData;
+  /** The make's OEM rule, if any. */
+  oemRule?: OemOfferRule | null;
+  /** The make's co-op pack, if one has been transcribed. */
+  coopPack?: CoopRulePack | null;
+  /** The stored design-time verdict, replayed rather than recomputed. */
+  coopDesign?: CoopDesignVerdict | null;
+  /**
+   * Offer types to draw. Defaults to every type the doc's KIND offers — not every
+   * type the doc's `visibleWhen` conditions declare, which is what the co-op design
+   * check uses. The difference is the point of the sheet: an archetype-built design
+   * gates nothing, so it claims to serve all four, and the sheet is where that
+   * claim gets tested rather than assumed.
+   */
+  offerTypes?: string[];
+  /** Boards to draw. Defaults to every size the doc defines, in doc order. */
+  sizeIds?: string[];
+}
+
+/**
+ * Offer types a proof sheet draws for a doc.
+ *
+ * `no_offer` is excluded: a message-only ad has no offer to prove, and drawing it
+ * would put an empty plate in the grid next to four full ones as if that were a
+ * finding. Every other type the kind offers is drawn, including the free-text one.
+ */
+export function proofOfferTypes(doc: TemplateDoc): string[] {
+  return offerKindForDoc(doc)
+    .offerTypes.filter((s) => !s.noOffer)
+    .map((s) => s.value);
+}
+
+/** The data one row renders with: defaults, then the caller's, then the type. */
+export function proofRowData(doc: TemplateDoc, data: AdData | undefined, offerType: string): AdData {
+  return enrichOfferFields({ ...mergeRenderData(doc, data ?? {}), offerType });
+}
+
+export function buildProofSheet(input: ProofSheetInput): ProofSheet {
+  const { doc, data, oemRule, coopPack, coopDesign } = input;
+
+  const wanted = input.sizeIds?.length ? new Set(input.sizeIds) : null;
+  const sizes = doc.sizes.filter((s) => !wanted || wanted.has(s.id));
+  const types = input.offerTypes?.length ? input.offerTypes : proofOfferTypes(doc);
+
+  const rows: ProofRow[] = types.map((offerType) => {
+    // One data set per row, used for BOTH the render and the check — so an issue
+    // reported under a cell is an issue with the ad drawn in that cell.
+    const rowData = proofRowData(doc, data, offerType);
+
+    // Preflight enriches internally, so it takes the merged-but-unenriched data.
+    // Passing the enriched set would be harmless but dishonest about the contract.
+    const result = preflight({
+      doc,
+      data: { ...mergeRenderData(doc, data ?? {}), offerType },
+      oemRule,
+      coopPack,
+      coopDesign,
+      sizeIds: sizes.map((s) => s.id),
+    });
+
+    // Design faults are the template's, and identical for every row — they are
+    // collected once, below, rather than repeated under each ad.
+    const adIssues = result.issues.filter((i) => i.scope !== 'design');
+
+    const boards: ProofBoard[] = sizes.map((size) => ({
+      sizeId: size.id,
+      label: size.label,
+      width: size.width,
+      height: size.height,
+      // `preview: false` — the sheet is a proof, so it draws what the exporter
+      // draws. Preview mode paints placeholder chrome for empty bindings, which
+      // would hide exactly the hole this sheet exists to reveal.
+      html: renderDoc(doc, rowData, size, { preview: false }),
+      issues: adIssues.filter((i) => i.sizes?.includes(size.id)),
+    }));
+
+    return {
+      offerType,
+      label: offerTypeShort(offerType),
+      accent: offerTypeAccent(offerType),
+      boards,
+      issues: adIssues,
+      // `ok` still reflects the FULL result: a design fault blocks an ad of this
+      // type just as hard for being the template's fault, and a row that read
+      // "clears" while the design blocked it would be a lie.
+      ok: result.ok,
+    };
+  });
+
+  const templateFaults = collectTemplateFaults(coopDesign);
+  const all = [
+    ...rows.flatMap((r) => r.issues),
+    // Counted once each, matching what the reader is shown.
+    ...templateFaults,
+  ];
+  return {
+    rows,
+    sizes,
+    templateFaults,
+    ok: rows.every((r) => r.ok),
+    errorCount: all.filter((i) => i.severity === 'error').length,
+    warningCount: all.filter((i) => i.severity === 'warning').length,
+    notes: proofNotes({ doc, coopPack, coopDesign, rows, templateFaults }),
+  };
+}
+
+/**
+ * The design verdict's findings, one line per rule.
+ *
+ * Read from the verdict rather than out of preflight's issues: the verdict carries
+ * the rule, the citation and the offer type as separate fields, where preflight has
+ * already composed them into a sentence for a per-ad reader. Same facts, in the
+ * shape a template-level list needs.
+ */
+function collectTemplateFaults(coopDesign?: CoopDesignVerdict | null): ProofTemplateFault[] {
+  if (!coopDesign?.findings.length) return [];
+  const by = new Map<string, ProofTemplateFault>();
+  for (const f of coopDesign.findings) {
+    // Keyed on rule AND wording: one rule can fail for more than one reason.
+    const key = `${f.ruleId} ${f.description}`;
+    const seen = by.get(key);
+    const type = f.offerType && f.offerType !== 'any' ? f.offerType : '';
+    if (seen) {
+      // An error under any offer type makes the fault an error.
+      if (f.severity === 'error') seen.severity = 'error';
+      if (type && !seen.offerTypes.includes(type)) seen.offerTypes.push(type);
+    } else {
+      by.set(key, {
+        ruleId: f.ruleId,
+        description: f.description,
+        severity: f.severity,
+        citation: f.citation,
+        offerTypes: type ? [type] : [],
+      });
+    }
+  }
+  return [...by.values()];
+}
+
+/**
+ * What a reader needs in order not to over-trust the sheet.
+ *
+ * A clean sheet means different things depending on which checks were in force,
+ * and the difference between "passes Chevrolet's co-op rules" and "no Chevrolet
+ * rules have been transcribed yet" is the whole value of saying so out loud.
+ */
+function proofNotes(args: {
+  doc: TemplateDoc;
+  coopPack?: CoopRulePack | null;
+  coopDesign?: CoopDesignVerdict | null;
+  rows: ProofRow[];
+  templateFaults: ProofTemplateFault[];
+}): string[] {
+  const { doc, coopPack, coopDesign, rows, templateFaults } = args;
+  const notes: string[] = [];
+  const make = (doc.make ?? '').trim();
+
+  if (!coopPack) {
+    notes.push(
+      make
+        ? `No ${make} co-op rule pack is on file, so no manufacturer advertising rules were checked. A clean sheet here is not a compliance sign-off.`
+        : 'This template names no make, so no manufacturer advertising rules were checked.',
+    );
+  } else if (!coopPack.verified) {
+    notes.push(
+      `The ${make || coopPack.make} co-op pack is unverified — its rules report as warnings rather than blocking, so an error you would expect may appear as a warning below.`,
+    );
+  }
+  if (coopDesign?.stale) {
+    notes.push(
+      'The design-time co-op verdict predates the current design or rule pack, so its findings are replayed as warnings. Re-run the template check for a definite answer.',
+    );
+  }
+
+  // The two things that are always the account's rather than the template's, and
+  // so are always missing from a design viewed on its own.
+  const missing: string[] = [];
+  if (!doc.defaults?.vehicleImageUrl) missing.push('vehicle photo');
+  if (!doc.defaults?.logoUrl) missing.push('dealer logo');
+  if (missing.length) {
+    notes.push(
+      `${missing.join(' and ')} come from the account, not the template — ${missing.length > 1 ? 'they are' : 'it is'} blank here unless a sample was supplied.`,
+    );
+  }
+
+  if (templateFaults.length) {
+    const errs = templateFaults.filter((f) => f.severity === 'error').length;
+    notes.push(
+      `${templateFaults.length} manufacturer rule${templateFaults.length === 1 ? '' : 's'} the DESIGN fails${errs ? `, ${errs} of them blocking` : ''}. Listed once below — they apply to every ad off this template, so they are the designer's to fix, not the data's.`,
+    );
+  }
+
+  const failing = rows.filter((r) => !r.ok).map((r) => r.label);
+  if (failing.length) {
+    notes.push(
+      `Blocked for ${failing.join(', ')}. An ad of ${failing.length > 1 ? 'those types' : 'that type'} cannot be exported off this template until the errors below are cleared.`,
+    );
+  }
+  return notes;
+}
+
+/** One line for a header or a page title: "4 offer types × 5 boards". */
+export function proofSheetSummary(sheet: ProofSheet): string {
+  const t = sheet.rows.length;
+  const b = sheet.sizes.length;
+  return `${t} offer type${t === 1 ? '' : 's'} × ${b} board${b === 1 ? '' : 's'} — ${t * b} ad${t * b === 1 ? '' : 's'}`;
+}

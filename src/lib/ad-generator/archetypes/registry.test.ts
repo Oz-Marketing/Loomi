@@ -138,6 +138,16 @@ describe('the picker has something to show', () => {
     }
   });
 
+  it('scopes store presets to their rooftop and leaves compositions global', () => {
+    // What `scripts/seed-archetype-templates.ts` seeds each row to: a Subaru
+    // preset belongs to Young Subaru, and a generic composition belongs to
+    // everyone the industry filter allows.
+    for (const s of ARCHETYPE_STARTS) {
+      if (s.group === 'Compositions') expect(s.accountKey, s.id).toBeUndefined();
+      else expect(s.accountKey, s.id).toBeTruthy();
+    }
+  });
+
   it('has no duplicate ids or names', () => {
     const ids = ARCHETYPE_STARTS.map((s) => s.id);
     const names = ARCHETYPE_STARTS.map((s) => s.name);

@@ -58,6 +58,12 @@ export interface ArchetypeStart {
    * leaves the archetype's placeholders in place.
    */
   defaults?: AdData;
+  /**
+   * The rooftop this preset belongs to, when it is one. Seeded to that account
+   * only; the generic compositions have no account and are offered to everyone
+   * the industry filter allows.
+   */
+  accountKey?: string;
 }
 
 export const ARCHETYPE_STARTS: ArchetypeStart[] = [
@@ -88,6 +94,7 @@ export const ARCHETYPE_STARTS: ArchetypeStart[] = [
     theme: YOUNG_SUBARU_THEME,
     sizes: YOUNG_SUBARU_SIZES,
     defaults: SUBARU_DEFAULTS,
+    accountKey: 'youngSubaru',
   },
   {
     id: 'young-subaru-dual',
@@ -99,6 +106,7 @@ export const ARCHETYPE_STARTS: ArchetypeStart[] = [
     theme: { ...YOUNG_SUBARU_THEME, fade: { angle: 180, end: 45 } },
     sizes: YOUNG_SUBARU_SIZES,
     defaults: { ...SUBARU_DEFAULTS, ...SUBARU_DUAL_DEFAULTS },
+    accountKey: 'youngSubaru',
   },
 ];
 

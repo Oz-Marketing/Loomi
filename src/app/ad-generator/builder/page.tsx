@@ -7988,12 +7988,11 @@ function BarBtn({
 function ThemeEditor({ theme, onChange }: { theme: Theme; onChange: (next: Theme) => void }) {
   const set = (patch: Partial<Theme>) => onChange({ ...theme, ...patch });
   const usesAccountBrand = theme.brand === 'brand';
-  const rows: { key: 'base' | 'brand' | 'ink' | 'muted' | 'onBrand'; label: string; hint: string }[] = [
+  const rows: { key: 'base' | 'brand' | 'ink' | 'muted'; label: string; hint: string }[] = [
     { key: 'base', label: 'Background', hint: 'The fill behind everything' },
-    { key: 'brand', label: 'Brand', hint: 'The offer figure and the expiration pill' },
+    { key: 'brand', label: 'Brand', hint: 'The offer figure' },
     { key: 'ink', label: 'Headings', hint: 'Tagline and vehicle name' },
     { key: 'muted', label: 'Supporting text', hint: 'Offer label, terms, disclaimer' },
-    { key: 'onBrand', label: 'On brand', hint: 'Text sitting on the brand colour' },
   ];
   const fade = theme.fade ?? { angle: 135, end: 70 };
   return (

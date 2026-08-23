@@ -46,7 +46,6 @@ export const BRAND_THEME: Theme = {
   brand: 'brand',
   ink: '#0f172a',
   muted: '#475569',
-  onBrand: '#ffffff',
   fade: { angle: 135, end: 70 },
 };
 

@@ -432,14 +432,18 @@ export function templateInSchedule(doc: Pick<TemplateDoc, 'schedule'>, date: Dat
 export interface Theme {
   /** Base fill behind everything. */
   base: string;
-  /** Accent used for the offer figure and the expiration pill. */
+  /** Accent used for the offer figure. */
   brand: string;
   /** Body/heading ink. */
   ink: string;
   /** Secondary ink — labels, terms, disclaimer. */
   muted: string;
-  /** Ink used ON the brand colour (the expiration pill's text). */
-  onBrand: string;
+  /**
+   * `onBrand` was here — ink for text sitting on the brand colour. The expiration
+   * pill was the only thing wearing it, and the pill is gone (a designer who wants
+   * the date on the art adds a layer for it), so the theme no longer decides a
+   * colour nothing paints. A stored doc may still carry the key; it is ignored.
+   */
   /** The white-fade angle + how far across it runs. */
   fade?: { angle: number; end: number };
 }

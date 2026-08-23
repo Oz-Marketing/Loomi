@@ -22,7 +22,6 @@ export const YOUNG_SUBARU_THEME: Theme = {
   brand: '#0a3d8f', // Subaru deep blue — the offer figure + expiration pill
   ink: '#0f172a',
   muted: '#334155',
-  onBrand: '#ffffff',
   fade: { angle: 135, end: 70 },
 };
 

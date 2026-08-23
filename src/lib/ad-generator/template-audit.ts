@@ -46,12 +46,23 @@ import { sizeFitOf } from './size-scope';
 export const LEGIBILITY_FLOOR_PX = 10;
 
 /**
- * What a disclaimer should get. Mirrors `DISCLAIMER_MIN_PX` in
- * `archetypes/vehicle-offer-archetype.ts`, which is where the archetype layout
- * enforces it — this file only reports the gap for designs that were not built
- * from an archetype.
+ * What a disclaimer should be able to render at, ON THIS BOARD.
+ *
+ * A share of the short edge rather than one number, because one number cannot be
+ * right for both a 1080 square and a 300×250: 22px is a comfortable legal line on
+ * the square and a tenth of the whole board on the rectangle. Manufacturer co-op
+ * packs state their own minimums the same way (Mazda's is 1.4% of the short edge);
+ * 2.2% sits above every pack in the library, with 11px as the floor under it.
+ *
+ * THE ARCHETYPE IMPORTS THIS. Its disclaimer is the one slot that holds a type
+ * size rather than fitting its box, and the size it holds is this number — so the
+ * layout and the audit cannot disagree about what legible means. Before that they
+ * did: the layout capped at the renderer's default 16px while this file wanted a
+ * flat 22, so an archetype design failed its own audit on every board.
  */
-export const DISCLAIMER_TARGET_PX = 22;
+export function disclaimerTargetPx(size: Pick<AdSize, 'width' | 'height'>): number {
+  return Math.round(Math.min(26, Math.max(11, Math.min(size.width, size.height) * 0.022)));
+}
 
 export type AuditCheck =
   /** No element anywhere renders the disclaimer. */
@@ -166,14 +177,20 @@ function disclaimerElements(doc: TemplateDoc): DocElement[] {
 /**
  * The largest a single line of this text CAN be on this board.
  *
- * A declared font size is the answer when there is one. Otherwise the box's own
- * height is the ceiling — auto-fitted text cannot be taller than the box holding
- * it — which is the only claim about size a doc supports without a browser.
+ * Both limits bind, and the smaller wins. The box's height is a hard ceiling —
+ * auto-fitted text cannot be taller than the box holding it. A declared size is a
+ * CAP the fitter starts from and shrinks below when the box is smaller, so a 5px
+ * strip declaring 11px type renders 5px, not 11.
+ *
+ * Taking only the declared size (the first version of this) let a design declare
+ * its way out of the check: an unreadable strip passed because the number written
+ * on it was fine.
  */
 function lineCeilingPx(box: DocLayoutBox, size: AdSize): { px: number; declared: boolean } {
+  const fromBox = box.h * size.height;
   const declared = box.fontSize ?? 0;
-  if (declared > 0) return { px: declared, declared: true };
-  return { px: box.h * size.height, declared: false };
+  if (declared > 0 && declared < fromBox) return { px: declared, declared: true };
+  return { px: fromBox, declared: false };
 }
 
 /**
@@ -215,7 +232,7 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
   } else {
     const missingOn: string[] = [];
     const illegible: { sizeId: string; px: number; declared: boolean }[] = [];
-    const belowTarget: { sizeId: string; px: number }[] = [];
+    const belowTarget: { sizeId: string; px: number; target: number }[] = [];
     for (const size of sizes) {
       // On the board at all? A slot the layout sheds has no box here — and the
       // disclaimer is the one slot that may never be shed.
@@ -230,8 +247,9 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
       const best = boxes
         .map((b) => lineCeilingPx(b, size))
         .sort((a, b) => b.px - a.px)[0];
+      const target = disclaimerTargetPx(size);
       if (best.px < LEGIBILITY_FLOOR_PX) illegible.push({ sizeId: size.id, ...best });
-      else if (best.px < DISCLAIMER_TARGET_PX) belowTarget.push({ sizeId: size.id, px: best.px });
+      else if (best.px < target) belowTarget.push({ sizeId: size.id, px: best.px, target });
     }
     if (missingOn.length) {
       add({
@@ -261,8 +279,8 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
         severity: 'warning',
         sizes: belowTarget.map((b) => b.sizeId),
         elementId: disclaimers[0].id,
-        message: `The disclaimer gets under ${DISCLAIMER_TARGET_PX}px on ${belowTarget.length === 1 ? 'one board' : `${belowTarget.length} boards`} (${belowTarget.map((b) => `${Math.round(b.px)}px`).join(', ')}).`,
-        fix: `${DISCLAIMER_TARGET_PX}px is what the archetype layouts hold to — legible on a phone at arm's length.`,
+        message: `The disclaimer is smaller than this board can carry on ${belowTarget.length === 1 ? 'one board' : `${belowTarget.length} boards`} (${belowTarget.map((b) => `${Math.round(b.px)}px where ${b.target}px fits`).join(', ')}).`,
+        fix: "A disclaimer wants about 2.2% of the board's short edge — above every manufacturer minimum in the library, and legible on a phone at arm's length.",
       });
     }
   }

@@ -5,7 +5,7 @@ import {
   elementFieldRefs,
   summarizeAudit,
   surfacedFields,
-  DISCLAIMER_TARGET_PX,
+  disclaimerTargetPx,
   LEGIBILITY_FLOOR_PX,
   type AuditFinding,
 } from './template-audit';
@@ -83,15 +83,25 @@ describe('the disclaimer', () => {
     expect(f.message).toContain(`${LEGIBILITY_FLOOR_PX}px`);
   });
 
-  it('is a WARNING between the floor and the target', () => {
+  it('is a WARNING between the floor and what the board can carry', () => {
     const layouts = structuredClone(doc.layouts);
     const id = doc.elements.find((e) => e.role === 'disclaimer')!.id;
-    // 6% of 250px = 15px: readable, but under what the archetypes hold to.
-    layouts.google[id] = { ...layouts.google[id], h: 0.06 };
+    // 12px on a 1200x628 board, where 14px fits: readable, but under par.
+    layouts.fb[id] = { ...layouts.fb[id], fontSize: 12 };
     const found = auditTemplate({ doc: { ...doc, layouts } });
     const f = found.find((x) => x.check === 'disclaimer_illegible')!;
     expect(f.severity).toBe('warning');
-    expect(f.message).toContain(`${DISCLAIMER_TARGET_PX}px`);
+    expect(f.message).toContain('12px where 14px fits');
+  });
+
+  it('scales what it asks for to the board, rather than one flat number', () => {
+    // A flat 22px is a comfortable legal line on a 1080 square and a tenth of a
+    // 300x250. Both of these are the same rule.
+    expect(disclaimerTargetPx({ width: 1080, height: 1080 })).toBe(24);
+    expect(disclaimerTargetPx({ width: 300, height: 250 })).toBe(11);
+    expect(disclaimerTargetPx({ width: 1200, height: 628 })).toBe(14);
+    // Capped, so a billboard-sized board doesn't demand a headline of fine print.
+    expect(disclaimerTargetPx({ width: 4000, height: 4000 })).toBe(26);
   });
 
   it('trusts a declared font size over the box it sits in', () => {

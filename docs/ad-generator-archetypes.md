@@ -132,16 +132,40 @@ disclaimer 11px of frame (single) and 13px (dual), and the 600×400 twenty. A
 fraction is not a size — 4.5% of a 250px board is eleven pixels. The archetype
 floors every board at 22px.
 
-Known imperfections, measured across all 40 rendered ads:
+Known imperfections, re-measured 2026-08-24 across 26 boards (both archetypes,
+both compositions, and both hand-built docs):
 
-- **6 glyph overflows of 3–7px** in the archetype (the hand-built templates have
-  15). Not clipped — the renderer doesn't clip — so it's a hair of spill, but the
-  box heights are a touch tight for fitted type at those sizes.
-- **`1.9% APR` reads redundantly** against its own label, and wraps on 300-wide
-  boards. The cause is in the offer specs, not the archetype:
-  [`offer-types.ts`](../src/lib/ad-generator/offer-types.ts) sets
-  `defaultLabel: 'APR'` **and** `main.suffix: '% APR'`. Fix one of the two. This
-  affects the hand-built templates identically.
+- **Nothing overflows its frame.** Zero elements exceed their box by the metric
+  the renderer fits to — `inner.scrollWidth` against the available width and the
+  *trimmed* ink box against the available height.
+
+  An earlier version of this section claimed 6 overflows of 3–7px in the archetype
+  and 15 in the hand-built docs. **That measurement was wrong**: it compared a
+  `Range` rect against the box, and a Range over inline content returns the union
+  of LINE BOXES, which includes the leading that `text-box: trim-both` removes from
+  what is painted. Measuring line boxes against a frame the fitter sizes by ink
+  will always report spill that is not there. Beware repeating it — the builder's
+  own `measureGlyphs` uses a Range for a different purpose (hugging a text box to
+  its content) where the leading is wanted.
+
+- **A two-offer board renders its two figures at different sizes**, and this one is
+  real. Each figure fits its own box independently, so a short string in a wide
+  column grows until the WIDTH binds while a longer one is bound by HEIGHT first.
+  Measured on the arch dual: 71px of ink against 134px on the square, 152 against
+  285 on the story. The hand-built dual has the same fault, slightly milder (79 vs
+  108 on Facebook).
+
+  It matters because a comparison implies the two offers are being shown on equal
+  terms, and the bigger number reads as the better deal. Fixing it needs a **shared
+  fit group** — the fitter settling both figures on the smaller of the two sizes —
+  which is a new mechanism in the renderer rather than a tuning change, so it is
+  called out here rather than quietly attempted.
+
+- **`1.9% APR` reading redundantly is FIXED.** `offer-types.ts` set
+  `defaultLabel: 'APR'` and `main.suffix: '% APR'`, so the figure repeated its own
+  label. The suffix is `%` now, and a separate `proseSuffix: ' APR'` keeps the
+  sentence form ("1.9% APR for 60 months") that `deterministicCopy` needs. The
+  creative shows the figure; only sentences carry the words.
 
 ## 6. The four numbers that are judgement, not arithmetic
 
@@ -311,17 +335,33 @@ are extra legal lines that one offer type requires and another does not.
 **So the original plan was wrong.** Deleting Show For outright would delete the
 only way to say "this line appears on APR ads". What Phase 2 removed was the
 *need* to use Show For for plate switching; the residual use is legitimate and
-should stay. The work left is:
+should stay.
 
-1. Retire "Edits apply to" — the archetype layout makes the scope question moot.
-2. Replace the Preview tabs with the proof sheet (**done**, Phase 4a).
-3. Migrate the two mechanical templates, then rename Show For to what it now
-   means — a per-type *disclosure*, not a layout switch — and stop offering it on
-   layers bound to offer tokens, where it can only cause the old confusion.
+Where the three controls now stand:
 
-*Done when:* the builder has no edit-scope mode, the Layers panel is the design's
-own layer list, and Show For appears only where a per-type disclosure is what a
-designer actually means.
+- ✅ **Show For is narrowed.** On a layer that renders the offer itself — a plate,
+  or anything bound to a computed `_offer*` token — the control is withheld and
+  says why, because the engine already resolves the right words for every type and
+  gating such a layer can only blank the ad for the excluded ones. That was the
+  mechanism behind per-type plate copies and behind "the Show For labels make it
+  extremely finicky". `bindsOfferToken` in `doc-types.ts` is the predicate; the
+  tooltip now describes a per-type *disclosure*, which is what the control is for.
+- ✅ **Preview tabs → the proof sheet** (Phase 4a).
+- ⚖️ **"Edits apply to" DEFAULTS to All sizes** rather than being retired. The
+  original plan was deletion; the honest read is that per-board work is legitimate
+  (the deliberate exceptions in §5 of this doc), and what was wrong was the
+  default. It shipped as this-size-only because broadcasting was unreliable —
+  position travelled as a coordinate, z-order and hidden state didn't travel at
+  all. Those are fixed, so broadcasting is the tested path, and the old default was
+  producing the very drift it was meant to prevent. The control stays as a
+  deliberate act, storage key bumped so a remembered `size` doesn't keep the old
+  behaviour for exactly the people who complained.
+
+**Left:** migrate the two mechanical templates the survey found (a currency mark
+and a percent mark gated by type, which the plate renders on its own).
+
+*Done when:* no template in the library uses Show For for anything but a per-type
+disclosure.
 
 ### Phase 5 — offers as a list
 
@@ -408,9 +448,13 @@ is available server-side, where a page component's helper could never go.
 
 ## 11. Open questions
 
-1. **How much per-type layout difference is real?** If APR is the same plate with
-   a different number, Phase 2 finishes the job. If APR is a genuinely different
-   composition, the archetype needs a per-type layout override.
+1. ~~**How much per-type layout difference is real?**~~ **ANSWERED: none, for the
+   vehicle kind.** One plate serves lease, APR, discount and sale price with no
+   conditional visibility anywhere in the composition, and the proof sheet draws
+   all four on every board so the claim is checkable rather than asserted. The
+   `visibleWhen` gating that remains in the library is per-type DISCLOSURES (cost
+   per $1,000 on APR, the source of a discount) — extra lines one type requires,
+   not a different layout. No per-type layout override is needed.
 2. **Per-OEM archetypes, or one archetype themed per make?** The prototype
    assumes the latter (Young Subaru is a theme, not an archetype). Ford and the
    powersports stores will settle it.

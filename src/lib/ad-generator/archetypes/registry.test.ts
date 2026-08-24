@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ARCHETYPE_STARTS, BRAND_THEME, DEFAULT_SIZES, archetypeStart, archetypeStartGroups, docFromStart } from './registry';
-import { youngSubaruDualOffer, youngSubaruSingleOffer } from './young-subaru-archetype';
-import { YOUNG_SUBARU_SIZES } from '../templates/young-subaru-offers';
+import { ARCHETYPE_STARTS, BRAND_THEME, DEFAULT_SIZES, archetypeStartGroups, docFromStart } from './registry';
 import { renderDoc } from '../doc-renderer';
 import { enrichOfferFields } from '../offer-text';
 import type { AdSize } from '../types';
@@ -83,47 +81,8 @@ describe('a starting point keeps the template it lands on', () => {
   });
 });
 
-describe('the Young Subaru starts match the archetype docs', () => {
-  /**
-   * The acceptance criterion for this phase: a designer picking "Young Subaru —
-   * One Offer" gets the doc `youngSubaruSingleOffer()` produces, on all five
-   * channels, without typing a coordinate. Everything but the template's own
-   * identity has to be identical, so this compares the whole design.
-   */
-  const identity = (doc: ReturnType<typeof youngSubaruSingleOffer>) => {
-    const { id, name, description, ...design } = doc;
-    void id;
-    void name;
-    void description;
-    return design;
-  };
-
-  it('single offer is byte-comparable to youngSubaruSingleOffer()', () => {
-    const fromStart = docFromStart(archetypeStart('young-subaru-single')!, { id: 'x' });
-    expect(identity(fromStart)).toEqual(identity(youngSubaruSingleOffer()));
-  });
-
-  it('dual offer is byte-comparable to youngSubaruDualOffer()', () => {
-    const fromStart = docFromStart(archetypeStart('young-subaru-dual')!, { id: 'x' });
-    expect(identity(fromStart)).toEqual(identity(youngSubaruDualOffer()));
-  });
-
-  it('lays the same five channels out either way', () => {
-    const fromStart = docFromStart(archetypeStart('young-subaru-single')!, { id: 'x' });
-    expect(Object.keys(fromStart.layouts).sort()).toEqual(YOUNG_SUBARU_SIZES.map((s) => s.id).sort());
-  });
-
-  it('arrives with the rooftop already filled in', () => {
-    // A store preset that lands showing a generic placeholder has not saved the
-    // designer the work it exists to save.
-    const doc = docFromStart(archetypeStart('young-subaru-single')!, { id: 'x' });
-    expect(doc.defaults.dealerName).toBe('Young Subaru');
-    expect(doc.defaults.vehicleName).toContain('Subaru');
-  });
-});
-
 describe('the picker has something to show', () => {
-  it('groups compositions before store presets', () => {
+  it('offers every entry, grouped', () => {
     const groups = archetypeStartGroups();
     expect(groups[0].group).toBe('Compositions');
     expect(groups.flatMap((g) => g.items)).toHaveLength(ARCHETYPE_STARTS.length);
@@ -138,14 +97,22 @@ describe('the picker has something to show', () => {
     }
   });
 
-  it('scopes store presets to their rooftop and leaves compositions global', () => {
-    // What `scripts/seed-archetype-templates.ts` seeds each row to: a Subaru
-    // preset belongs to Young Subaru, and a generic composition belongs to
-    // everyone the industry filter allows.
+  it('names no rooftop, dealership or make — this list is shown to everyone', () => {
+    // The regression this exists for: two Young Subaru presets sat here, so a Ford
+    // dealer opening the builder was offered "Young Subaru" as a way to start an
+    // ad. A store's palette belongs to its account branding, its channel sizes to
+    // the size library, and its sample content to its own templates.
     for (const s of ARCHETYPE_STARTS) {
-      if (s.group === 'Compositions') expect(s.accountKey, s.id).toBeUndefined();
-      else expect(s.accountKey, s.id).toBeTruthy();
+      const text = `${s.id} ${s.name} ${s.hint} ${s.group}`;
+      expect(text, s.id).not.toMatch(
+        /young|subaru|mazda|ford|chevrolet|kia|hyundai|nissan|toyota|honda|dealership/i,
+      );
     }
+  });
+
+  it('paints every entry from the account rather than a fixed palette', () => {
+    // The reason a store preset is unnecessary in the first place.
+    for (const s of ARCHETYPE_STARTS) expect(s.theme.brand, s.id).toBe('brand');
   });
 
   it('has no duplicate ids or names', () => {

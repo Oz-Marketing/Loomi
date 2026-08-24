@@ -178,11 +178,21 @@ describe('the offer plate holds its proportions across boards', () => {
 describe('small boards shed content instead of crushing it', () => {
   const doc = youngSubaruSingleOffer();
 
-  it('drops the tagline on the 300×250, exactly as the hand-tuned layout did', () => {
-    expect(doc.layouts.google.tagline).toBeUndefined();
+  it('drops the vehicle name on the 300×250, exactly as the hand-tuned layout did', () => {
+    expect(doc.layouts.google.vehicleName).toBeUndefined();
     // …and keeps it where there is room.
-    expect(doc.layouts.fb.tagline).toBeTruthy();
-    expect(doc.layouts.ksl850.tagline).toBeTruthy();
+    expect(doc.layouts.fb.vehicleName).toBeTruthy();
+    expect(doc.layouts.ksl850.vehicleName).toBeTruthy();
+  });
+
+  it('carries no tagline or expiration slot at all, on any board', () => {
+    // Both left the composition on the designers' say-so — "we never use
+    // taglines", "the expiration usually just goes into the disclaimer". The
+    // fields remain bindable; the composition simply stops assuming them.
+    for (const size of doc.sizes) {
+      expect(doc.layouts[size.id].tagline, size.id).toBeUndefined();
+      expect(doc.layouts[size.id].expiration, size.id).toBeUndefined();
+    }
   });
 
   it('keeps the offer and the disclaimer on every board it sheds from', () => {
@@ -230,10 +240,19 @@ describe('what the archetype replaces', () => {
   it('produces the same slots the hand-built Young Subaru doc places', () => {
     // Same anatomy, so the comparison is like-for-like: what changes is that
     // nobody typed the geometry.
+    //
+    // Except the expiration pill, which the archetype deliberately no longer
+    // carries — Young's designers put the date in the disclaimer, where the
+    // manufacturer's own wording already composes it.
+    const dropped = new Set(['expiration', 'tagline']);
     const arch = youngSubaruSingleOffer();
     const hand = youngSubaruSingleOfferDoc;
     const ids = (d: TemplateDoc) => new Set(d.elements.map((e) => e.id));
-    for (const id of ids(hand)) expect(ids(arch).has(id), `missing slot ${id}`).toBe(true);
+    for (const id of ids(hand)) {
+      if (dropped.has(id)) continue;
+      expect(ids(arch).has(id), `missing slot ${id}`).toBe(true);
+    }
+    for (const id of dropped) expect(ids(arch).has(id), `${id} should be gone`).toBe(false);
   });
 
   it('states the theme once instead of five layouts', () => {
@@ -252,7 +271,6 @@ describe('what the archetype replaces', () => {
       brand: '#1c3f94',
       ink: '#101828',
       muted: '#475467',
-      onBrand: '#ffffff',
       fade: { angle: 180, end: 45 },
     };
     const doc = buildArchetypeDoc(vehicleOfferArchetype(1), ford, YOUNG_SUBARU_SIZES, {
@@ -462,19 +480,39 @@ describe('nothing an archetype builds is sized in fixed pixels', () => {
       }
     });
 
-    it(`${label}: no box states a font size`, () => {
+    it(`${label}: no box states a font size except the disclaimer's cap`, () => {
       // Same reason, one level up: `fontSize` on a layout box is px on that board.
       // Type is FITTED to its frame instead, so the frame is the only thing an
       // archetype has to get right and the size follows from the board.
+      //
+      // The disclaimer is the exception, and it earns it: it is the one slot that
+      // HOLDS its type rather than fitting it (a paragraph of unknown length in a
+      // fixed strip), so it needs a ceiling — and the ceiling is derived from the
+      // board's short edge, not typed in. What the rule forbids is a constant.
       const doc = buildArchetypeDoc(arch, YOUNG_SUBARU_THEME, YOUNG_SUBARU_SIZES, {
         id: 't',
         name: 'T',
       });
+      const caps = new Set<number>();
       for (const [sizeId, boxes] of Object.entries(doc.layouts)) {
         for (const [id, b] of Object.entries(boxes)) {
+          if (id === 'disclaimer') {
+            const size = YOUNG_SUBARU_SIZES.find((s) => s.id === sizeId)!;
+            expect(b.fontSize, `${sizeId}/disclaimer cap`).toBeGreaterThanOrEqual(11);
+            expect(b.fontSize, `${sizeId}/disclaimer cap`).toBeLessThanOrEqual(26);
+            // And it has to FIT the strip it caps, or the cap is a lie.
+            expect(b.fontSize!, `${sizeId}/disclaimer cap vs strip`).toBeLessThanOrEqual(
+              b.h * size.height,
+            );
+            caps.add(b.fontSize!);
+            continue;
+          }
           expect(b.fontSize, `${sizeId}/${id}`).toBeUndefined();
         }
       }
+      // Derived, not constant: five boards of different short edges must not all
+      // land on one number.
+      expect(caps.size, 'the cap should vary with the board').toBeGreaterThan(1);
     });
   }
 });

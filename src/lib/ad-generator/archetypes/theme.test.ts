@@ -15,7 +15,6 @@ const RED: Theme = {
   brand: '#b91c1c',
   ink: '#450a0a',
   muted: '#7f1d1d',
-  onBrand: '#ffffff',
   fade: { angle: 90, end: 40 },
 };
 
@@ -25,8 +24,8 @@ describe('a recolour repaints the design', () => {
     const el = (id: string) => next.elements.find((e) => e.id === id)!;
     expect(el('bgFill').fill).toBe(RED.base);
     expect(el('offerMain').color).toBe(RED.brand);
-    expect(el('expiration').bg).toBe(RED.brand);
-    expect(el('expiration').color).toBe(RED.onBrand);
+    expect(el('vehicleName').color).toBe(RED.ink);
+    expect(el('offerLabel').color).toBe(RED.muted);
     expect(el('disclaimer').color).toBe(RED.muted);
   });
 

@@ -148,18 +148,21 @@ both compositions, and both hand-built docs):
   own `measureGlyphs` uses a Range for a different purpose (hugging a text box to
   its content) where the leading is wanted.
 
-- **A two-offer board renders its two figures at different sizes**, and this one is
-  real. Each figure fits its own box independently, so a short string in a wide
-  column grows until the WIDTH binds while a longer one is bound by HEIGHT first.
-  Measured on the arch dual: 71px of ink against 134px on the square, 152 against
-  285 on the story. The hand-built dual has the same fault, slightly milder (79 vs
-  108 on Facebook).
+- ~~**A two-offer board renders its two figures at different sizes.**~~ **FIXED.**
+  Each figure fitted its own box, so a short string in a wide column grew until its
+  WIDTH bound while a longer one was bound by HEIGHT first: 71px of ink against 134
+  on the square, 152 against 285 on the story. A comparison implies the two offers
+  are shown on equal terms, and the bigger number read as the better deal.
 
-  It matters because a comparison implies the two offers are being shown on equal
-  terms, and the bigger number reads as the better deal. Fixing it needs a **shared
-  fit group** — the fitter settling both figures on the smaller of the two sizes —
-  which is a new mechanism in the renderer rather than a tuning change, so it is
-  called out here rather than quietly attempted.
+  `DocElement.fitGroup` groups elements that must settle on one size, and the dual
+  archetype pairs each row. **Not the minimum of the individual sizes** — the
+  smallest member may be small because it WRAPS, and a wrapping label at another
+  member's size overflows ("PER MONTH LEASE" beside "APR" on a 600×400 dual, by
+  18px). The group takes the largest size at which every member fits. Verified
+  across 8 dual boards: every pair matches and nothing overflows.
+
+  The hand-built dual still has the fault (79 vs 108 on Facebook); it declares no
+  fit group. One more reason to re-cut it from the archetype rather than migrate it.
 
 - **`1.9% APR` reading redundantly is FIXED.** `offer-types.ts` set
   `defaultLabel: 'APR'` and `main.suffix: '% APR'`, so the figure repeated its own

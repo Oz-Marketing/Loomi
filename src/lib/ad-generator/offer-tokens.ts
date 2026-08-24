@@ -17,6 +17,8 @@
  * See docs/ad-generator-archetypes.md §1, §8 Phase 1.
  */
 
+import { offerSlotPrefix } from './doc-types';
+
 export interface OfferToken {
   /** The `AdData` key, as bound (`field:<key>`). */
   key: string;
@@ -52,14 +54,27 @@ export const OFFER_TOKENS: OfferToken[] = [
   },
 ];
 
+/**
+ * One offer slot's tokens, named for the offer they belong to.
+ *
+ * `index` is 0-based, matching `offerSlotPrefix` and a plate's `offerIndex`, so a
+ * third offer needs no new export here — which is the point. `OFFER_TOKENS_O2` was
+ * that new export, and it was the reason every caller had to know how many offers
+ * existed.
+ */
+export function offerTokensForSlot(index: number): OfferToken[] {
+  const prefix = offerSlotPrefix(index);
+  return OFFER_TOKENS.map((t) => ({
+    key: prefix ? t.key.replace('_offer', `_${prefix}offer`) : t.key,
+    label: t.label.replace('Offer', `Offer ${index + 1}`),
+    hint: t.hint,
+  }));
+}
+
 /** The second offer's twins, on a dual template. */
-export const OFFER_TOKENS_O2: OfferToken[] = OFFER_TOKENS.map((t) => ({
-  key: t.key.replace('_offer', '_o2_offer'),
-  label: t.label.replace('Offer', 'Offer 2'),
-  hint: t.hint,
-}));
+export const OFFER_TOKENS_O2: OfferToken[] = offerTokensForSlot(1);
 
 /** The first offer's tokens, named "Offer 1" for a template that has two. */
 export function offerTokensNumbered(): OfferToken[] {
-  return OFFER_TOKENS.map((t) => ({ ...t, label: t.label.replace('Offer', 'Offer 1') }));
+  return offerTokensForSlot(0);
 }

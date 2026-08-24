@@ -99,6 +99,13 @@ function offerPlate(i: number, dual: boolean): ArchetypeSlot[] {
   const p = prefixFor(i);
   const who = i === 0 ? 'Offer' : `Offer ${i + 1}`;
   const align = dual ? ('center' as const) : undefined;
+  // In a DUAL the two plates are a comparison, so each row is sized as a pair:
+  // both figures take the smaller of the two fitted sizes, and likewise the
+  // labels and the terms. Without this, "$299/mo" (width-bound) and "1.9%"
+  // (height-bound) landed at 71px and 134px of ink on the same square, and the
+  // bigger number reads as the better deal. A single offer has nothing to pair
+  // with, so it names no group.
+  const pair = (row: string) => (dual ? { fitGroup: `offer-${row}` } : {});
   return [
     {
       id: slotId(i, 'vehicleName'),
@@ -112,7 +119,7 @@ function offerPlate(i: number, dual: boolean): ArchetypeSlot[] {
       // dropped the vehicle name; their 300×250 dual kept both names and dropped
       // the offer labels instead.
       shedAt: dual ? 6 : 2,
-      build: (t) => ({ id: slotId(i, 'vehicleName'), type: 'text', name: `${who} vehicle`, binding: { kind: 'field', key: `${p}vehicleName` }, fontWeight: 700, color: t.ink, align: align ?? 'center' }),
+      build: (t) => ({ ...pair('vehicleName'), id: slotId(i, 'vehicleName'), type: 'text', name: `${who} vehicle`, binding: { kind: 'field', key: `${p}vehicleName` }, fontWeight: 700, color: t.ink, align: align ?? 'center' }),
     },
     {
       id: slotId(i, 'offerLabel'),
@@ -121,17 +128,17 @@ function offerPlate(i: number, dual: boolean): ArchetypeSlot[] {
       // "PER MONTH LEASE" as well as the number, and the hand-tuned dual layout
       // dropped exactly this. The single keeps it, because it has the room.
       shedAt: 4,
-      build: (t) => ({ id: slotId(i, 'offerLabel'), type: 'text', name: `${who} label`, binding: { kind: 'field', key: `_${p}offerLabel` }, fontWeight: 700, color: t.muted, uppercase: true, letterSpacing: 2, align }),
+      build: (t) => ({ ...pair('offerLabel'), id: slotId(i, 'offerLabel'), type: 'text', name: `${who} label`, binding: { kind: 'field', key: `_${p}offerLabel` }, fontWeight: 700, color: t.muted, uppercase: true, letterSpacing: 2, align }),
     },
     {
       id: slotId(i, 'offerMain'),
       role: 'offer',
-      build: (t) => ({ id: slotId(i, 'offerMain'), type: 'text', name: `${who} figure`, binding: { kind: 'field', key: `_${p}offerMain` }, fontWeight: 800, color: t.brand, lineHeight: 0.95, letterSpacing: -1, align }),
+      build: (t) => ({ ...pair('offerMain'), id: slotId(i, 'offerMain'), type: 'text', name: `${who} figure`, binding: { kind: 'field', key: `_${p}offerMain` }, fontWeight: 800, color: t.brand, lineHeight: 0.95, letterSpacing: -1, align }),
     },
     {
       id: slotId(i, 'offerTerms'),
       role: 'offer',
-      build: (t) => ({ id: slotId(i, 'offerTerms'), type: 'text', name: `${who} terms`, binding: { kind: 'field', key: `_${p}offerTerms` }, fontWeight: 500, color: t.muted, align }),
+      build: (t) => ({ ...pair('offerTerms'), id: slotId(i, 'offerTerms'), type: 'text', name: `${who} terms`, binding: { kind: 'field', key: `_${p}offerTerms` }, fontWeight: 500, color: t.muted, align }),
     },
   ];
 }

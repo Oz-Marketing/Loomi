@@ -15,8 +15,15 @@ import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
  * panel does it inline; the worker does it in the orchestrator).
  */
 
-/** `'' ` = the only / first offer slot; `'o2_'` = a dual template's second offer. */
-export type OfferSlot = '' | 'o2_';
+/**
+ * An offer slot's field prefix: `''` for the first, `o2_` for the second, and so
+ * on — see `offerSlotPrefix`.
+ *
+ * A template-literal type rather than the literal union `'' | 'o2_'` it was, so
+ * the type does not have to be edited for a template to carry a third offer. The
+ * doc format has always allowed one.
+ */
+export type OfferSlot = '' | `o${number}_`;
 
 export interface IncentivePatchContext {
   /** The searched vehicle — the incentive feed doesn't echo it back reliably. */

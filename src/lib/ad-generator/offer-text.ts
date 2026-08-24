@@ -1,4 +1,5 @@
 import type { AdData } from './types';
+import { offerSlotPrefixes } from './doc-types';
 import {
   CUSTOM_OFFER_TYPE_SPECS,
   VEHICLE_OFFER_TYPE_SPECS,
@@ -177,7 +178,7 @@ function bareValue(v: string | undefined, format: OfferFigureFormat): string | n
 }
 
 /**
- * Compute the `_offer*` (and `_o2_offer*`) display fields the doc templates bind
+ * Compute the `_offer*` display fields the doc templates bind
  * to, from the structured offer fields. Generic — runs for ANY TemplateDoc via
  * the renderer adapter — so the offer block shows everywhere a doc is rendered
  * (builder canvas, generator, gallery thumbs, snapshot copies, export), not just
@@ -185,9 +186,12 @@ function bareValue(v: string | undefined, format: OfferFigureFormat): string | n
  */
 export function enrichOfferFields(data: AdData): AdData {
   const out: AdData = { ...data };
-  for (const prefix of ['', 'o2_'] as const) {
-    // Only synthesize a block if this prefix's offer is actually in play.
-    if (!(`${prefix}offerType` in data) && prefix !== '') continue;
+  // EVERY slot the data carries, not the literal pair `['', 'o2_']` this used to
+  // iterate. The doc format has always allowed a third offer (a plate with
+  // `offerIndex: 2` reads `o3_*`), so a doc could have offer fields the engine
+  // never computed values for — the plate would render its em-dash placeholder and
+  // nobody would know why.
+  for (const prefix of offerSlotPrefixes(data)) {
     const offer = assembleOffer(data, prefix);
     out[`_${prefix}offerLabel`] = offer ? offer.label : data[`${prefix}offerLabel`] || 'PER MONTH LEASE';
     out[`_${prefix}offerMain`] = offer ? offer.main : data[`${prefix}price`] || '$X,XXX/mo';

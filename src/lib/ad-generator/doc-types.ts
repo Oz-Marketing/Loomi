@@ -379,10 +379,79 @@ export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> 
   return keys;
 }
 
-/** The field prefix an offer plate reads — '' for the first offer, 'o2_' for the second. */
+/**
+ * THE OFFER SLOT PREFIX. `''` for the first offer, `o2_` for the second, `o3_`
+ * for a third — the one place that spelling is decided.
+ *
+ * Every consumer takes a prefix, so the doc format has always allowed a third
+ * offer: give a plate `offerIndex: 2` and it reads `o3_*`. What did NOT allow it
+ * was the engine, which iterated the literal pair `['', 'o2_']` in half a dozen
+ * places — so an `o3_` field got no computed values, no placeholder guard and no
+ * compliance check, while looking to a designer like any other offer.
+ */
+export function offerSlotPrefix(index: number): string {
+  return index <= 0 ? '' : `o${index + 1}_`;
+}
+
+/** Matches any offer slot prefix, capturing its 1-based number. */
+export const OFFER_SLOT_RE = /^o(\d+)_/;
+
+/** The slot index a key belongs to — 0 for an unprefixed field. */
+export function offerSlotIndex(key: string): number {
+  const m = OFFER_SLOT_RE.exec(key);
+  return m ? Number(m[1]) - 1 : 0;
+}
+
+/** A key with its slot prefix removed: `o3_monthlyPayment` → `monthlyPayment`. */
+export function offerSlotBaseKey(key: string): string {
+  return key.replace(OFFER_SLOT_RE, '');
+}
+
+/**
+ * The offer slots this DATA actually carries, as prefixes, first slot first.
+ *
+ * Derived from the presence of a slot's `offerType`, which is the field every
+ * offer has and the one the field specs condition on. The first slot is always
+ * included: an ad with no offer fields at all still renders one offer's worth of
+ * placeholders, which is what the single-offer templates rely on.
+ */
+export function offerSlotPrefixes(data: Record<string, unknown>): string[] {
+  const found = new Set<number>([0]);
+  for (const key of Object.keys(data)) {
+    if (!key.endsWith('offerType')) continue;
+    const m = OFFER_SLOT_RE.exec(key);
+    if (m) found.add(Number(m[1]) - 1);
+  }
+  return [...found].sort((a, b) => a - b).map(offerSlotPrefix);
+}
+
+/**
+ * The field keys an element READS, for a caller that has to inspect values.
+ *
+ * A `field` binding is its own key. An offer PLATE has no binding at all — it
+ * renders three assembled values chosen by its `offerIndex` — so anything that
+ * only looked at `el.binding.kind === 'field'` could not see a plate.
+ *
+ * That is not hypothetical: preflight's placeholder guard and empty-binding check
+ * both did exactly that, so a plate-based template was UNGUARDED. A design whose
+ * offer figure would render "$X,XXX/mo" passed preflight clean, which on the
+ * unattended pipeline means publishing it. The plate arrived with Phase 2 and
+ * preflight was never taught about it.
+ *
+ * `brand` bindings are excluded deliberately: they resolve from account branding
+ * rather than from ad data, and the callers here are checking ad data.
+ */
+export function elementBoundKeys(el: Pick<DocElement, 'type' | 'binding' | 'offerIndex'>): string[] {
+  if (el.type === 'offer') {
+    const p = offerFieldPrefix(el);
+    return [`_${p}offerLabel`, `_${p}offerMain`, `_${p}offerTerms`];
+  }
+  return el.binding?.kind === 'field' ? [el.binding.key] : [];
+}
+
+/** The field prefix an offer plate reads. */
 export function offerFieldPrefix(el: Pick<DocElement, 'offerIndex'>): string {
-  const i = el.offerIndex ?? 0;
-  return i <= 0 ? '' : `o${i + 1}_`;
+  return offerSlotPrefix(el.offerIndex ?? 0);
 }
 
 /**

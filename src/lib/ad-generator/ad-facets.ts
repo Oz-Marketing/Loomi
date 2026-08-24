@@ -21,7 +21,14 @@ import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
  * endpoint already ships each ad's full `data` for the preview thumbnails.
  */
 
-/** The offer slots a template can fill. Mirrors `OfferSlot` in incentive-apply. */
+/**
+ * The offer slots to read facets from.
+ *
+ * Fixed at two because these are the slots the OFFER FEED fills, and a third
+ * offer would be a hand-built comparison rather than something MarketCheck
+ * returns. Stated as a decision rather than an assumption: if a third feed-filled
+ * offer ever exists, this list and `offerSlotPrefix` are the two things to change.
+ */
 const SLOTS = ['', 'o2_'] as const;
 
 export type FacetKey = 'make' | 'model' | 'trim' | 'year' | 'offerType';

@@ -366,13 +366,45 @@ and a percent mark gated by type, which the plate renders on its own).
 *Done when:* no template in the library uses Show For for anything but a per-type
 disclosure.
 
-### Phase 5 — offers as a list
+### Phase 5 — offers as a list *(the engine half is done; the UI half is deferred)*
 
-Replace the `o2_` twin fields with an indexed offer list. `offerPlate(i)` already
-reads a prefix, so the archetype side is done; the field schema, the client form,
-the disclaimer tokens and MarketCheck ingest are not.
+The plan was to replace the `o2_` twin fields with an indexed offer list. Half of
+that turned out to be a **latent bug rather than a feature**, and that half is
+done. The other half is a capability nobody has asked for, and it is deferred
+deliberately.
 
-*Done when:* a three-offer template needs no new fields and no new template.
+**What the doc format already allowed.** Every consumer takes a *prefix*, and
+`offerFieldPrefix` has always returned `o3_` for a plate with `offerIndex: 2`. So a
+third offer was already expressible. What did not allow it was the ENGINE, which
+iterated the literal pair `['', 'o2_']` in half a dozen places — `enrichOfferFields`,
+`preflight`'s `baseKey` and its `_o2_offerTerms` exemption, `OFFER_TOKENS_O2`,
+`OfferSlot`. A third offer therefore got no computed values, no placeholder guard
+and no compliance check, while looking to a designer like any other offer.
+
+✅ **Fixed.** `offerSlotPrefix` / `offerSlotPrefixes` / `offerSlotBaseKey` in
+`doc-types.ts` are the one rule, the engine iterates the slots the data actually
+carries, and `offerTokensForSlot(i)` replaces the hand-written second-offer twins.
+`offer-slots.test.ts` holds it: a third offer is computed, guarded and checked
+exactly like the first two.
+
+✅ **And a live bug it uncovered, which matters more.** Preflight only inspected
+elements whose `binding.kind === 'field'` — and an offer PLATE has no binding, it
+renders three assembled values chosen by its `offerIndex`. So a plate-based
+template, which is what the builder's Offer element creates, was **completely
+unguarded**: a design whose figure would render `$X,XXX/mo` passed preflight clean,
+and on the unattended pipeline that means publishing it. `elementBoundKeys` now
+answers "what does this element read" for both shapes, and preflight uses it for
+the placeholder guard and the empty-binding check.
+
+⏸️ **Deferred, on purpose:** the field kit, the client form's offer cards, and the
+MarketCheck slot mapping still assume two. Making them n-offer is maybe a day, and
+it buys a three-offer template that nobody has asked for — in the highest-blast-radius
+area of the generator, weeks before launch. The engine no longer stands in the way,
+which was the part worth doing now.
+
+*Done when:* somebody actually wants a three-offer ad. Then: `addFieldKit` takes a
+count, `offer-card.tsx` renders per slot, and `ad-facets`' `SLOTS` grows if the
+feed ever fills a third.
 
 ### Phase 6 — compliance at design time — **SHIPPED**
 

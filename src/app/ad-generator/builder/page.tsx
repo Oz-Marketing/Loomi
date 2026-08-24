@@ -113,7 +113,6 @@ import {
 } from '@/lib/ad-generator/size-scope';
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
-import { useIndustries } from '@/lib/hooks/use-industries';
 import { bindsOfferToken, templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
@@ -3043,8 +3042,9 @@ export default function AdBuilderPage() {
     });
   }
 
-  // ── industries (which accounts this template is offered to) ──
-  const allIndustries = useIndustries();
+  // The settings panel's Industries picker (and its `useIndustries` read) is
+  // gone. `doc.industries` is still part of the doc and still filters which
+  // accounts see a template; nothing in the builder asks a designer about it.
 
   /**
    * Ad mode: react to the ad having just stopped following its template.
@@ -4276,7 +4276,18 @@ export default function AdBuilderPage() {
               {settingsOpen && (
                 <>
                   <div className="fixed inset-0 z-[90]" onClick={() => setSettingsOpen(false)} />
-                  <div className="absolute right-0 top-11 z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
+                  {/*
+                    A bounded column, not a list that grows: with a theme editor, a
+                    usage picker, the offer count, the make and the size tools this
+                    ran off the bottom of the screen. The BODY scrolls and the three
+                    actions stay pinned, because "Proof sheet" is the one thing a
+                    designer opens this menu for and it was the furthest away.
+
+                    Every dropdown inside portals its menu to the body (Select and
+                    MultiSelect both), so the scroll container cannot clip one.
+                  */}
+                  <div className="absolute right-0 top-11 z-[100] flex max-h-[calc(100vh-6rem)] w-72 max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+                   <div className="min-h-0 flex-1 overflow-y-auto p-4">
                     {/* Theme first, and only for a design an archetype produced:
                         it is the control a designer reaches for most, and the one
                         that replaces recolouring every layer on every board.
@@ -4289,20 +4300,15 @@ export default function AdBuilderPage() {
                         />
                       </div>
                     )}
-                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h3>
-                    <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
-                      Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
-                    </p>
-                    <MultiSelect
-                      value={doc.industries ?? []}
-                      onChange={(vals) => setDoc((prev) => ({ ...prev, industries: vals }), 'industries')}
-                      options={allIndustries.map((name) => ({ value: name, label: name }))}
-                      placeholder="All vehicle-offer accounts"
-                      menuZIndex={260}
-                    />
-                    <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
-
-                    <div className="mt-4 border-t border-[var(--border)] pt-3">
+                    {/* INDUSTRIES was here — a multi-select for which industries
+                        could use the template. Removed on Connor's read that it
+                        "doesn't really make sense anymore": the generator is
+                        automotive now, every composition is built for a vehicle
+                        offer, and the field's own default (none selected → the
+                        vehicle-offer industries) is the only answer anyone picked.
+                        `doc.industries` still exists and archetypes still set
+                        Automotive; what is gone is asking a designer about it. */}
+                    <div>
                       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Used for</h3>
                       <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
                         Unattended OEM generation has no human to fill a blank, so every field an
@@ -4411,7 +4417,9 @@ export default function AdBuilderPage() {
                       </div>
                     )}
 
-                    <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                   </div>
+
+                    <div className="space-y-2 border-t border-[var(--border)] p-4">
                       {/* The PROOF SHEET: every offer type × every board, drawn by
                           the exporter's renderer and checked by the compliance gate
                           that generation runs. The pre-publish read the preview tabs

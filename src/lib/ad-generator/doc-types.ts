@@ -198,6 +198,21 @@ export interface DocElement {
    *  size (that's FILL). The chosen font size is the CAP. When falsy the element is
    *  FILL instead: the font auto-scales (up + down) to fill the box. Aligned by
    *  `align` (horizontal) + `vAlign` (vertical) in both modes. */
+  /**
+   * Elements sharing a `fitGroup` settle on ONE font size — the smallest any of
+   * them needs.
+   *
+   * For a comparison. Two offer figures each fitted to their own box land at
+   * different sizes, because a short string in a wide column grows until the WIDTH
+   * binds while a longer one is bound by HEIGHT first: measured on a two-offer
+   * square, 71px of ink against 134px. That reads as one offer being the better
+   * deal, which is a claim the design is making by accident.
+   *
+   * The fit script fits each member normally, then drops the whole group to the
+   * minimum. Only members of the same group affect each other, so this is inert
+   * for every element that does not name one.
+   */
+  fitGroup?: string;
   shrink?: boolean;
   /** DEPRECATED — the retired "Wrap" mode (fixed font, clip on overflow). Existing
    *  elements with `wrap` truthy are treated as SHRINK; no new element sets it. */

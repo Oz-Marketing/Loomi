@@ -86,14 +86,16 @@ describe('generateRenditions', () => {
     const result = await generateRenditions('asset-1', [
       { name: 'Instagram Square' },
       { name: 'Instagram Story / Reels' },
-      { name: 'Leaderboard' },
+      // A wide unit, to prove a landscape master crops rather than squashes. Was
+      // the 728x90 leaderboard until that size left the library.
+      { name: 'Billboard' },
     ]);
 
     expect(result.failed).toEqual([]);
     expect(result.created.map((r) => r.name).sort()).toEqual([
+      'Billboard',
       'Instagram Square',
       'Instagram Story / Reels',
-      'Leaderboard',
     ]);
 
     // Verify the actual pixels, not just the recorded numbers.
@@ -103,7 +105,7 @@ describe('generateRenditions', () => {
         return `${m.width}x${m.height}`;
       }),
     );
-    expect(dims.sort()).toEqual(['1080x1080', '1080x1920', '728x90']);
+    expect(dims.sort()).toEqual(['1080x1080', '1080x1920', '970x250']);
     expect(uploaded.every((u) => u.contentType === 'image/jpeg')).toBe(true);
   });
 

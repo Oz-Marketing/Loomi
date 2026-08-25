@@ -102,6 +102,7 @@ import {
   clearElementOverride,
   effectiveElement,
   overriddenKeys,
+  effectiveEditScope,
   refitAllSizes,
   refitElementAcrossSizes,
   rescaleBox,
@@ -113,7 +114,7 @@ import {
 } from '@/lib/ad-generator/size-scope';
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
-import { bindsOfferToken, templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
+import { bindsOfferToken, templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, blockFitsKind, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
@@ -122,11 +123,26 @@ import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/a
 import { offerTypeAccent, offerTypePill, offerTypeShort } from '@/lib/ad-generator/offer-type-style';
 import { surfacedFields } from '@/lib/ad-generator/template-audit';
 import { roleNote } from '@/lib/ad-generator/archetypes/roles';
-import { applyTheme } from '@/lib/ad-generator/archetypes/theme';
+import { composeBoard } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
+
+/**
+ * How far past each edge an element may be pushed.
+ *
+ * Elements may bleed past the artboard (clipped on export) and be dragged fully
+ * off it — then they detach, see `isDetached` — and this bounds how far, so a
+ * detached element parks just beside the board rather than a screen away.
+ *
+ * Module-level because TWO places clamp a drag and they disagreed: `applyHandle`
+ * allowed the bleed, then the move handler re-clamped to `[0, 1 - w]` and took it
+ * away. On a full-bleed element that second clamp read `clamp(x, 0, 0)` — pinning
+ * the one layer designers most want to push off the edge so hard it could not
+ * move a pixel by drag, leaving only the X/Y fields to shift it.
+ */
+const BLEED = 0.5;
 
 /**
  * What saving this design would do to the ads already built from this template.
@@ -746,10 +762,6 @@ function computeBox(handle: Handle, start: DocLayoutBox, dxF: number, dyF: numbe
     if (handle === 'n' || handle === 'nw' || handle === 'ne') y -= MIN_FRAC - h;
     h = MIN_FRAC;
   }
-  // Elements may bleed past the artboard (clipped on export) and be dragged fully
-  // off it (then they detach — see isDetached). BLEED bounds how far past each
-  // edge you can push, so a detached element parks just beside the artboard.
-  const BLEED = 0.5;
   if (handle === 'move') {
     x = clamp(x, -w - BLEED, 1 + BLEED);
     y = clamp(y, -h - BLEED, 1 + BLEED);
@@ -1140,7 +1152,10 @@ export default function AdBuilderPage() {
   // Multi-size templates only: with one board there's nothing to broadcast to, so
   // the control would be a switch that does nothing.
   const scopeApplies = doc.sizes.length > 1;
-  const effectiveScope: EditScope = scopeApplies ? editScope : 'size';
+  // See `effectiveEditScope` — a one-board doc edits SHARED, whatever the
+  // (hidden) picker says.
+  const effectiveScope: EditScope = effectiveEditScope(doc.sizes.length, editScope);
+
 
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
@@ -1656,10 +1671,12 @@ export default function AdBuilderPage() {
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // Inline text editing: double-click a text element to edit its value on-canvas.
   const [editingText, setEditingText] = useState<{ id: string; value: string; initial: string } | null>(null);
-  // Background panning: natural size of the selected bg image + the live pan
-  // preview (the full image, with its off-canvas "bleed" shown while dragging).
+  // Natural pixel size of the full-bleed background photo. All that reads it now
+  // is the test behind "Arrange photo" — whether a cover image overflows its box,
+  // and so whether aligning should pick the visible part of the picture instead of
+  // moving the frame. (It also fed a drag-time pan preview and a greyed bleed
+  // ghost; both are gone — the ghost got in the way of dragging.)
   const [bgNatural, setBgNatural] = useState<{ w: number; h: number } | null>(null);
-  const [bgPan, setBgPan] = useState<{ url: string; coverW: number; coverH: number; overflowX: number; overflowY: number; objectX: number; objectY: number } | null>(null);
   // Interactive image crop: the id of the image element currently in crop mode
   // (drag it on the canvas to reposition; the panel exposes zoom + reset) and
   // the natural pixel size of its source, needed to map drag → object-position.
@@ -1929,8 +1946,8 @@ export default function AdBuilderPage() {
     return cand?.id ?? null;
   }, [doc.elements, isFullBleed]);
 
-  // Load the background's natural pixel size so we can map drag distance to
-  // object-position and draw the bleed at the right cover scale.
+  // Load the background's natural pixel size — see the state's own note for what
+  // still depends on it.
   useEffect(() => {
     if (!bgImageId) {
       setBgNatural(null);
@@ -1944,6 +1961,11 @@ export default function AdBuilderPage() {
     let alive = true;
     const img = new Image();
     img.onload = () => alive && setBgNatural({ w: img.naturalWidth || 1, h: img.naturalHeight || 1 });
+    // Clear on failure rather than leaving the PREVIOUS image's dimensions in
+    // place: a stale natural size makes everything derived from it (the overflow
+    // test behind "Arrange photo") answer for a picture that is no longer there,
+    // and a broken URL would keep it wrong forever.
+    img.onerror = () => alive && setBgNatural(null);
     img.src = url;
     return () => {
       alive = false;
@@ -2034,6 +2056,18 @@ export default function AdBuilderPage() {
       else setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: value } }), `fieldval:${key}`);
     },
     [adId],
+  );
+
+  /**
+   * Every offer-type field the doc declares — `offerType`, plus `o2_offerType`
+   * on a dual (and `o3_…` if a third offer is ever added).
+   *
+   * Read off the FIELDS rather than hardcoding the pair, so a third offer needs
+   * no change here.
+   */
+  const offerTypeKeys = useMemo(
+    () => doc.fields.map((f) => f.key).filter((k) => /^(o\d+_)?offerType$/.test(k)),
+    [doc.fields],
   );
 
   const commitTextEdit = useCallback(() => {
@@ -2423,9 +2457,22 @@ export default function AdBuilderPage() {
       const untouched = !templateName.trim() || templateName === 'Untitled template';
       const name = untouched ? start.name : templateName;
       setDoc((prev) => {
-        // A doc still on its single default board takes the archetype's channels;
-        // one the designer has already shaped keeps them.
-        const chosen = prev.sizes.length > 1 ? prev.sizes : undefined;
+        // A doc still on its single default board takes EVERY board the account's
+        // library offers — custom sizes included, which is why this uses the live
+        // library rather than the archetype's own fallback list. Laying out a
+        // board costs the composition nothing, so the useful default is the whole
+        // catalogue and the designer switches off the channels this template is
+        // not for.
+        //
+        // A doc the designer has already shaped keeps its boards untouched.
+        const fromLibrary: AdSize[] = libSizes.map((s) => ({
+          id: s.id,
+          label: `${s.name} (${s.width}×${s.height})`,
+          width: s.width,
+          height: s.height,
+        }));
+        const chosen =
+          prev.sizes.length > 1 ? prev.sizes : fromLibrary.length ? fromLibrary : undefined;
         return {
           ...docFromStart(start, { id: prev.id, name, sizes: chosen }),
           // Template-level settings belong to the template, not the composition.
@@ -2440,7 +2487,7 @@ export default function AdBuilderPage() {
       setSelectedIds([]);
       toast.success(`Started from ${start.name}`);
     },
-    [setDoc, templateName],
+    [setDoc, templateName, libSizes],
   );
 
   // Keep the edited board valid after an archetype swaps the size list out.
@@ -2846,7 +2893,13 @@ export default function AdBuilderPage() {
   // folding size-by-size through state that hasn't landed yet.
   function addSizes(sizes: SizeToAdd[]) {
     if (!sizes.length) return;
-    const { doc: next, addedIds } = addSizesToDoc(doc, sizes, sizeId);
+    // A doc an archetype produced gets its NEW boards composed rather than
+    // rescaled off the board that happens to be open — see `composeBoard`. Going
+    // from a portrait board to a wide one is a re-arrangement, and re-fitting each
+    // box by its own shape cannot perform one. Docs from no archetype are
+    // unaffected: `composeBoard` returns null and every element takes the old
+    // rescale path.
+    const { doc: next, addedIds } = addSizesToDoc(doc, sizes, sizeId, (size) => composeBoard(doc, size));
     setDoc(next);
     const lastId = addedIds[addedIds.length - 1];
     if (lastId) setSizeId(lastId);
@@ -3342,7 +3395,6 @@ export default function AdBuilderPage() {
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
     | { kind: 'groupresize'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; bounds: { left: number; top: number; right: number; bottom: number }; items: { elId: string; start: DocLayoutBox; isText: boolean }[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } }
-    | { kind: 'bgpan'; sx: number; sy: number; sizeId: string; elId: string; startObjX: number; startObjY: number; overflowX: number; overflowY: number; url: string; coverW: number; coverH: number; dragging: boolean; live: { objectX: number; objectY: number } }
     | { kind: 'croppan'; sx: number; sy: number; sizeId: string; elId: string; startObjX: number; startObjY: number; overflowX: number; overflowY: number; dragging: boolean; live: { objectX: number; objectY: number } };
   const dragRef = useRef<DragState | null>(null);
 
@@ -3398,21 +3450,6 @@ export default function AdBuilderPage() {
       setMarquee(d.rect);
       return;
     }
-    if (d.kind === 'bgpan') {
-      const dxPx = e.clientX - d.sx;
-      const dyPx = e.clientY - d.sy;
-      // Ignore sub-threshold jitter so a plain click never flashes the preview.
-      if (!d.dragging && Math.abs(dxPx) < 3 && Math.abs(dyPx) < 3) return;
-      d.dragging = true;
-      // Pan the background: dragging the image right reveals more of its left
-      // side, so object-position decreases. Movement is 1:1 with the cursor
-      // (mapped through the cover overflow). Axes with no overflow stay put.
-      const ox = d.overflowX > 0 ? clamp(d.startObjX - dxPx / d.overflowX, 0, 1) : d.startObjX;
-      const oy = d.overflowY > 0 ? clamp(d.startObjY - dyPx / d.overflowY, 0, 1) : d.startObjY;
-      d.live = { objectX: ox, objectY: oy };
-      setBgPan({ url: d.url, coverW: d.coverW, coverH: d.coverH, overflowX: d.overflowX, overflowY: d.overflowY, objectX: ox, objectY: oy });
-      return;
-    }
     if (d.kind === 'croppan') {
       const dxPx = e.clientX - d.sx;
       const dyPx = e.clientY - d.sy;
@@ -3447,8 +3484,9 @@ export default function AdBuilderPage() {
       if (d.handle === 'move') {
         const sx = bestSnap([box.x, box.x + box.w / 2, box.x + box.w], d.targetsX, SNAP_PX / d.fw);
         const sy = bestSnap([box.y, box.y + box.h / 2, box.y + box.h], d.targetsY, SNAP_PX / d.fh);
-        box.x = clamp(box.x + sx.off, 0, 1 - box.w);
-        box.y = clamp(box.y + sy.off, 0, 1 - box.h);
+        // Same bounds the geometry helper uses — an element may leave the board.
+        box.x = clamp(box.x + sx.off, -box.w - BLEED, 1 + BLEED);
+        box.y = clamp(box.y + sy.off, -box.h - BLEED, 1 + BLEED);
         gx = sx.guide;
         gy = sy.guide;
       }
@@ -3524,7 +3562,7 @@ export default function AdBuilderPage() {
       }
       // A plain click on the empty artboard just clears the selection (handled on
       // pointerdown). Backgrounds are elements now — there's no canvas panel.
-    } else if ((d?.kind === 'bgpan' || d?.kind === 'croppan') && d.dragging) {
+    } else if (d?.kind === 'croppan' && d.dragging) {
       const { elId, sizeId, live } = d;
       setDoc((prev) => {
         const lay = prev.layouts[sizeId] ?? {};
@@ -3538,7 +3576,6 @@ export default function AdBuilderPage() {
     setGroupLive(null);
     setGuides({ x: null, y: null });
     setMarquee(null);
-    setBgPan(null);
     window.removeEventListener('pointermove', moveListener);
     window.removeEventListener('pointerup', upListener);
   };
@@ -3643,23 +3680,6 @@ export default function AdBuilderPage() {
 
   // Pan the selected background photo: dragging maps to object-position via the
   // cover overflow, so the image tracks the cursor and its off-canvas bleed shows.
-  function startBgPan(e: React.PointerEvent, elId: string) {
-    const box = layout[elId];
-    const url = resolveBindingUrl(doc.elements.find((x) => x.id === elId));
-    if (!box || !bgNatural || !url) return;
-    const coverScale = Math.max(frameW / bgNatural.w, frameH / bgNatural.h);
-    const coverW = bgNatural.w * coverScale;
-    const coverH = bgNatural.h * coverScale;
-    const overflowX = Math.max(0, coverW - frameW);
-    const overflowY = Math.max(0, coverH - frameH);
-    const startObjX = box.objectX ?? 0.5;
-    const startObjY = box.objectY ?? 0.5;
-    // Armed, but the bleed preview only appears once the pointer actually moves —
-    // a plain click just selects the background (no flash).
-    dragRef.current = { kind: 'bgpan', sx: e.clientX, sy: e.clientY, sizeId: size.id, elId, startObjX, startObjY, overflowX, overflowY, url, coverW, coverH, dragging: false, live: { objectX: startObjX, objectY: startObjY } };
-    listen();
-  }
-
   // Crop-mode drag: reposition the image inside its own box. The cover fit fills
   // the box, extra `objectScale` zoom scales it further, and the leftover overflow
   // in each axis is what a drag can pan across (mapped 1:1 to the cursor).
@@ -3741,14 +3761,15 @@ export default function AdBuilderPage() {
       toggleSelect(elId);
       return;
     }
-    // Clicking the (unlocked) background photo — or the full-bleed scrim above
-    // it — selects the background and lets you drag to reposition it, showing the
-    // off-canvas bleed. Resize via the Layers panel / handles if you need to.
-    if (bgImageId && bgNatural && !lockedIds.has(bgImageId) && (elId === bgImageId || isFullBleed(elId))) {
-      if (selectedId !== bgImageId) selectOne(bgImageId);
-      startBgPan(e, bgImageId);
-      return;
-    }
+    // A FULL-BLEED BACKGROUND USED TO BE SPECIAL HERE. Pressing one started a pan
+    // of the photo inside its box, so the box itself could never be dragged — the
+    // one layer a designer most often wants to push off the edge to bleed was the
+    // one layer drag refused to move, and only the X/Y fields could.
+    //
+    // It was also a duplicate: crop mode already pans a photo inside its own box,
+    // for any image, and does it better (it honours the crop zoom, which this did
+    // not). So the background drags like every other element, and reframing the
+    // photo is what the Crop button is for.
     // A deliberate multi-selection wins: pressing any of its members drags the
     // whole set together, even when some members are grouped (otherwise the
     // group-collapse branch below would shrink the selection to one group).
@@ -3935,7 +3956,54 @@ export default function AdBuilderPage() {
     };
   }
 
+  /**
+   * The one element whose ALIGN should move the photo rather than the box.
+   *
+   * A full-bleed cover image already fills the board, so aligning its box is a
+   * no-op — the six buttons did nothing at all on the layer a designer most wants
+   * to nudge. What they mean on a cropped photo is which part of it you keep, so
+   * they drive `objectX`/`objectY` instead.
+   *
+   * Only when it genuinely overflows: a cover image that happens to fit exactly
+   * has nothing to choose between, and moving its box is still the right answer.
+   */
+  const alignMovesPhotoId = useMemo(() => {
+    if (selectedIds.length !== 1) return null;
+    const id = selectedIds[0];
+    const el = doc.elements.find((e) => e.id === id);
+    if (!el || !sizeFitOf(el).bleed) return null;
+    // FULL-BLEED ONLY. The takeover is justified by box-align being a no-op —
+    // an element that already covers the board cannot be moved to an edge of it.
+    // A cover image that is merely large still sits somewhere on the board, and
+    // there "align right" plainly means move it right; hijacking that to re-crop
+    // the photo left it looking like align was broken.
+    if (!isFullBleed(id)) return null;
+    const box = (doc.layouts[size.id] ?? {})[id];
+    if (!box || box.hidden) return null;
+    const nat = id === bgImageId ? bgNatural : cropNatural;
+    if (!nat) return null;
+    const boxW = box.w * frameW;
+    const boxH = box.h * frameH;
+    const sc = Math.max(boxW / nat.w, boxH / nat.h) * Math.max(1, box.objectScale ?? 1);
+    return nat.w * sc - boxW > 1 || nat.h * sc - boxH > 1 ? id : null;
+  }, [selectedIds, doc.elements, doc.layouts, size.id, frameW, frameH, bgImageId, bgNatural, cropNatural, isFullBleed]);
+
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
+    if (alignMovesPhotoId) {
+      const id = alignMovesPhotoId;
+      const patch =
+        edge === 'left' ? { objectX: 0 }
+        : edge === 'hcenter' ? { objectX: 0.5 }
+        : edge === 'right' ? { objectX: 1 }
+        : edge === 'top' ? { objectY: 0 }
+        : edge === 'vmiddle' ? { objectY: 0.5 }
+        : { objectY: 1 };
+      // Per board: which part of a photo you keep is a per-shape decision — the
+      // crop that works on a story is not the one that works on a leaderboard.
+      const cur = (doc.layouts[size.id] ?? {})[id];
+      if (cur) setBox(size.id, id, { ...cur, ...patch }, `objpos:${id}:${edge}`);
+      return;
+    }
     applyPerBoard((lay, sz) => {
       const units = arrangeUnits(selectedIds)
         .map((ids) => unitBoxes(ids, lay))
@@ -3960,8 +4028,19 @@ export default function AdBuilderPage() {
         else if (edge === 'vmiddle') dy = cy - (bb.top + bb.bottom) / 2;
         // Clamped as a UNIT — clamping members one by one is what let a wide
         // lockup collapse against an edge instead of stopping there together.
-        dx = clamp(dx, -bb.left, 1 - bb.right);
-        dy = clamp(dy, -bb.top, 1 - bb.bottom);
+        //
+        // ONLY ON AN AXIS WHERE THE UNIT FITS. An element wider than the board —
+        // a bleeding background is the normal case — inverts this range: `lo` is
+        // `-bb.left` (0 when it starts at the edge) and `hi` is `1 - bb.right`
+        // (negative), and `clamp` resolves `Math.max(0, negative)` to ZERO. So
+        // align silently did nothing at all, on every button, for exactly the
+        // elements a designer most wants to centre.
+        //
+        // An oversized unit cannot be "kept on the board" anyway, so there is
+        // nothing for the clamp to protect — centring it means hanging equally
+        // off both edges, which is the answer the unclamped delta already gives.
+        if (bb.right - bb.left <= 1) dx = clamp(dx, -bb.left, 1 - bb.right);
+        if (bb.bottom - bb.top <= 1) dy = clamp(dy, -bb.top, 1 - bb.bottom);
         for (const { id, box } of members) patch[id] = { ...box, x: box.x + dx, y: box.y + dy };
       }
       return patch;
@@ -4288,18 +4367,14 @@ export default function AdBuilderPage() {
                   */}
                   <div className="absolute right-0 top-11 z-[100] flex max-h-[calc(100vh-6rem)] w-72 max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
                    <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                    {/* Theme first, and only for a design an archetype produced:
-                        it is the control a designer reaches for most, and the one
-                        that replaces recolouring every layer on every board.
-                        See docs/ad-generator-archetypes.md §8 Phase 3. */}
-                    {doc.archetype && (
-                      <div className="mb-4 border-b border-[var(--border)] pb-3">
-                        <ThemeEditor
-                          theme={doc.archetype.theme}
-                          onChange={(next) => setDoc((prev) => applyTheme(prev, next), 'theme')}
-                        />
-                      </div>
-                    )}
+                    {/* THE THEME EDITOR WAS HERE. It set five colours, two faces and a
+                        fade angle, and `applyTheme` pushed them onto the archetype's
+                        slots. The starting points now build PLAIN text boxes and image
+                        slots — nothing they produce is styled — so every control in it
+                        changed nothing a designer could see. A control that does nothing
+                        is worse than a missing one. `applyTheme` itself is kept (and no
+                        longer clobbers), so this comes back the day the blocks carry
+                        styling again. */}
                     {/* INDUSTRIES was here — a multi-select for which industries
                         could use the template. Removed on Connor's read that it
                         "doesn't really make sense anymore": the generator is
@@ -4610,15 +4685,17 @@ export default function AdBuilderPage() {
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
-          <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                <LayersIcon className="h-3.5 w-3.5" />
+          <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-2.5 shadow-2xl backdrop-blur-2xl">
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <h2 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                <LayersIcon className="h-3 w-3" />
                 Layers
               </h2>
-              <span className="text-[11px] text-[var(--muted-foreground)]">{placed.length}</span>
+              <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">{placed.length}</span>
             </div>
-            <div className="space-y-1" ref={layersRef}>
+            {/* A layer list is scanned, not read: rows are dense so more of the
+                design fits on screen at once. */}
+            <div className="space-y-px" ref={layersRef}>
               {(() => {
                 const base = [...placed].reverse(); // top of list = front
                 const byId = new Map(base.map((p) => [p.el.id, p] as const));
@@ -4704,9 +4781,12 @@ export default function AdBuilderPage() {
                       data-layer-row={el.id}
                       {...rowDrag(el.id, renaming)}
                       onContextMenu={(e) => openLayerMenu(e, { elId: el.id })}
-                      className={`flex items-center gap-1 rounded-lg pr-1 ${
-                        isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
-                      } ${box.hidden ? 'opacity-50' : ''} ${rowIsDragged(el.id, false) ? 'ring-1 ring-[var(--primary)]/60' : ''}`}
+                      // Selection reads from the label's colour alone — a filled row
+                      // put a second, louder highlight behind text that was already
+                      // marked, and stacked badly with the hidden/dragging states.
+                      className={`flex items-center gap-1 rounded-lg pr-1 hover:bg-[var(--muted)]/60 ${
+                        box.hidden ? 'opacity-50' : ''
+                      } ${rowIsDragged(el.id, false) ? 'ring-1 ring-[var(--primary)]/60' : ''}`}
                     >
                       {renaming ? (
                         <input
@@ -4718,37 +4798,45 @@ export default function AdBuilderPage() {
                             if (e.key === 'Enter') commitRename();
                             if (e.key === 'Escape') setRenamingLayer(null);
                           }}
-                          className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
+                          className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-1.5 py-1 text-[11px] text-[var(--foreground)] outline-none"
                         />
                       ) : (
                         <button
-                          onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
+                          onClick={(e) => {
+                            // Re-open a collapsed inspector. Nothing else does —
+                            // the collapse is sticky by design — so picking a layer
+                            // while it was shut selected the block and showed no
+                            // settings, which reads as the row not working.
+                            setInspectorCollapsed(false);
+                            if (e.shiftKey) toggleSelect(el.id);
+                            else selectOne(el.id);
+                          }}
                           onDoubleClick={() => {
                             setRenameDraft(elName(el));
                             setRenamingLayer(el.id);
                           }}
-                          className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                          className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                           title="Double-click to rename"
                         >
                           <span className="flex-shrink-0" style={{ color: KIND_COLOR[elementKind(el)] }}>
-                            <Icon className="h-4 w-4" />
+                            <Icon className="h-3.5 w-3.5" />
                           </span>
-                          <span className="min-w-0 flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                          <span className="min-w-0 flex-1 truncate text-[11px] font-medium">{elName(el)}</span>
                         </button>
                       )}
                       <button
                         onClick={() => toggleLock(el.id)}
                         title={locked ? 'Unlock' : 'Lock (not editable)'}
-                        className={`rounded p-1 transition-colors hover:text-[var(--foreground)] ${locked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
+                        className={`rounded p-0.5 transition-colors hover:text-[var(--foreground)] ${locked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
                       >
-                        {locked ? <LockClosedIcon className="h-3.5 w-3.5" /> : <LockOpenIcon className="h-3.5 w-3.5" />}
+                        {locked ? <LockClosedIcon className="h-3 w-3" /> : <LockOpenIcon className="h-3 w-3" />}
                       </button>
                       <button
                         onClick={() => toggleHidden(el.id)}
                         title={`${box.hidden ? 'Show' : 'Hide'} ${effectiveScope === 'all' ? 'on all sizes' : 'in this size'}`}
-                        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                        className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
                       >
-                        {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
+                        {box.hidden ? <EyeSlashIcon className="h-3 w-3" /> : <EyeIcon className="h-3 w-3" />}
                       </button>
                     </div>
                   );
@@ -4774,7 +4862,7 @@ export default function AdBuilderPage() {
                         data-layer-row={gid}
                         {...dragHandlers(gid, true, renamingG)}
                         onContextMenu={(e) => openLayerMenu(e, { gid })}
-                        className={`flex items-center gap-1 rounded-lg pr-1 ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'} ${rowIsDragged(gid, true) ? 'ring-1 ring-[var(--primary)]/60' : ''}`}
+                        className={`flex items-center gap-1 rounded-lg pr-1 hover:bg-[var(--muted)]/60 ${rowIsDragged(gid, true) ? 'ring-1 ring-[var(--primary)]/60' : ''}`}
                       >
                         <button onClick={() => toggleGroupCollapsed(gid)} title={collapsed ? 'Expand' : 'Collapse'} className="rounded p-0.5 pl-1 text-[var(--muted-foreground)]/70 hover:text-[var(--foreground)]">
                           {collapsed ? <ChevronRightIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}
@@ -4789,21 +4877,24 @@ export default function AdBuilderPage() {
                               if (e.key === 'Enter') commitGRename();
                               if (e.key === 'Escape') setRenamingLayer(null);
                             }}
-                            className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
+                            className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-1.5 py-1 text-[11px] text-[var(--foreground)] outline-none"
                           />
                         ) : (
                           <button
-                            onClick={() => selectGroup(gid)}
+                            onClick={() => {
+                              setInspectorCollapsed(false);
+                              selectGroup(gid);
+                            }}
                             onDoubleClick={() => {
                               setRenameDraft(gname);
                               setRenamingLayer(gid);
                             }}
-                            className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left ${allSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left ${allSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                             title="Click to select group · double-click to rename"
                           >
-                            <RectangleStackIcon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                            <span className="min-w-0 flex-1 truncate text-xs font-semibold">{gname}</span>
-                            <span className="text-[10px] text-[var(--muted-foreground)]">{leaves.length}</span>
+                            <RectangleStackIcon className="h-3.5 w-3.5 flex-shrink-0 opacity-70" />
+                            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold">{gname}</span>
+                            <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">{leaves.length}</span>
                           </button>
                         )}
                         <button onClick={() => ungroupGroup(gid)} title="Ungroup" className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
@@ -4820,7 +4911,22 @@ export default function AdBuilderPage() {
                           {allHidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
                         </button>
                       </div>
-                      {!collapsed && <div className="mt-1 space-y-1 border-l border-[var(--border)] pl-1">{node.children.map((c) => renderNode(c))}</div>}
+                      {/* The guide line is offset to sit UNDER the group's chevron
+                          rather than at the container's edge: the chevron button is
+                          `pl-1 p-0.5` around a 14px icon, so its centre is 11px in.
+                          Aligning them is what makes the line read as belonging to
+                          the twisty it descends from.
+
+                          The PADDING past the line is measured, not eyeballed: it
+                          puts a child's icon at the same x as the group's folder
+                          icon. A tree reads by the guide line, so the icons want to
+                          line up under it rather than step right again — 10px is
+                          what lands them there given the row's own `px-1.5`. */}
+                      {!collapsed && (
+                        <div className="ml-[11px] space-y-px border-l border-[var(--border)] pl-[10px]">
+                          {node.children.map((c) => renderNode(c))}
+                        </div>
+                      )}
                     </div>
                   );
                 };
@@ -4848,50 +4954,67 @@ export default function AdBuilderPage() {
                 <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} onInsert={insertComplianceField} />
               )}
               {usesOffer && usedOfferTypes.length > 0 && (
+                /* PER OFFER, not one switch for the board.
+                   A dual's realistic content is a MIX — offer 1 a lease, offer 2
+                   an APR — so a single control that forced both to the same type
+                   made the preview less truthful, not more. One row per offer
+                   previews the combination that will actually run, and still lets
+                   either plate be flipped to check a type on its own. */
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Preview</span>
-                  <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
-                    {/* All: every offer block on the board at once, the off-type ones
-                        ghosted — for finding and editing a block that belongs to a
-                        type you're not previewing. Picking a single type shows ONLY
-                        that type, which is the honest answer to "how will this look". */}
-                    <button
-                      type="button"
-                      onClick={() => setShowAllOfferTypes(true)}
-                      title="Show every offer block at once — off-type blocks are ghosted"
-                      aria-pressed={showAllOfferTypes}
-                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                        showAllOfferTypes
-                          ? 'bg-[var(--muted)] text-[var(--foreground)]'
-                          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      All
-                    </button>
-                    {usedOfferTypes.map((t) => {
-                      const color = offerTypeAccent(t.value);
-                      const active =
-                        !showAllOfferTypes && String(previewData.offerType ?? 'lease') === t.value;
-                      return (
-                        <button
-                          key={t.value}
-                          type="button"
-                          onClick={() => {
-                            setShowAllOfferTypes(false);
-                            writeFieldValue('offerType', t.value);
-                          }}
-                          title={`Preview as ${t.label} — only ${t.label} blocks show`}
-                          aria-pressed={active}
-                          className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                            active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                          }`}
-                          style={active ? { backgroundColor: `${color}1f`, color } : undefined}
-                        >
-                          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
-                          {offerTypeShort(t.value)}
-                        </button>
-                      );
-                    })}
+                  {/* All is GLOBAL: it is about which blocks are drawn, not which
+                      offer's data is showing, so it stays one control. */}
+                  <button
+                    type="button"
+                    onClick={() => setShowAllOfferTypes(true)}
+                    title="Show every offer block at once — off-type blocks are ghosted"
+                    aria-pressed={showAllOfferTypes}
+                    className={`rounded-full border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      showAllOfferTypes
+                        ? 'bg-[var(--muted)] text-[var(--foreground)]'
+                        : 'bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    All
+                  </button>
+                  <div className="flex flex-col gap-0.5">
+                    {offerTypeKeys.map((key, i) => (
+                      <div key={key} className="flex items-center gap-1">
+                        {offerTypeKeys.length > 1 && (
+                          <span className="w-3 text-right text-[10px] font-semibold tabular-nums text-[var(--muted-foreground)]">
+                            {i + 1}
+                          </span>
+                        )}
+                        <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                          {usedOfferTypes.map((t) => {
+                            const color = offerTypeAccent(t.value);
+                            const active =
+                              !showAllOfferTypes && String(previewData[key] ?? 'lease') === t.value;
+                            const which =
+                              offerTypeKeys.length > 1 ? `offer ${i + 1}` : 'this offer';
+                            return (
+                              <button
+                                key={t.value}
+                                type="button"
+                                onClick={() => {
+                                  setShowAllOfferTypes(false);
+                                  writeFieldValue(key, t.value);
+                                }}
+                                title={`Preview ${which} as ${t.label}`}
+                                aria-pressed={active}
+                                className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                                  active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                                }`}
+                                style={active ? { backgroundColor: `${color}1f`, color } : undefined}
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+                                {offerTypeShort(t.value)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
@@ -5073,20 +5196,6 @@ export default function AdBuilderPage() {
                       className="pointer-events-none absolute z-30 rounded-[2px] border border-[var(--primary)] bg-[var(--primary)]/10"
                       style={{ left: marquee.x * frameW, top: marquee.y * frameH, width: marquee.w * frameW, height: marquee.h * frameH }}
                     />
-                  )}
-                  {/* Background pan preview — the whole photo, with the off-canvas
-                      bleed dimmed and the live frame outlined. */}
-                  {bgPan && (
-                    <>
-                      <img
-                        src={bgPan.url}
-                        alt=""
-                        draggable={false}
-                        className="pointer-events-none absolute z-30 max-w-none select-none"
-                        style={{ left: -bgPan.objectX * bgPan.overflowX, top: -bgPan.objectY * bgPan.overflowY, width: bgPan.coverW, height: bgPan.coverH }}
-                      />
-                      <div className="pointer-events-none absolute inset-0 z-30 ring-2 ring-[var(--primary)]" style={{ boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)' }} />
-                    </>
                   )}
                   {placed.map(({ el, box }) => {
                     const isSel = selectedIds.includes(el.id);
@@ -5296,66 +5405,83 @@ export default function AdBuilderPage() {
                   the artboard, so a narrow board can't squeeze it. Click-through
                   wrapper (pan and marquee still work through it); only the card
                   takes pointer events. Hidden in multi-artboard view, where there
-                  is no single board to be onboarding for. */}
+                  is no single board to be onboarding for.
+
+                  The card is a HEIGHT-CAPPED column: header and footer are fixed
+                  and the middle scrolls. A blank template offers three ways in
+                  (layouts, saved blocks, single elements) and their combined
+                  length is unbounded — without the cap the card grew past the
+                  pane and its footer, and the last block in the list, were simply
+                  unreachable. `min-h-0` on the scroller is what lets a flex child
+                  shrink below its content.
+
+                  Order is layouts → blocks → elements, deliberately. An archetype
+                  lays out every board at once, which is what a template author
+                  actually wants; the element palette is for one-off work and sits
+                  last for that reason. */}
               {placed.length === 0 && !viewAll && (
                 <div
-                  className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6"
-                  style={{ paddingRight: rightReserve ? rightReserve + 24 : undefined }}
+                  className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-4"
+                  style={{ paddingRight: rightReserve ? rightReserve + 16 : undefined }}
                 >
-                  <div className="pointer-events-auto relative w-full max-w-[26rem] animate-fade-in-up">
-                    {/* Soft glow in the four element-palette colours so a blank
-                        canvas still feels alive + on-brand. */}
+                  <div className="pointer-events-auto relative flex max-h-full w-full max-w-[23rem] animate-fade-in-up flex-col">
+                    {/* Soft glow in the element-palette colours so a blank canvas
+                        still feels alive. Kept well back: the card above it is
+                        near-opaque, and a stronger glow read as a smudge THROUGH
+                        the card rather than behind it. */}
                     <div
                       aria-hidden
-                      className="pointer-events-none absolute -inset-8 -z-10 opacity-70 blur-3xl"
+                      className="pointer-events-none absolute -inset-5 -z-10 opacity-35 blur-3xl"
                       style={{
                         background:
                           'radial-gradient(38% 38% at 22% 18%, #3b82f655, transparent 70%), radial-gradient(38% 38% at 82% 16%, #ec489955, transparent 70%), radial-gradient(42% 42% at 78% 88%, #a855f755, transparent 70%), radial-gradient(38% 38% at 18% 86%, #f9731655, transparent 70%)',
                       }}
                     />
-                    <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
-                      <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-3 pt-7 text-center">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
-                          <PaintBrushIcon className="h-7 w-7" />
-                        </div>
-                        <h3 className="text-lg font-bold text-[var(--foreground)]">Design your ad</h3>
-                        <p className="max-w-[17rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
-                          Drop in your first element to start — text, image, button, or shape.
-                        </p>
+                    <div className="flex max-h-full flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl">
+                      {/* Header — a single row. The old stacked version (a 56px
+                          gradient tile over a centred title and paragraph) cost
+                          ~140px of a card that already could not fit. */}
+                      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] px-4 py-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-sm">
+                          <PaintBrushIcon className="h-[18px] w-[18px]" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-semibold leading-tight text-[var(--foreground)]">Design your ad</span>
+                          <span className="mt-0.5 block text-[11px] leading-snug text-[var(--muted-foreground)]">
+                            Load every block you need, or start from a saved block or single element.
+                          </span>
+                        </span>
                       </div>
-                      <div className="px-5 pb-5 pt-3">
-                        <AdderGrid adders={adders} variant="onboarding" />
-                        {/* Start from an ARCHETYPE — a whole laid-out design for
-                            every board, rather than one element at a time. This is
-                            the path an OEM offer template should take; the element
-                            palette above is for one-off work.
-                            See docs/ad-generator-archetypes.md §8 Phase 3. */}
-                        <div className="mt-4">
-                          <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                            Or start from a layout
-                          </p>
-                          <div className="flex flex-col gap-2.5">
-                            {archetypeStartGroups().map(({ group, items }, _i, groups) => (
-                              <div key={group}>
-                                {/* One group needs no heading — "Compositions" under
-                                    "start from a layout" is the same word twice. */}
-                                {groups.length > 1 && (
-                                  <p className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
-                                    {group}
-                                  </p>
-                                )}
-                                <div className="flex flex-col gap-1.5">
+
+                      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3.5">
+                        <div className="flex flex-col gap-4">
+                          {/* Start from an ARCHETYPE — a whole laid-out design for
+                              every board, rather than one element at a time. This is
+                              the path an OEM offer template should take.
+                              See docs/ad-generator-archetypes.md §8 Phase 3. */}
+                          <section>
+                            <OnboardingHeading>Start with the blocks</OnboardingHeading>
+                            <div className="flex flex-col gap-2.5">
+                              {archetypeStartGroups().map(({ group, items }, _i, groups) => (
+                                <div key={group} className="flex flex-col gap-1.5">
+                                  {/* One group needs no heading — "Compositions" under
+                                      "start from a layout" is the same word twice. */}
+                                  {groups.length > 1 && (
+                                    <p className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]/70">
+                                      {group}
+                                    </p>
+                                  )}
                                   {items.map((st) => (
                                     <button
                                       key={st.id}
                                       type="button"
                                       onClick={() => startFromArchetype(st)}
-                                      aria-label={`Start from ${st.name}`}
-                                      className="group/arch w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left transition-colors hover:border-[var(--primary)]"
+                                      aria-label={`Load the blocks for ${st.name}`}
+                                      className="group/arch w-full rounded-lg border border-[var(--border)] px-3 py-2 text-left transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40"
                                     >
                                       <span className="flex items-baseline gap-2">
-                                        <span className="truncate text-sm text-[var(--foreground)]">{st.name}</span>
-                                        <span className="ml-auto shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                        <span className="truncate text-[13px] font-medium text-[var(--foreground)]">{st.name}</span>
+                                        <span className="ml-auto shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide tabular-nums text-[var(--muted-foreground)]">
                                           {st.sizes.length} sizes
                                         </span>
                                       </span>
@@ -5365,36 +5491,42 @@ export default function AdBuilderPage() {
                                     </button>
                                   ))}
                                 </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Start from a saved block — begin a blank canvas from
-                            a pre-wired cluster instead of single elements. */}
-                        {insertableBlocks.length > 0 && (
-                          <div className="mt-4">
-                            <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Or start from a block</p>
-                            <div className="flex flex-col gap-1.5">
-                              {insertableBlocks.map((b) => (
-                                <button
-                                  key={b.id}
-                                  type="button"
-                                  onClick={() => insertBlock(b.doc)}
-                                  title="Insert this block"
-                                  className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
-                                >
-                                  <span className="truncate">{b.name}</span>
-                                  <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
-                                    {b.accountKeys?.length ? `${b.accountKeys.length} acct${b.accountKeys.length > 1 ? 's' : ''}` : 'Global'}
-                                  </span>
-                                </button>
                               ))}
                             </div>
-                          </div>
-                        )}
+                          </section>
+
+                          {/* Start from a saved block — begin a blank canvas from
+                              a pre-wired cluster instead of single elements. */}
+                          {insertableBlocks.length > 0 && (
+                            <section>
+                              <OnboardingHeading>Start from a block</OnboardingHeading>
+                              <div className="flex flex-col gap-1.5">
+                                {insertableBlocks.map((b) => (
+                                  <button
+                                    key={b.id}
+                                    type="button"
+                                    onClick={() => insertBlock(b.doc)}
+                                    title="Insert this block"
+                                    className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-[13px] text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40"
+                                  >
+                                    <span className="truncate">{b.name}</span>
+                                    <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                      {b.accountKeys?.length ? `${b.accountKeys.length} acct${b.accountKeys.length > 1 ? 's' : ''}` : 'Global'}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            </section>
+                          )}
+
+                          <section>
+                            <OnboardingHeading>Or add one element</OnboardingHeading>
+                            <AdderGrid adders={adders} variant="onboarding" />
+                          </section>
+                        </div>
                       </div>
-                      <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
+
+                      <div className="shrink-0 border-t border-[var(--border)] px-4 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
                         Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
                       </div>
                     </div>
@@ -5568,6 +5700,7 @@ export default function AdBuilderPage() {
                   }
                   collapsed={inspectorCollapsed}
                   onCollapse={() => setInspectorCollapsed(true)}
+                  alignMovesPhoto={alignMovesPhotoId != null}
                   sizeW={size.width}
                   sizeH={size.height}
                   fontOptions={fontOptions}
@@ -6489,7 +6622,7 @@ function MultiSelectPanel({
         {textEls.length > 0 ? (
           <>
             <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
-              <Select value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} />
+              <Select value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} previewFont />
               <div className="mt-2 flex items-center gap-2">
                 <div className="flex flex-1 items-center gap-1">
                   <BarBtn title="Smaller (all)" onClick={() => onBumpSize(-2)}>
@@ -6623,6 +6756,7 @@ function SelectionPanel({
   arrangeTarget,
   arrangeInGroup,
   onArrangeTarget,
+  alignMovesPhoto,
   onAlign,
   onClose,
   onCollapse,
@@ -6675,6 +6809,8 @@ function SelectionPanel({
   /** Drilled into a group: this member aligns inside the lockup, not the board. */
   arrangeInGroup: boolean;
   onArrangeTarget: (t: ArrangeTarget) => void;
+  /** The selection is a cropped photo: align picks the visible part, not the box. */
+  alignMovesPhoto?: boolean;
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onClose: () => void;
   /** Collapse the panel (hide it, keep the selection) to reclaim canvas width. */
@@ -6750,6 +6886,12 @@ function SelectionPanel({
     setShownIn(false);
     setTimeout(onClose, 200);
   };
+
+  /** An image slot with nothing in it and nothing coming — see the note by the
+   *  sections it hides. A FIELD-bound image is excluded: the offer data fills it
+   *  later and the designer still needs to style the slot now. */
+  const emptyImageSlot =
+    el.type === 'image' && (!el.binding || (el.binding.kind === 'static' && !el.binding.value));
 
   return (
     <div
@@ -6877,7 +7019,7 @@ function SelectionPanel({
                   )}
                 </div>
                 {content.mode === 'image-edit' ? (
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <button
                       type="button"
                       onClick={() => setPicking(true)}
@@ -6886,15 +7028,60 @@ function SelectionPanel({
                       <ArrowUpTrayIcon className="h-4 w-4" />
                       {content.value ? 'Replace' : 'Choose / upload'}
                     </button>
+                    {/* A URL, as an alternative to the library.
+                        The picker uploads to S3, which is not configured in every
+                        environment — so without this there is no way to put an
+                        image on a board locally at all. It is not only a dev
+                        affordance though: an EVOX jellybean, an OEM asset or a CDN
+                        photo is a URL somebody already has, and re-uploading it to
+                        get it in was a step with no purpose. */}
+                    <input
+                      type="url"
+                      inputMode="url"
+                      placeholder="…or paste an image URL"
+                      defaultValue={/^https?:\/\//.test(content.value ?? '') ? content.value : ''}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                      }}
+                      onBlur={(e) => {
+                        const url = e.target.value.trim();
+                        // Commit on blur, not on every keystroke: a partial URL
+                        // would fire a render (and a failed image load) per
+                        // character typed.
+                        if (url !== (content.value ?? '')) onContentChange(url);
+                      }}
+                      className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[11px] text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
+                    />
                     {content.value && (
-                      <button
-                        type="button"
-                        onClick={() => onContentChange('')}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
-                      >
-                        <XMarkIcon className="h-4 w-4" />
-                        Clear image
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        {/* CROP lives with the picture, not with the fit modes it
+                            used to sit beside: it is something you do to THIS
+                            image, and it only means anything once there is one. */}
+                        {onToggleCrop && (
+                          <button
+                            type="button"
+                            onClick={onToggleCrop}
+                            aria-pressed={cropping}
+                            title="Crop — drag the image on the canvas to reposition"
+                            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                              cropping
+                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                                : 'border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
+                            }`}
+                          >
+                            <CropIcon className="h-4 w-4" />
+                            {cropping ? 'Done' : 'Crop'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onContentChange('')}
+                          title="Clear image"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
+                        >
+                          <XMarkIcon className="h-4 w-4" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 ) : (
@@ -7037,6 +7224,17 @@ function SelectionPanel({
 
         {/* Precise position + size (px at the current size). Boxes are stored as
             fractions of the canvas, so we convert px ↔ fraction here. */}
+        {/* AN EMPTY IMAGE SLOT SHOWS ALMOST NOTHING.
+            Fit, radius, tint, opacity and crop all describe a picture, and with
+            no picture there is nothing to describe and nothing to judge the
+            result against — so the panel was a wall of controls that did not
+            visibly do anything. Content, Position & size, Arrange and Show for
+            all still mean something on an empty slot; the Image section does not.
+
+            Only a slot with nothing COMING: no binding at all, or a fixed image
+            with no file or URL chosen. An image bound to a FIELD keeps every
+            control, because the designer is styling a slot the offer data will
+            fill later and cannot wait for a sample to set its corner radius. */}
         <PanelSection title="Position & size">
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
@@ -7096,7 +7294,11 @@ function SelectionPanel({
 
         {/* Snap this one element to an artboard (or margin-box) edge/centre —
             the single-element half of the multi-select Arrange controls. */}
-        <ArrangeSection count={1} target={arrangeTarget} inGroup={arrangeInGroup} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} />
+        {/* ARRANGE STAYS on an empty slot. Positioning a placeholder is a real
+            thing to do — you place the frame first and drop the picture in after —
+            unlike fit, radius or tint, which describe a picture that is not there
+            yet. */}
+        <ArrangeSection count={1} target={arrangeTarget} inGroup={arrangeInGroup} onTargetChange={onArrangeTarget} onAlign={onAlign} onDistribute={() => {}} movesPhoto={alignMovesPhoto} />
 
         {/* Show for — per-offer-type visibility (element `visibleWhen`). Only for
             templates with an offerType question. All checked = always shown; check
@@ -7115,7 +7317,7 @@ function SelectionPanel({
         {el.type === 'text' && (
           <>
             <PanelSection title="Font">
-              <Select value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
+              <Select value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} previewFont />
               <div className="mt-2 flex items-center gap-2">
                 {/* Fit to box: the font auto-scales to the frame, so instead of an
                     editable stepper we surface the measured auto size (grayed) so
@@ -7427,40 +7629,36 @@ function SelectionPanel({
           );
         })()}
 
-        {(el.type === 'image' || el.type === 'logo') && (
+        {(el.type === 'image' || el.type === 'logo') && !emptyImageSlot && (
           <PanelSection title="Image">
-            {el.type === 'image' && <FillArtboardButton onClick={onFillArtboard} />}
-            <div className="flex items-center gap-1">
-              <BarBtn title="Fit (contain)" active={(el.fit ?? 'contain') === 'contain'} onClick={() => onEl({ fit: 'contain' })}>
-                <ArrowsPointingInIcon className="h-4 w-4" />
-              </BarBtn>
-              <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
-                <ArrowsPointingOutIcon className="h-4 w-4" />
-              </BarBtn>
-              <BarBtn title="Tile (repeat texture)" active={el.fit === 'tile'} onClick={() => onEl({ fit: 'tile' })}>
-                <span className="grid grid-cols-2 gap-[1.5px]">
-                  {[0, 1, 2, 3].map((i) => (
-                    <span key={i} className="h-1.5 w-1.5 rounded-[1px] bg-current" />
-                  ))}
-                </span>
-              </BarBtn>
-              {/* Crop — flips to Fill (cover) if needed, then lets the designer
-                  drag the image on the canvas + zoom in. Toggles crop mode. */}
-              <button
-                type="button"
-                onClick={onToggleCrop}
-                title="Crop — drag the image on the canvas to reposition"
-                aria-pressed={cropping}
-                className={`ml-1 inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
-                  cropping
-                    ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                    : 'border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
-                }`}
-              >
-                <CropIcon className="h-4 w-4" />
-                {cropping ? 'Done' : 'Crop'}
-              </button>
-            </div>
+            {/* THE FILL-ARTBOARD BUTTON WAS HERE. It sized the element to the whole
+                board on every size and sent it to the back. Retired on the
+                designer's call — layer order belongs in the Layers panel, and with
+                "All sizes" on, resizing once travels. */}
+            {/* Named, not three unlabelled glyphs: "which of these arrows is
+                cover?" is not a question an icon row answers. */}
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">How it fills the frame</span>
+              <Select
+                value={el.fit ?? 'contain'}
+                onChange={(v) => onEl({ fit: v as 'contain' | 'cover' | 'tile' })}
+                options={[
+                  { value: 'contain', label: 'Fit', icon: <ArrowsPointingInIcon className="h-4 w-4" /> },
+                  { value: 'cover', label: 'Fill', icon: <ArrowsPointingOutIcon className="h-4 w-4" /> },
+                  {
+                    value: 'tile',
+                    label: 'Tile',
+                    icon: (
+                      <span className="grid grid-cols-2 gap-[1.5px]">
+                        {[0, 1, 2, 3].map((i) => (
+                          <span key={i} className="h-1.5 w-1.5 rounded-[1px] bg-current" />
+                        ))}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </label>
             <RadiusControl el={el} onEl={onEl} />
             <div className="mt-3 flex flex-wrap items-center gap-4">
               {el.fit === 'tile' && (
@@ -7479,6 +7677,44 @@ function SelectionPanel({
                 </label>
               )}
             </div>
+            {/* TINT — a scrim over this photo, solid or gradient.
+                It lives ON the image rather than being a shape stacked over it,
+                which is the whole point: darkening a photo so a headline reads used
+                to mean adding a rectangle, matching it to the photo on all sixteen
+                boards, and keeping the two in step forever. This one is cropped and
+                rounded with the image and cannot fall out of register. */}
+            {(() => {
+              const tint = el.overlay ? toGradientFill({ gradientFill: el.overlay }) : null;
+              const solidSeed = { type: 'linear' as const, angle: 0, stops: [{ color: '#000000', pos: 0, opacity: 45 }, { color: '#000000', pos: 100, opacity: 45 }] };
+              const fadeSeed = { type: 'linear' as const, angle: 180, stops: [{ color: '#000000', pos: 0, opacity: 0 }, { color: '#000000', pos: 100, opacity: 70 }] };
+              return (
+                <div className="mt-3 border-t border-[var(--border)] pt-3">
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Tint</span>
+                    <Tooltip label="A colour wash over this image — a flat scrim, or a gradient that fades across it. It travels with the photo: recrop, resize or swap the image and the tint stays exactly on it.">
+                      <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                    </Tooltip>
+                  </div>
+                  {tint ? (
+                    <>
+                      <GradientEditor value={tint} onChange={(g) => onEl({ overlay: g })} />
+                      <button type="button" onClick={() => onEl({ overlay: undefined })} className="mt-2 text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80">
+                        Remove tint
+                      </button>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-3">
+                      <button type="button" onClick={() => onEl({ overlay: solidSeed })} className="text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80">
+                        Add a tint
+                      </button>
+                      <button type="button" onClick={() => onEl({ overlay: fadeSeed })} className="text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80">
+                        Add a gradient
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {/* Opacity + blend — lets an image tint/knock back a layer below it. */}
             <CompositeControls el={el} onEl={onEl} />
             {cropping && (
@@ -7609,9 +7845,16 @@ function ArrangeSection({
   onTargetChange,
   onAlign,
   onDistribute,
+  movesPhoto,
 }: {
   /** How many UNITS are selected — gates Selection + the distribute buttons. */
   count: number;
+  /**
+   * The selection is a cropped photo, so these buttons choose which PART of it
+   * the frame keeps rather than moving the frame. The target chips go with it —
+   * "align to margins" means nothing when nothing is being moved.
+   */
+  movesPhoto?: boolean;
   /** The EFFECTIVE target, so the highlighted chip is what will actually happen. */
   target: ArrangeTarget;
   /** Drilled into a group: the group is the frame, and the board is out of reach. */
@@ -7635,8 +7878,9 @@ function ArrangeSection({
     target === 'selection' ? 'selection' : target === 'group' ? 'the group' : target === 'margins' ? 'margins' : 'artboard';
   return (
     <PanelSection
-      title="Arrange"
+      title={movesPhoto ? 'Arrange photo' : 'Arrange'}
       action={
+        movesPhoto ? null : (
         <div className="flex items-center gap-0.5 rounded-md border border-[var(--border)] p-0.5">
           {options.map((o) => (
             <button
@@ -7654,15 +7898,25 @@ function ArrangeSection({
             </button>
           ))}
         </div>
+        )
       }
     >
+      {movesPhoto && (
+        <p className="mb-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">
+          This photo is cropped by its frame. These pick which part of it stays in view.
+        </p>
+      )}
       <div className="flex items-center gap-1">
         {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
           <button
             key={edge}
             type="button"
             onClick={() => onAlign(edge)}
-            title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')} to ${targetWord}`}
+            title={
+              movesPhoto
+                ? `Show the ${edge.replace('hcenter', 'centre').replace('vmiddle', 'middle')} of the photo`
+                : `Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')} to ${targetWord}`
+            }
             className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
           >
             <AlignIcon edge={edge} />
@@ -7927,9 +8181,25 @@ type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>;
 /** The element palette — a grid of tiles that drop an element on the canvas.
  *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
  *  (`onboarding`); `variant` only tunes density. */
+/** Section heading inside the empty-canvas onboarding card.
+ *  A label with a rule running off to the right — the three sections used to be
+ *  centred all-caps captions stacked down the middle, which gave the card no
+ *  left edge to read against and made the lists below them float. */
+function OnboardingHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+      <span className="shrink-0">{children}</span>
+      <span aria-hidden className="h-px flex-1 bg-[var(--border)]" />
+    </p>
+  );
+}
+
 function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
-  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-5';
-  const tile = variant === 'panel' ? 'gap-2 py-4 text-xs' : 'gap-1.5 py-3 text-[10px]';
+  // THREE across, not five. There are six adders, so a five-column grid left the
+  // last one alone on a second row — which read as a rendering fault rather than
+  // a layout. Three gives two even rows and enough width for the longest label.
+  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-3';
+  const tile = variant === 'panel' ? 'gap-2 py-4 text-xs' : 'gap-1.5 py-3 text-[11px]';
   return (
     <div className={`grid ${cols} gap-2`}>
       {adders.map((a) => (
@@ -8030,75 +8300,6 @@ function BarBtn({
  *  colors" link that opens the subaccount's branding settings in a new tab.
  *  Used by every color control (fill, background, text, button, gradient stops)
  *  so brand colors are one click away wherever a color is set. */
-/**
- * THE THEME EDITOR — the designer-owned half of an archetype.
- *
- * An archetype derives every board from five colours and a fade, so this is the
- * whole styling surface for a composition: change the brand blue here and eleven
- * layers on five boards follow, instead of being recoloured fifty-five times.
- *
- * Editing is a RECOLOUR, not a rebuild (see `archetypes/theme.ts`): geometry,
- * bindings, additions and per-board overrides all survive it.
- */
-function ThemeEditor({ theme, onChange }: { theme: Theme; onChange: (next: Theme) => void }) {
-  const set = (patch: Partial<Theme>) => onChange({ ...theme, ...patch });
-  const usesAccountBrand = theme.brand === 'brand';
-  const rows: { key: 'base' | 'brand' | 'ink' | 'muted'; label: string; hint: string }[] = [
-    { key: 'base', label: 'Background', hint: 'The fill behind everything' },
-    { key: 'brand', label: 'Brand', hint: 'The offer figure' },
-    { key: 'ink', label: 'Headings', hint: 'Tagline and vehicle name' },
-    { key: 'muted', label: 'Supporting text', hint: 'Offer label, terms, disclaimer' },
-  ];
-  const fade = theme.fade ?? { angle: 135, end: 70 };
-  return (
-    <div>
-      <div className="mb-1 flex items-center gap-1.5">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Theme</h3>
-        <Tooltip label="An archetype styles every layer on every board from these five colours and the fade. Changing one recolours the whole design and keeps your layout, bindings and per-size overrides.">
-          <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
-        </Tooltip>
-      </div>
-      <div className="space-y-1">
-        {rows.map((r) => {
-          const token = theme[r.key] === 'brand';
-          return (
-            <div key={r.key} className="flex items-center gap-2">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] font-medium text-[var(--foreground)]">{r.label}</p>
-                <p className="truncate text-[10px] text-[var(--muted-foreground)]">{token ? "The account's brand color" : r.hint}</p>
-              </div>
-              <ColorSwatchInput
-                title={`${r.label} color`}
-                value={token ? '#4f46e5' : theme[r.key]}
-                onChange={(v) => set({ [r.key]: v } as Partial<Theme>)}
-              />
-            </div>
-          );
-        })}
-      </div>
-      {/* The one theme value that isn't a colour: how far the white wash runs
-          across the backdrop, and at what angle. */}
-      <div className="mt-2 flex items-end gap-2 border-t border-[var(--border)] pt-2">
-        <label className="flex-1">
-          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade angle</span>
-          <NumberInput value={fade.angle} onChange={(v) => set({ fade: { ...fade, angle: clamp(Math.round(v), 0, 360) } })} min={0} max={360} unit="°" />
-        </label>
-        <label className="flex-1">
-          <span className="mb-0.5 block text-[10px] font-medium text-[var(--muted-foreground)]">Fade reach</span>
-          <NumberInput value={fade.end} onChange={(v) => set({ fade: { ...fade, end: clamp(Math.round(v), 0, 100) } })} min={0} max={100} unit="%" />
-        </label>
-      </div>
-      {/* Only ever true for the generic starting points, which is the point of
-          them: one composition that paints itself for every rooftop. */}
-      {usesAccountBrand && (
-        <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
-          The brand color follows whichever account the ad is for. Pick a color to fix it to this template instead.
-        </p>
-      )}
-    </div>
-  );
-}
-
 function ColorSwatchInput({ title, value, onChange }: { title: string; value: string; onChange: (v: string) => void }) {
   const { accountData, accountKey } = useAccount();
   const [open, setOpen] = useState(false);

@@ -318,6 +318,33 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     `left:${box.x * width}px;top:${box.y * height}px;` +
     `width:${box.w * width}px;height:${box.h * height}px;`;
 
+  // A tint layer for an element that carries one, or ''. Shared by the background
+  // (where it is the fade) and by ordinary images.
+  const overlayCss = (e: DocElement, b: string, maskTo?: { url: string; pos: string }): string => {
+    if (!e.overlay) return '';
+    const ov = normalizeGradient({ gradientFill: e.overlay });
+    if (!ov) return '';
+    // MASKED TO THE PICTURE when the image is letterboxed.
+    //
+    // A `contain` image does not fill its frame, so a tint drawn across the whole
+    // box also tints the empty bars beside it — which reads as a coloured panel
+    // with a photo in it rather than a tinted photo. Masking with the image
+    // itself, at the same fit and position, paints the tint exactly where the
+    // picture is. It follows transparency too, so a cut-out PNG is tinted on the
+    // subject and nowhere else.
+    //
+    // `cover` and `tile` fill the box by definition, so they are left unmasked —
+    // masking them would restrict a full-frame scrim to a transparent PNG's
+    // subject, which is the opposite of what a background wash is for.
+    const mask = maskTo
+      ? `-webkit-mask-image:url(${maskTo.url});mask-image:url(${maskTo.url});` +
+        `-webkit-mask-size:contain;mask-size:contain;` +
+        `-webkit-mask-position:${maskTo.pos};mask-position:${maskTo.pos};` +
+        `-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;`
+      : '';
+    return `<div style="position:absolute;inset:0;pointer-events:none;${mask}background:${buildGradientCss(ov, b)};"></div>`;
+  };
+
   if (el.type === 'background') {
     // Unified full-bleed background: composite base fill → texture → fade overlay
     // inside one element. Replaces the old doc-level canvas fill + bg image.
@@ -356,9 +383,9 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       }
     }
     // 3. Fade / overlay gradient on top.
-    if (el.overlay && part !== 'base') {
-      const ov = normalizeGradient({ gradientFill: el.overlay });
-      if (ov) layers.push(`<div style="position:absolute;inset:0;background:${buildGradientCss(ov, brand)};"></div>`);
+    if (part !== 'base') {
+      const ov = overlayCss(el, brand);
+      if (ov) layers.push(ov);
     }
     if (!layers.length) return '';
     const radius = borderRadiusCss(el);
@@ -408,7 +435,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     if (fit === 'tile') {
       const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
       const tileRadius = borderRadiusCss(el);
-      return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${tileRadius}background-image:url(${url});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`;
+      return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${tileRadius}background-image:url(${url});background-repeat:repeat;background-size:${tilePct}% auto;">${overlayCss(el, brand)}</div>`;
     }
     // A cover image can carry a per-size focal point (object-position) so one
     // background frames correctly across aspect ratios; else sensible defaults.
@@ -428,7 +455,11 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
         ? `transform:scale(${cropScale});transform-origin:${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%;`
         : '';
     const inner = `width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}`;
-    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${mediaTag(url, el, inner)}</div>`;
+    // A tint over the photo, inside the same clipped wrapper — so it inherits the
+    // corner radius and the crop, and cannot drift out of register with the image
+    // the way a separate shape layer does.
+    const tint = overlayCss(el, brand, fit === 'contain' ? { url, pos: objectPos } : undefined);
+    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${mediaTag(url, el, inner)}${tint}</div>`;
   }
 
   if (el.type === 'offer') {

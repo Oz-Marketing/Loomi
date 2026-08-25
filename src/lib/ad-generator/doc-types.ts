@@ -270,7 +270,19 @@ export interface DocElement {
   // `DocBackground` canvas fill and the separate full-bleed background image.
   /** Opacity (0–100) of the background's texture layer only. Undefined = 100. */
   bgImageOpacity?: number;
-  /** The background's top fade/overlay gradient (composited over the texture). */
+  /**
+   * A TINT composited over this element's own image — solid or gradient.
+   *
+   * On a `background` this is the fade it always had. On an ordinary `image` it
+   * is the same thing, and it exists because the alternative was worse: darkening
+   * a photo so a headline reads on it meant adding a shape, sizing it to the
+   * photo on every board, and keeping the two in step forever. The tint travels
+   * WITH the image — resize it, recrop it, swap the photo, and the scrim is still
+   * exactly on it.
+   *
+   * A solid tint is a one-stop gradient, so there is one shape here rather than a
+   * colour field and a gradient field that can disagree.
+   */
   overlay?: GradientFill;
   /** Corner radius in px (all four corners). Applies to rectangle shapes AND
    *  images/logos (rounds the image, which is clipped by the wrapper's
@@ -523,13 +535,45 @@ export interface Theme {
   /** Secondary ink — labels, terms, disclaimer. */
   muted: string;
   /**
-   * `onBrand` was here — ink for text sitting on the brand colour. The expiration
-   * pill was the only thing wearing it, and the pill is gone (a designer who wants
-   * the date on the art adds a layer for it), so the theme no longer decides a
-   * colour nothing paints. A stored doc may still carry the key; it is ignored.
+   * Ink for text sitting ON the brand colour.
+   *
+   * REINSTATED. It was removed when the expiration pill went, on the correct
+   * reasoning that the theme should not decide a colour nothing paints — the pill
+   * was the only thing wearing it. The brand BAND brought the need back and then
+   * some: the vehicle name and the whole disclaimer now sit on a full-bleed panel
+   * of the account's brand colour, so something has to say what colour text is
+   * legible there, and it cannot be `ink` (near-black on a deep brand blue is
+   * unreadable).
+   *
+   * Undefined reads as white, which is what the band composition was designed
+   * against and what a doc stored before this existed should render as.
    */
+  onBrand?: string;
   /** The white-fade angle + how far across it runs. */
   fade?: { angle: number; end: number };
+  /**
+   * DISPLAY face — the vehicle name, the offer label and the offer figure. The
+   * voice of the plate.
+   *
+   * Type is in the theme for the same reason colour is: an archetype styles every
+   * text layer on every board, so a brand face was otherwise a change a designer
+   * had to make one layer at a time and then repeat on the next template. The
+   * account already stores its faces (`Account.branding.fonts`), so this is
+   * mostly about letting the design USE what is already known.
+   *
+   * Empty / undefined = the account's brand font stack, which is exactly what
+   * every archetype doc rendered before typography was part of the theme — so a
+   * doc written earlier is unchanged by this existing.
+   */
+  heading?: string;
+  /**
+   * READING face — the offer terms and the disclaimer. The fine print.
+   *
+   * Falls back to `heading`, then to the account's stack. A theme that names one
+   * face means "use it for everything", which is the common case; naming two is
+   * the display/text pairing a brand book actually specifies.
+   */
+  body?: string;
 }
 
 export interface TemplateDoc {

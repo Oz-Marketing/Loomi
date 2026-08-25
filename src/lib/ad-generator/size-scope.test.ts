@@ -4,6 +4,7 @@ import {
   applyElementPatch,
   applyStackOrder,
   clearElementOverride,
+  effectiveEditScope,
   effectiveElement,
   effectiveElements,
   overridableKeys,
@@ -713,5 +714,49 @@ describe('applyBox — hidden', () => {
     expect(d.layouts.story.headline.hidden).toBe(true); // story was already hidden
     const sub = applyBox(doc(), 'sub', { ...doc().layouts.square.sub, hidden: true }, 'size', 'square');
     expect(sub.layouts.story.sub.hidden).toBeUndefined();
+  });
+});
+
+/**
+ * The regression this guards, in the designer's words: "I had 1 size. I uploaded
+ * a photo and changed the type to 'fill'. Then added more sizes, but the types on
+ * the 2 new images are still at default (Fit)."
+ *
+ * The edit had been stored as a per-board override on the only board, so the new
+ * boards fell back to the element's untouched default.
+ */
+describe('a one-board doc edits shared, whatever the picker says', () => {
+  it('forces "all" at one board, so the value survives adding boards', () => {
+    expect(effectiveEditScope(1, 'size')).toBe('all');
+    expect(effectiveEditScope(1, 'all')).toBe('all');
+    // Zero boards is not a real doc, but it must not be a per-board write either.
+    expect(effectiveEditScope(0, 'size')).toBe('all');
+  });
+
+  it('honours the picker once there is more than one board', () => {
+    expect(effectiveEditScope(2, 'size')).toBe('size');
+    expect(effectiveEditScope(2, 'all')).toBe('all');
+    expect(effectiveEditScope(16, 'size')).toBe('size');
+  });
+
+  it('end to end: set a style on the only board, then add one', () => {
+    const one: TemplateDoc = {
+      id: 'd', name: 'D', sizes: [{ id: 'a', label: 'A', width: 1080, height: 1080 }],
+      fields: [], elements: [{ id: 'img', type: 'image' }],
+      layouts: { a: { img: { x: 0, y: 0, w: 1, h: 1, z: 0 } } }, defaults: {},
+    };
+    // The designer picks Fill while only one board exists.
+    const styled = applyElementPatch(one, 'img', { fit: 'cover' }, effectiveEditScope(one.sizes.length, 'all'), 'a');
+    // It landed on the ELEMENT, not in an override — which is what lets a board
+    // added later inherit it.
+    expect(styled.elements[0].fit).toBe('cover');
+    expect(styled.overrides?.a?.img).toBeUndefined();
+
+    const two: TemplateDoc = {
+      ...styled,
+      sizes: [...styled.sizes, { id: 'b', label: 'B', width: 1080, height: 1920 }],
+      layouts: { ...styled.layouts, b: { img: { x: 0, y: 0, w: 1, h: 1, z: 0 } } },
+    };
+    expect(effectiveElement(two.elements[0], two.overrides, 'b').fit).toBe('cover');
   });
 });

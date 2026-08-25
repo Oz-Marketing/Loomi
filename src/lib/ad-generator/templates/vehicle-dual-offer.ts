@@ -155,7 +155,12 @@ export const vehicleDualOffer: AdTemplate = {
     leaseTerm: '36',
     dueAtSigning: '2999',
     msrp: '34000',
-    // Offer 2 — APR
+    // Offer 2 — APR by default, but carrying a sample value for EVERY offer type.
+    //
+    // Offer 1 gets full coverage for free: the builder merges the single's
+    // preview data first, and those keys are unprefixed. Nothing does that for
+    // `o2_`, so previewing the template as Discount or Sale price left the second
+    // plate's figure empty — the one thing the preview chip exists to show.
     o2_vehicleName: '2024 RAV4 XLE',
     o2_vehicleImageUrl: '',
     o2_offerType: 'apr',
@@ -163,6 +168,13 @@ export const vehicleDualOffer: AdTemplate = {
     o2_aprTerm: '60',
     o2_financialInstitution: 'Toyota Financial',
     o2_msrp: '36000',
+    o2_monthlyPayment: '329',
+    o2_leaseTerm: '36',
+    o2_dueAtSigning: '3499',
+    o2_discountAmount: '2500',
+    o2_discountLabelStyle: 'off_msrp',
+    o2_salePrice: '33500',
+    o2_price: '$329/mo',
     disclaimer: 'Plus tax, title, and license. With approved credit. See dealer for details.',
   },
   render,

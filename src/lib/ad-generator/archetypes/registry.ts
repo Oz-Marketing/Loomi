@@ -1,4 +1,5 @@
 import type { AdData, AdSize } from '../types';
+import { AD_SIZE_STARTERS } from '../ad-size-library';
 import type { TemplateDoc } from '../doc-types';
 import { vehicleOfferArchetype, type OfferCount } from './vehicle-offer-archetype';
 import { buildArchetypeDoc, type Theme } from './types';
@@ -49,12 +50,34 @@ export const BRAND_THEME: Theme = {
   fade: { angle: 135, end: 70 },
 };
 
-/** The social/display set a template starts with when nobody has said otherwise. */
-export const DEFAULT_SIZES: AdSize[] = [
-  { id: 'square', label: 'Square 1:1 (1080×1080)', width: 1080, height: 1080 },
-  { id: 'landscape', label: 'Landscape (1200×628)', width: 1200, height: 628 },
-  { id: 'story', label: 'Story 9:16 (1080×1920)', width: 1080, height: 1920 },
-];
+/**
+ * The channel set a template starts with when nobody has said otherwise.
+ *
+ * EVERY size in the library, not a curated few. It costs an archetype nothing to
+ * lay out a board — that is the entire claim the composition makes — so the
+ * useful default is the whole catalogue, and the designer switches off the
+ * channels this template is not for. Curating here just made them re-add by hand
+ * the boards we had decided on their behalf they would not want.
+ *
+ * Derived from `AD_SIZE_STARTERS` rather than restated, so the list cannot drift
+ * from the library. The BUILDER goes one better and hands the archetype the
+ * account's live library — including any custom sizes — so this constant is the
+ * fallback for callers with no account in scope (the seed script, the tests).
+ *
+ * Three of these are 1080×1920 (Facebook Story, Instagram Story, TikTok). They
+ * stay as three: they are three placements with three sets of safe areas, and
+ * `uniqueSizeId` keeps their layouts separate.
+ *
+ * The one board the archetype CANNOT compose — a 728×90 leaderboard — is not in
+ * the library at all, which is why nothing here has to special-case it. See the
+ * note in `ad-size-library.ts`.
+ */
+export const DEFAULT_SIZES: AdSize[] = AD_SIZE_STARTERS.map((s) => ({
+  id: s.key,
+  label: `${s.name} (${s.width}×${s.height})`,
+  width: s.width,
+  height: s.height,
+}));
 
 export interface ArchetypeStart {
   id: string;
@@ -78,7 +101,7 @@ export const ARCHETYPE_STARTS: ArchetypeStart[] = [
   {
     id: 'vehicle-offer',
     name: 'Vehicle Offer',
-    hint: 'One vehicle, one offer. Serves lease, APR, discount and sale price from the same design.',
+    hint: 'Every block for one vehicle and one offer, on every board. Serves lease, APR, discount and sale price.',
     group: 'Compositions',
     offers: 1,
     theme: BRAND_THEME,
@@ -87,7 +110,7 @@ export const ARCHETYPE_STARTS: ArchetypeStart[] = [
   {
     id: 'two-vehicles',
     name: 'Two Vehicles',
-    hint: 'Two offers side by side — a comparison. Stacks itself on tall boards.',
+    hint: 'Every block for two vehicle offers — two of each, plus a logo and disclaimer.',
     group: 'Compositions',
     offers: 2,
     theme: BRAND_THEME,

@@ -42,6 +42,28 @@ const NEVER_OVERRIDE = new Set<keyof DocElement>([
   'sizeMode',
 ]);
 
+/**
+ * The scope an edit ACTUALLY lands at, given how many boards the doc has.
+ *
+ * A doc with ONE board always edits SHARED, whatever the picker says. The picker
+ * is hidden at one board — there is no "other size" to hold something back from —
+ * so whatever it happens to be showing is not a choice the designer made.
+ *
+ * This used to resolve to `'size'` there, on the reasoning that with a single
+ * board the two are indistinguishable. They are not; they differ LATER. Setting a
+ * photo to Fill on your only board wrote a per-board exception, and the moment you
+ * added boards the new ones fell back to the element's untouched default and
+ * arrived on Fit — with nothing in the UI to explain why, and no way to have
+ * avoided it.
+ *
+ * Lives here rather than inline in the builder because it is a rule about how
+ * edits are STORED, and the bug it fixes was invisible until boards were added —
+ * exactly the kind that wants a test rather than a careful reader.
+ */
+export function effectiveEditScope(boardCount: number, chosen: EditScope): EditScope {
+  return boardCount > 1 ? chosen : 'all';
+}
+
 /** Whether a patch has anything left to write once the shared-only keys are dropped. */
 export function overridableKeys(patch: Partial<DocElement>): (keyof DocElement)[] {
   return (Object.keys(patch) as (keyof DocElement)[]).filter((k) => !NEVER_OVERRIDE.has(k));

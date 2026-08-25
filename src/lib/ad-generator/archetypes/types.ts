@@ -45,6 +45,8 @@ export type { Theme } from '../doc-types';
  */
 export type SlotRole =
   | 'backdrop'
+  | 'band'
+  | 'divider'
   | 'logo'
   | 'tagline'
   | 'offer'
@@ -57,17 +59,21 @@ export interface ArchetypeSlot {
   /** Element id in the produced doc. Stable, so per-board overrides survive. */
   id: string;
   role: SlotRole;
+  /**
+   * The GROUP this slot belongs to, as `id|Display Name`.
+   *
+   * Groups are builder-only — they change nothing about the render — but they are
+   * what turns a composition into a KIT. A designer who wants the offer somewhere
+   * else drags one thing instead of marquee-selecting three and hoping they stay
+   * in step, and the lockup's internal proportions survive being moved.
+   *
+   * That matters more than the arrangement does. The arrangement is a suggestion a
+   * designer will override; the bindings, the styling and the internal
+   * relationships are the part they should never have to rebuild by hand.
+   */
+  group?: string;
   /** The element, styled from the theme. */
   build: (t: Theme) => DocElement;
-  /**
-   * Shed order when a board has no room for everything: the LOWEST value goes
-   * first. Absent means required — it is never shed, at any size.
-   *
-   * The disclaimer is deliberately not optional. A board too small for it is a
-   * board this archetype must not claim to support, because an ad without a
-   * legible disclaimer is one nobody can run.
-   */
-  shedAt?: number;
 }
 
 export interface Archetype {
@@ -115,7 +121,21 @@ export function buildArchetypeDoc(
   // designer what a layer is for, and it survives every later edit to the doc.
   const elements: DocElement[] = arch.slots
     .filter((s) => used.has(s.id))
-    .map((s) => ({ ...s.build(theme), id: s.id, role: s.role }));
+    .map((s) => ({
+      ...s.build(theme),
+      id: s.id,
+      role: s.role,
+      ...(s.group ? { groupId: s.group.split('|')[0] } : {}),
+    }));
+
+  // One entry per group any surviving slot names, in slot order. A group whose
+  // every member was shed on every board never appears.
+  const groups: NonNullable<TemplateDoc['groups']> = [];
+  for (const s of arch.slots) {
+    if (!s.group || !used.has(s.id)) continue;
+    const [id, name] = s.group.split('|');
+    if (!groups.some((g) => g.id === id)) groups.push({ id, name: name ?? id });
+  }
 
   const layouts: TemplateDoc['layouts'] = {};
   for (const size of sizes) {
@@ -142,16 +162,10 @@ export function buildArchetypeDoc(
     sizes,
     fields: arch.fields,
     elements,
+    ...(groups.length ? { groups } : {}),
     layouts,
     defaults: { ...arch.defaults, ...(meta.defaults ?? {}) },
   };
-}
-
-/** Slots in shed order: the first to go, first. Required slots are excluded. */
-export function shedOrder(slots: ArchetypeSlot[]): ArchetypeSlot[] {
-  return slots
-    .filter((s) => s.shedAt != null)
-    .sort((a, b) => (a.shedAt ?? 0) - (b.shedAt ?? 0));
 }
 
 /** Boxes keyed by slot id, for the layout helpers to fill in. */

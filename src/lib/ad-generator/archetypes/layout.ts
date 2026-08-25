@@ -113,13 +113,29 @@ export function column(r: Rect, size: AdSize, rows: Row[], gapPx = 0): Record<st
   const free = Math.max(0, r.h - paidFloors.reduce((a, b) => a + b, 0) - paidGap * (rows.length - 1));
   const weightTotal = rows.reduce((a, row) => a + row.weight, 0) || 1;
 
-  let y = r.y;
+  // Positions are QUANTIZED to the same 1e-4 grid the boxes are stored on, and
+  // each row's height is derived from its neighbour's quantized top.
+  //
+  // Without this, contiguous rows overlap. `box` rounds x/y/w/h independently, so
+  // a row whose top rounds down and whose height rounds up ends fractionally past
+  // the next row's top — 0.03px on a 250px board. It never showed while every
+  // caller passed a gap, because a 4px gutter swallows the error; the reference
+  // composition stacks its rows flush, and the overlap invariant caught it
+  // immediately.
+  const tops: number[] = [];
+  let cursor = r.y;
   rows.forEach((row, i) => {
-    const h = paidFloors[i] + (free * row.weight) / weightTotal;
+    tops.push(cursor);
+    cursor += paidFloors[i] + (free * row.weight) / weightTotal + paidGap;
+  });
+  const lastBottom = cursor - paidGap;
+
+  rows.forEach((row, i) => {
+    const top = round(tops[i]);
+    const bottom = round(i + 1 < rows.length ? tops[i + 1] - paidGap : lastBottom);
     const w = r.w * (row.widthFrac ?? 1);
     const x = row.align === 'center' ? r.x + (r.w - w) / 2 : r.x;
-    out[row.id] = { x, y, w, h };
-    y += h + paidGap;
+    out[row.id] = { x, y: top, w, h: Math.max(0, round(bottom - top)) };
   });
   return out;
 }

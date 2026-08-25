@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { applyTheme, docTheme } from './theme';
 import { youngSubaruSingleOffer, YOUNG_SUBARU_THEME } from './young-subaru-archetype';
 import { blankTemplateDoc } from '../doc-template';
-import type { Theme } from '../doc-types';
+import type { TemplateDoc, Theme } from '../doc-types';
+import { archetypeStart, docFromStart, BRAND_THEME } from './registry';
 
 /**
  * Retheming. The whole reason an archetype's output is an ordinary doc is that a
@@ -18,23 +19,17 @@ const RED: Theme = {
   fade: { angle: 90, end: 40 },
 };
 
-describe('a recolour repaints the design', () => {
-  it('moves every theme colour onto the elements that wear it', () => {
-    const next = applyTheme(youngSubaruSingleOffer(), RED);
-    const el = (id: string) => next.elements.find((e) => e.id === id)!;
-    expect(el('bgFill').fill).toBe(RED.base);
-    expect(el('offerMain').color).toBe(RED.brand);
-    expect(el('vehicleName').color).toBe(RED.ink);
-    expect(el('offerLabel').color).toBe(RED.muted);
-    expect(el('disclaimer').color).toBe(RED.muted);
-  });
-
-  it('rebuilds the fade from the new angle and reach', () => {
-    const fade = applyTheme(youngSubaruSingleOffer(), RED).elements.find((e) => e.id === 'bgFade')!;
-    expect(fade.gradientFill?.angle).toBe(90);
-    expect(fade.gradientFill?.stops[1].pos).toBe(40);
-  });
-
+/**
+ * `applyTheme` survives, but it has nothing to paint.
+ *
+ * The starting points build PLAIN text boxes and image slots — no fills, no
+ * colours, no faces — so a retheme is a no-op on everything they produce. What
+ * these tests guard is that it stays a no-op rather than becoming destructive:
+ * an unguarded copy of the theme's keys would push `undefined` over whatever
+ * styling the DESIGNER had applied, and clear their work every time the theme
+ * was touched.
+ */
+describe('a retheme never destroys the designer\u2019s work', () => {
   it('records the theme it is now wearing', () => {
     expect(docTheme(applyTheme(youngSubaruSingleOffer(), RED))).toEqual(RED);
     expect(docTheme(youngSubaruSingleOffer())).toEqual(YOUNG_SUBARU_THEME);
@@ -106,5 +101,35 @@ describe('a doc no archetype produced is left alone', () => {
   it('returns a doc naming an archetype this build does not know unchanged', () => {
     const doc = { ...youngSubaruSingleOffer(), archetype: { id: 'from-the-future', offers: 1, theme: RED } };
     expect(applyTheme(doc, YOUNG_SUBARU_THEME)).toBe(doc);
+  });
+});
+
+/**
+ * Type is a theme value, not a per-layer chore.
+ *
+ * Before this, an archetype styled every text slot on every board and named no
+ * face, so a brand font was a change a designer made one layer at a time and then
+ * repeated on the next template.
+ */
+describe('the theme is recorded, even though nothing reads it', () => {
+  const doc = () => docFromStart(archetypeStart('vehicle-offer')!, { id: 't', name: 'T' });
+  const faceOf = (d: TemplateDoc, id: string) => d.elements.find((e) => e.id === id)?.fontFamily;
+
+  it('names no face by default, so an older design is unchanged', () => {
+    const d = doc();
+    for (const el of d.elements) expect(el.fontFamily).toBeUndefined();
+  });
+
+  it('keeps the face it was given on the doc it stores', () => {
+    const d = applyTheme(doc(), { ...BRAND_THEME, heading: 'Archivo', body: 'Source Serif 4' });
+    expect(d.archetype?.theme.heading).toBe('Archivo');
+    expect(d.archetype?.theme.body).toBe('Source Serif 4');
+  });
+
+  it('does not touch a hand-placed layer', () => {
+    const base = doc();
+    const withMine: TemplateDoc = { ...base, elements: [...base.elements, { id: 'mine', type: 'text', fontFamily: 'Courier New' }] };
+    const d = applyTheme(withMine, { ...BRAND_THEME, heading: 'Archivo' });
+    expect(faceOf(d, 'mine')).toBe('Courier New');
   });
 });

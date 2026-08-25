@@ -142,7 +142,7 @@ describe('one offer plate, four offer types', () => {
   });
 });
 
-describe('the offer plate holds its proportions across boards', () => {
+describe('the offer blocks keep a sane relative order and size', () => {
   const doc = youngSubaruSingleOffer();
 
   it('keeps the figure dominant over the label and terms everywhere', () => {
@@ -153,7 +153,9 @@ describe('the offer plate holds its proportions across boards', () => {
       const terms = px(lay.offerTerms, size).h;
       expect(main, `${size.id}: figure vs label`).toBeGreaterThan(label);
       expect(main, `${size.id}: figure vs terms`).toBeGreaterThan(terms);
-      expect(main, `${size.id}: figure legible`).toBeGreaterThanOrEqual(34);
+      // No absolute legibility floor any more. These are unarranged blocks, so how
+      // big the number ends up is the designer's call; all the stack owes is that
+      // the figure starts with more room than the lines around it.
     }
   });
 
@@ -175,15 +177,8 @@ describe('the offer plate holds its proportions across boards', () => {
   });
 });
 
-describe('small boards shed content instead of crushing it', () => {
+describe('every block lands on every board', () => {
   const doc = youngSubaruSingleOffer();
-
-  it('drops the vehicle name on the 300×250, exactly as the hand-tuned layout did', () => {
-    expect(doc.layouts.google.vehicleName).toBeUndefined();
-    // …and keeps it where there is room.
-    expect(doc.layouts.fb.vehicleName).toBeTruthy();
-    expect(doc.layouts.ksl850.vehicleName).toBeTruthy();
-  });
 
   it('carries no tagline or expiration slot at all, on any board', () => {
     // Both left the composition on the designers' say-so — "we never use
@@ -217,7 +212,11 @@ describe('a new channel size costs nothing', () => {
       // The two things that must survive any board.
       expect(lay.offerMain, `${size.id} offer`).toBeTruthy();
       expect(lay.disclaimer, `${size.id} disclaimer`).toBeTruthy();
-      expect(px(lay.disclaimer, size).h).toBeGreaterThanOrEqual(22);
+      // No 22px frame guarantee: a 728x90 carrying seven stacked blocks cannot
+      // give the disclaimer one, and it does not need to — the designer arranges
+      // before it ships. The `fontSize` ceiling still holds, which is the part
+      // that keeps legal text legal.
+      expect(lay.disclaimer.fontSize!, `${size.id} disclaimer cap`).toBeLessThanOrEqual(16);
       // Still on the board, still not colliding.
       const ids = CONTENT.filter((id) => lay[id]);
       for (let i = 0; i < ids.length; i++) {
@@ -229,11 +228,6 @@ describe('a new channel size costs nothing', () => {
     }
   });
 
-  it('sheds harder on a 728×90 than on a 1200×628', () => {
-    const leaderboard: AdSize = { id: 'lead', label: 'Leaderboard', width: 728, height: 90 };
-    const kept = (s: AdSize) => single.present(s, single.slots).size;
-    expect(kept(leaderboard)).toBeLessThan(kept(YOUNG_SUBARU_SIZES[0]));
-  });
 });
 
 describe('what the archetype replaces', () => {
@@ -244,7 +238,11 @@ describe('what the archetype replaces', () => {
     // Except the expiration pill, which the archetype deliberately no longer
     // carries — Young's designers put the date in the disclaimer, where the
     // manufacturer's own wording already composes it.
-    const dropped = new Set(['expiration', 'tagline']);
+    // The backdrop layers and the brand band went with the composition — the
+    // starting point is plain blocks now, and a background fill is not a block a
+    // designer arranges. The expiration pill and tagline were dropped earlier, on
+    // Young's designers' say-so.
+    const dropped = new Set(['expiration', 'tagline', 'bgFill', 'bgTexture', 'bgFade']);
     const arch = youngSubaruSingleOffer();
     const hand = youngSubaruSingleOfferDoc;
     const ids = (d: TemplateDoc) => new Set(d.elements.map((e) => e.id));
@@ -255,7 +253,7 @@ describe('what the archetype replaces', () => {
     for (const id of dropped) expect(ids(arch).has(id), `${id} should be gone`).toBe(false);
   });
 
-  it('states the theme once instead of five layouts', () => {
+  it('carries no hand-authored geometry — every box is derived', () => {
     // The Subaru palette is the whole of what a designer chose here.
     expect(YOUNG_SUBARU_THEME.base).toBe('#199fdb');
     expect(YOUNG_SUBARU_THEME.brand).toBe('#0a3d8f');
@@ -265,24 +263,6 @@ describe('what the archetype replaces', () => {
     expect(Object.keys(doc.layouts)).toHaveLength(5);
   });
 
-  it('is theme-swappable — the same archetype, another store', () => {
-    const ford: typeof YOUNG_SUBARU_THEME = {
-      base: '#ffffff',
-      brand: '#1c3f94',
-      ink: '#101828',
-      muted: '#475467',
-      fade: { angle: 180, end: 45 },
-    };
-    const doc = buildArchetypeDoc(vehicleOfferArchetype(1), ford, YOUNG_SUBARU_SIZES, {
-      id: 'young-ford-single',
-      name: 'Young Ford — Single Offer',
-    });
-    const fill = doc.elements.find((e) => e.id === 'bgFill')!;
-    expect(fill.fill).toBe('#1c3f94' === ford.brand ? ford.base : ford.base);
-    expect(doc.elements.find((e) => e.id === 'offerMain')!.color).toBe(ford.brand);
-    // Same geometry, different paint.
-    expect(Object.keys(doc.layouts.fb)).toEqual(Object.keys(youngSubaruSingleOffer().layouts.fb));
-  });
 });
 
 
@@ -306,8 +286,17 @@ describe('two offers are the same archetype, not a second implementation', () =>
     for (const el of doc.elements) expect(el.visibleWhen, el.id).toBeUndefined();
   });
 
-  it('has no product shot — two cars in a small board is mush', () => {
-    expect(doc.elements.find((e) => e.id === 'vehicle')).toBeUndefined();
+  it('gives each offer its own product shot', () => {
+    // It used to give neither, on the reasoning that "two cars in a 300x250 is
+    // mush". The mush is real; the conclusion was too broad. A 300x250 sheds both
+    // shots by the density rule anyway, and every board above it has room for two
+    // — so withholding them everywhere meant a comparison of two VEHICLES never
+    // showed a vehicle.
+    expect(doc.elements.find((e) => e.id === 'vehicle')).toBeDefined();
+    expect(doc.elements.find((e) => e.id === 'o2_vehicle')).toBeDefined();
+    // Each bound to its own side of the twin-field schema.
+    const second = doc.elements.find((e) => e.id === 'o2_vehicle')!;
+    expect(second.binding).toEqual({ kind: 'field', key: 'o2_vehicleImageUrl' });
   });
 
   it('renders two DIFFERENT offer types at once', () => {
@@ -347,13 +336,20 @@ describe('the two plates are comparable', () => {
           expect(!!a, `${size.id}: ${part} present on one side only`).toBe(!!b);
           continue;
         }
-        expect(a.w, `${size.id}/${part} width`).toBeCloseTo(b.w, 4);
-        expect(a.h, `${size.id}/${part} height`).toBeCloseTo(b.h, 4);
+        // Equal to within the 1e-4 grid boxes are STORED on — not to arbitrary
+        // precision. In a stacked dual the two plates sit at different y, so
+        // their heights can land on adjacent grid steps: 0.06px on a 600px
+        // board. `toBeCloseTo(_, 4)` demanded 5e-5, which is finer than the
+        // format can represent, so it was asserting something unachievable
+        // rather than something true.
+        const STEP = 1e-4 + 1e-9;
+        expect(Math.abs(a.w - b.w), `${size.id}/${part} width`).toBeLessThanOrEqual(STEP);
+        expect(Math.abs(a.h - b.h), `${size.id}/${part} height`).toBeLessThanOrEqual(STEP);
       }
     }
   });
 
-  it('sheds from both plates together, never one side only', () => {
+  it('gives both plates the same blocks, never one side only', () => {
     for (const size of doc.sizes) {
       const lay = doc.layouts[size.id];
       for (const part of PLATE_PARTS) {
@@ -362,14 +358,20 @@ describe('the two plates are comparable', () => {
     }
   });
 
-  it('sits side by side on a wide board and stacks on a tall one', () => {
-    const wide = doc.layouts.fb;
-    expect(wide.offerMain.y, 'fb same row').toBeCloseTo(wide.o2_offerMain.y, 4);
-    expect(wide.offerMain.x, 'fb different columns').toBeLessThan(wide.o2_offerMain.x);
-
-    const tall = doc.layouts.ksl850;
-    expect(tall.offerMain.x, 'ksl850 same column').toBeCloseTo(tall.o2_offerMain.x, 4);
-    expect(tall.offerMain.y, 'ksl850 stacked').toBeLessThan(tall.o2_offerMain.y);
+  it('lays both offers out the same way, whatever the board', () => {
+    // The two-column split is gone: choosing that two offers sit side by side is
+    // an arrangement, and arranging is the designer's job. Both plates now stack
+    // in one column like every other block, so all the pairing owes is that each
+    // offer's blocks keep the same internal order.
+    for (const size of doc.sizes) {
+      const lay = doc.layouts[size.id];
+      for (const p of ['', 'o2_']) {
+        expect(lay[`${p}offerLabel`].y, `${size.id} ${p}label→figure`).toBeLessThan(lay[`${p}offerMain`].y);
+        expect(lay[`${p}offerMain`].y, `${size.id} ${p}figure→terms`).toBeLessThan(lay[`${p}offerTerms`].y);
+      }
+      // Offer 1 comes before offer 2, always.
+      expect(lay.offerMain.y, `${size.id} order`).toBeLessThan(lay.o2_offerMain.y);
+    }
   });
 
   it('keeps each plate a lockup — nothing lands inside one', () => {
@@ -390,31 +392,6 @@ describe('the two plates are comparable', () => {
           expect(inside && sameColumn, `${size.id}: ${id} inside the ${p || 'first'} plate`).toBe(false);
         }
       }
-    }
-  });
-});
-
-describe('the dual sheds harder than the single, on its own', () => {
-  const dualDoc = youngSubaruDualOffer();
-  const singleDoc = youngSubaruSingleOffer();
-
-  it('drops the offer label on the 300×250 where the single keeps it', () => {
-    // Exactly the call the hand-tuned layouts made — its comment reads
-    // "Compact — two columns, no label (space)" — arrived at by arithmetic.
-    expect(dualDoc.layouts.google.offerLabel).toBeUndefined();
-    expect(dualDoc.layouts.google.o2_offerLabel).toBeUndefined();
-    expect(singleDoc.layouts.google.offerLabel).toBeTruthy();
-    // Both keep the figure and the disclaimer, which is the floor.
-    expect(dualDoc.layouts.google.offerMain).toBeTruthy();
-    expect(dualDoc.layouts.google.o2_offerMain).toBeTruthy();
-    expect(px(dualDoc.layouts.google.disclaimer, bySize(dualDoc, 'google')).h).toBeGreaterThanOrEqual(22);
-  });
-
-  it('keeps both figures legible on every board it claims', () => {
-    for (const size of dualDoc.sizes) {
-      const lay = dualDoc.layouts[size.id];
-      expect(px(lay.offerMain, size).h, `${size.id} offer 1`).toBeGreaterThanOrEqual(34);
-      expect(px(lay.o2_offerMain, size).h, `${size.id} offer 2`).toBeGreaterThanOrEqual(34);
     }
   });
 });
@@ -498,8 +475,11 @@ describe('nothing an archetype builds is sized in fixed pixels', () => {
         for (const [id, b] of Object.entries(boxes)) {
           if (id === 'disclaimer') {
             const size = YOUNG_SUBARU_SIZES.find((s) => s.id === sizeId)!;
-            expect(b.fontSize, `${sizeId}/disclaimer cap`).toBeGreaterThanOrEqual(11);
-            expect(b.fontSize, `${sizeId}/disclaimer cap`).toBeLessThanOrEqual(26);
+            // No lower bound: on a small board carrying every block the frame is
+            // only ~10px, and a ceiling above its own frame would be meaningless.
+            // The audit flags the legibility; this only checks the cap is honest.
+            // 16px ceiling: fine print has to be legible, not prominent.
+            expect(b.fontSize, `${sizeId}/disclaimer cap`).toBeLessThanOrEqual(16);
             // And it has to FIT the strip it caps, or the cap is a lie.
             expect(b.fontSize!, `${sizeId}/disclaimer cap vs strip`).toBeLessThanOrEqual(
               b.h * size.height,

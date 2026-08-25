@@ -30,6 +30,16 @@ export const ROLE_NOTES: Record<SlotRole, RoleNote> = {
     what: 'The base fill, the brand fade over it, and any texture. Everything else sits on top.',
     rule: 'Covers the whole board on every size, with bleed, so a wide board never shows an edge.',
   },
+  band: {
+    label: 'Brand band',
+    what: 'The panel of brand colour along the bottom. The vehicle name and the disclaimer sit on it.',
+    rule: 'Full-bleed across every board, and only as deep as the name and disclaimer need — so it is a brand block on a square and never a slab on a story.',
+  },
+  divider: {
+    label: 'Plate divider',
+    what: 'The hairline between the two offers. Only a two-offer design has one.',
+    rule: 'Runs down the gutter on a wide board and across it on a tall one, so the two offers read as a pair of things rather than one long list.',
+  },
   logo: {
     label: 'Logo lockup',
     what: 'The dealership and OEM marks. Sized in pixels, not as a share of the board.',

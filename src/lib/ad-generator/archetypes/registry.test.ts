@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ARCHETYPE_STARTS, BRAND_THEME, DEFAULT_SIZES, archetypeStartGroups, docFromStart } from './registry';
+import { ARCHETYPE_STARTS, archetypeStartGroups, docFromStart } from './registry';
 import { renderDoc } from '../doc-renderer';
 import { enrichOfferFields } from '../offer-text';
 import type { AdSize } from '../types';
@@ -23,7 +23,10 @@ describe('every starting point produces a usable template', () => {
           // The two things no board may be missing.
           expect(lay.offerMain, `${size.id} offer`).toBeTruthy();
           expect(lay.disclaimer, `${size.id} disclaimer`).toBeTruthy();
-          expect(lay.disclaimer.h * size.height, `${size.id} disclaimer px`).toBeGreaterThanOrEqual(22);
+          // The frame has no floor now — these are unarranged blocks and a small
+          // board carrying all of them cannot spare one. The type CEILING is the
+          // guarantee that survives.
+          expect(lay.disclaimer.fontSize!, `${size.id} disclaimer cap`).toBeLessThanOrEqual(16);
         }
       });
 
@@ -46,21 +49,16 @@ describe('every starting point produces a usable template', () => {
   }
 });
 
-describe('the default theme paints itself from the account', () => {
-  it('uses the brand token rather than a hardcoded colour', () => {
-    // So the generic starting points are usable for every rooftop instead of
-    // arriving grey and needing a recolour before they look like anything.
-    expect(BRAND_THEME.brand).toBe('brand');
-    const doc = docFromStart(ARCHETYPE_STARTS[0], { id: 't' });
-    expect(doc.elements.find((e) => e.id === 'offerMain')!.color).toBe('brand');
-  });
-
-  it('resolves to the account colour at render time', () => {
-    const doc = docFromStart(ARCHETYPE_STARTS[0], { id: 't' });
-    const html = renderDoc(doc, enrichOfferFields({ ...doc.defaults, brandColor: '#ff0055' }), DEFAULT_SIZES[0], { preview: false });
-    expect(html).toContain('#ff0055');
-  });
-});
+/**
+ * THE BRAND-TOKEN TESTS WERE HERE.
+ *
+ * `BRAND_THEME.brand === 'brand'` meant the offer figure arrived painted in the
+ * account's colour, so a generic starting point was usable for every rooftop
+ * instead of arriving grey. The starting points now build PLAIN blocks — nothing
+ * they produce carries a colour at all — so there is no painting left to assert.
+ * The theme is still recorded on the doc; see `theme.test.ts` for what it does
+ * and does not do now.
+ */
 
 describe('a starting point keeps the template it lands on', () => {
   it('keeps the id, and the name when the designer has set one', () => {

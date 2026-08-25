@@ -61,7 +61,11 @@ export const LEGIBILITY_FLOOR_PX = 10;
  * flat 22, so an archetype design failed its own audit on every board.
  */
 export function disclaimerTargetPx(size: Pick<AdSize, 'width' | 'height'>): number {
-  return Math.round(Math.min(26, Math.max(11, Math.min(size.width, size.height) * 0.022)));
+  // CEILING 16px. Legal text is fine print by design — it has to be legible, not
+  // prominent, and a 26px disclaimer on a 1080 square competed with the offer
+  // terms above it. The floor still rises with the board, so a small unit is not
+  // allowed to shrink it away; only the top end is capped.
+  return Math.round(Math.min(16, Math.max(11, Math.min(size.width, size.height) * 0.022)));
 }
 
 export type AuditCheck =

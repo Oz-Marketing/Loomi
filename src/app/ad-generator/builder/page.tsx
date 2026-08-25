@@ -111,6 +111,7 @@ import {
   styleVariants,
   type EditScope,
 } from '@/lib/ad-generator/size-scope';
+import { BLEED, clampPos, clampShift } from '@/lib/ad-generator/bleed';
 import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { bindsOfferToken, templateUsage, type TemplateDoc, type TemplateUsage, type DocElement, type DocElementType, type DocLayoutBox, type SizeMode, type GradientFill, type GradientStop, type BlendMode, type Binding, type Theme } from '@/lib/ad-generator/doc-types';
@@ -749,10 +750,9 @@ function computeBox(handle: Handle, start: DocLayoutBox, dxF: number, dyF: numbe
   // Elements may bleed past the artboard (clipped on export) and be dragged fully
   // off it (then they detach — see isDetached). BLEED bounds how far past each
   // edge you can push, so a detached element parks just beside the artboard.
-  const BLEED = 0.5;
   if (handle === 'move') {
-    x = clamp(x, -w - BLEED, 1 + BLEED);
-    y = clamp(y, -h - BLEED, 1 + BLEED);
+    x = clampPos(x, w);
+    y = clampPos(y, h);
   } else {
     x = clamp(x, -BLEED, 1 + BLEED - MIN_FRAC);
     y = clamp(y, -BLEED, 1 + BLEED - MIN_FRAC);
@@ -2225,7 +2225,7 @@ export default function AdBuilderPage() {
         if (b) {
           layouts[sid] = {
             ...prev.layouts[sid],
-            [newId]: { ...b, x: clamp(b.x + 0.03, 0, 1 - b.w), y: clamp(b.y + 0.03, 0, 1 - b.h), z: (b.z ?? 0) + 1 },
+            [newId]: { ...b, x: clampPos(b.x + 0.03, b.w), y: clampPos(b.y + 0.03, b.h), z: (b.z ?? 0) + 1 },
           };
         }
       }
@@ -2258,7 +2258,7 @@ export default function AdBuilderPage() {
         const lay = { ...prev.layouts[sid] };
         for (const [oldId, newId] of idMap) {
           const b = prev.layouts[sid][oldId];
-          if (b) lay[newId] = { ...b, x: clamp(b.x + 0.03, 0, 1 - b.w), y: clamp(b.y + 0.03, 0, 1 - b.h), z: (b.z ?? 0) + 1 };
+          if (b) lay[newId] = { ...b, x: clampPos(b.x + 0.03, b.w), y: clampPos(b.y + 0.03, b.h), z: (b.z ?? 0) + 1 };
         }
         layouts[sid] = lay;
       }
@@ -2334,8 +2334,8 @@ export default function AdBuilderPage() {
       const b = prev.layouts[size.id]?.[id];
       if (!b) return prev;
       const nb = { ...b };
-      if (contentW) nb.w = clamp(contentW / size.width, 0.02, 1 - b.x);
-      if (contentH) nb.h = clamp(contentH / size.height, 0.01, 1 - b.y);
+      if (contentW) nb.w = clamp(contentW / size.width, 0.02, 1 + BLEED - b.x);
+      if (contentH) nb.h = clamp(contentH / size.height, 0.01, 1 + BLEED - b.y);
       return applyBox(prev, id, nb, effectiveScope, size.id);
     }, `fit:${axis}:${id}`);
   }, [size.id, size.width, size.height, effectiveScope]);
@@ -2645,6 +2645,46 @@ export default function AdBuilderPage() {
     if (!box) return;
     setBox(size.id, id, { ...box, hidden: !box.hidden });
   }
+
+  /**
+   * Show/hide one element on ONE NAMED board, whichever board is on screen.
+   *
+   * Deliberately NOT routed through `applyBox` + the edit scope. "Hide the
+   * disclaimer on the leaderboard" is a per-size statement by construction, so a
+   * control that obeyed "All sizes" could only ever say "hide it everywhere" —
+   * which is the one thing this is not for. The eye toggle in the Layers panel
+   * keeps its scope-aware behavior for the board you are looking at; this is the
+   * cross-board view of the same flag.
+   *
+   * A board that has no placement for the element yet gets one, re-derived from
+   * the current board by the element's own SizeFit — the same arithmetic every
+   * other cross-board path uses, so turning a size back on doesn't drop the
+   * element in at a distorted shape.
+   */
+  const setSizeHidden = useCallback(
+    (elId: string, sid: string, hidden: boolean) => {
+      setDoc((prev) => {
+        const lay = prev.layouts[sid] ?? {};
+        let box = lay[elId];
+        if (!box) {
+          if (hidden) return prev; // nothing to hide — it isn't on that board
+          const from = prev.sizes.find((sz) => sz.id === size.id);
+          const to = prev.sizes.find((sz) => sz.id === sid);
+          const src = prev.layouts[size.id]?.[elId];
+          if (!src || !from || !to) return prev;
+          const fit = sizeFitOf(prev.elements.find((e) => e.id === elId));
+          const maxZ = Object.values(lay).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
+          box = { ...rescaleBox(src, from, to, fit), z: maxZ + 1 };
+        }
+        // Absent IS visible — one spelling for one state, matching `applyBox`.
+        const next = { ...box };
+        if (hidden) next.hidden = true;
+        else delete next.hidden;
+        return { ...prev, layouts: { ...prev.layouts, [sid]: { ...lay, [elId]: next } } };
+      }, `sizevis:${elId}:${sid}`);
+    },
+    [size.id, setDoc],
+  );
 
   // Lock/unlock an element (builder-only; deselects it when locking).
   function toggleLock(id: string) {
@@ -3447,8 +3487,12 @@ export default function AdBuilderPage() {
       if (d.handle === 'move') {
         const sx = bestSnap([box.x, box.x + box.w / 2, box.x + box.w], d.targetsX, SNAP_PX / d.fw);
         const sy = bestSnap([box.y, box.y + box.h / 2, box.y + box.h], d.targetsY, SNAP_PX / d.fh);
-        box.x = clamp(box.x + sx.off, 0, 1 - box.w);
-        box.y = clamp(box.y + sy.off, 0, 1 - box.h);
+        // Bounded the same way `computeBox` just bounded the raw drag — against
+        // the BLEED range, not the board. Re-clamping to `[0, 1 - w]` here undid
+        // the bleed the drag had allowed, so an element parked off the left edge
+        // (or an X typed as a negative) jumped back to 0 on the next drag.
+        box.x = clampPos(box.x + sx.off, box.w);
+        box.y = clampPos(box.y + sy.off, box.h);
         gx = sx.guide;
         gy = sy.guide;
       }
@@ -3486,12 +3530,14 @@ export default function AdBuilderPage() {
       const scaleY = h0 > 0 ? rect.h / h0 : 1;
       const live: Record<string, DocLayoutBox> = {};
       for (const it of d.items) {
+        const nw = Math.max(MIN_FRAC, it.start.w * scaleX);
+        const nh = Math.max(MIN_FRAC, it.start.h * scaleY);
         const nb: DocLayoutBox = {
           ...it.start,
-          x: clamp(rect.x + (it.start.x - d.bounds.left) * scaleX, 0, 1),
-          y: clamp(rect.y + (it.start.y - d.bounds.top) * scaleY, 0, 1),
-          w: Math.max(MIN_FRAC, it.start.w * scaleX),
-          h: Math.max(MIN_FRAC, it.start.h * scaleY),
+          x: clampPos(rect.x + (it.start.x - d.bounds.left) * scaleX, nw),
+          y: clampPos(rect.y + (it.start.y - d.bounds.top) * scaleY, nh),
+          w: nw,
+          h: nh,
         };
         if (it.isText && it.start.fontSize) nb.fontSize = Math.max(4, Math.round(it.start.fontSize * scaleY));
         live[it.elId] = nb;
@@ -3589,10 +3635,13 @@ export default function AdBuilderPage() {
       sizeId: size.id,
       items,
       bounds: { left, right, top, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 },
-      minDx: -left,
-      maxDx: 1 - right,
-      minDy: -top,
-      maxDy: 1 - bottom,
+      // The UNIT may bleed off the board like a single element does: bound the
+      // travel so the group's bounding box lands inside the bleed range, not so
+      // it is pinned flush to the artboard.
+      minDx: -(right - left) - BLEED - left,
+      maxDx: 1 + BLEED - left,
+      minDy: -(bottom - top) - BLEED - top,
+      maxDy: 1 + BLEED - top,
       targetsX: tx,
       targetsY: ty,
       live: {},
@@ -3960,8 +4009,11 @@ export default function AdBuilderPage() {
         else if (edge === 'vmiddle') dy = cy - (bb.top + bb.bottom) / 2;
         // Clamped as a UNIT — clamping members one by one is what let a wide
         // lockup collapse against an edge instead of stopping there together.
-        dx = clamp(dx, -bb.left, 1 - bb.right);
-        dy = clamp(dy, -bb.top, 1 - bb.bottom);
+        // Against the BLEED range, not the artboard: a unit already hanging off
+        // an edge has `-bb.left` positive and `1 - bb.right` negative, so the old
+        // bounds inverted and shoved it sideways instead of leaving it be.
+        dx = clampShift(dx, bb.left, bb.right - bb.left);
+        dy = clampShift(dy, bb.top, bb.bottom - bb.top);
         for (const { id, box } of members) patch[id] = { ...box, x: box.x + dx, y: box.y + dy };
       }
       return patch;
@@ -3996,7 +4048,7 @@ export default function AdBuilderPage() {
         let cur = start;
         for (const { members, bb } of units) {
           const w = bb.right - bb.left;
-          shift(members, 'x', clamp(cur - bb.left, -bb.left, 1 - bb.right));
+          shift(members, 'x', clampShift(cur - bb.left, bb.left, bb.right - bb.left));
           cur += w + gap;
         }
       } else {
@@ -4010,7 +4062,7 @@ export default function AdBuilderPage() {
         let cur = start;
         for (const { members, bb } of units) {
           const h = bb.bottom - bb.top;
-          shift(members, 'y', clamp(cur - bb.top, -bb.top, 1 - bb.bottom));
+          shift(members, 'y', clampShift(cur - bb.top, bb.top, bb.bottom - bb.top));
           cur += h + gap;
         }
       }
@@ -4047,7 +4099,7 @@ export default function AdBuilderPage() {
         selectedIds.reduce((acc, id) => {
           const b = acc.layouts[size.id]?.[id];
           if (!b) return acc;
-          const moved = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
+          const moved = { ...b, x: clampPos(b.x + dx, b.w), y: clampPos(b.y + dy, b.h) };
           return applyBox(acc, id, moved, effectiveScope, size.id);
         }, prev),
       );
@@ -5583,6 +5635,14 @@ export default function AdBuilderPage() {
                   onSetSizing={(mode) => updEl({ shrink: mode === 'shrink' ? true : undefined, wrap: undefined, autoSize: undefined })}
                   onSetSizeMode={(mode) => setSizeMode(selected.id, mode)}
                   multiSize={doc.sizes.length > 1}
+                  sizeVisibility={doc.sizes.map((s2) => ({
+                    id: s2.id,
+                    label: s2.label,
+                    // A board with no placement for the element reads as "not on
+                    // this size" — the same answer the renderer gives.
+                    shown: Boolean(doc.layouts[s2.id]?.[selected.id]) && !doc.layouts[s2.id]?.[selected.id]?.hidden,
+                  }))}
+                  onToggleSizeVisible={(sid, shown) => setSizeHidden(selected.id, sid, !shown)}
                   fitFontPx={fitFontPx}
                   hasOfferField={doc.fields.some((f) => f.key === 'offerType')}
                   offerTypes={docKind.offerTypes}
@@ -6631,6 +6691,8 @@ function SelectionPanel({
   shifted,
   cropping,
   onToggleCrop,
+  sizeVisibility,
+  onToggleSizeVisible,
 }: {
   el: DocElement;
   box: DocLayoutBox;
@@ -6660,6 +6722,13 @@ function SelectionPanel({
   /** More than one artboard — gates the Across-sizes control, which has nothing
    *  to say about a single-board template. */
   multiSize: boolean;
+  /** Whether this element renders on each of the doc's boards. Drives the
+   *  "Show on sizes" control, which is the only place a designer can see — and
+   *  set — visibility for a board that isn't the one on screen. */
+  sizeVisibility: { id: string; label: string; shown: boolean }[];
+  /** Show/hide this element on ONE board, named. Bypasses the This size / All
+   *  sizes scope on purpose: see `setSizeHidden`. */
+  onToggleSizeVisible: (sizeId: string, shown: boolean) => void;
   /** Text/Fit-to-box only: the measured auto-scaled font size (px), for a
    *  read-only readout. Null when unavailable (not yet fit / not fit mode). */
   fitFontPx: number | null;
@@ -7093,6 +7162,41 @@ function SelectionPanel({
             </div>
           )}
         </PanelSection>
+
+        {/* Show on sizes — per-BOARD visibility for this one element. The eye in
+            the Layers panel can only speak about the board on screen (and obeys
+            the This size / All sizes switch); this is where a designer drops a
+            disclaimer plate from the leaderboard without leaving the square. */}
+        {multiSize && (
+          <PanelSection
+            title="Show on sizes"
+            action={
+              <Tooltip label="Which artboards this element renders on. Hiding a size keeps its placement there — the element simply isn't drawn or exported on that board, so turning the size back on restores it exactly where it was. Use it for the pieces one shape can't carry: a legal plate that won't fit a leaderboard, a tagline that only earns its space on the story.">
+                <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+              </Tooltip>
+            }
+          >
+            <div className="flex flex-wrap gap-1.5">
+              {sizeVisibility.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onToggleSizeVisible(s.id, !s.shown)}
+                  aria-pressed={s.shown}
+                  title={`${s.label} — ${s.shown ? 'shown (click to hide)' : 'hidden (click to show)'}`}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                    s.shown
+                      ? 'border-[var(--primary)]/50 bg-[var(--primary)]/10 text-[var(--foreground)]'
+                      : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  {s.shown ? <EyeIcon className="h-3.5 w-3.5" /> : <EyeSlashIcon className="h-3.5 w-3.5" />}
+                  {s.label.split(' ')[0]}
+                </button>
+              ))}
+            </div>
+          </PanelSection>
+        )}
 
         {/* Snap this one element to an artboard (or margin-box) edge/centre —
             the single-element half of the multi-select Arrange controls. */}

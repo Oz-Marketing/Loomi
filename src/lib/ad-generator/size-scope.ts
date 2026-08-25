@@ -331,16 +331,22 @@ export function sizeFitOf(el: Pick<DocElement, 'sizeMode' | 'type' | 'fit'> | un
  * Place an extent on the target board, letting it hang off the edge when that is
  * the only way to keep the element's real size or shape.
  *
- * When the extent fits, `start` is preserved (nudged in only if it would run past
- * the far edge) — the long-standing behaviour, so nothing moves in the common
- * case. When it does not fit and the element may bleed, it overflows SYMMETRICALLY
+ * When the extent fits, `start` is preserved. For an element that may NOT bleed
+ * it is nudged in if it would run past the far edge — the long-standing
+ * behavior, so nothing moves in the common case. An element that MAY bleed keeps
+ * its offset untouched, because there the overhang is the design: a photo the
+ * designer pushed off the right edge was being pulled flush to it on every other
+ * board, which is the same "it won't stay where I put it" the builder's own move
+ * clamps used to cause.
+ *
+ * When it does not fit and the element may bleed, it overflows SYMMETRICALLY
  * about its old centre, so a background crops evenly instead of sliding to one
  * side. When it may not bleed, it fills the board exactly (`0..1`) rather than
  * keeping a stale negative offset — that combination used to leave a visible strip
  * of empty canvas at the bottom of a bleeding background.
  */
 function placeExtent(start: number, oldExtent: number, extent: number, bleed: boolean) {
-  if (extent <= 1) return { pos: Math.min(start, Math.max(0, 1 - extent)), extent };
+  if (extent <= 1) return { pos: bleed ? start : Math.min(start, Math.max(0, 1 - extent)), extent };
   if (bleed) return { pos: start + oldExtent / 2 - extent / 2, extent };
   return { pos: 0, extent: 1 };
 }

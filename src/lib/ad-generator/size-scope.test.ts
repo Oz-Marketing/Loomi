@@ -715,3 +715,49 @@ describe('applyBox — hidden', () => {
     expect(sub.layouts.story.sub.hidden).toBeUndefined();
   });
 });
+
+describe('applyBox — deliberate bleed survives the broadcast', () => {
+  /** A cover photo pushed off the LEFT edge on the square. */
+  function bleedDoc() {
+    const d = shapeDoc();
+    d.elements.push({ id: 'photo', type: 'image', fit: 'cover' } as never);
+    const bled = { x: -0.12, y: 0.1, w: 0.6, h: 0.6 };
+    for (const sid of ['square', 'landscape', 'story']) d.layouts[sid].photo = { ...bled };
+    return { d, bled };
+  }
+
+  it('keeps a photo hanging off the left edge on every board', () => {
+    const { d, bled } = bleedDoc();
+    const out = applyBox(d, 'photo', bled, 'all', 'square');
+    for (const sid of ['square', 'landscape', 'story']) {
+      expect(out.layouts[sid].photo.x).toBeCloseTo(-0.12, 9);
+    }
+  });
+
+  it('keeps a photo hanging off the RIGHT edge instead of pulling it flush', () => {
+    const { d } = bleedDoc();
+    // Right edge at 1.15 — 15% of the board past the far side.
+    const bled = { x: 0.55, y: 0.1, w: 0.6, h: 0.6 };
+    for (const sid of ['square', 'landscape', 'story']) d.layouts[sid].photo = { ...bled };
+    const out = applyBox(d, 'photo', bled, 'all', 'square');
+    for (const sid of ['square', 'landscape', 'story']) {
+      expect(out.layouts[sid].photo.x).toBeCloseTo(0.55, 9);
+    }
+  });
+
+  it('still tucks a SHAPE back in — only croppable content may bleed', () => {
+    const d = shapeDoc();
+    const past = { x: 0.55, y: 0.1, w: 0.6, h: 0.6 };
+    for (const sid of ['square', 'landscape', 'story']) d.layouts[sid].badge = { ...past };
+    const out = applyBox(d, 'badge', past, 'all', 'square');
+    // The badge is 0.6 wide, so the far edge caps its origin at 0.4.
+    expect(out.layouts.landscape.badge.x).toBeCloseTo(0.4, 9);
+  });
+
+  it('re-fits a bleeding photo without dragging it back onto the board', () => {
+    const { d, bled } = bleedDoc();
+    const out = refitAllSizes(d, 'square');
+    expect(out.layouts.landscape.photo.x).toBeCloseTo(bled.x, 9);
+    expect(out.layouts.story.photo.x).toBeCloseTo(bled.x, 9);
+  });
+});

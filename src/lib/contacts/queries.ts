@@ -288,24 +288,39 @@ export async function countContactsForAccount(accountKey: string): Promise<numbe
 // has to happen BEFORE the limit/offset or the page size is meaningless, so
 // the grouping runs in SQL.
 
-/** Rows are grouped by this — mirrors `contactIdentityKey` on the client. */
-const IDENTITY_SQL = Prisma.sql`
+/**
+ * Rows are grouped by this — mirrors `contactIdentityKey` on the client.
+ *
+ * Parameterised by table qualifier because the segment resolver needs the
+ * SAME expression against an unaliased `"Contact"` (its translated WHERE
+ * clauses are written that way). Two hand-copied versions of this would be
+ * two definitions of who counts as one person, and a group's segment count
+ * would drift from the group's contact list.
+ */
+export function contactIdentitySql(qualifier = 'c'): Prisma.Sql {
+  const email = Prisma.raw(`${qualifier}."email"`);
+  const phone = Prisma.raw(`${qualifier}."phone"`);
+  const id = Prisma.raw(`${qualifier}."id"`);
+  return Prisma.sql`
   CASE
-    WHEN btrim(coalesce(c."email", '')) <> ''
-      THEN 'email:' || lower(btrim(c."email"))
-    WHEN btrim(coalesce(c."phone", '')) LIKE '+%'
-         AND regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') <> ''
-      THEN 'phone:+' || regexp_replace(c."phone", '\\D', '', 'g')
-    WHEN length(regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g')) = 10
-      THEN 'phone:+1' || regexp_replace(c."phone", '\\D', '', 'g')
-    WHEN length(regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g')) = 11
-         AND regexp_replace(coalesce(c."phone", ''), '\\D', '', 'g') LIKE '1%'
-      THEN 'phone:+' || regexp_replace(c."phone", '\\D', '', 'g')
+    WHEN btrim(coalesce(${email}, '')) <> ''
+      THEN 'email:' || lower(btrim(${email}))
+    WHEN btrim(coalesce(${phone}, '')) LIKE '+%'
+         AND regexp_replace(coalesce(${phone}, ''), '\\D', '', 'g') <> ''
+      THEN 'phone:+' || regexp_replace(${phone}, '\\D', '', 'g')
+    WHEN length(regexp_replace(coalesce(${phone}, ''), '\\D', '', 'g')) = 10
+      THEN 'phone:+1' || regexp_replace(${phone}, '\\D', '', 'g')
+    WHEN length(regexp_replace(coalesce(${phone}, ''), '\\D', '', 'g')) = 11
+         AND regexp_replace(coalesce(${phone}, ''), '\\D', '', 'g') LIKE '1%'
+      THEN 'phone:+' || regexp_replace(${phone}, '\\D', '', 'g')
     -- No usable email or phone: not mergeable with anything, so key it to
     -- itself. The client does the same by leaving such rows un-grouped.
-    ELSE 'id:' || c."id"
+    ELSE 'id:' || ${id}
   END
 `;
+}
+
+const IDENTITY_SQL = contactIdentitySql('c');
 
 /**
  * Sortable columns, mirroring the table's header buttons. Whitelisted rather

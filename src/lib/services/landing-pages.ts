@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
+import { findCanonicalDomainForAccount } from '@/lib/services/account-domains';
 import {
   emptyLandingPageTemplate,
   isHtmlLandingPageTemplate,
@@ -9,6 +10,7 @@ import {
   type LandingPageContent,
 } from '@/lib/landing-pages/types';
 import { isValidSlug, slugify } from '@/lib/landing-pages/schemas';
+import { canonicalLandingPageUrl } from '@/lib/landing-pages/canonical';
 
 export type LandingPageStatus = 'draft' | 'published';
 
@@ -164,11 +166,34 @@ function publicHost(): string {
   return (process.env.NEXT_PUBLIC_APP_URL || 'https://studio.loomilm.com').replace(/\/+$/, '');
 }
 
-function toDetail(row: LandingPageRow): LandingPageDetail {
+/**
+ * The CANONICAL public URL of a landing page.
+ *
+ * An account with a verified custom domain serves its LPs from that
+ * host, so the studio URL (`studio.loomilm.com/lp/<slug>`) is a
+ * secondary address for the same content. Returning the custom-domain
+ * form here means the URL the UI hands out, the `rel=canonical` tag and
+ * the sitemap all agree — otherwise an ad or QR code built from a copied
+ * studio link gets indexed as a duplicate of the page we want ranking.
+ */
+async function landingPagePublicUrl(row: LandingPageRow): Promise<string> {
+  const studioUrl = `${publicHost()}/lp/${row.slug}`;
+  // Library templates have no owning account, so no custom domain and
+  // no public address of their own.
+  const domain = row.accountKey ? await findCanonicalDomainForAccount(row.accountKey) : null;
+  return canonicalLandingPageUrl({
+    studioUrl,
+    slug: row.slug,
+    pageId: row.id,
+    domain,
+  });
+}
+
+async function toDetail(row: LandingPageRow): Promise<LandingPageDetail> {
   const summary = toSummary(row);
   return {
     ...summary,
-    publicUrl: `${publicHost()}/lp/${row.slug}`,
+    publicUrl: await landingPagePublicUrl(row),
   };
 }
 

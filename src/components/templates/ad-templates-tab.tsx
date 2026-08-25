@@ -13,6 +13,7 @@ import {
   PencilSquareIcon,
   PencilIcon,
   DocumentDuplicateIcon,
+  TableCellsIcon,
   TrashIcon,
   XMarkIcon,
   ChevronLeftIcon,
@@ -376,6 +377,18 @@ export function AdTemplatesTab({
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
     { key: 'clone', label: 'Copy', icon: DocumentDuplicateIcon, run: () => void clone(t) },
+    // The PROOF SHEET: every offer type on every board, with its compliance
+    // check. A template-level question, so it sits with the template-level
+    // actions rather than only behind the builder's cog.
+    {
+      key: 'proof',
+      label: 'Proof sheet',
+      icon: TableCellsIcon,
+      run: () =>
+        router.push(
+          `/ad-generator/proof/${t.id}${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`,
+        ),
+    },
     // Directly below Copy: who can use this one template.
     shareAction(t),
     // The publish WINDOW, without a trip through the builder.

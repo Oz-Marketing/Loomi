@@ -78,7 +78,9 @@ export function deterministicCopy(params: {
   const { data, dealerName, vehicle } = params;
   const offer = assembleOffer(data);
   const name = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
-  const main = offer?.main ?? '';
+  // The PROSE form: a caption has no label element beside the figure, so an APR
+  // reads "4.9% APR" here where the creative shows "4.9%".
+  const main = offer?.prose ?? '';
   const terms = offer?.terms ?? '';
   const dealer = dealerName.trim();
 

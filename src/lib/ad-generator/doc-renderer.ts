@@ -1,5 +1,6 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
+import { offerFieldPrefix, OFFER_PLATE_DEFAULTS } from './doc-types';
 import { logoVariantDataKey } from './brand-logos';
 import { effectiveElements } from './size-scope';
 import { cssSafeFamily } from './fonts';
@@ -430,6 +431,78 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${mediaTag(url, el, inner)}</div>`;
   }
 
+  if (el.type === 'offer') {
+    // ── THE OFFER PLATE ────────────────────────────────────────────────────
+    //
+    // One element, three assembled rows: the label, the figure, the terms. The
+    // values come from whatever `assembleOffer` made of this ad's offer, so the
+    // same plate renders "PER MONTH LEASE / $299/mo / 36-month lease · $2,999
+    // due at signing" and "APR / 1.9% / for 60 months" with no per-type copies
+    // and no `visibleWhen`.
+    //
+    // The rows are shares of the plate's own height and each fits its own text,
+    // which is where per-type emphasis comes from for free: "1.9%" is a shorter
+    // string than "$299/mo", so it fills its row at a larger size. Nobody
+    // configures a font size per offer type.
+    const p = offerFieldPrefix(el);
+    const parts = {
+      label: esc(String(data[`_${p}offerLabel`] ?? '')),
+      figure: esc(String(data[`_${p}offerMain`] ?? '')),
+      terms: esc(String(data[`_${p}offerTerms`] ?? '')),
+    };
+    // An empty plate would be an invisible element on the canvas, so preview
+    // shows what it IS. Export renders nothing rather than a placeholder.
+    if (!parts.figure) {
+      if (!ctx.preview) return '';
+      parts.label = parts.label || 'OFFER LABEL';
+      parts.figure = '$&mdash;';
+    }
+
+    const plate = { ...OFFER_PLATE_DEFAULTS, ...(el.offerPlate ?? {}) };
+    const family = el.fontFamily ? `'${cssSafeFamily(el.fontFamily)}', ${brandStack}` : brandStack;
+    const figureColor = resolveColor(el.color, brand, '#0f172a');
+    // The label and terms are supporting type. `bg`, padding and radius belong to
+    // the plate as a whole rather than to any one row.
+    const mutedColor = '#475569';
+    const align = el.align ?? 'left';
+    const items = align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start';
+    const plateBg = el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
+
+    const row = (
+      text: string,
+      share: number | null,
+      opts: { color: string; weight: number; upper?: boolean; spacing?: number; line?: number },
+    ): string => {
+      if (!text) return '';
+      // `share: null` is the figure — it takes whatever the other two leave.
+      const size = share == null ? 'flex:1 1 auto;min-height:0;' : `flex:0 0 ${(share * 100).toFixed(2)}%;`;
+      const style =
+        `${size}display:flex;flex-direction:column;justify-content:center;align-items:${items};overflow:hidden;` +
+        `font-family:${family};font-weight:${opts.weight};color:${esc(opts.color)};` +
+        `text-align:${align};line-height:${opts.line ?? 1.05};` +
+        (opts.upper ? 'text-transform:uppercase;' : '') +
+        (opts.spacing ? `letter-spacing:${opts.spacing}px;` : '');
+      // Same fit contract as a text element: the value sits in a trimmed inner
+      // box so the row hugs the glyph ink rather than the font's line box.
+      const inner = `<div data-fit-inner style="display:inline-block;max-width:100%;white-space:pre-wrap;text-box:trim-both cap alphabetic;">${text}</div>`;
+      return `<div data-fit style="${style}">${inner}</div>`;
+    };
+
+    const body =
+      row(parts.label, plate.labelShare, { color: mutedColor, weight: 700, upper: true, spacing: el.letterSpacing ?? 1.5 }) +
+      row(parts.figure, null, { color: figureColor, weight: el.fontWeight ?? 800, line: el.lineHeight ?? 0.95 }) +
+      row(parts.terms, plate.termsShare, { color: mutedColor, weight: 500, line: 1.25 });
+
+    const styles =
+      pos +
+      `display:flex;flex-direction:column;justify-content:center;gap:${Math.max(0, plate.gapPx)}px;` +
+      plateBg +
+      paddingCss(el) +
+      borderRadiusCss(el) +
+      'overflow:hidden;';
+    return `<div${idAttr} style="${dim}${fx}${styles}">${body}</div>`;
+  }
+
   // text
   let raw = resolveBinding(el.binding, data);
   // Replace {{field}} tokens so one text block can be a full sentence/disclaimer.
@@ -496,8 +569,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   const marker = el.shrink || el.wrap || el.autoSize
     ? `data-fit data-fit-max="${box.fontSize ?? 16}"`
     : 'data-fit';
+  // Members of a fit group settle on the smallest size any of them needs — see
+  // `DocElement.fitGroup`. Emitted as an attribute so the fit script can find the
+  // group without knowing anything about the doc.
+  const group = el.fitGroup ? ` data-fit-group="${esc(el.fitGroup)}"` : '';
   const inner = `<div data-fit-inner style="display:inline-block;max-width:100%;white-space:pre-wrap;text-box:trim-both cap alphabetic;">${value}</div>`;
-  return `<div${idAttr} ${marker} style="${dim}${fx}${styles}">${inner}</div>`;
+  return `<div${idAttr} ${marker}${group} style="${dim}${fx}${styles}">${inner}</div>`;
 }
 
 /**
@@ -636,40 +713,78 @@ ${googleLink}
 // changes don't resize the fixed box, so the ResizeObserver won't re-fire; the
 // MutationObserver watches text, not attributes.
 const FIT_SCRIPT = `(function(){
+  // How much room this element gives its text, and the node whose ink is measured.
+  function room(el){
+    var cs=getComputedStyle(el);
+    return {
+      w: el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0),
+      h: el.clientHeight-parseFloat(cs.paddingTop||0)-parseFloat(cs.paddingBottom||0),
+      inner: el.querySelector('[data-fit-inner]')
+    };
+  }
+  // Does this element's text fit at \`px\`? Measures the TRIMMED inner box so the
+  // frame is filled with glyph ink rather than the taller line box; width comes
+  // from scrollWidth because unbreakable text overflows the max-width cap.
+  function fitsAt(el,px,r){
+    el.style.fontSize=px+'px';
+    var w,h;
+    if(r.inner){ w=r.inner.scrollWidth; h=r.inner.getBoundingClientRect().height; }
+    else { var rg=document.createRange(); rg.selectNodeContents(el); var rr=rg.getBoundingClientRect(); w=rr.width; h=rr.height; }
+    return w<=r.w+0.5 && h<=r.h+0.5;
+  }
+  // The largest size in (0, hi] at which every element in \`els\` fits.
+  function largestFitting(els,hi){
+    var rooms=els.map(room);
+    function all(px){ for(var i=0;i<els.length;i++){ if(!fitsAt(els[i],px,rooms[i])) return false; } return true; }
+    if(all(hi)) return hi;
+    var lo=1, h=hi;
+    for(var i=0;i<18;i++){ var mid=(lo+h)/2; if(all(mid)) lo=mid; else h=mid; }
+    return lo;
+  }
   function fitOne(el){
     try{
-      var cs=getComputedStyle(el);
-      var availW=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);
-      var availH=el.clientHeight-parseFloat(cs.paddingTop||0)-parseFloat(cs.paddingBottom||0);
-      if(availW<=0||availH<=0)return;
-      // Measure the trimmed inner box so the fit fills the frame with GLYPH INK,
-      // not the taller line box; fall back to a Range if the inner is absent.
-      var inner=el.querySelector('[data-fit-inner]');
-      function fits(px){
-        el.style.fontSize=px+'px';
-        var w, h;
-        // width via scrollWidth (unbreakable text overflows the max-width cap),
-        // height via the trimmed box rect.
-        if(inner){ w=inner.scrollWidth; h=inner.getBoundingClientRect().height; }
-        else { var r=document.createRange(); r.selectNodeContents(el); var rr=r.getBoundingClientRect(); w=rr.width; h=rr.height; }
-        return w<=availW+0.5 && h<=availH+0.5;
-      }
+      var r=room(el);
+      if(r.w<=0||r.h<=0)return;
       // data-fit-max caps the size (SHRINK): hold the chosen size, only shrink to
       // fit on overflow — never grow past it. Absent (FILL) → maximize to frame.
       var capAttr=el.getAttribute('data-fit-max');
       var cap=capAttr?parseFloat(capAttr):0;
-      if(cap>0 && fits(cap)){ el.style.fontSize=cap+'px'; return; }
-      var lo=1, hi=cap>0?cap:Math.max(2,availH*2);
-      for(var i=0;i<18;i++){ var mid=(lo+hi)/2; if(fits(mid)) lo=mid; else hi=mid; }
-      el.style.fontSize=lo+'px';
+      el.style.fontSize=largestFitting([el], cap>0?cap:Math.max(2,r.h*2))+'px';
     }catch(e){}
   }
-  function fitAll(){ document.querySelectorAll('[data-fit]').forEach(fitOne); }
+  // A FIT GROUP settles on one size for every member — see DocElement.fitGroup.
+  // Two offer figures in a comparison must be the same size even though one is
+  // bound by its width and the other by its height.
+  //
+  // NOT simply the minimum of the individual sizes: the smallest member might be
+  // small because it WRAPS, and a wrapping label at another member's size needs
+  // more height than its box has. (Measured: "PER MONTH LEASE" beside "APR" on a
+  // 600x400 dual overflowed its box by 18px under a plain-minimum rule.) So the
+  // group takes the largest size at which EVERY member still fits.
+  function syncGroups(){
+    var groups={};
+    document.querySelectorAll('[data-fit-group]').forEach(function(el){
+      var k=el.getAttribute('data-fit-group');
+      (groups[k]=groups[k]||[]).push(el);
+    });
+    Object.keys(groups).forEach(function(k){
+      var els=groups[k];
+      if(els.length<2)return;
+      var min=Infinity;
+      els.forEach(function(el){ var v=parseFloat(el.style.fontSize||'0'); if(v>0&&v<min)min=v; });
+      if(!isFinite(min))return;
+      var px=largestFitting(els,min);
+      els.forEach(function(el){ el.style.fontSize=px+'px'; });
+    });
+  }
+  function fitAll(){ document.querySelectorAll('[data-fit]').forEach(fitOne); syncGroups(); }
   window.__fitText=fitAll;
   if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fitAll);
   fitAll();
   try{
-    var ro=new ResizeObserver(function(es){ es.forEach(function(e){ fitOne(e.target); }); });
+    // A single element re-fitting alone would break its group's parity, so the
+    // group pass runs after any observed re-fit too.
+    var ro=new ResizeObserver(function(es){ es.forEach(function(e){ fitOne(e.target); }); syncGroups(); });
     var mo=new MutationObserver(function(){ fitAll(); });
     document.querySelectorAll('[data-fit]').forEach(function(el){
       ro.observe(el);

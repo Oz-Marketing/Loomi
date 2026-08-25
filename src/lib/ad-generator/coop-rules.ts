@@ -50,6 +50,31 @@ interface CoopRuleBase {
    *  Required in practice: an uncitable rule can't be audited or defended. */
   citation?: string;
   scope?: CoopScope;
+
+  // ── provenance, for a DRAFTED rule ───────────────────────────────────────
+  //
+  // Absent on every hand-transcribed rule, which is why all of these are optional
+  // and why absence must read as "a human wrote this" rather than as "unreviewed".
+  // Ignored by evaluation — a rule is judged on what it requires, never on where it
+  // came from — but they are what make a drafted rule reviewable, and what let an
+  // advisory answer deep-link a rule to the page it was taken from.
+
+  /** Who wrote it. `human` once a reviewer edits a drafted rule. */
+  origin?: 'ai' | 'human';
+  /**
+   * A `proposed` rule DOES NOT EVALUATE — not as an error, not as a warning — until
+   * a human accepts it. Stricter than the `verified` downgrade on purpose: a drafting
+   * pass can add hundreds of rules at once, and a flood of unaccepted warnings would
+   * bury the co-op step until people stopped reading it. Absent = accepted, which is
+   * correct for every pack transcribed by hand.
+   */
+  reviewState?: 'proposed' | 'accepted' | 'rejected';
+  /** `AdGuidelineDoc` id the rule was taken from. */
+  sourceDocId?: string;
+  /** 1-based page, verified against the document's stored text. */
+  sourcePage?: number;
+  /** The verified span the rule rests on. Shown to a reviewer beside the rule. */
+  sourceQuote?: string;
 }
 
 /** The ad data field a text rule inspects (e.g. `disclaimer`, `tagline`). */

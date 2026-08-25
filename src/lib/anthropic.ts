@@ -31,6 +31,15 @@ export const ANTHROPIC_MODEL = 'claude-sonnet-4-5-20250929';
 // callers must use adaptive thinking + effort instead.
 export const ANTHROPIC_FLOW_MODEL = 'claude-opus-4-7';
 
+// Opus 5 for compliance drafting — transcribing manufacturer co-op guidelines into
+// machine-checkable rules and disclaimer bodies. A SEPARATE constant from
+// ANTHROPIC_MODEL on purpose: that one is shared with the ad copywriter, and the
+// tradeoff here is the opposite of copy's. This runs a few dozen times ever, over
+// dense legal prose, where a misread clause costs a brand its month of ads — so
+// accuracy dominates and cost is irrelevant. Opus 5 rejects temperature/top_p and
+// budget_tokens; use adaptive thinking + output_config.effort instead.
+export const ANTHROPIC_COMPLIANCE_MODEL = 'claude-opus-5';
+
 /** Attempt to parse JSON from an AI response, stripping markdown fences if needed. */
 export function parseAiJson(raw: string): unknown {
   try {

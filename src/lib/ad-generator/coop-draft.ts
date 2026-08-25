@@ -188,9 +188,27 @@ export function buildCitation(source: string, section: string | undefined, page:
   return source.trim() ? `${source.trim()} — ${where}` : where;
 }
 
-/** Lowercased, punctuation-stripped, for comparing a term against a rule's phrase. */
-function squash(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/** Lowercased, punctuation-stripped words. */
+function words(s: string): string[] {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+/**
+ * Does the quoted evidence support a rule about `phrase`?
+ *
+ * WORD SUBSET, not substring. A guideline lists combined entries — GM's is
+ * `» "The GM store/outlet"`, one bullet covering two forbidden descriptions — and a
+ * rule about "GM outlet" is properly supported by it. Substring matching said no,
+ * because "gm outlet" is not a contiguous run of "the gm store outlet", and dropped
+ * a correct rule. Requiring every word of the phrase to appear in the quote still
+ * refuses the case this exists for: a rule about "Employee Pricing" quoting
+ * "Clearance" shares no words at all.
+ */
+function evidenceSupportsPhrase(quote: string, phrase: string): boolean {
+  const inQuote = new Set(words(quote));
+  const needed = words(phrase);
+  if (needed.length === 0) return true;
+  return needed.every((w) => inQuote.has(w));
 }
 
 /** Field keys a rule references, across every kind that can carry one. */
@@ -285,9 +303,7 @@ export function screenRuleProposals(
     // a different one — structurally perfect, and wrong in a way review would have
     // to catch by eye, forty times.
     if (quote.at.matchType === 'list_item' && raw.phrase?.trim()) {
-      const term = squash(proposal.quote);
-      const phrase = squash(raw.phrase);
-      if (!term.includes(phrase) && !phrase.includes(term)) {
+      if (!evidenceSupportsPhrase(proposal.quote, raw.phrase)) {
         drop(
           'evidence_mismatch',
           `The rule is about "${raw.phrase.trim()}" but the quoted list entry is "${proposal.quote.trim()}".`,

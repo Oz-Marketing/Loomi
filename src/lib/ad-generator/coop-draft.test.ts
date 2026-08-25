@@ -268,4 +268,36 @@ describe('screenRuleProposals — list entries', () => {
     const r = screenRuleProposals([listProposal('“Employee Pricing”', 'employee pricing')], PAGES2, OPTS);
     expect(r.accepted).toHaveLength(1);
   });
+
+  // Real GM case: one bullet covers two forbidden descriptions, and a rule about
+  // either is properly supported by it. Substring matching rejected this and cost a
+  // correct rule on a live run.
+  it('accepts a rule drawn from a COMBINED list entry', () => {
+    const combined = `${LEAD} » “The GM store/outlet”. Blowout.`;
+    const pages = ['cover', combined];
+    const r = screenRuleProposals(
+      [
+        {
+          page: 2,
+          quote: '» “The GM store/outlet”',
+          context: LEAD,
+          rule: {
+            kind: 'banned_phrase',
+            severity: 'error',
+            description: 'Do not describe the dealership as "GM outlet".',
+            phrase: 'GM outlet',
+          } as never,
+        },
+      ],
+      pages,
+      OPTS,
+    );
+    expect(r.dropped).toEqual([]);
+    expect(r.accepted).toHaveLength(1);
+  });
+
+  it('still refuses a phrase sharing no words with the quoted entry', () => {
+    const r = screenRuleProposals([listProposal('Clearance', 'Employee Pricing')], PAGES2, OPTS);
+    expect(r.dropped[0].reason).toBe('evidence_mismatch');
+  });
 });

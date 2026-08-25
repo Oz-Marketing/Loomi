@@ -333,3 +333,27 @@ describe('searchPages — free-text search', () => {
     expect(searchPages(spread, 'term apr')).toEqual([]);
   });
 });
+
+describe('verifyQuote — a short STANDALONE sentence, not a list entry', () => {
+  // Real GM case: "The ad must list the dealership's name" is stated in five words,
+  // which the evidence floor refused outright. The context path is not list-specific.
+  const page = 'Required elements. Dealer name must appear. Vehicle imagery must be a new GM vehicle.';
+  const pages = ['cover', page];
+
+  it('accepts a five-word requirement paired with its surrounding context', () => {
+    const r = verifyQuote(pages, 2, 'Dealer name must appear', {
+      context: 'Vehicle imagery must be a new GM vehicle',
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.at.matchType).toBe('list_item');
+    expect(page.slice(r.at.start, r.at.end)).toBe('Dealer name must appear');
+  });
+
+  it('still refuses it with no context at all', () => {
+    const r = verifyQuote(pages, 2, 'Dealer name must appear');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('too_short');
+  });
+});

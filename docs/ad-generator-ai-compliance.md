@@ -712,7 +712,50 @@ discarded by the original exact matcher), and 28 were list entries. §12.2's cav
 is now closed: the loose path is exercised by real model output, not only by a
 unit test.
 
-### 12.5 Three defects the live run exposed
+### 12.5 All three answer keys, and what the extra two changed
+
+Mazda alone proved the approach; Chevrolet and Subaru were run because two more
+documents of different shapes are the cheapest way to know it generalises. They
+paid for themselves by exposing two defects Mazda never triggered.
+
+| Make | Document | Proposed | Accepted | Dropped | Hand-written recovered | Notes |
+|---|---|---|---|---|---|---|
+| Mazda | MCAP, 51 pp | 58 | **58** | 0 | **16 / 16** | 45 |
+| Chevrolet | GM iMR, 42 pp | 25 | **25** | 0 | **8 / 8** | 21 |
+| Subaru | SAF 2026, 62 pp | 76 | **75** | 1 | **22 / 22** | 57 |
+
+**46 of 46 hand-transcribed rules recovered across all three brands**, alongside
+158 drafted rules and 123 unexpressible notes. Two rules came back bound to
+`_offerMain` where the human chose `_offerValue` / `_offerTerms` — real keys either
+way, a reviewer's adjustment rather than a miss. Subaru's single drop was
+`quote_not_found`, the load-bearing check refusing an unlocatable quote.
+
+Both defects the extra runs found were OURS, and both discarded correct rules:
+
+**Evidence matching was substring, and is now word-subset.** GM's prohibited list
+carries combined entries — `» "The GM store/outlet"`, one bullet covering two
+forbidden descriptions. A rule about "GM outlet" is properly supported by it, but
+"gm outlet" is not a contiguous run of "the gm store outlet", so the
+`evidence_mismatch` check dropped a correct rule. Requiring every *word* of the
+phrase to appear still refuses what the check exists for: a rule about "Employee
+Pricing" quoting "Clearance" shares no words at all.
+
+**The context pairing was framed as list-only.** The mechanism always accepted any
+short quote backed by a context quote, but the prompt only asked for one on list
+entries. So *"Dealer name must appear."* — a real GM requirement stated in five
+words — was read correctly and then discarded by the six-word floor with nothing to
+save it. A floor that silently drops true rules is the same failure as a matcher
+that rejects true quotes (§12.1), one level up. The instruction now covers any
+short quote, with the list entry and the short standalone sentence as its two
+cases, and says explicitly not to pad a quote with words the document lacks.
+
+**What this says about cost.** The three passes averaged ~$0.65, not the ~$0.45
+Mazda suggested — Subaru's 62 pages cost about $1. So the full backlog of roughly
+30 documents is nearer **$18–20** than $15, which is more than a $20 balance
+comfortably covers once validation spend is deducted. Budget for it deliberately
+rather than discovering it two-thirds through.
+
+### 12.6 Three defects the first live run exposed
 
 Each was a flaw in our code, not in the model's reading.
 
@@ -743,7 +786,7 @@ rather than the request. Two responses: the output schema lost its heaviest node
 not retry 4xx, correctly, and this is the exception. A minutes-long pass over a
 50-page document should not be thrown away by a transient refusal.
 
-### 12.6 `numeric_limit` is not drafted
+### 12.7 `numeric_limit` is not drafted
 
 Dropped from the drafting schema, for two reasons pointing the same way. **Policy:**
 pricing floors and caps are transcribed by the Co-op team from a confirmed formula

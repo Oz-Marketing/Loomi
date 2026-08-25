@@ -24,6 +24,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
+import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 import type {
@@ -102,8 +103,10 @@ interface SegmentPreviewState {
   count: number;
   reachable: { email: number; phone: number };
   contacts: Contact[];
-  /** Total contacts in the account, for the "% of roster" line. */
+  /** Total contacts in the accounts in scope, for the "% of roster" line. */
   total: number;
+  /** How many accounts the figures cover — more than one on a group. */
+  accountCount?: number;
   strategy?: 'sql' | 'scan';
   error?: string;
 }
@@ -140,7 +143,8 @@ export interface SegmentEditorProps {
 
 export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const router = useRouter();
-  const { isAccount, accountKey, accountData, userRole } = useAccount();
+  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys } =
+    useAccount();
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
 
@@ -157,6 +161,23 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // field keys mean different things in different sub-accounts, so
   // mixing them in a portfolio segment is misleading).
   const { fields } = useFilterableFields(isAccount ? accountKey : null);
+
+  // The accounts this segment is RESOLVED against — preview, eligibility
+  // and export alike.
+  //
+  // A group account (Young Powersports) owns no contacts of its own: every
+  // contact hangs off a rooftop beneath it. Resolving against the group's
+  // own key therefore returned "0 contacts match, 0% of 0 total" for
+  // filters with thousands of members one level down. So a roll-up scope
+  // resolves against its whole subtree, exactly as the Contacts list,
+  // segments list and CSV export already do.
+  const resolveKeys = useMemo<string[]>(() => {
+    if (isRollup) return scopedAccountKeys;
+    if (isAccount && accountKey) return [accountKey];
+    return [];
+  }, [isRollup, isAccount, accountKey, scopedAccountKeys]);
+  // Serialised so effects re-run on a real scope change, not per render.
+  const resolveKeysKey = resolveKeys.join(',');
 
   // ── Form state ─────────────────────────────────────────────
   const initialDef = useMemo<FilterDefinition>(() => {
@@ -210,7 +231,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     // Org-wide scope has no single account to resolve against — a
     // segment is a filter, and its size differs per sub-account. Rather
     // than showing a cross-account sample dressed up as a count, say so.
-    if (!isAccount || !accountKey) {
+    if (resolveKeys.length === 0) {
       setPreview({
         status: 'org-wide',
         count: 0,
@@ -241,7 +262,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          accountKey,
+          accountKeys: resolveKeys,
           definition: cleaned,
           sampleSize: 12,
           // So the segment can't reference itself while being edited.
@@ -265,6 +286,9 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
             contacts: Array.isArray(data.contacts) ? data.contacts : [],
             total: Number(data.accountTotal) || 0,
             strategy: data.strategy,
+            accountCount: Array.isArray(data.accountKeys)
+              ? data.accountKeys.length
+              : resolveKeys.length,
           });
         })
         .catch((err) => {
@@ -286,13 +310,13 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     };
     // `cleanedKey` stands in for `cleaned` — see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanedKey, isAccount, accountKey]);
+  }, [cleanedKey, resolveKeysKey]);
 
   // How much of this segment could actually be pushed to an ad platform.
   // A separate request from the preview so a slow eligibility pass never
   // blanks the segment count beside it.
   useEffect(() => {
-    if (!isAccount || !accountKey || cleaned.groups.length === 0) {
+    if (resolveKeys.length === 0 || cleaned.groups.length === 0) {
       setEligibility((prev) => ({ ...prev, status: 'idle' }));
       return;
     }
@@ -303,7 +327,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       fetch('/api/segments/eligibility', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, definition: cleaned }),
+        body: JSON.stringify({ accountKeys: resolveKeys, definition: cleaned }),
       })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
@@ -334,7 +358,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanedKey, isAccount, accountKey]);
+  }, [cleanedKey, resolveKeysKey]);
 
   // ── Mutations ──────────────────────────────────────────────
   const updateDef = useCallback(
@@ -411,7 +435,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // the CSV of the filter they're looking at, not of the last version
   // they happened to save.
   async function handleExport() {
-    if (!isAccount || !accountKey) {
+    if (resolveKeys.length === 0) {
       toast.error(
         'Switch to an account to export — a segment is a filter, so its members are per account.',
       );
@@ -424,7 +448,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     setExporting(true);
     try {
       await exportSegmentCsv({
-        accountKeys: [accountKey],
+        accountKeys: resolveKeys,
         definition: cleaned,
         label: name.trim() || 'segment',
       });
@@ -494,7 +518,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // ── Render ─────────────────────────────────────────────────
   // Export needs a single account to resolve against and at least one
   // complete condition — the same two things the live preview needs.
-  const canExport = Boolean(isAccount && accountKey) && cleaned.groups.length > 0;
+  const canExport = resolveKeys.length > 0 && cleaned.groups.length > 0;
 
   const scopeLabel = initial?.accountKey
     ? accountData?.dealer ?? initial.accountKey
@@ -555,6 +579,11 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               )}
               {scopeLabel}
             </span>
+            {/* On a group, which accounts the preview and the export resolve
+                against — its rooftops, or the group standing alone. The
+                numbers on this screen change with it, so the control belongs
+                on it (see docs/account-scope.md). */}
+            <AccountScopeToggle />
             <button
               type="button"
               onClick={handleExport}
@@ -1276,6 +1305,12 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
           )}
           {status === 'ready' && `${percent}% of ${total.toLocaleString()} total`}
         </p>
+        {status === 'ready' && (preview.accountCount ?? 1) > 1 && (
+          <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+            Across {preview.accountCount} accounts, counted as people — someone
+            who shops at two rooftops counts once.
+          </p>
+        )}
       </div>
 
       {/* Ad-platform eligibility. Shown next to the segment size because

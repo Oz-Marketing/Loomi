@@ -27,7 +27,13 @@ import {
   type DraftRule,
 } from '@/lib/ad-generator/coop-rule-authoring';
 import { invalidatePackChecks, resolveTemplateCoopCheck } from '@/lib/ad-generator/coop-template-check-store';
-import { applyRuleReviews, changesEnforcement } from '@/lib/ad-generator/coop-review';
+import {
+  applyRequiredFieldReviews,
+  applyRuleReviews,
+  changesEnforcement,
+  foldRequiredFields,
+} from '@/lib/ad-generator/coop-review';
+import { offerKind } from '@/lib/ad-generator/offer-kinds';
 import { parseCoopPack } from '@/lib/ad-generator/coop-rules';
 import { getGuidelineDoc, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -262,6 +268,92 @@ export async function POST(req: NextRequest) {
           notFound: result.notFound,
           notInReview: result.notInReview,
           rechecksQueued,
+        });
+      }
+
+      // ── deciding on drafted REQUIRED FIELDS ────────────────────────────
+      //
+      // Accepting one writes it into `AdOemOfferRule.requiredFields`, which preflight,
+      // generation, the dry run and template sync already read. The proposals live on
+      // the pack until then because that model is a plain map of field-name arrays,
+      // with nowhere to record a quote, a page or a review state.
+      case 'review_required_fields': {
+        const packId = (body.packId ?? '').trim();
+        const decisions = Array.isArray(body.decisions) ? body.decisions : [];
+        if (!packId) return NextResponse.json({ error: 'packId is required' }, { status: 400 });
+        const keys = decisions
+          .map((d: { ruleId?: unknown; state?: unknown }) => ({
+            key: typeof d?.ruleId === 'string' ? d.ruleId : '',
+            state: d?.state === 'accepted' ? ('accepted' as const) : ('rejected' as const),
+          }))
+          .filter((d: { key: string }) => d.key);
+        if (keys.length === 0) {
+          return NextResponse.json({ error: 'No usable decisions' }, { status: 400 });
+        }
+
+        const row = await prisma.adCoopRulePack.findUnique({ where: { id: packId } });
+        if (!row) return NextResponse.json({ error: 'Pack not found' }, { status: 404 });
+        const parsed = parseCoopPack(row.rules);
+        if (!parsed) {
+          return NextResponse.json({ error: 'That pack cannot be read.' }, { status: 409 });
+        }
+
+        const u = session?.user as { id?: string; name?: string | null; email?: string | null } | undefined;
+        const reviewer = u?.name || u?.email || u?.id || 'unknown';
+        const result = applyRequiredFieldReviews(parsed, keys, reviewer, new Date());
+        if (result.applied.length === 0) {
+          return NextResponse.json({ ok: true, applied: 0, unchanged: result.unchanged.length, notFound: result.notFound });
+        }
+
+        await prisma.adCoopRulePack.update({
+          where: { id: packId },
+          data: { rules: JSON.stringify(result.pack) },
+        });
+
+        // Fold the accepted set into the make's OEM rule row.
+        //
+        // An entry with no offer types applies to the VEHICLE kind's types — which is
+        // exactly the key set the four hand-maintained rows already use. A service
+        // requirement arrives with its own offerTypes, so it never lands here by
+        // accident.
+        const vehicleTypes = offerKind('vehicle').offerTypes.map((x) => x.value);
+        const existingRule = await prisma.adOemOfferRule.findFirst({
+          where: { make: { equals: row.make, mode: 'insensitive' } },
+        });
+        let current: Record<string, string[]> = {};
+        if (existingRule) {
+          try {
+            current = JSON.parse(existingRule.requiredFields) as Record<string, string[]>;
+          } catch {
+            // An unreadable row is left alone rather than overwritten: it may hold
+            // requirements nobody has another copy of.
+            return NextResponse.json(
+              { error: `${row.make}'s OEM rule row could not be read, so nothing was written to it.` },
+              { status: 409 },
+            );
+          }
+        }
+        const folded = foldRequiredFields(result.pack, vehicleTypes, current);
+
+        if (existingRule) {
+          await prisma.adOemOfferRule.update({
+            where: { id: existingRule.id },
+            data: { requiredFields: JSON.stringify(folded) },
+          });
+        } else {
+          await prisma.adOemOfferRule.create({
+            data: { make: row.make, requiredFields: JSON.stringify(folded), isActive: true },
+          });
+        }
+
+        return NextResponse.json({
+          ok: true,
+          applied: result.applied.length,
+          accepted: result.applied.filter((a) => a.to === 'accepted').length,
+          rejected: result.applied.filter((a) => a.to === 'rejected').length,
+          unchanged: result.unchanged.length,
+          notFound: result.notFound,
+          requiredFields: folded,
         });
       }
 

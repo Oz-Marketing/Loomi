@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { parseCoopPack, type CoopRule } from './coop-rules';
+import { parseCoopPack, type CoopRule, type RequiredFieldEntry } from './coop-rules';
 import { splitByReviewState } from './coop-pack-store';
 import { listTemplateChecks, type TemplateCheckRow } from './coop-template-check-store';
 import { listGuidelineDocs, type GuidelineDocRow } from './guideline-docs';
@@ -71,6 +71,8 @@ export interface PackRow {
    *  rather than shipping the raw JSON string, so a corrupt row reads as an
    *  empty pack instead of breaking the page. */
   rules: CoopRule[];
+  /** Drafted required-field entries, for the review queue. */
+  requiredFields: RequiredFieldEntry[];
   effectiveFrom: string | null;
   effectiveTo: string | null;
 }
@@ -230,6 +232,7 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
           ...counts,
           updatedAt: p.updatedAt.toISOString(),
           rules: parsed?.rules ?? [],
+          requiredFields: parsed?.requiredFields ?? [],
           effectiveFrom: p.effectiveFrom?.toISOString().slice(0, 10) ?? null,
           effectiveTo: p.effectiveTo?.toISOString().slice(0, 10) ?? null,
         };

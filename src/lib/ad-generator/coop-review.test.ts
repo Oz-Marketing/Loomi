@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { applyRuleReviews, pendingRules, changesEnforcement, groupPendingByKind } from './coop-review';
+import {
+  applyRuleReviews,
+  pendingRules,
+  changesEnforcement,
+  groupPendingByKind,
+  applyRequiredFieldReviews,
+  pendingRequiredFields,
+  foldRequiredFields,
+} from './coop-review';
 import type { CoopRule, CoopRulePack } from './coop-rules';
 
 const NOW = new Date('2026-08-25T12:00:00.000Z');
@@ -142,5 +150,78 @@ describe('groupPendingByKind', () => {
     const accepted = { ...kindRule('done', 'banned_phrase'), reviewState: 'accepted' } as CoopRule;
     const handWritten = { id: 'hand', kind: 'banned_phrase', severity: 'error', description: 'h', citation: 'c' } as CoopRule;
     expect(groupPendingByKind([accepted, handWritten])).toEqual([]);
+  });
+});
+
+describe('required fields — review and fold', () => {
+  const pack: CoopRulePack = {
+    make: 'Subaru',
+    version: 'saf-2026-04',
+    verified: true,
+    rules: [],
+    requiredFields: [
+      { field: 'vin', offerTypes: [], reason: 'VIN must appear.', reviewState: 'proposed', origin: 'ai' },
+      { field: 'expiration', offerTypes: ['lease'], reason: 'End date.', reviewState: 'proposed', origin: 'ai' },
+      { field: 'msrp', offerTypes: [], reason: 'Typed by a person.' },
+    ],
+  };
+
+  it('accepts a proposal and attributes it', () => {
+    const r = applyRequiredFieldReviews(pack, [{ key: 'vin|', state: 'accepted' }], 'Dana', NOW);
+    const got = r.pack.requiredFields!.find((e) => e.field === 'vin')!;
+    expect(got.reviewState).toBe('accepted');
+    expect(got.reviewedBy).toBe('Dana');
+    expect(r.applied).toEqual([{ key: 'vin|', from: 'proposed', to: 'accepted' }]);
+  });
+
+  it('refuses to decide a hand-written entry', () => {
+    const r = applyRequiredFieldReviews(pack, [{ key: 'msrp|', state: 'rejected' }], 'Dana', NOW);
+    expect(r.applied).toEqual([]);
+    expect(r.pack.requiredFields!.find((e) => e.field === 'msrp')!.reviewState).toBeUndefined();
+  });
+
+  it('keys an entry by field AND scope, so the same field can differ per offer type', () => {
+    const r = applyRequiredFieldReviews(pack, [{ key: 'expiration|lease', state: 'accepted' }], 'Dana', NOW);
+    expect(r.applied).toHaveLength(1);
+    // The unscoped vin entry is untouched by a scoped decision.
+    expect(r.pack.requiredFields!.find((e) => e.field === 'vin')!.reviewState).toBe('proposed');
+  });
+
+  it('folds only ACCEPTED entries, and an empty scope means every offer type', () => {
+    const accepted = applyRequiredFieldReviews(
+      pack,
+      [
+        { key: 'vin|', state: 'accepted' },
+        { key: 'expiration|lease', state: 'accepted' },
+      ],
+      'Dana',
+      NOW,
+    ).pack;
+    const folded = foldRequiredFields(accepted, ['lease', 'apr']);
+    expect(folded.lease.sort()).toEqual(['expiration', 'vin']);
+    expect(folded.apr).toEqual(['vin']);
+  });
+
+  it('leaves a proposal out of the fold entirely', () => {
+    expect(foldRequiredFields(pack, ['lease', 'apr'])).toEqual({});
+  });
+
+  it('is ADDITIVE — it never drops what a person already required', () => {
+    // Two makes have hand-maintained lists and no rule pack. A derived list that
+    // replaced them would delete requirements with no recorded source.
+    const accepted = applyRequiredFieldReviews(pack, [{ key: 'vin|', state: 'accepted' }], 'Dana', NOW).pack;
+    const folded = foldRequiredFields(accepted, ['lease'], { lease: ['securityDeposit'], apr: ['aprTerm'] });
+    expect(folded.lease.sort()).toEqual(['securityDeposit', 'vin']);
+    expect(folded.apr).toEqual(['aprTerm']);
+  });
+
+  it('does not duplicate a field a person already required', () => {
+    const accepted = applyRequiredFieldReviews(pack, [{ key: 'vin|', state: 'accepted' }], 'Dana', NOW).pack;
+    const folded = foldRequiredFields(accepted, ['lease'], { lease: ['vin'] });
+    expect(folded.lease).toEqual(['vin']);
+  });
+
+  it('reports pending entries and nothing else', () => {
+    expect(pendingRequiredFields(pack).map((e) => e.field)).toEqual(['vin', 'expiration']);
   });
 });

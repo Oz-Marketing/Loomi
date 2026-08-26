@@ -37,7 +37,7 @@ import { toast } from 'sonner';
 import { CoopPackEditor } from './coop-pack-editor';
 import { CoopRuleReview } from './coop-rule-review';
 import { toDraftRule, type DraftPack } from '@/lib/ad-generator/coop-rule-authoring';
-import type { CoopRule } from '@/lib/ad-generator/coop-rules';
+import type { CoopRule, RequiredFieldEntry } from '@/lib/ad-generator/coop-rules';
 import {
   ArrowPathIcon,
   BookOpenIcon,
@@ -88,6 +88,8 @@ interface PackRow {
   /** Drafted rules awaiting a decision in the review queue. Enforce nothing. */
   proposedCount: number;
   rejectedCount: number;
+  /** Drafted "a person must fill this in" entries, for the review queue. */
+  requiredFields?: RequiredFieldEntry[];
   warningCount: number;
   errorCount: number;
   updatedAt: string;
@@ -887,6 +889,7 @@ export function CoopGuidelinesTab() {
                           packId={p.id}
                           packVerified={p.verified}
                           rules={p.rules}
+                          requiredFields={p.requiredFields}
                           docs={active.docs.map((d) => ({
                             id: d.id,
                             title: d.title,

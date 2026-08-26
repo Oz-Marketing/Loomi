@@ -253,6 +253,43 @@ export function splitCoopPack(pack: CoopRulePack): { design: CoopRulePack; conte
   };
 }
 
+/**
+ * A field a manufacturer requires a PERSON to fill in on every ad.
+ *
+ * ── WHY THIS IS NOT A `required_element` RULE ──
+ *
+ * `required_element` is evaluated against the TEMPLATE: does the design have an
+ * element bound to this field, placed in a rendered size. This is the other half —
+ * does the ad's DATA carry a value. A template can have an MSRP element while a
+ * given ad leaves MSRP blank, and only one of those two checks catches it.
+ *
+ * They also draw from different vocabularies in practice. Nobody fills in a logo per
+ * ad (it comes from account branding), and nobody designs an "expiration element" —
+ * so `logoUrl` belongs to the design check and `expiration` to this one, even though
+ * both are things the document says the ad must carry.
+ *
+ * Accepted entries are written into `AdOemOfferRule.requiredFields`, which preflight,
+ * generation, the dry run and template sync already read. They live here until then
+ * because that model is a plain map of field-name arrays with nowhere to record a
+ * quote, a page or a review state.
+ */
+export interface RequiredFieldEntry {
+  /** FieldSpec / AdData key, e.g. `expiration`, `aprTerm`. */
+  field: string;
+  /** Offer types it applies to. Empty means every offer type the make advertises. */
+  offerTypes: string[];
+  /** What the document requires, in a sentence, for whoever is reviewing. */
+  reason: string;
+
+  origin?: 'ai' | 'human';
+  reviewState?: 'proposed' | 'accepted' | 'rejected';
+  sourceDocId?: string;
+  sourcePage?: number;
+  sourceQuote?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+}
+
 export interface CoopRulePack {
   make: string;
   /** Guideline edition, e.g. "2026-Q3". Packs are versioned, never overwritten:
@@ -266,6 +303,15 @@ export interface CoopRulePack {
    *  so a half-transcribed pack can't block a dealer's whole month. */
   verified?: boolean;
   rules: CoopRule[];
+  /**
+   * Fields the manufacturer requires a person to fill in, awaiting review or already
+   * decided. Carried on the pack because it is the same drafting artifact, and
+   * because `AdOemOfferRule` has nowhere to record a quote or a review state.
+   *
+   * The rule engine ignores this entirely — it is a separate array, so a proposal
+   * here can never be evaluated as a rule.
+   */
+  requiredFields?: RequiredFieldEntry[];
 }
 
 export interface CoopFinding {

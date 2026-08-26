@@ -29,13 +29,14 @@ import { prisma } from '../src/lib/prisma';
 import { loadCoopPackForReview } from '../src/lib/ad-generator/coop-pack-store';
 import { mergeDraftedRules, type MergeSkip } from '../src/lib/ad-generator/coop-draft-merge';
 import { splitByReviewState } from '../src/lib/ad-generator/coop-pack-store';
-import type { AcceptedRule } from '../src/lib/ad-generator/coop-draft';
+import type { AcceptedRequiredField, AcceptedRule } from '../src/lib/ad-generator/coop-draft';
 
 interface DraftFile {
   make: string;
   title: string;
   sourceDocId?: string | null;
   accepted: AcceptedRule[];
+  requiredFields?: AcceptedRequiredField[];
   notes?: unknown[];
 }
 
@@ -63,6 +64,7 @@ async function main() {
 
   let totalAdded = 0;
   let totalSkipped = 0;
+  let totalFields = 0;
 
   for (const file of files) {
     if (!fs.existsSync(file)) bail(`No such file: ${file}`);
@@ -91,12 +93,17 @@ async function main() {
       );
     }
     const before = existing ? splitByReviewState(existing.pack) : null;
-    const merged = mergeDraftedRules(existing?.pack ?? null, draft.accepted, {
-      make: draft.make,
-      version: existing?.pack.version ?? draftVersion(),
-      source: draft.title,
-      sourceDocId: draft.sourceDocId ?? undefined,
-    });
+    const merged = mergeDraftedRules(
+      existing?.pack ?? null,
+      draft.accepted,
+      {
+        make: draft.make,
+        version: existing?.pack.version ?? draftVersion(),
+        source: draft.title,
+        sourceDocId: draft.sourceDocId ?? undefined,
+      },
+      draft.requiredFields ?? [],
+    );
 
     const target = existing
       ? `${draft.make} "${existing.pack.version}" (${before?.accepted.rules.length ?? 0} accepted, ${before?.proposedCount ?? 0} proposed)`
@@ -104,7 +111,13 @@ async function main() {
 
     console.log(`\n${target}`);
     console.log(`  ${file}`);
-    console.log(`  + ${merged.added.length} proposed`);
+    console.log(`  + ${merged.added.length} proposed rule(s)`);
+    if (merged.addedRequiredFields.length || merged.skippedRequiredFields) {
+      console.log(
+        `  + ${merged.addedRequiredFields.length} required field(s)` +
+          (merged.skippedRequiredFields ? `, ${merged.skippedRequiredFields} already present` : ''),
+      );
+    }
     if (merged.skipped.length) {
       const by: Record<string, number> = {};
       for (const s of merged.skipped) by[s.reason] = (by[s.reason] ?? 0) + 1;
@@ -118,9 +131,10 @@ async function main() {
     }
     totalAdded += merged.added.length;
     totalSkipped += merged.skipped.length;
+    totalFields += merged.addedRequiredFields.length;
 
     if (!apply) continue;
-    if (merged.added.length === 0) {
+    if (merged.added.length === 0 && merged.addedRequiredFields.length === 0) {
       console.log('  nothing to write');
       continue;
     }
@@ -150,7 +164,7 @@ async function main() {
   }
 
   console.log(
-    `\n${apply ? 'Applied' : 'Would apply'}: ${totalAdded} proposed rule(s) across ${files.length} file(s), ${totalSkipped} skipped.`,
+    `\n${apply ? 'Applied' : 'Would apply'}: ${totalAdded} proposed rule(s) and ${totalFields} required field(s) across ${files.length} file(s), ${totalSkipped} skipped.`,
   );
   if (!apply) console.log('Dry run — pass --apply to write.');
   else console.log('All added rules are PROPOSED: nothing evaluates until a human accepts it.');

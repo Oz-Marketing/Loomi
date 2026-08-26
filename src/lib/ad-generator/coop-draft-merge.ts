@@ -1,6 +1,6 @@
-import type { CoopRule, CoopRulePack } from './coop-rules';
+import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
 import { toCoopRule } from './coop-rule-authoring';
-import type { AcceptedRule } from './coop-draft';
+import type { AcceptedRequiredField, AcceptedRule } from './coop-draft';
 
 /**
  * Merging drafted rules into the pack a make already has.
@@ -63,6 +63,10 @@ export interface MergeSkip {
 }
 
 export interface MergeResult {
+  /** Required-field entries newly appended, all `proposed`. */
+  addedRequiredFields: RequiredFieldEntry[];
+  /** Already present for the same field and scope. */
+  skippedRequiredFields: number;
   /** The pack to store. Identical to `existing` when nothing was added. */
   pack: CoopRulePack;
   /** Rules newly appended, all `reviewState: 'proposed'`. */
@@ -90,10 +94,16 @@ export interface MergeOptions {
  * append a second copy of a rule already awaiting review. Matching on
  * kind + target + phrase catches that, which is what makes re-running a pass safe.
  */
+/** A required-field entry's identity: the field, plus the scope it applies to. */
+function fieldScopeKey(e: { field: string; offerTypes?: string[] }): string {
+  return `${e.field}|${[...(e.offerTypes ?? [])].sort().join(',')}`;
+}
+
 export function mergeDraftedRules(
   existing: CoopRulePack | null,
   drafted: AcceptedRule[],
   opts: MergeOptions,
+  draftedRequiredFields: AcceptedRequiredField[] = [],
 ): MergeResult {
   const base: CoopRulePack = existing ?? {
     make: opts.make,
@@ -156,11 +166,44 @@ export function mergeDraftedRules(
     bySignature.set(signature(stamped), stamped);
   }
 
+  // ── required fields, same append-only treatment ──
+  const existingFields = base.requiredFields ?? [];
+  const seenFields = new Set(existingFields.map(fieldScopeKey));
+  const addedRequiredFields: RequiredFieldEntry[] = [];
+  let skippedRequiredFields = 0;
+
+  for (const item of draftedRequiredFields) {
+    const key = fieldScopeKey(item);
+    if (seenFields.has(key)) {
+      skippedRequiredFields++;
+      continue;
+    }
+    seenFields.add(key);
+    addedRequiredFields.push({
+      field: item.field,
+      offerTypes: item.offerTypes,
+      reason: item.reason,
+      origin: 'ai',
+      reviewState: 'proposed',
+      sourcePage: item.source.page,
+      sourceQuote: item.source.quote,
+      ...(opts.sourceDocId ? { sourceDocId: opts.sourceDocId } : {}),
+    });
+  }
+
   return {
     // Existing rules FIRST and unchanged; proposals appended after them.
-    pack: { ...base, rules: [...base.rules, ...added] },
+    pack: {
+      ...base,
+      rules: [...base.rules, ...added],
+      ...(existingFields.length || addedRequiredFields.length
+        ? { requiredFields: [...existingFields, ...addedRequiredFields] }
+        : {}),
+    },
     added,
     skipped,
+    addedRequiredFields,
+    skippedRequiredFields,
     keptExisting: base.rules.length,
   };
 }

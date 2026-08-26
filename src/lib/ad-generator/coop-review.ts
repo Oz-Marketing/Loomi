@@ -1,4 +1,4 @@
-import type { CoopRule, CoopRulePack } from './coop-rules';
+import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
 
 /**
  * Deciding on drafted rules — the human gate.
@@ -126,4 +126,97 @@ export function groupPendingByKind(rules: CoopRule[]): { kind: string; rules: Co
     // Ties broken by kind name so the order is stable across renders rather than
     // depending on which rule the drafter happened to emit first.
     .sort((a, b) => b.rules.length - a.rules.length || a.kind.localeCompare(b.kind));
+}
+
+// ── required fields ──────────────────────────────────────────────────────────
+
+export interface ApplyFieldReviewsResult {
+  pack: CoopRulePack;
+  applied: { key: string; from: string; to: ReviewDecision }[];
+  notFound: string[];
+  unchanged: string[];
+}
+
+/** How a required-field entry is addressed in a decision: field plus its scope. */
+export function requiredFieldKey(e: { field: string; offerTypes?: string[] }): string {
+  return `${e.field}|${[...(e.offerTypes ?? [])].sort().join(',')}`;
+}
+
+/** Entries still awaiting a decision. */
+export function pendingRequiredFields(pack: CoopRulePack): RequiredFieldEntry[] {
+  return (pack.requiredFields ?? []).filter((e) => e.reviewState === 'proposed');
+}
+
+/**
+ * Decide on drafted required fields.
+ *
+ * Mirrors {@link applyRuleReviews}, including the part that matters: an entry with no
+ * `reviewState` was written by a person and is not in the queue, so a decision cannot
+ * reach it. Rejection marks rather than deletes, so a later pass recognises the entry
+ * as already-declined instead of proposing it again.
+ */
+export function applyRequiredFieldReviews(
+  pack: CoopRulePack,
+  keys: { key: string; state: ReviewDecision }[],
+  reviewer: string,
+  now: Date,
+): ApplyFieldReviewsResult {
+  const wanted = new Map(keys.filter((k) => k.key?.trim()).map((k) => [k.key, k.state]));
+  const applied: ApplyFieldReviewsResult['applied'] = [];
+  const unchanged: string[] = [];
+  const seen = new Set<string>();
+  const stamp = now.toISOString();
+
+  const entries = (pack.requiredFields ?? []).map((entry) => {
+    const key = requiredFieldKey(entry);
+    const want = wanted.get(key);
+    if (!want) return entry;
+    seen.add(key);
+    const state = entry.reviewState ?? null;
+    if (state === null) return entry; // hand-written; not in review
+    if (state === want) {
+      unchanged.push(key);
+      return entry;
+    }
+    applied.push({ key, from: state, to: want });
+    return { ...entry, reviewState: want, reviewedBy: reviewer, reviewedAt: stamp };
+  });
+
+  return {
+    pack: { ...pack, requiredFields: entries },
+    applied,
+    notFound: [...wanted.keys()].filter((k) => !seen.has(k)),
+    unchanged,
+  };
+}
+
+/**
+ * The accepted entries folded into the `{offerType: field[]}` shape
+ * `AdOemOfferRule.requiredFields` stores.
+ *
+ * ADDITIVE ONLY. It merges into whatever a person already put there rather than
+ * replacing it: four makes have hand-maintained lists today, two of them for brands
+ * with no rule pack at all, and a derived list that replaced them would delete
+ * requirements nobody had recorded a source for.
+ *
+ * An entry with no `offerTypes` applies to every type in `allOfferTypes`.
+ */
+export function foldRequiredFields(
+  pack: CoopRulePack,
+  allOfferTypes: string[],
+  current: Record<string, string[]> = {},
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [k, v] of Object.entries(current)) out[k] = [...v];
+
+  for (const entry of pack.requiredFields ?? []) {
+    if (entry.reviewState !== 'accepted') continue;
+    const types = entry.offerTypes.length ? entry.offerTypes : allOfferTypes;
+    for (const type of types) {
+      const list = out[type] ?? [];
+      if (!list.includes(entry.field)) list.push(entry.field);
+      out[type] = list;
+    }
+  }
+  return out;
 }

@@ -233,23 +233,14 @@ describe('account settings sections', () => {
     }
   });
 
-  it('keeps Email & Texts to Studio', () => {
-    // Reporting and Projects don't send anything, so a SendGrid key or a
-    // suppression list there would be a dead panel.
-    expect(sectionKeys('studio')).toContain('email-texts');
-    for (const surface of ['reporting', 'app'] as const) {
+  it('no longer carries Email & Texts — it moved to the Studio settings rail', () => {
+    // It is per-ACCOUNT config, but it sat in a rail whose PATH SEGMENT was never
+    // read (only `?tab=`), so every "fix this in settings" link from the blast
+    // preflight landed on General. It lives in SETTINGS_REGISTRY now, where the tab
+    // comes from the path.
+    for (const surface of ['studio', 'reporting', 'app'] as const) {
       expect(sectionKeys(surface)).not.toContain('email-texts');
     }
-  });
-
-  it('exposes email settings as ONE nav entry, not four', () => {
-    // Email identity, SMS, the footer, and suppressions are sub-tabs of
-    // Email & Texts. Four sibling entries read as four unrelated pages.
-    const keys = sectionKeys('studio');
-    for (const retired of ['sending', 'sms', 'email-footer', 'suppressions']) {
-      expect(keys).not.toContain(retired);
-    }
-    expect(keys[keys.indexOf('contact-fields') + 1]).toBe('email-texts');
   });
 
   it('offers Notifications everywhere but Reporting', () => {
@@ -286,5 +277,31 @@ describe('account settings sections', () => {
     expect(canonicalSubaccountSection('general')).toBe('general');
     expect(canonicalSubaccountSection('branding')).toBe('branding');
     expect(canonicalSubaccountSection(undefined)).toBeUndefined();
+  });
+});
+
+describe('Email & Texts placement', () => {
+  it('sits on Studio, only inside an account, and only once', () => {
+    // Per-ACCOUNT config — the SendGrid key, sender identity and suppression list
+    // gate whether ONE account can send — so it needs an account in scope, the same
+    // as General. In Agency View there is no single answer, so it isn't offered.
+    expect(keysOf(SUBACCOUNT_ADMIN)).toContain('email-texts');
+    expect(keysOf(AGENCY_ELEVATED)).not.toContain('email-texts');
+    for (const surface of ['reporting', 'app'] as const) {
+      expect(keysOf(scope({ ...SUBACCOUNT_ADMIN, surface }))).not.toContain('email-texts');
+    }
+  });
+
+  it('never re-splits into four sibling tabs', () => {
+    // Sender identity, SMS, the footer and suppressions are SUB-tabs of Email &
+    // Texts. As siblings they read as four unrelated pages, which is what they were.
+    const keys = keysOf(SUBACCOUNT_ADMIN);
+    for (const retired of ['sending', 'sms', 'email-footer', 'suppressions']) {
+      expect(keys).not.toContain(retired);
+    }
+  });
+
+  it('stays out of the agency rail, because it is sector-owned', () => {
+    expect(navKeysOf(SUBACCOUNT_ADMIN)).not.toContain('email-texts');
   });
 });

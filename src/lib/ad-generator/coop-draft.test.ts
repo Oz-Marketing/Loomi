@@ -301,3 +301,94 @@ describe('screenRuleProposals — list entries', () => {
     expect(r.dropped[0].reason).toBe('evidence_mismatch');
   });
 });
+
+describe('screenRuleProposals — a prohibited-terms list as one rule', () => {
+  const PASSAGE =
+    'The following terms and phrases may not be used in any Subaru advertising: invoice, penny over, below retailer cost, our cost, wholesale pricing, overstocked, blowout.';
+  const pages = ['cover', PASSAGE];
+
+  function listProposal(phrases: string[]): RuleProposal {
+    return {
+      page: 2,
+      quote: PASSAGE,
+      section: '6l',
+      rule: {
+        kind: 'banned_phrase',
+        severity: 'error',
+        description: 'Subaru prohibits these terms in advertising.',
+        phrases,
+      } as RuleProposal['rule'],
+    };
+  }
+
+  it('accepts one rule carrying the whole list', () => {
+    const r = screenRuleProposals(
+      [listProposal(['invoice', 'penny over', 'our cost', 'wholesale pricing', 'blowout'])],
+      pages,
+      OPTS,
+    );
+    expect(r.dropped).toEqual([]);
+    expect(r.accepted).toHaveLength(1);
+    // Fifty-one terms becomes ONE review decision, which is the whole point.
+    expect((r.accepted[0].rule as { phrases?: string[] }).phrases).toHaveLength(5);
+  });
+
+  it('TRIMS a term that is not on the cited page, and keeps the rule', () => {
+    // Discarding a twenty-nine-term list because one term was mistyped is a bad
+    // trade — and it cost two real Subaru lists before this changed.
+    const r = screenRuleProposals([listProposal(['invoice', 'employee pricing'])], pages, OPTS);
+    expect(r.dropped).toEqual([]);
+    expect(r.accepted).toHaveLength(1);
+    expect((r.accepted[0].rule as { phrases?: string[] }).phrases).toEqual(['invoice']);
+  });
+
+  it('REPORTS what it trimmed rather than hiding it', () => {
+    const r = screenRuleProposals([listProposal(['invoice', 'nope one', 'nope two'])], pages, OPTS);
+    expect(r.accepted[0].trimmedTerms).toEqual(['nope one', 'nope two']);
+  });
+
+  it('drops the rule only when NO term is on the page', () => {
+    const r = screenRuleProposals([listProposal(['nope one', 'nope two'])], pages, OPTS);
+    expect(r.accepted).toEqual([]);
+    expect(r.dropped[0].reason).toBe('evidence_mismatch');
+    expect(r.dropped[0].detail).toContain('None of the 2');
+  });
+
+  it('accepts a list whose quote is only the introducing sentence', () => {
+    // The shape the prompt now asks for: a short contiguous quote, terms verified
+    // against the page rather than required to sit inside the quote.
+    const intro = 'The following terms and phrases may not be used in any Subaru advertising:';
+    const r = screenRuleProposals(
+      [{ ...listProposal(['invoice', 'blowout']), quote: intro }],
+      pages,
+      OPTS,
+    );
+    expect(r.dropped).toEqual([]);
+    expect((r.accepted[0].rule as { phrases?: string[] }).phrases).toEqual(['invoice', 'blowout']);
+  });
+
+  it('tolerates punctuation and case differing from the document', () => {
+    const r = screenRuleProposals([listProposal(['Invoice', '“our cost”'])], pages, OPTS);
+    expect(r.accepted).toHaveLength(1);
+  });
+
+  it('still accepts a lone banned phrase with no list', () => {
+    const r = screenRuleProposals(
+      [
+        {
+          page: 2,
+          quote: PASSAGE,
+          rule: {
+            kind: 'banned_phrase',
+            severity: 'error',
+            description: 'Do not say "blowout".',
+            phrase: 'blowout',
+          } as RuleProposal['rule'],
+        },
+      ],
+      pages,
+      OPTS,
+    );
+    expect(r.accepted).toHaveLength(1);
+  });
+});

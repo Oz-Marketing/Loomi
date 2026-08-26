@@ -697,7 +697,7 @@ export default function AdGeneratorListPage() {
                 type="button"
                 onClick={() => setNewOpen((v) => !v)}
                 disabled={!accountKey}
-                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PlusIcon className="w-4 h-4" />
                 New ad
@@ -784,7 +784,7 @@ export default function AdGeneratorListPage() {
                 type="button"
                 onClick={() => setPickerOpen(true)}
                 disabled={!accountKey}
-                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PlusIcon className="w-4 h-4" />
                 New ad
@@ -867,7 +867,7 @@ export default function AdGeneratorListPage() {
           <button
             type="button"
             onClick={() => setPickerOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-sm font-medium hover:opacity-90 transition-opacity"
           >
             <PlusIcon className="w-4 h-4" />
             Create your first ad
@@ -1085,7 +1085,7 @@ export default function AdGeneratorListPage() {
                           setPickerOpen(false);
                           setScratchOpen(true);
                         }}
-                        className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                        className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
                       >
                         <Squares2X2Icon className="h-4 w-4" />
                         Start from scratch
@@ -1361,7 +1361,7 @@ function ScratchSetupModal({
           <button
             onClick={() => onStart(name, selected, AD_TYPES[adType]?.kind ?? DEFAULT_OFFER_KIND, AD_TYPES[adType]?.mode ?? 'none')}
             disabled={creating || selected.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Squares2X2Icon className="h-4 w-4" />
             {creating ? 'Creating…' : selected.length > 1 ? `Start with ${selected.length} sizes` : 'Start designing'}

@@ -24,7 +24,7 @@ import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
-import { LoomiWordmark } from '@/components/loomi-wordmark';
+import { SectorBrand } from '@/components/sector-brand';
 
 /**
  * App-surface sidebar. Branding + nav only — user identity, theme toggle,
@@ -119,7 +119,7 @@ export function AppSidebar() {
     <SidebarFrame
       brand={
         <Link href={`${prefix}/projects`} className="block text-[var(--sidebar-foreground)]">
-          <LoomiWordmark className="h-8 w-auto" />
+          <SectorBrand surface="app" />
         </Link>
       }
       account={
@@ -192,7 +192,7 @@ function NewTicketButton({ collapsed, prefix }: { collapsed: boolean; prefix: st
       href={`${prefix}/projects/new`}
       className={`flex items-center ${
         collapsed ? 'justify-center px-2' : 'gap-2 px-3'
-      } rounded-xl py-2 text-sm font-medium bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90`}
+      } rounded-xl py-2 text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] accent-glow transition hover:opacity-90`}
     >
       <PlusIcon className="h-5 w-5" />
       {!collapsed && 'New ticket'}

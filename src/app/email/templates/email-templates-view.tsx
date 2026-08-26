@@ -1146,7 +1146,7 @@ function ManagementView({
               <button
                 onClick={() => { void handleRenameTemplate(); }}
                 disabled={renaming || !renameValue.trim()}
-                className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40"
+                className="px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40"
               >
                 {renaming ? 'Renaming...' : 'Rename'}
               </button>

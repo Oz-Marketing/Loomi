@@ -152,7 +152,7 @@ export function EvoxPickerModal({ onClose, onPick, initial }: { onClose: () => v
         <button
           onClick={search}
           disabled={busy}
-          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           <MagnifyingGlassIcon className="h-4 w-4" />
           {busy ? 'Searching…' : 'Search'}

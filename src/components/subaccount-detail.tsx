@@ -21,12 +21,10 @@ import {
   PuzzlePieceIcon,
   TagIcon,
   ChartBarIcon,
-  PaperAirplaneIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
-import { EmailTextsTab } from '@/components/settings/email-texts-tab';
 import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import {
@@ -92,7 +90,6 @@ type DetailTab =
   | 'contact-fields'
   | 'domains'
   | 'integrations'
-  | 'email-texts'
   | 'reports';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
@@ -125,10 +122,6 @@ const TABS: TabDef[] = [
   { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
   // The email/SMS engine's per-account config — sender identity, Twilio
   // credentials, the compliance footer and the suppression list. ONE entry with
-  // sub-tabs inside (see email-texts-tab): they read as four unrelated pages
-  // when they're really one job, and the sub-tab is addressable as ?section= so
-  // a "fix this in settings" link can still deep-link to the right one.
-  { key: 'email-texts', label: 'Email & Texts', icon: PaperAirplaneIcon },
   // Which reports this account's CLIENT users see.
   { key: 'reports', label: 'Reports', icon: ChartBarIcon },
 ];
@@ -780,7 +773,7 @@ export function SubAccountDetailPage({
               <button
                 onClick={handleSave}
                 disabled={saving || !hasFormChanges}
-                className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
+                className="px-4 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
               >
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
@@ -1285,7 +1278,7 @@ export function SubAccountDetailPage({
                   type="button"
                   onClick={handleFontUpload}
                   disabled={fontUploading}
-                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {fontUploading ? 'Uploading…' : 'Upload font'}
                 </button>
@@ -1497,7 +1490,7 @@ export function SubAccountDetailPage({
                     type="button"
                     onClick={handleSaveIntegration}
                     disabled={savingIntegration}
-                    className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {savingIntegration ? 'Saving…' : 'Save'}
                   </button>
@@ -1513,11 +1506,6 @@ export function SubAccountDetailPage({
             blueprint library is its own Studio settings tab. */}
         {activeTab === 'contact-fields' && <CustomFieldsTab />}
 
-        {/* ════════════ EMAIL / SMS / SUPPRESSIONS ════════════
-            Moved here from /messaging/settings. Sender identity and the
-            SendGrid key gate whether this account can send at all; the
-            suppression list is what the campaign hygiene filter reads. */}
-        {activeTab === 'email-texts' && key && <EmailTextsTab accountKey={key} />}
 
         {/* ════════════ REPORTS TAB ════════════
             Which reports this account's CLIENT users see. Narrowing only —

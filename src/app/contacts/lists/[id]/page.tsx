@@ -234,7 +234,7 @@ export default function ListDetailPage() {
           <div className="flex items-center justify-center gap-2 mt-4">
             <Link
               href={importHref}
-              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
             >
               <ArrowUpTrayIcon className="w-4 h-4" />
               Upload CSV

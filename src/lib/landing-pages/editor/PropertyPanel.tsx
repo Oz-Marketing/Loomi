@@ -451,7 +451,7 @@ function PropertyTabsBar({
               onClick={() => onChange(key)}
               className={`flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-[12px] font-medium rounded transition-colors ${
                 isActive
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >

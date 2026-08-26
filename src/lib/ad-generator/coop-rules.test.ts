@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   coopPassed,
+  effectiveSeverity,
   evaluateCoopRules,
   parseCoopPack,
   splitCoopPack,
@@ -563,5 +564,104 @@ describe('coopPassed', () => {
         { ruleId: 'b', severity: 'error', description: 'd', observed: 'o' },
       ]),
     ).toBe(false);
+  });
+});
+
+describe('banned_phrase — prohibited-terms lists', () => {
+  // Shaped like Subaru §6l/§6m: fifty-one terms stated once, as a list.
+  const listRule: CoopRule = {
+    id: 'subaru-prohibited-terms',
+    kind: 'banned_phrase',
+    severity: 'error',
+    description: 'Subaru prohibits these terms in advertising.',
+    citation: 'SAF 2026 §6l/§6m, p.42',
+    phrases: ['invoice', 'our cost', 'blowout', 'penny over', 'wholesale pricing'],
+  };
+  const d = doc([textEl('h', 'headline')]);
+  const run = (data: Partial<AdData>, rule: CoopRule = listRule) =>
+    evaluateCoopRules({ doc: d, data: { ...LEASE, ...data } as AdData, pack: pack([rule]) });
+
+  it('flags any term in the list', () => {
+    const f = run({ headline: 'Blowout prices this week' });
+    expect(f).toHaveLength(1);
+    expect(f[0].ruleId).toBe('subaru-prohibited-terms');
+  });
+
+  it('NAMES the term that was found', () => {
+    // Being told "one of fifty-one words is present" is not actionable.
+    expect(run({ headline: 'Below our cost!' })[0].observed).toContain('"our cost"');
+  });
+
+  it('matches a multi-word term across irregular spacing', () => {
+    expect(run({ headline: 'wholesale   pricing today' })).toHaveLength(1);
+  });
+
+  it('passes an ad using none of them', () => {
+    expect(run({ headline: 'Great lease offers' })).toEqual([]);
+  });
+
+  // Why the list form needs word boundaries: the single-`phrase` form is plain
+  // substring matching, and its documented mitigation was "transcribe phrases, not
+  // bare verbs" — which a fifty-one-word list makes impossible to rely on.
+  it('does NOT fire on a term embedded in a longer word', () => {
+    expect(run({ headline: 'Costumes and invoicing' })).toEqual([]);
+  });
+
+  it('still fires where the boundary genuinely ends', () => {
+    expect(run({ headline: 'See the invoice today' })).toHaveLength(1);
+  });
+
+  it('ignores blank entries rather than matching everything', () => {
+    const sloppy: CoopRule = { ...listRule, phrases: ['', '   ', 'blowout'] };
+    expect(run({ headline: 'Nice cars' }, sloppy)).toEqual([]);
+    expect(run({ headline: 'Blowout' }, sloppy)).toHaveLength(1);
+  });
+
+  it('leaves the single-phrase form working unchanged', () => {
+    const single: CoopRule = {
+      id: 'one', kind: 'banned_phrase', severity: 'error',
+      description: 'no clearance', citation: 'x', phrase: 'clearance',
+    };
+    expect(run({ headline: 'Clearance event' }, single)).toHaveLength(1);
+  });
+});
+
+describe('effectiveSeverity — one gate, asked per rule', () => {
+  const unapproved = { verified: false };
+  const approved = { verified: true };
+
+  it('a legacy rule in an unapproved pack warns, whatever it declares', () => {
+    // The three hand-transcribed packs were written in seed scripts whose own
+    // comments say a human must check them before they can block.
+    expect(effectiveSeverity({ severity: 'error' }, unapproved)).toBe('warning');
+  });
+
+  // The bug this whole change exists to kill: accepting a rule bought nothing.
+  it('an ACCEPTED rule blocks even in an unapproved pack', () => {
+    expect(effectiveSeverity({ severity: 'error', reviewState: 'accepted' }, unapproved)).toBe('error');
+  });
+
+  it('approving the pack promotes the legacy rules in bulk', () => {
+    expect(effectiveSeverity({ severity: 'error' }, approved)).toBe('error');
+  });
+
+  it('never promotes a rule that only ever warned', () => {
+    expect(effectiveSeverity({ severity: 'warning', reviewState: 'accepted' }, approved)).toBe('warning');
+    expect(effectiveSeverity({ severity: 'warning' }, unapproved)).toBe('warning');
+  });
+
+  it('applies it to real findings', () => {
+    const rule: CoopRule = {
+      id: 'r', kind: 'required_element', field: 'disclaimer',
+      severity: 'error', description: 'Needs a disclaimer.', citation: 'x',
+    };
+    const d = doc([textEl('h', 'headline')]);
+    const warnPack: CoopRulePack = { make: 'M', version: '1', verified: false, rules: [rule] };
+    const blockPack: CoopRulePack = {
+      make: 'M', version: '1', verified: false,
+      rules: [{ ...rule, reviewState: 'accepted' }],
+    };
+    expect(evaluateCoopRules({ doc: d, data: LEASE, pack: warnPack })[0].severity).toBe('warning');
+    expect(evaluateCoopRules({ doc: d, data: LEASE, pack: blockPack })[0].severity).toBe('error');
   });
 });

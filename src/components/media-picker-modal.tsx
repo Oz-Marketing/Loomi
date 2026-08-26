@@ -291,7 +291,7 @@ export function MediaPickerModal({
           <div className="flex flex-wrap items-center gap-1.5 px-5 pt-3">
             <button
               onClick={() => setActiveCategory(undefined)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${!activeCategory ? 'bg-[var(--primary)] text-white' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${!activeCategory ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
             >
               All
             </button>
@@ -299,7 +299,7 @@ export function MediaPickerModal({
               <button
                 key={c.value}
                 onClick={() => setActiveCategory(c.value)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${activeCategory === c.value ? 'bg-[var(--primary)] text-white' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${activeCategory === c.value ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
               >
                 {c.label}
               </button>

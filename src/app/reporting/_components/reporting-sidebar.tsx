@@ -30,6 +30,7 @@ import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { useAccount } from '@/contexts/account-context';
 import { navPathFor, visibleNav, withSurfacePrefix } from './nav-visibility';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
+import { SectorBrand } from '@/components/sector-brand';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
@@ -276,10 +277,8 @@ export function ReportingSidebar() {
   return (
     <SidebarFrame
       brand={
-        <Link href={withSurface('/')} className="block">
-          <div className="text-base font-semibold tracking-tight">
-            loomi <span className="text-[var(--primary)]">reporting</span>
-          </div>
+        <Link href={withSurface('/')} className="block text-[var(--sidebar-foreground)]">
+          <SectorBrand surface="reporting" />
         </Link>
       }
       account={

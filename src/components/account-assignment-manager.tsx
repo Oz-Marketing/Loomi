@@ -468,7 +468,7 @@ export function AccountAssignmentManager({
                           onClick={() => setPage(pageNumber)}
                           className={`px-2 py-1 text-xs rounded-md border transition-colors ${
                             pageNumber === page
-                              ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                              ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
                               : 'border-[var(--border)] hover:bg-[var(--muted)]'
                           }`}
                         >

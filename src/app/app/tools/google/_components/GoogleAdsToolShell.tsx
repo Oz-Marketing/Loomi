@@ -777,7 +777,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
                 aria-pressed={reconView === v}
                 className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   reconView === v
-                    ? 'bg-[var(--primary)] text-white'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
@@ -1067,7 +1067,7 @@ function Header({
               {filtersActive > 0 && (
                 <span
                   className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold"
-                  style={{ background: 'var(--primary)', color: 'white' }}
+                  style={{ background: 'var(--primary)', color: 'var(--primary-foreground)' }}
                 >
                   {filtersActive}
                 </span>
@@ -1434,7 +1434,7 @@ function ImportFromGoogleModal({
               type="button"
               onClick={doImport}
               disabled={importing || selected.size === 0}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {importing ? <ArrowPathIcon className="h-4 w-4 animate-spin" /> : <PlusIcon className="h-4 w-4" />}
               {importing

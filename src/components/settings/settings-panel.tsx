@@ -11,6 +11,7 @@ import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { ClientReportsTab } from '@/components/settings/client-reports-tab';
 import { BudgetChannelsTab } from '@/components/settings/budget-channels-tab';
 import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
+import { EmailTextsTab } from '@/components/settings/email-texts-tab';
 import { AdSizesTab } from '@/components/settings/ad-sizes-tab';
 import { AdDisclaimersTab } from '@/components/settings/ad-disclaimers-tab';
 import { AdOemRulesTab } from '@/components/settings/ad-oem-rules-tab';
@@ -122,6 +123,9 @@ export function SettingsPanel({
     'budget-channels': () => <BudgetChannelsTab />,
     alerts: () => <AlertRulesTab />,
     'coop-guidelines': () => <CoopGuidelinesTab />,
+    // Per-ACCOUNT config, so it reads the account in scope — the same shape as
+    // `subaccount` above. The tab is only visible when an account is selected.
+    'email-texts': () => <EmailTextsPanel />,
     // Ad Generator config, moved off the cog on the generator's own header.
     'ad-sizes': () => <AdSizesTab />,
     'ad-disclaimers': () => <AdDisclaimersTab />,
@@ -171,6 +175,7 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'budget-channels',
   'alerts',
   'coop-guidelines',
+  'email-texts',
   'ad-sizes',
   'ad-disclaimers',
   'ad-oem-rules',
@@ -182,3 +187,20 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'reporting-alerts',
   'appearance',
 ];
+
+/**
+ * `EmailTextsTab` takes an explicit accountKey because it is also rendered from the
+ * account drill-in. Here the account comes from scope, so this reads it once rather
+ * than threading it through the panel's tab map.
+ */
+function EmailTextsPanel() {
+  const { accountKey } = useAccount();
+  if (!accountKey) {
+    return (
+      <p className="text-sm text-[var(--muted-foreground)]">
+        Choose an account to configure its sending.
+      </p>
+    );
+  }
+  return <EmailTextsTab accountKey={accountKey} />;
+}

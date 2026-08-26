@@ -28,7 +28,7 @@
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { screenRuleProposals, summarizeDrops } from '../src/lib/ad-generator/coop-draft';
-import { draftCoopRules } from '../src/lib/ai/coop-rule-draft';
+import { draftCoopRules, draftRequiredFields } from '../src/lib/ai/coop-rule-draft';
 import { renderPagesForPrompt } from '../src/lib/ad-generator/guideline-quotes';
 import { anthropicConfigured } from '../src/lib/anthropic';
 
@@ -120,15 +120,45 @@ async function main() {
   const draft = await draftCoopRules({ make, title, pages });
   const seconds = Math.round((Date.now() - started) / 1000);
 
-  const screened = screenRuleProposals(draft.proposals, pages, { source: title, make }, draft.unexpressible);
+  // Second pass, over the same document, asking only "which values must a person
+  // state". Asked together with the rules it made them worse — 76 proposals with 1
+  // unverifiable quote became 48 with 11 — so the two questions stay separate.
+  const fields = await draftRequiredFields({ make, title, pages });
 
-  const u = draft.usage;
+  const screened = screenRuleProposals(
+    draft.proposals,
+    pages,
+    { source: title, make },
+    draft.unexpressible,
+    fields.requiredFields,
+  );
+
+  // Both passes, so the cache read on the second one is visible — that number is the
+  // whole reason splitting them is cheap.
+  const u = {
+    inputTokens: draft.usage.inputTokens + fields.usage.inputTokens,
+    outputTokens: draft.usage.outputTokens + fields.usage.outputTokens,
+    cacheCreationTokens: draft.usage.cacheCreationTokens + fields.usage.cacheCreationTokens,
+    cacheReadTokens: draft.usage.cacheReadTokens + fields.usage.cacheReadTokens,
+  };
   console.log(
     `\nDone in ${seconds}s · in ${u.inputTokens.toLocaleString()} (cache write ${u.cacheCreationTokens.toLocaleString()}, read ${u.cacheReadTokens.toLocaleString()}) · out ${u.outputTokens.toLocaleString()}`,
   );
   console.log(
     `\nProposed ${draft.proposals.length} · accepted ${screened.accepted.length} · dropped ${screened.dropped.length}`,
   );
+  console.log(
+    `Required fields: ${screened.requiredFields.length} kept, ${screened.droppedRequiredFields.length} dropped`,
+  );
+  const lists = screened.accepted.filter((a) => (a.rule as { phrases?: string[] }).phrases?.length);
+  if (lists.length) {
+    const terms = lists.reduce((n, a) => n + ((a.rule as { phrases?: string[] }).phrases?.length ?? 0), 0);
+    const trimmed = lists.reduce((n, a) => n + (a.trimmedTerms?.length ?? 0), 0);
+    console.log(
+      `Term lists: ${lists.length} rule(s) carrying ${terms} term(s)` +
+        (trimmed ? ` · ${trimmed} term(s) trimmed as not on the cited page` : ''),
+    );
+  }
   console.log(
     `Unexpressible: ${screened.notes.length} kept, ${screened.droppedNotes.length} dropped`,
   );
@@ -171,7 +201,7 @@ async function main() {
 
   const out = arg('out');
   if (out) {
-    fs.writeFileSync(out, JSON.stringify({ make, title, usage: draft.usage, ...screened }, null, 2));
+    fs.writeFileSync(out, JSON.stringify({ make, title, usage: u, ...screened }, null, 2));
     console.log(`\nWrote ${out}`);
   }
 }

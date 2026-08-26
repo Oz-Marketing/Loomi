@@ -97,7 +97,7 @@ export function LensToggle({ lens, canSwitch, setLens }: LensState) {
         aria-pressed={lens === 'team'}
         className={`${base} ${
           lens === 'team'
-            ? 'bg-[var(--primary)] text-white'
+            ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
             : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
         }`}
       >
@@ -110,7 +110,7 @@ export function LensToggle({ lens, canSwitch, setLens }: LensState) {
         aria-pressed={lens === 'client'}
         className={`${base} ${
           lens === 'client'
-            ? 'bg-[var(--primary)] text-white'
+            ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
             : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
         }`}
       >

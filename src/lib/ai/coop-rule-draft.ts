@@ -1,7 +1,12 @@
 import { getAnthropicClient, ANTHROPIC_COMPLIANCE_MODEL } from '@/lib/anthropic';
 import { RULE_KINDS, RULE_KIND_META } from '@/lib/ad-generator/coop-rule-authoring';
-import { knownAdDataKeys, knownOfferTypes } from '@/lib/ad-generator/coop-draft';
-import type { RuleProposal, UnexpressibleProposal } from '@/lib/ad-generator/coop-draft';
+import { OFFER_KINDS } from '@/lib/ad-generator/offer-kinds';
+import { fillableFieldKeys, knownAdDataKeys, knownOfferTypes } from '@/lib/ad-generator/coop-draft';
+import type {
+  RequiredFieldProposal,
+  RuleProposal,
+  UnexpressibleProposal,
+} from '@/lib/ad-generator/coop-draft';
 import { renderPagesForPrompt } from '@/lib/ad-generator/guideline-quotes';
 
 /**
@@ -78,9 +83,14 @@ HARD RULES — these are not style preferences:
 6. Prefer FEWER, well-founded rules. A missed rule costs a resubmission; a wrong rule silently costs a brand its entire month of advertising. When you are unsure whether the document really says it, leave it out or mark it unexpressible.
 7. Write \`description\` for the dealer who gets blocked by the rule: what is required, in one plain sentence. Write \`rationale\` for the reviewer: why you read the quote that way.
 
-ANY QUOTE SHORTER THAN SIX WORDS MUST BE PAIRED WITH \`context\`. \`context\` is a full-length quote from the SAME PAGE that establishes what the short quote means — the sentence it sits in, or the heading it sits under. Both are checked against the document and both must be on that page. A short quote with no context is discarded, so never omit it. This applies to every short quote, not only to lists:
+A PROHIBITED-TERMS LIST IS **ONE** RULE, NOT ONE PER TERM. These documents ban wording in bulk — thirty or fifty terms under a single sentence. Emit ONE \`banned_phrase\` rule whose \`phrases\` array holds every term in that list.
 
-  - A LIST ENTRY. These documents list banned wording in bulk — thirty terms under one sentence like "the following may not be used in any advertising". Make ONE rule per term, with \`quote\` as the term itself (that IS the evidence) and \`context\` as the introducing sentence. Keep \`phrase\` consistent with the term you quoted; a rule about one term supported by a quote of a different one is discarded.
+For \`quote\`, give ONLY the introducing sentence — the one that says these are forbidden — exactly as it appears, as ONE CONTIGUOUS RUN of text from ONE page. Do NOT assemble a quote out of the list itself, and do NOT stitch two sections together: a quote spanning "6q. … 6r. …" is not a span that exists in the document and is discarded. The terms do not belong in the quote; they go in \`phrases\`, and each one is checked against that page separately.
+
+If a list runs across two sections or two pages, emit ONE RULE PER SECTION, each with its own introducing sentence. Terms are matched on word boundaries, so give each term as the document writes it and do not add wildcards. Only fall back to a single \`phrase\` when the document forbids one thing on its own, away from any list.
+
+ANY OTHER QUOTE SHORTER THAN SIX WORDS MUST BE PAIRED WITH \`context\`. \`context\` is a full-length quote from the SAME PAGE that establishes what the short quote means — the sentence it sits in, or the heading it sits under. Both are checked against the document and both must be on that page. A short quote with no context is discarded, so never omit it. This applies to every short quote, not only to lists:
+
   - A SHORT STANDALONE SENTENCE. Requirements are sometimes stated in four or five words ("Dealer name must appear."). Quote it, and give the surrounding sentence or its section heading as \`context\`. Do NOT pad the quote with words the document does not have — quote it short and supply the context.
 
 PRICING FLOORS AND CAPS ARE OUT OF SCOPE for a rule. Minimum advertised price / MAAP, maximum customer down payment, maximum amount due at signing — do NOT propose these as rules. Report them under \`unexpressible\`, quoting the formula the document states and naming the figures it depends on. Those are transcribed by hand from a confirmed formula, because the manufacturers' formulas genuinely differ and a guessed one blocks real ads for a reason nobody can defend.
@@ -154,6 +164,7 @@ const PROPOSAL_PROPERTIES: Record<string, unknown> = {
   field: { type: 'string' },
   fields: { type: 'array', items: { type: 'string' } },
   phrase: { type: 'string' },
+  phrases: { type: 'array', items: { type: 'string' } },
   pattern: { type: 'string' },
   offerTypes: { type: 'array', items: { type: 'string' } },
   minPx: { type: 'number' },
@@ -282,6 +293,7 @@ Notes on the field keys: \`disclaimer\` is the composed fine print. \`logoUrl\` 
 OFFER TYPES (for \`offerTypes\`, which narrows a rule; omit it when the rule always applies):
 ${offerTypes.join(', ')}
 
+
 Return every rule the document supports, and every stated requirement you cannot express.`;
 
   return {
@@ -297,7 +309,15 @@ Return every rule the document supports, and every stated requirement you cannot
     },
     system: [
       // FIRST and cached: the document is the same across every pass over it.
-      { type: 'text' as const, text: document, cache_control: { type: 'ephemeral' as const } },
+      {
+        type: 'text' as const,
+        text: document,
+        // ONE HOUR, not the 5-minute default. The rules pass on a 62-page document
+        // has taken 334s; at 5 minutes the cache expired before the second pass
+        // started and the document was paid for twice (`cache write 124,860, read
+        // 0`). With an hour it reads (`write 62,851, read 62,045`).
+        cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
+      },
       { type: 'text' as const, text: instructions },
     ],
     messages: [
@@ -387,4 +407,163 @@ function flatten(flat: FlatProposal): RuleProposal {
     // here becomes a reported drop rather than a silent pass.
     rule: rule as unknown as RuleProposal['rule'],
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECOND PASS: fields a person must fill in
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A SEPARATE REQUEST over the same cached document, and not for tidiness.
+//
+// Both questions were asked in one pass first, and the rules got measurably worse for
+// it: a Subaru run went from 76 proposals with 1 unverifiable quote to 48 with 11.
+// Reading a 62-page document for one thing is a different job from reading it for
+// two, and the second question crowded out the first.
+//
+// It is nearly free, but only with an explicit cache TTL — and it took two wrong
+// explanations to get here. The document block is byte-identical, yet a run reported
+// `cache write 124,860, read 0`: the document paid for twice. That was NOT the output
+// schemas taking part in the cache prefix, which was the first guess. The rules pass
+// on this document had taken 334 seconds, and the default cache lifetime is five
+// minutes — so the entry had expired before the second pass asked for it. With
+// `ttl: '1h'` the same pair reports `write 62,851, read 62,045`.
+
+export interface DraftRequiredFieldsResult {
+  requiredFields: RequiredFieldProposal[];
+  usage: DraftRulesResult['usage'];
+}
+
+const FIELD_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['requiredFields'],
+  properties: {
+    requiredFields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['page', 'quote', 'field', 'reason'],
+        properties: {
+          page: { type: 'integer' },
+          quote: { type: 'string' },
+          context: { type: 'string' },
+          section: { type: 'string' },
+          field: { type: 'string' },
+          offerTypes: { type: 'array', items: { type: 'string' } },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const;
+
+/** The second pass's request. Exported so prompt assembly stays testable. */
+export function buildRequiredFieldsParams(req: DraftRulesRequest) {
+  const fillable = [...fillableFieldKeys()].sort();
+  // Grouped, not a flat list. Given every offer type at once and no clue what they
+  // are, a first run put `msrp` and `dueAtSigning` on `flat_price` — requiring an
+  // MSRP and a due-at-signing figure on an oil-change coupon.
+  const kindLines = OFFER_KINDS.map(
+    (k) => `  ${k.label} offers: ${k.offerTypes.map((x) => x.value).join(', ')}`,
+  ).join('\n');
+
+  // Byte-identical to the rules pass on purpose. That has NOT been enough to make the
+  // second pass read from cache (see the note above), but it costs nothing to keep and
+  // it is the precondition if the schema-prefix theory turns out to be wrong.
+  const document = `You are reading the following manufacturer document. Page markers are authoritative: cite the page whose marker precedes the text you quote.
+
+DOCUMENT: ${req.title}
+MANUFACTURER: ${req.make}
+
+${renderPagesForPrompt(req.pages)}`;
+
+  const instructions = `You are reading a vehicle manufacturer's co-operative advertising guidelines to answer ONE question: which values does this manufacturer require a dealer's ad to STATE?
+
+These are figures and terms a person types, or an offer feed supplies — an expiration date, a VIN, the lease term, the security deposit, the MSRP. They would be BLANK if nobody supplied them, and the ad would be non-compliant.
+
+DO NOT list what a DESIGNER puts on a template once: the brandmark, the dealer's name, the vehicle photograph, the disclaimer block, brand colours. Those are handled separately. The test is whether the value differs from ad to ad.
+
+Every entry needs evidence, exactly like a rule:
+  - \`page\` — the page whose marker precedes the text you quote
+  - \`quote\` — the verbatim sentence requiring it
+  - \`context\` — REQUIRED when the quote is under six words: a full-length quote from the SAME page establishing what it means
+  - \`field\` — one of the keys listed below, and nothing else
+  - \`reason\` — what the document requires, in one sentence, for whoever reviews this
+  - \`offerTypes\` — include it when the requirement applies to only some offer types; omit it when it always applies
+
+Quote what the document says. Do not paraphrase into the quote, and do not pad a short quote with words the document does not contain — an unverifiable quote is discarded.
+
+FIELD KEYS (the only permitted values for \`field\`):
+${fillable.join(', ')}
+
+OFFER TYPES (for \`offerTypes\`), grouped by what they advertise:
+${kindLines}
+
+SCOPE THE OFFER TYPES CORRECTLY. A requirement stated in a section about advertising VEHICLES applies to the vehicle offer types only. Use a custom offer type ONLY where the document is explicitly about parts, service or fixed-operations advertising — a rule about MSRP or an amount due at signing has no meaning on a service coupon, and requiring it there would block every service ad.
+
+ONE ENTRY PER FIELD. If a field is required across several offer types, list it once with all of them, not once per type.`;
+
+  return {
+    model: ANTHROPIC_COMPLIANCE_MODEL,
+    max_tokens: MAX_REPLY_TOKENS,
+    thinking: { type: 'adaptive' as const },
+    output_config: {
+      effort: 'high' as const,
+      format: { type: 'json_schema' as const, schema: FIELD_SCHEMA as unknown as Record<string, unknown> },
+    },
+    system: [
+      {
+        type: 'text' as const,
+        text: document,
+        // ONE HOUR, not the 5-minute default. The rules pass on a 62-page document
+        // has taken 334s; at 5 minutes the cache expired before the second pass
+        // started and the document was paid for twice (`cache write 124,860, read
+        // 0`). With an hour it reads (`write 62,851, read 62,045`).
+        cache_control: { type: 'ephemeral' as const, ttl: '1h' as const },
+      },
+      { type: 'text' as const, text: instructions },
+    ],
+    messages: [
+      { role: 'user' as const, content: `List the values ${req.make} requires a dealer ad to state.` },
+    ],
+  };
+}
+
+export async function draftRequiredFields(req: DraftRulesRequest): Promise<DraftRequiredFieldsResult> {
+  const client = getAnthropicClient();
+  const message = await withSchemaRetry(() =>
+    client.messages.stream(buildRequiredFieldsParams(req), { timeout: 30 * 60 * 1000 }).finalMessage(),
+  );
+
+  const usage = {
+    inputTokens: message.usage.input_tokens ?? 0,
+    outputTokens: message.usage.output_tokens ?? 0,
+    cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+    cacheCreationTokens: message.usage.cache_creation_input_tokens ?? 0,
+  };
+
+  const text = message.content
+    .filter((b): b is Extract<typeof b, { type: 'text' }> => b.type === 'text')
+    .map((b) => b.text)
+    .join('');
+
+  if (message.stop_reason === 'max_tokens') {
+    throw new Error(
+      `The required-fields reply was cut off at the ${MAX_REPLY_TOKENS.toLocaleString()}-token ceiling.`,
+    );
+  }
+  if (!text.trim()) {
+    throw new Error(`No text in the required-fields reply (stop reason: ${message.stop_reason ?? 'unknown'}).`);
+  }
+
+  let reply: { requiredFields?: RequiredFieldProposal[] };
+  try {
+    reply = JSON.parse(text) as { requiredFields?: RequiredFieldProposal[] };
+  } catch (err) {
+    throw new Error(
+      `The required-fields reply was not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return { requiredFields: reply.requiredFields ?? [], usage };
 }

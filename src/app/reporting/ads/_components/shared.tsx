@@ -240,7 +240,7 @@ export function EmptyState({
           {action && (
             <button
               onClick={action.onClick}
-              className="rounded-lg bg-[var(--primary)] px-3.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+              className="rounded-lg bg-[var(--primary)] px-3.5 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
             >
               {action.label}
             </button>

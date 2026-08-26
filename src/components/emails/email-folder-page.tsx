@@ -566,7 +566,7 @@ export function EmailFolderPage() {
           <div className="w-px h-5 bg-[var(--border)]" />
           <button
             onClick={() => setShowBulkMoveModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-[var(--primary)] text-white rounded-lg hover:opacity-90 transition-opacity"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg hover:opacity-90 transition-opacity"
           >
             <FolderArrowDownIcon className="w-4 h-4" /> Move to Folder
           </button>

@@ -179,7 +179,7 @@ export function AccountDashboard() {
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div className="flex items-center gap-4">
             <div
-              className="w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-xl bg-[var(--primary)]"
+              className="w-12 h-12 rounded-xl flex items-center justify-center text-[var(--primary-foreground)] font-bold text-xl bg-[var(--primary)]"
             >
               {accountData.dealer.charAt(0).toUpperCase()}
             </div>
@@ -255,7 +255,7 @@ export function AccountDashboard() {
       <div className="flex gap-3 mb-8">
         <Link
           href="/email/templates"
-          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[var(--primary)] text-white font-medium text-sm hover:opacity-90 transition-opacity"
+          className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] font-medium text-sm hover:opacity-90 transition-opacity"
         >
           <BookOpenIcon className="w-4 h-4" />
           Browse Templates

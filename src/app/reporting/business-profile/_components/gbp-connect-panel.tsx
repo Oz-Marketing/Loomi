@@ -138,7 +138,7 @@ export function GbpConnectPanel({
           </Muted>
           <a
             href={connectHref}
-            className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90"
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
           >
             <LinkIcon className="h-4 w-4" />
             Connect Google Business Profile

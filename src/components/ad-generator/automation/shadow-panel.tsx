@@ -1249,7 +1249,7 @@ export function ShadowPanel({
               <button
                 onClick={save}
                 disabled={!!busy || !dirty}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {busy === 'save' ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
               </button>
@@ -1341,7 +1341,7 @@ export function ShadowPanel({
               setFeedName('');
             }}
             disabled={!!busy || !feedUrl.trim()}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-[7px] text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-[7px] text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             <PlusIcon className="h-3.5 w-3.5" /> Add feed
           </button>

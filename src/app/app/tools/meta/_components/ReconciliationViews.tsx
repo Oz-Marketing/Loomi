@@ -475,7 +475,7 @@ export function ReconciliationPanel({
                     onClick={() => setBucket(b)}
                     className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
                       bucket === b
-                        ? 'bg-[var(--primary)] text-white'
+                        ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                         : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                     }`}
                   >
@@ -487,7 +487,7 @@ export function ReconciliationPanel({
                 type="button"
                 onClick={() => post({ type: 'apply-all', bucket }, 'apply-all')}
                 disabled={!canApply || busy === 'apply-all'}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-[11px] font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-[11px] font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {busy === 'apply-all'
                   ? 'Applying…'

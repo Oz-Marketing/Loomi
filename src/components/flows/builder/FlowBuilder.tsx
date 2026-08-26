@@ -1638,7 +1638,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
           )}
 
           {clipboardNode && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--primary)] text-white text-xs font-semibold shadow-md">
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-semibold shadow-md">
               <span>
                 {NODE_META[clipboardNode.type].label} on clipboard — click any
                 connection to paste

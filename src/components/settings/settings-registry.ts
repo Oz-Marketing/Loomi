@@ -37,6 +37,7 @@ export type SettingsTabKey =
   | 'ad-disclaimers'
   | 'ad-oem-rules'
   | 'ad-automation'
+  | 'email-texts'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'integrations'
@@ -87,6 +88,14 @@ export type SettingsTab = {
    *  a bare "Users" would be ambiguous. Defaults to `label`. */
   navLabel?: string;
   titleLabel: string;
+  /**
+   * One line under the page title saying what this page is for.
+   *
+   * Written for the person who landed here, not for a developer: what they can
+   * change and what it affects. The header used to print "Manage settings and
+   * configuration for this account" on every page, which told nobody anything.
+   */
+  description: string;
   group: SettingsGroup;
   icon: React.ComponentType<{ className?: string }>;
 };
@@ -148,6 +157,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'subaccounts',
     label: 'Accounts',
     titleLabel: 'Account Settings',
+    description:
+      'Every account Loomi manages. Open one to change its branding, integrations and reporting.',
     group: 'manage',
     icon: BuildingStorefrontIcon,
     // Agency rail only. It used to also appear for a group account, which put
@@ -160,6 +171,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'subaccount',
     label: 'General',
     titleLabel: 'General Settings',
+    description:
+      'This account\u2019s name, branding and industry \u2014 the details every ad, report and email inherits.',
     group: 'manage',
     icon: BuildingStorefrontIcon,
     visible: (s) => s.isAccount,
@@ -170,6 +183,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'users',
     label: 'Users',
     titleLabel: 'User Settings',
+    description:
+      'Who at the agency can sign in, and what each person is allowed to do.',
     group: 'manage',
     icon: UsersIcon,
     visible: (s) => s.hasAdminAccess && s.isAdmin,
@@ -184,6 +199,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'client-users',
     label: 'Clients',
     titleLabel: 'Client Users',
+    description:
+      'Dealer-side people with access. Clients see Reporting only, scoped to their own accounts.',
     group: 'manage',
     icon: IdentificationIcon,
     visible: (s) => s.hasAdminAccess && s.isAdmin,
@@ -192,6 +209,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'teams',
     label: 'Teams',
     titleLabel: 'Teams',
+    description:
+      'The groups work is routed to. A team decides who picks up a request and what kinds they deliver.',
     group: 'manage',
     icon: UserGroupIcon,
     visible: (s) => s.hasAdminAccess && s.isAdmin,
@@ -200,6 +219,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'integrations',
     label: 'Integrations',
     titleLabel: 'Integrations',
+    description:
+      'Connections to Meta, Google and the other platforms Loomi pulls spend and performance from.',
     group: 'manage',
     icon: PuzzlePieceIcon,
     visible: (s) => s.hasAdminAccess && s.isAccount,
@@ -210,6 +231,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'contact-fields',
     label: 'Custom Fields',
     titleLabel: 'Contact Custom Fields',
+    description:
+      'Extra fields on a contact record, beyond the ones every contact has.',
     group: 'manage',
     icon: TagIcon,
     visible: (s) => s.hasAdminAccess && s.isAccount && s.surface === 'studio',
@@ -221,6 +244,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'contact-field-blueprints',
     label: 'Field Blueprints',
     titleLabel: 'Contact Field Blueprints',
+    description:
+      'Reusable field sets you can apply to several accounts at once, instead of rebuilding them per account.',
     group: 'manage',
     icon: Squares2X2Icon,
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
@@ -230,6 +255,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'agents',
     label: 'Agents',
     titleLabel: 'AI Agents',
+    description:
+      'The specialists built into Loomi. Edit what each one knows, how it answers, and who it looks like.',
     group: 'manage',
     icon: SparklesIcon,
     visible: (s) => s.hasAdminAccess && s.isAdmin,
@@ -238,6 +265,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'industries',
     label: 'Industries',
     titleLabel: 'Industry Settings',
+    description:
+      'Which industries accounts can belong to, and the behavior each one switches on.',
     group: 'configure',
     icon: BriefcaseIcon,
     visible: (s) => s.isElevated && s.isAdmin,
@@ -246,6 +275,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'markup',
     label: 'Markup',
     titleLabel: 'Default Markup',
+    description:
+      'The default markup applied to media spend, and the rate cards it comes from.',
     group: 'configure',
     icon: CalculatorIcon,
     // Sector rail, and no `isAdmin`: that means the retired "Agency View" and is
@@ -261,6 +292,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'budget-channels',
     label: 'Channels',
     titleLabel: 'Budget Channels',
+    description:
+      'The channels a budget can be split across, and how each one is billed.',
     group: 'configure',
     icon: Squares2X2Icon,
     visible: (s) => s.surface === 'app' && s.isElevated,
@@ -270,6 +303,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'alerts',
     label: 'Alerts',
     titleLabel: 'Alert Rules',
+    description:
+      'Rules that decide when Loomi raises a pacing or delivery alert, and who hears about it.',
     group: 'configure',
     // What this tunes is the AD PACER's alert engine — account pace, budget
     // burn, flight thresholds. Every rule is about paced media, which is
@@ -295,6 +330,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'coop-guidelines',
     label: 'Co-op Guidelines',
     titleLabel: 'OEM Guidelines & Sales Events',
+    description:
+      'Each manufacturer\u2019s advertising rules and sales events \u2014 the documents behind every co-op claim, and what Loomi checks ads against automatically.',
     group: 'configure',
     icon: ShieldCheckIcon,
     // STUDIO's: every consumer of a co-op pack or a sales event is under
@@ -302,6 +339,25 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     // Still global data (one library per make), which is why it's sector-level
     // and not per-account.
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess && s.oemRelevant,
+    rail: 'sector',
+  },
+  // Sending config, email footer and suppressions for the account in scope.
+  //
+  // MOVED HERE from the sub-account drill-in's rail (2026-08-25). It is per-ACCOUNT
+  // config — the SendGrid key, sender identity, postal address and suppression list
+  // all gate whether this one account can send — so it stays account-scoped, the
+  // same way General does. What was wrong was the placement: it sat in a rail whose
+  // path segment was never read, so every "fix this in settings" deep link from the
+  // blast preflight landed on General instead.
+  {
+    key: 'email-texts',
+    label: 'Email & Texts',
+    titleLabel: 'Email & Texts',
+    description:
+      'Sender identity, the email footer and the suppression list for this account \u2014 what decides whether it can send at all.',
+    group: 'configure',
+    icon: PaperAirplaneIcon,
+    visible: (s) => s.surface === 'studio' && s.isAccount,
     rail: 'sector',
   },
   // ── Ad Generator config ──
@@ -320,6 +376,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'ad-sizes',
     label: 'Ad Sizes',
     titleLabel: 'Ad Sizes',
+    description:
+      'The output sizes an ad can be built and exported at.',
     group: 'configure',
     icon: RectangleGroupIcon,
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
@@ -329,6 +387,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'ad-disclaimers',
     label: 'Disclaimers',
     titleLabel: 'Disclaimer Templates',
+    description:
+      'Reusable legal fine print, per manufacturer and offer type. Generated ads fill these in automatically.',
     group: 'configure',
     icon: DocumentTextIcon,
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
@@ -340,6 +400,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'ad-oem-rules',
     label: 'OEM Rules',
     titleLabel: 'OEM Compliance Rules',
+    description:
+      'Fields each manufacturer requires on an ad before it can be exported.',
     group: 'configure',
     icon: ShieldCheckIcon,
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
@@ -349,6 +411,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'ad-automation',
     label: 'Ad Automation',
     titleLabel: 'Ad Automation',
+    description:
+      'Which accounts generate ads on their own, from which feeds, and how far they get without a person.',
     group: 'configure',
     icon: BoltIcon,
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess,
@@ -365,6 +429,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'client-reports',
     label: 'Client Reports',
     titleLabel: 'Client Report Access',
+    description:
+      'Which reports clients can open, and which accounts they cover.',
     group: 'configure',
     icon: ChartBarIcon,
     visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
@@ -374,6 +440,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'notifications',
     label: 'Notifications',
     titleLabel: 'Notification Settings',
+    description:
+      'Which events reach you, and whether by email, in-app, or both.',
     group: 'configure',
     icon: BellIcon,
     // Sector rail: the categories it lists ARE this sector's, per
@@ -398,6 +466,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'reporting-notifications',
     label: 'Notifications',
     titleLabel: 'Reporting Notifications',
+    description:
+      'Scheduled report deliveries and the alerts that ride along with them.',
     group: 'configure',
     icon: BellIcon,
     visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
@@ -408,6 +478,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'reporting-alerts',
     label: 'Alerts',
     titleLabel: 'Reporting Alerts',
+    description:
+      'Thresholds that flag a reporting metric as worth attention.',
     group: 'configure',
     icon: ExclamationTriangleIcon,
     visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
@@ -418,6 +490,8 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     key: 'appearance',
     label: 'Appearance',
     titleLabel: 'Appearance Settings',
+    description:
+      'Theme, density and the visual details of your own workspace.',
     group: 'configure',
     icon: SwatchIcon,
     visible: () => true,
@@ -433,7 +507,6 @@ export type SubaccountSectionKey =
   | 'integrations'
   | 'domains'
   | 'contact-fields'
-  | 'email-texts'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -511,13 +584,6 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
   // still deep-link to the right one.
   //
   // Studio-only: Reporting and Projects don't send anything.
-  {
-    key: 'email-texts',
-    label: 'Email & Texts',
-    group: 'sector',
-    icon: PaperAirplaneIcon,
-    visible: (s) => s.surface === 'studio',
-  },
 
   // Which reports this sub-account's CLIENT users see. Reporting-only, and
   // staff-only to reach: it needs `reporting.configure`, which no client role

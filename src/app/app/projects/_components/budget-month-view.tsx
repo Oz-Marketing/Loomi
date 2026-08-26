@@ -156,7 +156,7 @@ export function BudgetMonthView({
                 onClick={() => onMonthChange(i + 1)}
                 className={`flex-1 rounded-lg px-2 py-1.5 text-center transition ${
                   active
-                    ? 'bg-[var(--primary)] text-white'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : has
                       ? 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                       : 'text-[var(--muted-foreground)] opacity-50 hover:bg-[var(--muted)]'

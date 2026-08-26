@@ -209,7 +209,7 @@ export function TemplateCard({
           aria-label={selected ? 'Deselect' : 'Select'}
           className={`absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 backdrop-blur transition-opacity ${
             selected
-              ? 'border-[var(--primary)] bg-[var(--primary)] text-white opacity-100'
+              ? 'border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] opacity-100'
               : 'border-white/70 bg-black/30 text-transparent opacity-0 group-hover:opacity-100'
           }`}
         >

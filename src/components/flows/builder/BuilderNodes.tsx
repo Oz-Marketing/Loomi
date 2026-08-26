@@ -237,7 +237,7 @@ function NodeShell({
               }}
               title="Add step after"
               aria-label="Add step after"
-              className="w-5 h-5 rounded-full border border-[var(--border)] bg-[var(--card-strong)] text-[var(--muted-foreground)] hover:text-white hover:bg-[var(--primary)] hover:border-[var(--primary)] flex items-center justify-center shadow-sm transition-colors"
+              className="w-5 h-5 rounded-full border border-[var(--border)] bg-[var(--card-strong)] text-[var(--muted-foreground)] hover:text-[var(--primary-foreground)] hover:bg-[var(--primary)] hover:border-[var(--primary)] flex items-center justify-center shadow-sm transition-colors"
             >
               <PlusIcon className="w-3 h-3" />
             </button>

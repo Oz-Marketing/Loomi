@@ -87,6 +87,25 @@ export interface RuleProposal {
  * Collected here they become a ranked list of what engine work would actually buy
  * coverage, instead of knowledge buried in a seed script.
  */
+/** A raw "a person must fill this in" proposal, straight from the model. */
+export interface RequiredFieldProposal {
+  page: number;
+  quote: string;
+  context?: string;
+  section?: string;
+  field: string;
+  offerTypes?: string[];
+  reason: string;
+}
+
+export interface AcceptedRequiredField {
+  field: string;
+  /** Resolved: what the model gave, or empty meaning every offer type. */
+  offerTypes: string[];
+  reason: string;
+  source: QuoteLocation & { quote: string; section?: string };
+}
+
 export interface UnexpressibleProposal {
   page: number;
   quote: string;
@@ -103,6 +122,8 @@ export type DropReason =
   | 'quote_not_evidence'
   | 'quote_context_missing'
   | 'evidence_mismatch'
+  | 'unknown_field_for_person'
+  | 'duplicate_requirement'
   | 'unknown_kind'
   | 'invalid_severity'
   | 'invalid_rule'
@@ -110,6 +131,8 @@ export type DropReason =
   | 'unknown_offer_type';
 
 export interface AcceptedRule {
+  /** List terms removed because they were not on the cited page. Reported, not hidden. */
+  trimmedTerms?: string[];
   rule: DraftRule;
   /** Always `ai` here. Flips to `human` when a reviewer edits it. */
   origin: 'ai';
@@ -133,6 +156,10 @@ export interface ScreenResult {
   accepted: AcceptedRule[];
   /** Discarded, with the reason — reported so a bad drafting run is visible. */
   dropped: DroppedRule[];
+  /** Fields a person must fill in, whose quotes checked out. */
+  requiredFields: AcceptedRequiredField[];
+  /** Required-field proposals discarded, with why. */
+  droppedRequiredFields: { reason: DropReason; detail: string; proposal: RequiredFieldProposal }[];
   /** Stated-but-not-expressible requirements whose quotes checked out. */
   notes: AcceptedNote[];
   /** Notes whose quotes did not check out, discarded for the same reason rules are. */
@@ -186,6 +213,25 @@ export function knownOfferTypes(): Set<string> {
 export function buildCitation(source: string, section: string | undefined, page: number): string {
   const where = section?.trim() ? `§${section.trim()}, p.${page}` : `p.${page}`;
   return source.trim() ? `${source.trim()} — ${where}` : where;
+}
+
+/**
+ * Keys a PERSON fills in on an ad — the offer kinds' own field schemas.
+ *
+ * Deliberately narrower than {@link knownAdDataKeys}: that also carries account
+ * branding (a logo nobody types per ad) and the synthetic `_offer*` values the offer
+ * engine computes (which cannot be filled at all). Requiring either as a per-ad field
+ * would block every ad on a value no form collects.
+ */
+let fillableCache: Set<string> | null = null;
+export function fillableFieldKeys(): Set<string> {
+  if (fillableCache) return fillableCache;
+  const keys = new Set<string>();
+  for (const kind of OFFER_KINDS) {
+    for (const f of kind.fields) if (!f.key.startsWith('_')) keys.add(f.key);
+  }
+  fillableCache = keys;
+  return keys;
 }
 
 /** Lowercased, punctuation-stripped words. */
@@ -248,6 +294,7 @@ export function screenRuleProposals(
   pages: string[],
   opts: ScreenOptions,
   unexpressible: UnexpressibleProposal[] = [],
+  requiredFieldProposals: RequiredFieldProposal[] = [],
 ): ScreenResult {
   const corpus: QuoteCorpus = prepareQuoteCorpus(pages);
   const known = knownAdDataKeys();
@@ -296,6 +343,38 @@ export function screenRuleProposals(
       continue;
     }
 
+    // ── every term of a list must be findable on the quoted page ──
+    //
+    // Checked against the PAGE, not against the quote. Requiring each term to appear
+    // inside the quote was the first design and it cost two real lists — 36 of
+    // Subaru's prohibited terms — because it pushed the model into composing a long
+    // quote out of the list itself, which then failed verification as a span that
+    // does not exist. The introducing sentence is the evidence that these are
+    // forbidden; the terms are evidenced by being on the page.
+    //
+    // Absent terms are TRIMMED rather than discarding the rule. Losing a
+    // twenty-nine-term list because one term was mistyped is a bad trade, and the
+    // trims are reported so nobody has to guess what happened.
+    const listTerms = (raw.phrases ?? []).map((x) => String(x).trim()).filter(Boolean);
+    let trimmedTerms: string[] = [];
+    if (listTerms.length > 0) {
+      const pageText = (pages[quote.at.page - 1] ?? '').toLowerCase();
+      const onPage = (term: string) => {
+        const needed = words(term);
+        return needed.length > 0 && needed.every((w) => pageText.includes(w));
+      };
+      const kept = listTerms.filter(onPage);
+      trimmedTerms = listTerms.filter((x) => !kept.includes(x));
+      if (kept.length === 0) {
+        drop(
+          'evidence_mismatch',
+          `None of the ${listTerms.length} term(s) appear on page ${quote.at.page}.`,
+        );
+        continue;
+      }
+      raw.phrases = kept;
+    }
+
     // ── the evidence must be about THIS rule ──
     //
     // Only meaningful for a list entry, and essential there. Working down a list of
@@ -335,6 +414,7 @@ export function screenRuleProposals(
       origin: 'ai',
       source: { ...quote.at, quote: proposal.quote, section: proposal.section },
       rationale: proposal.rationale,
+      ...(trimmedTerms.length ? { trimmedTerms } : {}),
     });
   }
 
@@ -349,7 +429,82 @@ export function screenRuleProposals(
     notes.push({ ...note, at: quote.at });
   }
 
-  return { accepted, dropped, notes, droppedNotes };
+  // ── fields a person must fill in ──
+  //
+  // Same evidence gate as a rule: the quote must be real, the field must exist, and
+  // the offer types must be ones we have. The vocabulary is NARROWER than a rule's —
+  // `fillableFieldKeys` excludes account branding and the synthetic offer values,
+  // because requiring a logo as a per-ad field would block every ad on a value no
+  // form collects.
+  const fillable = fillableFieldKeys();
+  const requiredFields: AcceptedRequiredField[] = [];
+  const droppedRequiredFields: ScreenResult['droppedRequiredFields'] = [];
+  const seenFieldScope = new Set<string>();
+
+  for (const proposal of requiredFieldProposals) {
+    const dropRf = (reason: DropReason, detail: string) =>
+      droppedRequiredFields.push({ reason, detail, proposal });
+
+    const q = verifyQuoteIn(corpus, proposal.page, proposal.quote, { context: proposal.context });
+    if (!q.ok) {
+      dropRf(QUOTE_DROP[q.reason], q.detail);
+      continue;
+    }
+
+    const field = (proposal.field ?? '').trim();
+    if (!field) {
+      dropRf('unknown_field_for_person', 'No field was named.');
+      continue;
+    }
+    if (!fillable.has(field)) {
+      // "Not a field at all" and "a field nobody fills" are different mistakes. The
+      // second means the model reached for the wrong mechanism, and the requirement
+      // probably belongs in a required_element rule — so say so.
+      dropRf(
+        'unknown_field_for_person',
+        known.has(field)
+          ? `"${field}" is a real field but not one a person fills in — it is account branding or a value the offer engine computes. A requirement about it belongs in a required_element rule.`
+          : `"${field}" is not a field on an ad.`,
+      );
+      continue;
+    }
+
+    const types = (proposal.offerTypes ?? []).map((x) => x.trim()).filter(Boolean);
+    const badType = types.find((x) => !offerTypes.has(x));
+    if (badType) {
+      dropRf('unknown_offer_type', `"${badType}" is not an offer type.`);
+      continue;
+    }
+
+    // ONE DECISION PER FIELD.
+    //
+    // Keyed on the field alone, not on field + scope. A document states the same
+    // requirement in several places — the summary page and the category section — and
+    // a first run produced `vin` twice and `discountAmount` twice with overlapping
+    // scopes. Three entries for one requirement is three decisions about one thing,
+    // and the reviewer has no way to tell they are the same.
+    //
+    // The FIRST entry wins, because the model is asked to list a field once with all
+    // its offer types; a second is a restatement, and keeping the first keeps its
+    // quote matched to its scope rather than widening a scope past its evidence.
+    if (seenFieldScope.has(field)) {
+      dropRf(
+        'duplicate_requirement',
+        `"${field}" was already proposed${types.length ? ` (this one for ${types.join(', ')})` : ''}.`,
+      );
+      continue;
+    }
+    seenFieldScope.add(field);
+
+    requiredFields.push({
+      field,
+      offerTypes: types,
+      reason: (proposal.reason ?? '').trim() || `${field} must be stated.`,
+      source: { ...q.at, quote: proposal.quote.trim(), section: proposal.section?.trim() },
+    });
+  }
+
+  return { accepted, dropped, requiredFields, droppedRequiredFields, notes, droppedNotes };
 }
 
 /** One-line-per-reason tally, for a run summary. */

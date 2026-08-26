@@ -37,7 +37,7 @@ export function TemplateEmptyState({
       <button
         type="button"
         onClick={onAction}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] text-sm font-medium hover:opacity-90 transition-opacity"
       >
         <PlusIcon className="w-4 h-4" />
         {actionLabel}

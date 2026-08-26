@@ -304,7 +304,7 @@ function GroupSection({
                 onMouseEnter={() => onHover(absIdx)}
                 className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-md text-sm transition-colors ${
                   isHighlighted
-                    ? 'bg-[var(--primary)] text-white'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                 } ${isSelected && !isHighlighted ? 'font-semibold' : ''}`}
               >

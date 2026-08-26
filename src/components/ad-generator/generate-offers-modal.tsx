@@ -146,7 +146,7 @@ export function GenerateOffersModal({
                     aria-pressed={on}
                     className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                       on
-                        ? 'bg-[var(--primary)] text-white'
+                        ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                         : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
                     }`}
                   >
@@ -275,7 +275,7 @@ export function GenerateOffersModal({
                 offerTypes: types,
               })
             }
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
           >
             <BoltIcon className={`h-3.5 w-3.5 ${busy ? 'animate-pulse' : ''}`} />
             {busy ? 'Generating…' : total === 0 ? 'Generate' : `Generate ${capped} ad${capped === 1 ? '' : 's'}`}

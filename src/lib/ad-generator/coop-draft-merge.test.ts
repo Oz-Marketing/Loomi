@@ -133,3 +133,52 @@ describe('mergeDraftedRules', () => {
     expect(r.skipped[0].reason).toBe('malformed');
   });
 });
+
+describe('mergeDraftedRules — prohibited-terms lists', () => {
+  const list = (id: string, phrases: string[]): AcceptedRule =>
+    ({
+      rule: { id, kind: 'banned_phrase', severity: 'error', description: `list ${id}`, citation: 'x', phrases },
+      origin: 'ai',
+      source: { page: 1, statedPage: 1, pageCorrected: false, start: 0, end: 5, matchedPages: [1], matchType: 'exact', stretch: 1, quote: 'q' },
+    }) as unknown as AcceptedRule;
+
+  const OPTS = { make: 'Subaru', version: 'v1', source: 'doc' };
+
+  // The bug: a list carries no single `phrase`, so every list computed the same
+  // signature and the first one made all the others look like duplicates. A real
+  // Subaru run landed one of four.
+  it('keeps several DIFFERENT lists in one merge', () => {
+    const r = mergeDraftedRules(null, [
+      list('a', ['invoice', 'blowout']),
+      list('b', ['special purchase', 'employee pricing']),
+      list('c', ['ADM', 'Market Adjustment']),
+    ], OPTS);
+    expect(r.added).toHaveLength(3);
+    expect(r.skipped).toEqual([]);
+  });
+
+  it('still recognises the SAME list re-drafted', () => {
+    const first = mergeDraftedRules(null, [list('a', ['invoice', 'blowout'])], OPTS);
+    const again = mergeDraftedRules(first.pack, [list('z', ['blowout', 'invoice'])], OPTS);
+    // Order is not identity: the same terms in a different order is one rule.
+    expect(again.added).toEqual([]);
+    expect(again.skipped[0].reason).toBe('duplicate_rule');
+  });
+
+  it('RENAMES a genuinely different rule that computed a taken id', () => {
+    // Ids are slugs from the description, so a coincidence must not cost a real
+    // requirement.
+    const first = mergeDraftedRules(null, [list('shared', ['invoice'])], OPTS);
+    const again = mergeDraftedRules(first.pack, [list('shared', ['bailout'])], OPTS);
+    expect(again.added).toHaveLength(1);
+    expect(again.added[0].id).toBe('shared-2');
+    expect(again.pack.rules).toHaveLength(2);
+  });
+
+  it('skips a true duplicate that also shares its id', () => {
+    const first = mergeDraftedRules(null, [list('same', ['invoice'])], OPTS);
+    const again = mergeDraftedRules(first.pack, [list('same', ['invoice'])], OPTS);
+    expect(again.added).toEqual([]);
+    expect(again.skipped[0].reason).toBe('duplicate_id');
+  });
+});

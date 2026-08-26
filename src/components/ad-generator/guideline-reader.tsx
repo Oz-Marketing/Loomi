@@ -43,6 +43,19 @@ export interface GuidelineReaderProps {
   pageCount: number | null;
   /** Direct link to the original file, when one is stored. */
   sourceUrl: string | null;
+  /**
+   * Open here rather than at page 1 — for arriving from a citation.
+   *
+   * A verified citation is only worth having if it can be OPENED, so a rule under
+   * review links straight to the page its quote came from.
+   */
+  initialPage?: number;
+  /**
+   * Pre-fill the search box, so the cited sentence is highlighted on arrival.
+   * Combined with `initialPage` this turns "§5e p.12" into the actual sentence,
+   * lit up, without the reader having to be told where to look.
+   */
+  initialQuery?: string;
   onClose: () => void;
 }
 
@@ -61,9 +74,17 @@ function sectionFor(sections: Section[], page: number): string | null {
   return found;
 }
 
-export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }: GuidelineReaderProps) {
+export function GuidelineReader({
+  docId,
+  title,
+  pageCount,
+  sourceUrl,
+  initialPage,
+  initialQuery,
+  onClose,
+}: GuidelineReaderProps) {
   /** The page being displayed — changing this triggers a fetch and a render. */
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialPage && initialPage > 0 ? initialPage : 1);
   /**
    * What the scrubber reads right now, which is NOT the same thing.
    *
@@ -73,12 +94,12 @@ export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }:
    * disagreeing with the counter as the responses raced. So the scrubber moves
    * freely here and only commits to `page` when the user lets go.
    */
-  const [scrub, setScrub] = useState(1);
+  const [scrub, setScrub] = useState(initialPage && initialPage > 0 ? initialPage : 1);
   const [total, setTotal] = useState<number | null>(pageCount);
   const [src, setSrc] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(initialQuery ?? '');
   const [pages, setPages] = useState<string[] | null>(null);
   const [textState, setTextState] = useState<'idle' | 'loading' | 'none'>('idle');
   const [showHits, setShowHits] = useState(false);

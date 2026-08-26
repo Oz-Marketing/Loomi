@@ -61,6 +61,10 @@ export default function SettingsPage() {
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
   const titleText = activeTabObj?.titleLabel ?? 'Settings';
+  // Falls back only when the active tab isn't in the registry, which shouldn't
+  // happen — every registered tab carries its own description.
+  const titleDescription =
+    activeTabObj?.description ?? 'Manage your preferences and configuration.';
 
   // Until the scope resolves, the tab set (and thus activeTab) reflects the
   // default mode — hold a light placeholder so a deep-linked tab doesn't flash
@@ -79,40 +83,38 @@ export default function SettingsPage() {
     // Full-width: the settings tabs live in the sidebar (SettingsNav) now, so
     // the content spans the whole page-content width.
     <div className="animate-fade-in-up pt-4">
+      {/* THE TITLE IS THE PAGE, NOT THE ACCOUNT.
+          Account mode used to make the account's name the h1 and print "Manage
+          settings and configuration for this account" underneath, on all twenty-odd
+          pages. That answered a question nobody had — you know which account you
+          opened — and left the one that matters, "what does this page do", unanswered.
+          Now the h1 is the page and the account is context above it: avatar plus name
+          as an eyebrow, so it's still obvious what you're editing. */}
       <div className="mb-6 flex items-start justify-between gap-4">
-        {isAccount && accountData ? (
-          // Account-mode: title is the sub-account's avatar + name (matches the
-          // Studio sub-account settings header). The name is editable in the
-          // Sub-Account tab content.
-          <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          {isAccount && accountData ? (
             <AccountAvatar
               name={accountData.dealer || accountKey || ''}
               accountKey={accountKey || ''}
               storefrontImage={accountData.storefrontImage}
               logos={accountData.logos}
               size={44}
-              className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+              className="mt-0.5 flex-shrink-0 rounded-xl border border-[var(--border)]"
             />
-            <div className="min-w-0">
-              <h1 className="truncate text-2xl font-bold text-[var(--foreground)]">
+          ) : null}
+          <div className="min-w-0">
+            {isAccount && accountData ? (
+              <p className="truncate text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
                 {accountData.dealer || accountKey}
-              </h1>
-              <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
-                Manage settings and configuration for this account
               </p>
-            </div>
-          </div>
-        ) : (
-          <div>
+            ) : null}
             <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-              <TitleIcon className="w-6 h-6" />
+              {!isAccount || !accountData ? <TitleIcon className="w-6 h-6" /> : null}
               {titleText}
             </h1>
-            <p className="text-sm text-[var(--muted-foreground)] mt-1">
-              Manage your preferences and configuration
-            </p>
+            <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">{titleDescription}</p>
           </div>
-        )}
+        </div>
         <div id="settings-title-actions" className="flex items-center gap-2" />
       </div>
 

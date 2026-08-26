@@ -32,10 +32,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { CoopPackEditor } from './coop-pack-editor';
+import { CoopRuleReview } from './coop-rule-review';
 import { toDraftRule, type DraftPack } from '@/lib/ad-generator/coop-rule-authoring';
-import type { CoopRule } from '@/lib/ad-generator/coop-rules';
+import type { CoopRule, RequiredFieldEntry } from '@/lib/ad-generator/coop-rules';
 import {
   ArrowPathIcon,
   BookOpenIcon,
@@ -81,7 +83,13 @@ interface PackRow {
   verifiedBy: string | null;
   verifiedAt: string | null;
   isActive: boolean;
+  /** ACCEPTED rules — what is enforced. */
   ruleCount: number;
+  /** Drafted rules awaiting a decision in the review queue. Enforce nothing. */
+  proposedCount: number;
+  rejectedCount: number;
+  /** Drafted "a person must fill this in" entries, for the review queue. */
+  requiredFields?: RequiredFieldEntry[];
   warningCount: number;
   errorCount: number;
   updatedAt: string;
@@ -221,6 +229,7 @@ function DocMenu({
   downloadUrl,
   onRename,
   onReplace,
+  onArchive,
   onRemove,
 }: {
   label: string;
@@ -230,6 +239,8 @@ function DocMenu({
   downloadUrl?: string | null;
   onRename: () => void;
   onReplace: () => void;
+  /** Archive: hides it from the library without destroying the record. */
+  onArchive: () => void;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -306,6 +317,7 @@ function DocMenu({
           )}
           {item('Rename', onRename)}
           {item('Replace', onReplace)}
+          {item('Archive', onArchive)}
           {item('Remove', onRemove, true)}
         </div>
       )}
@@ -325,7 +337,14 @@ export function CoopGuidelinesTab() {
   const [eventDraft, setEventDraft] = useState<ReturnType<typeof emptyEventDraft> | null>(null);
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
   const [pickingLogo, setPickingLogo] = useState(false);
+  /** Mounted guard: `document.body` doesn't exist during SSR, and the modals below
+   *  are portalled onto it. */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [reading, setReading] = useState<GuidelineDocRow | null>(null);
+  /** Where to land in the reader — set when arriving from a rule's citation. */
+  const [readingAt, setReadingAt] = useState<{ page: number; query: string } | null>(null);
   /** Document currently being renamed inline, and the text being typed. */
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   /** Cover thumbnails, fetched per document on demand — the list omits them. */
@@ -351,6 +370,20 @@ export function CoopGuidelinesTab() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Documents change-watching can actually reach.
+   *
+   * The daily sweep re-downloads and re-fingerprints documents registered by WEB
+   * ADDRESS. A document that was uploaded as a file has no address to re-fetch, and
+   * its bytes cannot change on their own — so it is not watched, and never was. With
+   * none on file the button is disabled rather than cheerfully reporting success
+   * having checked nothing, which is what it used to do.
+   */
+  const watchable = useMemo(
+    () => makes.reduce((n, m) => n + m.docs.filter((d) => d.sourceUrl).length, 0),
+    [makes],
+  );
 
   const act = useCallback(
     async (action: string, extra: Record<string, unknown>, label: string, okMsg: string) => {
@@ -464,33 +497,27 @@ export function CoopGuidelinesTab() {
   }
 
   const totalDocs = makes.reduce((n, m) => n + m.docs.length, 0);
-  const withRules = makes.filter((m) => m.packs.length > 0).length;
+  // Makes with at least one rule a person has ACCEPTED. A pack of unreviewed drafts
+  // enforces nothing, so counting the row would overstate what is live.
+  const withRules = makes.filter((m) => m.packs.some((p) => p.ruleCount > 0)).length;
+  const awaitingReview = makes.reduce(
+    (n, m) => n + m.packs.reduce((k, p) => k + p.proposedCount, 0),
+    0,
+  );
 
   return (
     <div>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="max-w-3xl text-sm text-[var(--muted-foreground)]">
-            {makes.length} manufacturers · {totalDocs} guideline documents watched for changes · {withRules} with
-            rules Loomi enforces automatically
+            {/* "watched for changes" was not true: watching needs a web address, and
+                every document here was uploaded as a file. Say what is actually the
+                case rather than describing a capability nobody has. */}
+            {makes.length} manufacturers · {totalDocs} guideline document{totalDocs === 1 ? '' : 's'} on file
+            {watchable > 0 ? `, ${watchable} watched for changes` : ''} · {withRules} with rules Loomi enforces
+            automatically
+            {awaitingReview > 0 ? ` · ${awaitingReview} drafted rules awaiting review` : ''}
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => act('refresh_docs', {}, 'refresh-docs', 'Documents re-checked')}
-            disabled={!!busy || loading}
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} />
-            Check for updates
-          </button>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Reload
-          </button>
         </div>
       </header>
 
@@ -549,6 +576,12 @@ export function CoopGuidelinesTab() {
                   <button
                     key={m.make}
                     onClick={() => setSelected(m.make)}
+                    // The visible label is built from nested spans and counts, which
+                    // computes to no accessible name at all — the rail read as
+                    // twenty-four unnamed buttons. `aria-current` then says which one
+                    // you are on, which colour alone was carrying.
+                    aria-label={m.make}
+                    aria-current={isActive ? 'true' : undefined}
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
                       isActive ? 'bg-[var(--primary)]/10 text-[var(--foreground)]' : 'hover:bg-[var(--muted)]/40'
                     }`}
@@ -753,6 +786,14 @@ export function CoopGuidelinesTab() {
                                 downloadUrl={d.sourceUrl}
                                 onRename={() => setRenaming({ id: d.id, title: d.title })}
                                 onReplace={() => setDocDraft({ ...emptyDocDraft(active.make), title: d.title })}
+                                onArchive={() =>
+                                  act(
+                                    'set_doc_active',
+                                    { docId: d.id, active: false },
+                                    `da-${d.id}`,
+                                    'Document archived — re-upload it to bring it back',
+                                  )
+                                }
                                 onRemove={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
                               />
                             </div>
@@ -778,9 +819,12 @@ export function CoopGuidelinesTab() {
                       never auto-approve, so a person sees every one. Nothing is skipped.
                     </p>
                     <p>
-                      <strong>Approve for enforcement</strong> means a person checked the transcription against the
-                      document. Until then findings only warn, so a half-finished transcription can&rsquo;t block a
-                      brand&rsquo;s month.
+                      A rule blocks an ad only once a person has <strong>signed off on it</strong> — either by
+                      accepting it in the review queue below, or in bulk with <strong>Approve for enforcement</strong>.
+                      Everything else warns, so a half-finished transcription can&rsquo;t block a brand&rsquo;s month.
+                    </p>
+                    <p>
+                      That is one question, not two: the counts above say what can actually block today.
                     </p>
                   </HelpTip>
                 </h3>
@@ -811,7 +855,8 @@ export function CoopGuidelinesTab() {
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium text-[var(--foreground)]">{p.version}</span>
                               <span className="text-[11px] text-[var(--muted-foreground)]">
-                                {p.ruleCount} rules · {p.errorCount} can block
+                                {p.ruleCount} enforced · {p.errorCount} can block
+                                {p.proposedCount > 0 ? ` · ${p.proposedCount} awaiting review` : ''}
                               </span>
                               <button
                                 onClick={() =>
@@ -830,9 +875,15 @@ export function CoopGuidelinesTab() {
                               </button>
                             </div>
                             <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                              {/* Says the SAME thing as the counts above rather than a
+                                  second, contradicting thing. A rule blocks once a
+                                  person has signed off on it — individually in the
+                                  review queue, or in bulk by approving the pack. */}
                               {p.verified
-                                ? `Approved${p.verifiedBy ? ` by ${p.verifiedBy}` : ''}${p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — these can block a non-compliant ad.`
-                                : 'Not approved — findings only warn, and ads for this make stay drafts.'}
+                                ? `Approved${p.verifiedBy ? ` by ${p.verifiedBy}` : ''}${p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — signed-off rules block a non-compliant ad.`
+                                : p.errorCount > 0
+                                  ? 'Pack not approved, so only the rules accepted in review can block. Approve it to promote the rest.'
+                                  : 'Pack not approved — every rule warns rather than blocks, and ads for this make stay drafts.'}
                             </p>
                           </div>
                           <button
@@ -859,6 +910,28 @@ export function CoopGuidelinesTab() {
                             {p.verified ? 'Approved' : 'Approve for enforcement'}
                           </button>
                         </div>
+
+                        <CoopRuleReview
+                          make={active.make}
+                          packId={p.id}
+                          packVerified={p.verified}
+                          rules={p.rules}
+                          requiredFields={p.requiredFields}
+                          docs={active.docs.map((d) => ({
+                            id: d.id,
+                            title: d.title,
+                            pageCount: d.pageCount,
+                            sourceUrl: d.sourceUrl,
+                          }))}
+                          busy={!!busy}
+                          onRead={(doc, page, query) => {
+                            const full = active.docs.find((d) => d.id === doc.id);
+                            if (!full) return;
+                            setReadingAt({ page, query });
+                            setReading(full);
+                          }}
+                          onDecided={load}
+                        />
                       </div>
                     ))}
 
@@ -1023,7 +1096,9 @@ export function CoopGuidelinesTab() {
       )}
 
       {/* ── add / replace a document ── */}
-      {docDraft && (
+      {/* Portalled for the same reason as the event modal below — see the note there. */}
+      {mounted && docDraft && createPortal(
+        (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-1 text-sm font-semibold text-[var(--foreground)]">
@@ -1132,10 +1207,22 @@ export function CoopGuidelinesTab() {
             </div>
           </div>
         </div>
-      )}
+        ), document.body)}
 
       {/* ── add / edit event ── */}
-      {eventDraft && (
+      {/* PORTALLED TO THE BODY, like the reader above it, and for the same reason:
+          `position: fixed` resolves against the nearest ancestor carrying a
+          transform, filter, backdrop-filter or containment — and this page is built
+          from glass cards that all use backdrop-blur. Rendered in place, `inset-0`
+          sized itself to whichever card happened to contain it instead of the
+          viewport, so the modal appeared boxed inside the panel rather than over the
+          screen.
+
+          z-50 is deliberately NOT raised to the drill-in layer (260). The media
+          picker opens FROM this modal and sits at z-[220]; at 260 this overlay would
+          cover the picker and choosing an event mark would become impossible. */}
+      {mounted && eventDraft && createPortal(
+        (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-4 text-sm font-semibold text-[var(--foreground)]">
@@ -1297,7 +1384,7 @@ export function CoopGuidelinesTab() {
             </div>
           </div>
         </div>
-      )}
+        ), document.body)}
 
       {/* ── read a document in place ── */}
       {reading && (
@@ -1306,7 +1393,12 @@ export function CoopGuidelinesTab() {
           title={reading.title}
           pageCount={reading.pageCount}
           sourceUrl={reading.sourceUrl}
-          onClose={() => setReading(null)}
+          initialPage={readingAt?.page}
+          initialQuery={readingAt?.query}
+          onClose={() => {
+            setReading(null);
+            setReadingAt(null);
+          }}
         />
       )}
 

@@ -42,6 +42,12 @@ export interface AdSizeStarter extends AdSize {
  * blank page; NOT consulted at read time (the DB is the source of truth) except
  * as a fallback when the table hasn't been migrated yet.
  */
+// NO 728x90 LEADERBOARD. It was here and was removed deliberately: 90px cannot
+// carry an offer ad. After the disclaimer takes its 22px frame there is not
+// enough height left to give the offer figure its 34px floor and the two copy
+// rows 14px each, so every composition degrades to ~14px of offer figure —
+// complete, in-bounds and unreadable. Re-adding it means either accepting that
+// or building a horizontal STRIP arrangement for boards too short to stack.
 export const AD_SIZE_STARTERS: AdSizeStarter[] = [
   { key: 'facebook-feed', name: 'Facebook Feed', width: 1200, height: 628, tags: ['Facebook', 'Social'] },
   { key: 'facebook-story', name: 'Facebook Story', width: 1080, height: 1920, tags: ['Facebook', 'Social', 'Story'] },
@@ -53,7 +59,6 @@ export const AD_SIZE_STARTERS: AdSizeStarter[] = [
   { key: 'x-post', name: 'X / Twitter Post', width: 1200, height: 675, tags: ['X', 'Social'] },
   { key: 'youtube-thumbnail', name: 'YouTube Thumbnail', width: 1280, height: 720, tags: ['YouTube', 'Video'] },
   { key: 'medium-rectangle', name: 'Medium Rectangle', width: 300, height: 250, tags: ['Google', 'Display'] },
-  { key: 'leaderboard', name: 'Leaderboard', width: 728, height: 90, tags: ['Google', 'Display'] },
   { key: 'wide-skyscraper', name: 'Wide Skyscraper', width: 160, height: 600, tags: ['Google', 'Display'] },
   { key: 'large-rectangle', name: 'Large Rectangle', width: 336, height: 280, tags: ['Google', 'Display'] },
   { key: 'half-page', name: 'Half Page', width: 300, height: 600, tags: ['Google', 'Display'] },

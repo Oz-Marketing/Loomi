@@ -13,16 +13,17 @@
 
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import { resolveFilterFields } from '@/lib/services/audience-fields';
+import { resolveRequestedAccountKeys } from '@/lib/segments/api-scope';
 import {
-  resolveEligibleForSync,
+  resolveEligibleAcrossAccounts,
   type SyncChannel,
 } from '@/lib/segments/eligibility';
-import { SegmentRefError } from '@/lib/segments/refs';
 import {
-  formatFilterErrors,
-  validateFilterDefinition,
-} from '@/lib/smart-list-validate';
+  planSegmentAcrossAccounts,
+  SegmentLookupError,
+} from '@/lib/segments/lookup';
+import { SegmentRefError } from '@/lib/segments/refs';
+import type { FieldDefinition, FilterDefinition } from '@/lib/smart-list-types';
 
 export async function POST(req: Request) {
   const { session, error } = await requirePermission('studio.segments.edit');
@@ -33,44 +34,49 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'JSON body required' }, { status: 400 });
   }
 
-  const accountKey =
-    typeof body.accountKey === 'string' && body.accountKey.trim()
-      ? body.accountKey.trim()
-      : '';
-  if (!accountKey) {
-    return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
+  // A list, for the same reason the preview takes one: a group account
+  // holds no contacts of its own, so gating its own key alone reports
+  // that nothing in the group is uploadable.
+  const requestedKeys: string[] = Array.isArray(body.accountKeys)
+    ? body.accountKeys.map((v: unknown) => String(v))
+    : typeof body.accountKey === 'string' && body.accountKey.trim()
+      ? [body.accountKey.trim()]
+      : [];
+  if (requestedKeys.length === 0) {
+    return NextResponse.json({ error: 'accountKeys is required' }, { status: 400 });
   }
 
-  const userRole = session!.user.role;
-  const userAccountKeys: string[] = session!.user.accountKeys ?? [];
-  if (
-    userRole === 'admin' &&
-    userAccountKeys.length > 0 &&
-    !userAccountKeys.includes(accountKey)
-  ) {
+  const { selected, deniedAll } = await resolveRequestedAccountKeys(
+    requestedKeys,
+    session!.user.role,
+    session!.user.accountKeys ?? [],
+  );
+  if (deniedAll) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const fields = await resolveFilterFields(accountKey);
-  const validation = validateFilterDefinition(body.definition, fields);
-  if (!validation.ok) {
-    return NextResponse.json(
-      {
-        error: `Invalid filter definition — ${formatFilterErrors(validation.errors)}`,
-        details: validation.errors,
-      },
-      { status: 400 },
-    );
+  const definition = body.definition;
+  if (!definition || typeof definition !== 'object') {
+    return NextResponse.json({ error: 'definition is required' }, { status: 400 });
   }
 
   const channel: SyncChannel =
     body.channel === 'email' || body.channel === 'phone' ? body.channel : 'any';
 
   try {
-    const { breakdown } = await resolveEligibleForSync(
-      accountKey,
-      validation.definition,
-      fields,
+    // Per-account catalogues, then one gated pass that de-duplicates
+    // across them — a shopper at three rooftops is one uploadable person.
+    const { plans } = await planSegmentAcrossAccounts(
+      definition as FilterDefinition,
+      selected,
+    );
+    const fieldsByAccount = new Map<string, FieldDefinition[]>(
+      plans.map((plan) => [plan.accountKey, plan.fields]),
+    );
+    const { breakdown } = await resolveEligibleAcrossAccounts(
+      plans.map((plan) => plan.accountKey),
+      plans[0]?.definition ?? (definition as FilterDefinition),
+      fieldsByAccount,
       { channel },
     );
     // Only the counts cross the wire. The hashed identifiers stay
@@ -80,6 +86,9 @@ export async function POST(req: Request) {
   } catch (err) {
     if (err instanceof SegmentRefError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    if (err instanceof SegmentLookupError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
     }
     const message =
       err instanceof Error ? err.message : 'Failed to resolve eligibility';

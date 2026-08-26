@@ -22,7 +22,7 @@ function offerFields(prefix: string, group: string): FieldSpec[] {
     { key: `${prefix}vehicleName`, label: 'Vehicle', type: 'text', group, placeholder: '2024 Toyota Camry SE' },
     { key: `${prefix}vehicleImageUrl`, label: 'Vehicle image URL', type: 'image', group, placeholder: 'https://…/camry.png', help: 'Transparent PNG (EVOX) looks best.' },
     { key: t, label: 'Offer type', type: 'select', group, options: OFFER_TYPES, help: 'Drives this offer block + which fields show.' },
-    { key: `${prefix}offerLabel`, label: 'Offer label', type: 'text', group, placeholder: 'auto (e.g. LEASE FOR)', copy: true, maxLength: 18 },
+    { key: `${prefix}offerLabel`, label: 'Custom offer label', type: 'text', group, placeholder: 'auto (e.g. LEASE FOR)', copy: true, maxLength: 18 },
     { key: `${prefix}monthlyPayment`, label: 'Monthly payment ($)', type: 'text', group, placeholder: '299', visibleWhen: { field: t, in: ['lease'] } },
     { key: `${prefix}leaseTerm`, label: 'Lease term (months)', type: 'text', group, placeholder: '36', visibleWhen: { field: t, in: ['lease'] } },
     { key: `${prefix}dueAtSigning`, label: 'Due at signing ($)', type: 'text', group, placeholder: '2999', visibleWhen: { field: t, in: ['lease', 'apr', 'discount', 'sales_price'] } },
@@ -155,7 +155,12 @@ export const vehicleDualOffer: AdTemplate = {
     leaseTerm: '36',
     dueAtSigning: '2999',
     msrp: '34000',
-    // Offer 2 — APR
+    // Offer 2 — APR by default, but carrying a sample value for EVERY offer type.
+    //
+    // Offer 1 gets full coverage for free: the builder merges the single's
+    // preview data first, and those keys are unprefixed. Nothing does that for
+    // `o2_`, so previewing the template as Discount or Sale price left the second
+    // plate's figure empty — the one thing the preview chip exists to show.
     o2_vehicleName: '2024 RAV4 XLE',
     o2_vehicleImageUrl: '',
     o2_offerType: 'apr',
@@ -163,6 +168,13 @@ export const vehicleDualOffer: AdTemplate = {
     o2_aprTerm: '60',
     o2_financialInstitution: 'Toyota Financial',
     o2_msrp: '36000',
+    o2_monthlyPayment: '329',
+    o2_leaseTerm: '36',
+    o2_dueAtSigning: '3499',
+    o2_discountAmount: '2500',
+    o2_discountLabelStyle: 'off_msrp',
+    o2_salePrice: '33500',
+    o2_price: '$329/mo',
     disclaimer: 'Plus tax, title, and license. With approved credit. See dealer for details.',
   },
   render,

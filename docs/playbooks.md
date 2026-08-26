@@ -102,16 +102,20 @@ Everything lives under `src/lib/playbooks/`:
 
 ```
 types.ts        Check / playbook / result types. No prisma, no react.
-checks.ts       The check registry — 25 pure functions over an audit context.
+checks.ts       The check registry — 29 pure functions over an audit context.
 definitions.ts  Six Phase 0 playbooks: named bundles of check ids.
-context.ts      The ONLY prisma module. Batched reads → one context per account.
-audit.ts        Pure orchestration: context × definitions → coverage.
+context.ts      The ONLY prisma module (audit side). Batched reads → one context per account.
+audit.ts        Pure orchestration: context × definitions → coverage. Folds in waivers.
+scope.ts        Pure: which accounts a request may audit. The access boundary.
+sweep.ts        The nightly run — heartbeat row, new-failure diff, alert.
+creative.ts     Pure: parse / hash / diff / reset a creative playbook. Version rule.
+library.ts      The only prisma module for `Playbook` rows.
 ```
 
 `context.ts` is deliberately the only place that touches the database, and it
 issues a **fixed number of queries regardless of account count** (nine
 `findMany`s, then in-memory indexing). A per-account query loop over 38
-rooftops × 25 checks is the obvious way to write this and the wrong one.
+rooftops × 29 checks is the obvious way to write this and the wrong one.
 
 Everything else is pure, so `checks.test.ts` builds contexts by hand and
 asserts on them with no database.
@@ -147,9 +151,32 @@ which requires a conversion action" is a fact. Phase 1 replaces every
 `appliesTo` predicate with the explicit link; until then the audit can be wrong
 in both directions and the UI says so.
 
+**Waivers are the interim answer.** Being wrong in both directions is only fatal
+if there is nowhere to put the correction — the reaction to a red nobody can act
+on is to stop reading reds, which costs the whole screen. So a check can be
+waived per account, with a REQUIRED reason, and a waived check scores as `na`:
+out of coverage entirely, exactly like a playbook that doesn't apply, because
+that is what the person is asserting.
+
+Three rules make it a record rather than a mute button:
+
+- The check still RUNS and its observed detail is still shown. A waiver says "we
+  accept this", so hiding what was accepted defeats it.
+- A waiver on a PASSING check does nothing. Otherwise a stale waiver quietly
+  shrinks the denominator and reads as credit for something that simply works.
+- The waived count sits on the COLLAPSED account row. A rooftop at 100% because
+  six checks were waived is a different fact from one at 100% outright, and
+  hiding that behind an expander is how a waiver becomes a way to make a number
+  look good.
+
+`PlaybookCheckWaiver` is deliberately not `PlaybookApplication` (§5). It records
+one account-and-check exemption, needs none of Phase 1's three open decisions,
+and is the kind of fact an explicit application would later absorb rather than
+contradict.
+
 ### 4.4 The checks
 
-Six playbooks, 25 checks.
+Six playbooks, 29 checks.
 
 **`automotive-foundation`** — applies to any Automotive / Powersports account.
 
@@ -235,9 +262,46 @@ Two views over one payload:
 - **By check** — a row per check, showing how many rooftops fail it. This is
   the view that drives Phase 1 scope.
 
-`GET /api/playbooks/audit` returns the whole matrix. Account scope is enforced
-with `getAccountScope` / `filterAccountKeysByAccess`, so an admin restricted to
-three rooftops audits three rooftops.
+`GET /api/playbooks/audit` returns the whole matrix. Account scope is resolved by
+`resolveAuditScope` in `scope.ts` — lifted out of the route so the intersection
+between "what was asked for" and "what the caller may see" is provable without a
+database or a session, the same shape as `api/reporting/_lib/guard.ts`. An admin
+restricted to three rooftops audits three rooftops, and a hand-edited query
+string cannot widen that.
+
+`POST/DELETE /api/playbooks/waivers` records and lifts a waiver. Guarded on
+`agency.subaccounts.edit` WITH the account key rather than a platform-wide
+permission: a waiver is a statement about one rooftop, so someone restricted to
+three accounts can make it for those three and no others.
+
+### 4.6 The nightly sweep
+
+`loomi.playbooks.sweep` runs at **08:30 UTC**, last in the nightly chain. The
+order is not cosmetic: the audit reads the freshness of the inventory sync, the
+offer poll, generation and the audience sync, so sweeping before them would score
+every rooftop against yesterday's state and manufacture drift that isn't there.
+
+It writes a `PlaybookRun` on **every** run, clean ones included — the `IngestRun`
+discipline, because "nothing drifted this week" and "the sweep has been dead for
+three weeks" otherwise render identically, and the second is the state that costs
+money. The row is opened BEFORE the work, so a sweep that dies mid-run leaves a
+started-and-never-finished row rather than no evidence; the page reads a null
+`finishedAt` on the newest row as exactly that.
+
+Alerting is a DIFF, not a report. `diffBlocking` compares this run's blocking
+failures against the previous run's `blockingKeys` and announces only what is
+new, and announces **nothing at all on a first run** — with no baseline every
+pre-existing failure reads as overnight news, and a wall of 200 items is how the
+first alert becomes the last one anyone reads. Keys are `accountKey:checkId`, so
+Young Ford losing its Page is not covered by Young Chevrolet having lost its Page
+last week.
+
+Recipients are admins, the call `notifyGuidelineChanges` already makes: this is
+agency-wide governance, not one rooftop's setting, and an empty recipient list
+logs a warning rather than silently doing nothing. The dedupe window is RELATIVE
+(20h) rather than a date-stamped key — the pacer learned that one the hard way,
+where a UTC-dated key silently suppressed the next scheduled run whenever the job
+was re-run by hand late in the day.
 
 ---
 
@@ -369,6 +433,91 @@ collapsed an N+1 stock query into one read.
 > lease/apr/cash every time anyone pressed Save. It is now on `ScopeForm`, shown
 > as a reorderable chip row, and covered by the completeness test.
 
+### Hardening pass (2026-08-21)
+
+Four things found reviewing this for a flag-on, all in the same class: correct
+logic with a production edge nobody had hit yet.
+
+- **Both freshness lookups were unbounded.** `adAutomationRun.groupBy` had no
+  `where` at all and `emailBlast.findMany` filtered only on an
+  `automationKey` prefix, so the audit got slower every night the automation
+  ran. Both now read a rolling `FRESHNESS_LOOKBACK_DAYS` window (365), which is
+  deliberately far wider than the 3- and 35-day thresholds that consume them —
+  so no check's STATUS can change, only the detail string past a year ("last run
+  400 days ago" → "no run on record", which for a liveness check is the same
+  sentence). The date bound is also what makes the email lookup index-usable:
+  `EmailBlast` is indexed on `createdAt`, while a bare `startsWith` is a prefix
+  LIKE a default-collation btree can't serve.
+- **Delete and unpublish were single-click.** Both now confirm, and both name
+  the **follower count** — the fact nobody has in their head. The delete copy
+  also states what survives, because `onDelete: SetNull` plus the config's own
+  columns mean deleting UNLINKS rooftops rather than blanking their creative;
+  someone who believes they are about to break eleven stores cancels a safe
+  deletion. "Save as draft" on a published playbook was also renamed
+  **Unpublish**, since withdrawing a live bundle from every account picker is not
+  what "save" says.
+- **The scope intersection moved into `scope.ts`** and got covered. The audit
+  enumerates ad account ids, pixel ids and sender domains for whatever keys it
+  is handed, so `resolveAuditScope` is the entire boundary between what a caller
+  asked for and what they may see — and nothing on screen would change if it
+  silently stopped intersecting. Same shape as
+  `api/reporting/_lib/guard.ts`: lift the rule out of the route so it can be
+  proven without a database or a session.
+- **The version-bump rule was untested**, and it is the one the whole staleness
+  story rests on. `resolveVersionBump` is now pure and in `creative.ts`, pinning
+  both directions: a rename or a re-save must not bump (a "behind" signal that
+  fires on a rename is one people learn to ignore), and every real field edit
+  must.
+
+### Second hardening pass (2026-08-21)
+
+The rest of the flag-on list. Three of these are the same shape as the first
+pass — correct logic with a production edge nobody had reached — and two are
+gaps rather than bugs.
+
+- **The audit had no heartbeat and no alerting.** It was on-demand only: it
+  computed a good matrix and forgot it when the tab closed. §4.6 is the fix.
+- **A false red had nowhere to go.** §4.3's waivers.
+- **`playbooksAllowed` guarded one door with two permission models** — a
+  `MANAGEMENT_ROLES.includes(role)` test here while every route beside it checked
+  `agency.subaccounts.view`, free to drift apart silently. Now `hasPermission`,
+  which routes through the same per-sector enforcement flags as the routes, so
+  migrating the agency sector later moves this gate with it. Calling `can()` from
+  the registry directly would enforce EARLY and lock people out ahead of the
+  rollout.
+- **`Playbook` had no `updatedByUserId`.** Platform config that reaches every
+  following rooftop, and `createdByUserId` answers neither "who changed this" nor
+  "when". Stamped on every save including a rename, since a rename is a change
+  someone made.
+- **Two prisma calls could 500 on a correct request.** `createPlaybook`'s
+  key-collision scan is not a lock, so two people pressing New at once raced onto
+  the unique index and one got a generic 500 — now a P2002 takes the next suffix
+  and retries, the same loop `createEmailTemplate` uses. `deletePlaybook` used
+  `delete`, so a double-click turned the second request into a P2025 and a 500 on
+  a button whose job was already done; `deleteMany` plus a 404 says the true
+  thing. Both `create` and `update` also stopped re-reading the WHOLE library to
+  return one row.
+
+**Not done, deliberately.** I flagged "no caching — every visit re-runs the
+queries" in review and then didn't build a cache. With the date bounds from the
+first pass in place this is a handful of batched reads and a few hundred pure
+functions, and I have not measured it being slow. If it ever is, the sweep's own
+summary row is already sitting there to render from — but building that now would
+be speculative work on an unmeasured problem, and a stale cache on an audit whose
+entire job is to be current is a worse failure than a slow page.
+
+New tables (`PlaybookRun`, `PlaybookCheckWaiver`) are born with their
+constraints, and `updatedByUserId` is a nullable column, so `db push` handles all
+three — no `ensure-*-unique.ts` needed. That trap only bites when a `@unique`
+lands on a table that already exists.
+
+`creative.ts` also carried two **literal NUL bytes** — a `sizeIds.join('\0')`
+separator, which is a sound choice written the wrong way: a raw `\0` in the
+source makes the whole file binary to `grep`, so nothing in it could be found by
+search. It is now written as the escape `'\u0000'`, which is byte-for-byte the
+same string at runtime. `meta-ads-pacer.ts` has the same trap and is still
+grep-invisible.
+
 ### Not built
 
 - Applying a playbook to many accounts at once. Today it is picked per
@@ -494,7 +643,7 @@ Found while building Phase 0. Each one is a real constraint, not a style note.
 
 | Phase | State |
 |---|---|
-| 0 — coverage audit | **Built**, flag-gated, read-only |
+| 0 — coverage audit | **Built**, flag-gated, read-only. Nightly sweep + waivers added 2026-08-21. |
 | 1 — definition + apply | **Creative slice built** (§4b); the rest specified |
 | 2 — inherit / sync | Specified |
 | 3 — event playbooks | Specified |

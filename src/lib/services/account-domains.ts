@@ -170,6 +170,28 @@ export async function findVerifiedDomainByHostname(
   return row;
 }
 
+/**
+ * The account's CANONICAL custom domain — the host whose URLs we treat
+ * as the real address of that account's landing pages.
+ *
+ * Used to build `publicUrl` / `rel=canonical` and to decide whether a
+ * studio-host request should redirect. Only VERIFIED rows count: an
+ * unverified hostname doesn't resolve yet, so pointing canonical tags
+ * (or redirects) at it would send traffic into a hole.
+ *
+ * An account may hold several verified domains. We pick the OLDEST by
+ * `createdAt` so the answer is stable — a canonical URL that reshuffles
+ * when someone adds a second domain would de-index the first one.
+ */
+export async function findCanonicalDomainForAccount(
+  accountKey: string,
+): Promise<AccountDomain | null> {
+  return prisma.accountDomain.findFirst({
+    where: { accountKey, verifiedAt: { not: null } },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
 // ── Create / verify / update / delete ──────────────────────────────
 
 export async function createAccountDomain(input: {

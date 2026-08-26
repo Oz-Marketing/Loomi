@@ -1,4 +1,5 @@
 import type { AdData } from './types';
+import { offerSlotPrefixes } from './doc-types';
 import {
   CUSTOM_OFFER_TYPE_SPECS,
   VEHICLE_OFFER_TYPE_SPECS,
@@ -38,8 +39,16 @@ export const OFFER_TYPES: { value: OfferType; label: string }[] = VEHICLE_OFFER_
 export interface OfferBlock {
   /** Small label above the number (e.g. "PER MONTH LEASE"). */
   label: string;
-  /** The big headline number, symbols included (e.g. "$299/mo", "1.9% APR"). */
+  /** The big headline number, symbols included (e.g. "$299/mo", "1.9%"). */
   main: string;
+  /**
+   * The headline as it reads in a SENTENCE — "1.9% APR" where `main` is "1.9%".
+   *
+   * On the creative the figure sits under a label element carrying the word APR,
+   * so repeating it there reads "APR / 1.9% APR". A caption has no label, so it
+   * needs the word back. Equal to `main` for every type that doesn't need one.
+   */
+  prose: string;
   /** Supporting line(s), joined (e.g. "36-month lease · $2,999 due at signing"). */
   terms: string;
   /** The bare headline NUMBER only, no symbols (e.g. "299", "1.9", "40,000") — so
@@ -169,7 +178,7 @@ function bareValue(v: string | undefined, format: OfferFigureFormat): string | n
 }
 
 /**
- * Compute the `_offer*` (and `_o2_offer*`) display fields the doc templates bind
+ * Compute the `_offer*` display fields the doc templates bind
  * to, from the structured offer fields. Generic — runs for ANY TemplateDoc via
  * the renderer adapter — so the offer block shows everywhere a doc is rendered
  * (builder canvas, generator, gallery thumbs, snapshot copies, export), not just
@@ -177,9 +186,12 @@ function bareValue(v: string | undefined, format: OfferFigureFormat): string | n
  */
 export function enrichOfferFields(data: AdData): AdData {
   const out: AdData = { ...data };
-  for (const prefix of ['', 'o2_'] as const) {
-    // Only synthesize a block if this prefix's offer is actually in play.
-    if (!(`${prefix}offerType` in data) && prefix !== '') continue;
+  // EVERY slot the data carries, not the literal pair `['', 'o2_']` this used to
+  // iterate. The doc format has always allowed a third offer (a plate with
+  // `offerIndex: 2` reads `o3_*`), so a doc could have offer fields the engine
+  // never computed values for — the plate would render its em-dash placeholder and
+  // nobody would know why.
+  for (const prefix of offerSlotPrefixes(data)) {
     const offer = assembleOffer(data, prefix);
     out[`_${prefix}offerLabel`] = offer ? offer.label : data[`${prefix}offerLabel`] || 'PER MONTH LEASE';
     out[`_${prefix}offerMain`] = offer ? offer.main : data[`${prefix}price`] || '$X,XXX/mo';
@@ -217,6 +229,10 @@ export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
     label: override || swapped || spec.defaultLabel || '',
     // A missing figure reads as the bare placeholder — never `—/mo`.
     main: figure ? `${figure}${spec.main.suffix ?? ''}` : PLACEHOLDER,
+    // Only ever differs where the spec says the figure is ambiguous alone.
+    prose: figure
+      ? `${figure}${spec.main.suffix ?? ''}${spec.main.proseSuffix ?? ''}`
+      : PLACEHOLDER,
     // Always the bare number, whatever the headline format: the `$` / `%` are
     // separate styled elements.
     value: bareValue(g(spec.main.field), spec.main.format) ?? PLACEHOLDER,

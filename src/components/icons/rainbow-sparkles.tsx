@@ -1,7 +1,7 @@
 import type { SVGProps } from 'react';
 
 // Heroicons-shaped Sparkles outline path, but stroked with the Loomi
-// rainbow gradient instead of `currentColor`. Used for the Iris
+// rainbow gradient instead of `currentColor`. Used for the Loomi AI
 // rail item so the icon itself reads as the chromatic surface
 // signature — no tile/background needed around it.
 //

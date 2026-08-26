@@ -42,7 +42,7 @@ export default function BulkActionDock({
     <div className="fixed bottom-6 left-[calc(50%+9.25rem)] z-40 w-fit max-w-[calc(100vw-2rem)] -translate-x-1/2 animate-fade-in-up">
       <div className="loomi-bulk-dock flex items-center rounded-2xl border px-2 py-1.5 backdrop-blur-xl">
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <span className="loomi-bulk-dock-count inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-full bg-[var(--primary)] px-2 text-xs font-semibold text-white">
+          <span className="loomi-bulk-dock-count inline-flex h-7 min-w-[1.75rem] items-center justify-center rounded-full bg-[var(--primary)] px-2 text-xs font-semibold text-[var(--primary-foreground)]">
             {count}
           </span>
           <span className="text-[13px] font-semibold text-[var(--foreground)] whitespace-nowrap">

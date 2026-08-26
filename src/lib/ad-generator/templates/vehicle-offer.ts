@@ -145,7 +145,7 @@ export const vehicleOffer: AdTemplate = {
     { key: 'eventLogoUrl', label: 'Sales event logo', type: 'image', group: 'Brand', audience: 'internal', placeholder: 'auto — from the OEM event calendar', help: 'Filled automatically from the active OEM sales event. Leave empty; it resolves per run.' },
     { key: 'tagline', label: 'Tagline', type: 'text', group: 'Copy', placeholder: 'Drive home today', help: 'Short on-image hook — the AI can write this.', copy: true, maxLength: 28 },
     { key: 'offerType', label: 'Offer type', type: 'select', group: 'Offer', options: OFFER_TYPES, help: 'Drives the offer block + which fields show below.' },
-    { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'auto (e.g. LEASE FOR)', help: 'Optional — overrides the default label. AI can write this.', copy: true, maxLength: 18 },
+    { key: 'offerLabel', label: 'Custom offer label', type: 'text', group: 'Offer', placeholder: 'auto (e.g. LEASE FOR)', help: 'Optional. Leave blank and the ad says PER MONTH LEASE / APR / OFF MSRP / SALES PRICE to match the offer type. AI can write this.', copy: true, maxLength: 18 },
     // Lease
     { key: 'monthlyPayment', label: 'Monthly payment ($)', type: 'text', group: 'Offer', placeholder: '299', visibleWhen: { field: 'offerType', in: ['lease'] } },
     { key: 'leaseTerm', label: 'Lease term (months)', type: 'text', group: 'Offer', placeholder: '36', visibleWhen: { field: 'offerType', in: ['lease'] } },

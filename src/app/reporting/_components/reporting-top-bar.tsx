@@ -19,6 +19,7 @@ import { AgencySettingsButton } from '@/components/agency-settings-button';
 import { UserAvatar } from '@/components/user-avatar';
 import { ChangelogPanel } from '@/components/changelog-panel';
 import { NotificationsPanel } from '@/components/notifications-panel';
+import { DevImpersonate } from '@/components/dev-impersonate';
 import { openSupportModal } from '@/lib/ui-events';
 import type { UserRole } from '@/lib/roles';
 import { useTopBarBadges } from '@/hooks/use-top-bar-badges';
@@ -138,7 +139,7 @@ export function ReportingTopBar({
             <span
               /* 9px is deliberate and exempt from the type scale: the count
                  sits inside a 14px dot, and anything larger overflows it. */
-              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[9px] font-bold leading-none text-white"
+              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[9px] font-bold leading-none text-[var(--primary-foreground)]"
               aria-hidden
             >
               {unreadNotifications > 9 ? '9+' : unreadNotifications}
@@ -253,6 +254,11 @@ export function ReportingTopBar({
                   <ArrowRightStartOnRectangleIcon className="h-4 w-4" />
                   Logout
                 </button>
+                {/* "View as" — developer-only, and it renders nothing for
+                    everyone else. It has always been in the Studio menu
+                    (top-utility-bar.tsx); this surface simply never got it, so
+                    testing as another user meant hopping back to Studio first. */}
+                <DevImpersonate />
               </div>
             </div>
           )}

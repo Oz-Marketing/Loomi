@@ -330,7 +330,7 @@ export function AccountNotesDrawer({
                             type="button"
                             onClick={() => saveEdit(note.id)}
                             disabled={editSaving || !editText.trim()}
-                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] hover:bg-[var(--primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             <CheckIcon className="w-3 h-3" />
                             {editSaving ? 'Saving…' : 'Save'}
@@ -371,7 +371,7 @@ export function AccountNotesDrawer({
               type="button"
               onClick={handlePost}
               disabled={!text.trim() || posting}
-              className="px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+              className="px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
             >
               {posting ? 'Posting…' : 'Post'}
             </button>

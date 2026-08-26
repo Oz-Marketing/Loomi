@@ -5,6 +5,7 @@ import {
   Lexend,
   Syne,
   Bricolage_Grotesque,
+  Quicksand,
 } from 'next/font/google';
 
 /**
@@ -49,6 +50,15 @@ const bricolage = Bricolage_Grotesque({
 });
 
 /**
+ * Quicksand is NOT in the picker — it is the brand face, used only by the
+ * `loomi <sector>` wordmark in each sidebar. It is loaded the same way so the
+ * mark never depends on a runtime request to Google, and it is deliberately
+ * excluded from `FONTS` in ./presets.ts: the wordmark must read the same no
+ * matter which interface font the user has chosen.
+ */
+const quicksand = Quicksand({ subsets: ['latin'], display: 'swap', variable: '--font-quicksand' });
+
+/**
  * Every font's CSS-variable class, to be applied once on `<html>`. Declaring
  * them all up front (rather than swapping the loaded font per preference) is
  * what makes switching instant and lets the settings cards preview each face
@@ -61,4 +71,5 @@ export const appearanceFontVariables = [
   lexend.variable,
   syne.variable,
   bricolage.variable,
+  quicksand.variable,
 ].join(' ');

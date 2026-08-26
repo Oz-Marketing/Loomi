@@ -164,7 +164,7 @@ export function ActiveFilterBar({
                 ? `Downloads all ${segmentTotal.toLocaleString()} contacts matching this filter — the search box does not narrow the export`
                 : 'Download every contact matching this filter as CSV'
             }
-            className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <ArrowDownTrayIcon className="w-3.5 h-3.5" />
             {exporting ? 'Exporting…' : 'Export CSV'}

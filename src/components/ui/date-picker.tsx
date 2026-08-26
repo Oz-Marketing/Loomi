@@ -277,10 +277,10 @@ function CalendarMonth({
                 background: highlighted
                   ? 'var(--primary)'
                   : inSelected
-                    ? 'rgba(59,130,246,0.18)'
+                    ? 'color-mix(in srgb, var(--primary) 18%, transparent)'
                     : undefined,
                 color: highlighted
-                  ? 'white'
+                  ? 'var(--primary-foreground)'
                   : isToday
                     ? 'var(--primary)'
                     : undefined,

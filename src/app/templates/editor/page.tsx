@@ -783,7 +783,7 @@ function AlignmentButtons({ value, onChange, vertical }: { value: string; onChan
           onClick={() => onChange(o.value)}
           className={`px-3 py-1.5 flex items-center justify-center transition-colors ${
             value === o.value
-              ? 'bg-[var(--primary)] text-white'
+              ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
               : 'bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
           }`}
           title={o.label}
@@ -921,7 +921,7 @@ function SpacingField({
       </div>
       <button
         onClick={toggleLinked}
-        className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-white border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
+        className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
         title={linked ? "Unlink sides" : "Link all sides"}
       >
         <LinkIcon className="w-3 h-3" />
@@ -1055,7 +1055,7 @@ function BorderRadiusField({
       </div>
       <button
         onClick={toggleLinked}
-        className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-white border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
+        className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
         title={linked ? "Unlink corners" : "Link all corners"}
       >
         <LinkIcon className="w-3 h-3" />
@@ -3960,7 +3960,7 @@ function ButtonSetTabs({
               onClick={() => onTabChange(tab)}
               className={`flex-1 py-1.5 text-[11px] font-medium transition-colors ${
                 resolvedActiveTab === tab
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
@@ -4242,7 +4242,7 @@ function BorderSideEditor({
               </div>
               <button
                 onClick={toggleLinked}
-                className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-white border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
+                className={`w-7 h-7 self-start rounded-md flex items-center justify-center border transition-colors flex-shrink-0 ${linked ? "bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]" : "bg-[var(--input)] text-[var(--muted-foreground)] border-[var(--border)] hover:text-[var(--foreground)]"}`}
                 title={linked ? "Unlink sides" : "Link all sides"}
               >
                 <LinkIcon className="w-3 h-3" />
@@ -4454,7 +4454,7 @@ function HeroBackgroundEditor({
           <button
             type="button"
             onClick={() => setGradientMode("classic")}
-            className={`px-2.5 py-1.5 border-r border-[var(--border)] ${!isGradientMode ? "bg-[var(--primary)] text-white" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            className={`px-2.5 py-1.5 border-r border-[var(--border)] ${!isGradientMode ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
             title="Image / Classic"
           >
             <PhotoIcon className="w-3.5 h-3.5" />
@@ -4462,7 +4462,7 @@ function HeroBackgroundEditor({
           <button
             type="button"
             onClick={() => setGradientMode("gradient")}
-            className={`px-2.5 py-1.5 ${isGradientMode ? "bg-[var(--primary)] text-white" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            className={`px-2.5 py-1.5 ${isGradientMode ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
             title="Gradient"
           >
             <AdjustmentsHorizontalIcon className="w-3.5 h-3.5" />
@@ -4698,21 +4698,21 @@ function GradientEditor({
           <button
             type="button"
             onClick={() => setType("none")}
-            className={`px-2 py-1 text-[10px] ${gradType === "none" ? "bg-[var(--primary)] text-white" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            className={`px-2 py-1 text-[10px] ${gradType === "none" ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
           >
             None
           </button>
           <button
             type="button"
             onClick={() => setType("linear")}
-            className={`px-2 py-1 text-[10px] border-l border-[var(--border)] ${gradType === "linear" ? "bg-[var(--primary)] text-white" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            className={`px-2 py-1 text-[10px] border-l border-[var(--border)] ${gradType === "linear" ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
           >
             Linear
           </button>
           <button
             type="button"
             onClick={() => setType("radial")}
-            className={`px-2 py-1 text-[10px] border-l border-[var(--border)] ${gradType === "radial" ? "bg-[var(--primary)] text-white" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+            className={`px-2 py-1 text-[10px] border-l border-[var(--border)] ${gradType === "radial" ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
           >
             Radial
           </button>
@@ -5469,7 +5469,7 @@ function ComponentPropsRenderer({
                     onClick={() => onPropChange("variant", option)}
                     className={`flex-1 py-2 text-[11px] font-medium transition-colors ${
                       isActive
-                        ? "bg-[var(--primary)] text-white"
+                        ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                         : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                     }`}
                   >
@@ -5909,7 +5909,7 @@ function ComponentPropsRenderer({
                   onClick={() => setActiveSplitSide(side)}
                   className={`flex-1 py-1.5 text-[11px] font-medium transition-colors ${
                     isActive
-                      ? "bg-[var(--primary)] text-white"
+                      ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                       : "bg-[var(--input)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
                   }`}
                 >
@@ -9030,7 +9030,7 @@ export default function TemplateEditorPage() {
           )}
           {/* Secondary actions consolidated into a single 3-dot menu:
               Send Test, Save as template, Change template (last two only
-              in campaign-builder mode). Ask Iris removed at this level
+              in campaign-builder mode). Ask Loomi AI removed at this level
               per UX cleanup — it lives inside the editor pane already. */}
           <div ref={manageTemplateMenuRef} className="relative">
             <button
@@ -9111,7 +9111,7 @@ export default function TemplateEditorPage() {
                   )
                 }
                 disabled={saving}
-                className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50 transition-opacity"
                 title={fromMultiBuilder ? 'Back to Message' : 'Continue to Schedule'}
               >
                 <PaperAirplaneIcon className="w-4 h-4" />
@@ -9124,7 +9124,7 @@ export default function TemplateEditorPage() {
             <button
               onClick={() => { void handleSave(); }}
               disabled={saving}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50 transition-opacity"
               title="Save draft"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-4 h-4"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
@@ -10042,14 +10042,14 @@ export default function TemplateEditorPage() {
             <div className="flex items-center justify-center gap-1">
               <button
                 onClick={() => setPreviewWidth("desktop")}
-                className={`p-1.5 rounded ${previewWidth === "desktop" ? "bg-[var(--primary)] text-white" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+                className={`p-1.5 rounded ${previewWidth === "desktop" ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
                 title="Desktop"
               >
                 <ComputerDesktopIcon className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setPreviewWidth("mobile")}
-                className={`p-1.5 rounded ${previewWidth === "mobile" ? "bg-[var(--primary)] text-white" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
+                className={`p-1.5 rounded ${previewWidth === "mobile" ? "bg-[var(--primary)] text-[var(--primary-foreground)]" : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"}`}
                 title="Mobile (375px)"
               >
                 <DevicePhoneMobileIcon className="w-4 h-4" />
@@ -10254,7 +10254,7 @@ export default function TemplateEditorPage() {
                     <SparklesIcon className="w-3.5 h-3.5 text-zinc-900" />
                   </div>
                   <p className="text-sm font-semibold text-[var(--foreground)]">
-                    Ask Iris
+                    Ask Loomi AI
                   </p>
                   <span className="text-[10px] text-[var(--muted-foreground)] bg-[var(--muted)] px-1.5 py-0.5 rounded">
                     ⌘⇧A
@@ -11004,7 +11004,7 @@ export default function TemplateEditorPage() {
               <button
                 onClick={handleSendTest}
                 disabled={!sendTestTo.trim() || sendingTest}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                className="flex items-center gap-1.5 px-4 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
               >
                 <EnvelopeIcon className="w-3.5 h-3.5" />
                 {sendingTest ? "Sending..." : "Send Test"}

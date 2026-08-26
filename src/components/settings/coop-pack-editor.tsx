@@ -279,7 +279,7 @@ export function CoopPackEditor({
             <button onClick={onClose} disabled={saving} className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
               Cancel
             </button>
-            <button onClick={save} disabled={saving} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50">
+            <button onClick={save} disabled={saving} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] disabled:opacity-50">
               {saving ? 'Saving…' : 'Save rules'}
             </button>
           </div>

@@ -2480,7 +2480,7 @@ function DailyBudgetCell({
           type="button"
           onClick={push}
           disabled={busy || pushing || readOnly}
-          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-[11px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-[11px] font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {busy ? <ArrowPathIcon className="h-3 w-3 animate-spin" /> : <BoltIcon className="h-3 w-3" />}
           {busy ? 'Pushing…' : 'Push to Google'}
@@ -2950,7 +2950,7 @@ function MoveBudgetModal({
               aria-pressed={method === value}
               className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                 method === value
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
@@ -3161,7 +3161,7 @@ function MoveBudgetModal({
             type="button"
             onClick={commit}
             disabled={readOnly || !plan?.ok}
-            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Move
           </button>

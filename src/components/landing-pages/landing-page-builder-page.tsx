@@ -406,7 +406,7 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
             type="button"
             onClick={() => void togglePublish()}
             disabled={publishing || !page}
-            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {published ? 'Move to Draft' : 'Publish'}
           </button>

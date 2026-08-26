@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useDockedScroll } from '@/hooks/use-docked-scroll';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { useAiPanel, AI_PANEL_WIDTH } from '@/contexts/ai-panel-context';
 
 /**
  * Shared shell layout for BOTH the studio and reporting surfaces.
@@ -27,9 +28,20 @@ export function SurfaceShell({
   topBar: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const { collapsed, mobileOpen, setMobileOpen } = useSidebarCollapse();
+  const { collapsed, setAutoCollapsed, mobileOpen, setMobileOpen } = useSidebarCollapse();
+  const { isOpen, expanded, setSlotEl } = useAiPanel();
+  // Expanded covers the page, so the content column must reclaim its width.
+  const aiOpen = isOpen && !expanded;
   const pathname = usePathname();
   const mainRef = useRef<HTMLDivElement>(null);
+
+  // The AI panel takes a rail's worth of width off the right, so give it back by
+  // folding the nav on the left. Temporary — `setAutoCollapsed` deliberately does
+  // not touch the saved preference, so closing the panel restores whatever the
+  // user actually chose.
+  useEffect(() => {
+    setAutoCollapsed(aiOpen);
+  }, [aiOpen, setAutoCollapsed]);
 
   // Close the mobile drawer on navigation (e.g. tapping a nav link).
   useEffect(() => {
@@ -91,7 +103,12 @@ export function SurfaceShell({
               go truly full-screen. */}
           {/* The rounded clip lives on this NON-scrolling wrapper so the
               scroller inside stays a plain, unpromoted scroll container. */}
-          <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl">
+          {/* Page card + AI panel share one row. The panel is a SIBLING of the card,
+              which is what keeps the utility header above at full width and gives
+              the panel the card's exact top, height and rounding for free — no
+              fixed positioning, no hardcoded offset to the header. */}
+          <div className="relative flex flex-1 min-h-0 gap-3">
+          <div className="relative flex-1 min-w-0 min-h-0 overflow-hidden rounded-2xl">
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm"
@@ -116,6 +133,17 @@ export function SurfaceShell({
               <div aria-hidden className="content-dock-lead" />
               {children}
             </div>
+          </div>
+          {/* The slot the panel portals into. Only exists while open, so it takes
+              no space otherwise. Below `md` there is no room to split the screen,
+              so it overlays the card instead of shrinking it. */}
+          {aiOpen && (
+            <div
+              ref={setSlotEl}
+              style={{ ['--ai-panel-w' as string]: AI_PANEL_WIDTH }}
+              className="relative z-30 max-md:absolute max-md:inset-0 max-md:w-full md:w-[var(--ai-panel-w)] md:shrink-0"
+            />
+          )}
           </div>
         </div>
       </main>

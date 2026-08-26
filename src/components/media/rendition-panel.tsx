@@ -269,7 +269,7 @@ export function RenditionPanel({
                 type="button"
                 onClick={generate}
                 disabled={busy || selected.size === 0}
-                className="mt-2.5 w-full rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="mt-2.5 w-full rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {busy
                   ? 'Generating…'

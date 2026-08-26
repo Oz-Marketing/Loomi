@@ -94,7 +94,7 @@ export function LibraryPickerContent({ onSelect }: LibraryPickerContentProps) {
               onClick={() => setSelectedTag(null)}
               className={`text-xs px-2.5 py-1.5 rounded-lg text-left transition-colors ${
                 !selectedTag
-                  ? 'bg-[var(--primary)] text-white font-medium'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-medium'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
               }`}
             >
@@ -106,7 +106,7 @@ export function LibraryPickerContent({ onSelect }: LibraryPickerContentProps) {
                 onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
                 className={`text-xs px-2.5 py-1.5 rounded-lg text-left transition-colors ${
                   selectedTag === tag
-                    ? 'bg-[var(--primary)] text-white font-medium'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)] font-medium'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
                 }`}
               >

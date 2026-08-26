@@ -99,7 +99,7 @@ export function FlowSettingsPanel({
           type="button"
           onClick={save}
           disabled={saving}
-          className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 transition-colors"
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 transition-colors"
         >
           {saving ? 'Saving…' : 'Save settings'}
         </button>

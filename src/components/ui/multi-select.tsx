@@ -228,7 +228,7 @@ export function MultiSelect({
                       <span
                         className={`flex h-4 w-4 items-center justify-center rounded-[5px] border transition-colors ${
                           isSelected
-                            ? 'border-[var(--primary)] bg-[var(--primary)] text-white'
+                            ? 'border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]'
                             : 'border-[var(--border)] group-hover:border-[var(--muted-foreground)]'
                         }`}
                       >

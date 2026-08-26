@@ -9,7 +9,7 @@ import {
 } from '@heroicons/react/24/outline';
 import type { FlowAiAction, FlowSnapshot } from '@/lib/ai/flow-tools';
 
-// Chat panel that slots into the left rail when the user opens Iris.
+// Chat panel that slots into the left rail when the user opens Loomi AI.
 // Replaces the BuilderPalette while open. Communicates with the FlowBuilder
 // via two props:
 //   - getSnapshot(): freshest view of the canvas + triggers, sent on every
@@ -154,7 +154,7 @@ export function FlowAiPanel({
           </div>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-[var(--foreground)] truncate">
-              Iris
+              Loomi AI
             </h3>
             <p className="text-[10px] text-[var(--muted-foreground)] truncate">
               Ask, edit, explain.
@@ -221,7 +221,7 @@ export function FlowAiPanel({
           <div key={`chat-${idx}`}>
             {msg.role === 'user' ? (
               <div className="flex justify-end">
-                <div className="max-w-[85%] bg-[var(--primary)] text-white rounded-xl rounded-br-sm px-3 py-2">
+                <div className="max-w-[85%] bg-[var(--primary)] text-[var(--primary-foreground)] rounded-xl rounded-br-sm px-3 py-2">
                   <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
                 </div>
               </div>

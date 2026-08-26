@@ -173,11 +173,22 @@ function toRow(r: DbRow, now = new Date()): GuidelineDocRow {
  */
 export async function listGuidelineDocs(
   make?: string,
-  opts: { includePreview?: boolean } = {},
+  opts: { includePreview?: boolean; includeInactive?: boolean } = {},
 ): Promise<GuidelineDocRow[]> {
   try {
     const rows = (await prisma.adGuidelineDoc.findMany({
-      where: make ? { make: { equals: make, mode: 'insensitive' } } : undefined,
+      // ARCHIVED DOCUMENTS ARE HIDDEN BY DEFAULT.
+      //
+      // This filter was missing, and it made deactivating a document do nothing
+      // visible: the daily sweep and `makesMissingCoopPack` both honour `isActive`,
+      // but the list the page reads did not — so an archived edition kept appearing
+      // in the rail and kept counting toward "33 documents on file". Which is also
+      // why nobody had noticed the flag existed, and why a hard delete was the only
+      // way to make a document go away.
+      where: {
+        ...(opts.includeInactive ? {} : { isActive: true }),
+        ...(make ? { make: { equals: make, mode: 'insensitive' } } : {}),
+      },
       orderBy: [{ make: 'asc' }, { title: 'asc' }],
     })) as DbRow[];
     const now = new Date();
@@ -280,6 +291,11 @@ export async function registerGuidelineDoc(args: RegisterArgs): Promise<Guidelin
     }
 
     const base = {
+      // Uploading a document asserts it is the current edition, so a replacement
+      // brings an archived row back rather than landing invisibly. `@@unique([make,
+      // title])` means a re-upload of the same title upserts onto the archived row;
+      // without this it would keep the old `isActive: false` and vanish on save.
+      isActive: true,
       sourceUrl: args.sourceUrl?.trim() || null,
       sourceAssetId: args.sourceAssetId?.trim() || null,
       ...(args.notes !== undefined ? { notes: args.notes?.trim() || null } : {}),
@@ -291,6 +307,18 @@ export async function registerGuidelineDoc(args: RegisterArgs): Promise<Guidelin
       create: { make, title, ...base, createdBy: args.createdBy ?? null },
       update: base,
     })) as DbRow;
+
+    // ── A REPLACEMENT UPLOAD IS THE CHANGE EVENT ──
+    //
+    // This notification used to fire ONLY from the URL sweep, which re-fetches
+    // documents registered by web address. Every document on file was uploaded
+    // instead, so the sweep had nothing to check and the alert had never once
+    // fired — while the path that actually happens, a person uploading a reissued
+    // edition, told nobody at all. The hash comparison above already knew the bytes
+    // had moved; it just wasn't saying so.
+    if (hashed.previousHash) {
+      await notifyGuidelineChanges([`${make} — ${title}`], args.createdBy);
+    }
     return toRow(row);
   } catch (err) {
     console.warn('[guideline-docs] register failed:', err);
@@ -410,7 +438,7 @@ export async function refreshGuidelineDocs(
  * co-op governance, not per-sub-account. The lesson from the generate step applies —
  * an empty recipient list means the whole mechanism silently does nothing.
  */
-async function notifyGuidelineChanges(changed: string[]): Promise<void> {
+async function notifyGuidelineChanges(changed: string[], exceptUserId?: string | null): Promise<void> {
   let recipients: string[] = [];
   try {
     const admins = await prisma.user.findMany({
@@ -418,7 +446,9 @@ async function notifyGuidelineChanges(changed: string[]): Promise<void> {
       select: { id: true },
       take: 10,
     });
-    recipients = admins.map((a) => a.id);
+    // Not the person who just replaced it: they know. Telling them turns a useful
+    // alert into the kind of notification people learn to dismiss.
+    recipients = admins.map((a) => a.id).filter((id) => id !== exceptUserId);
   } catch {
     return;
   }
@@ -437,7 +467,9 @@ async function notifyGuidelineChanges(changed: string[]): Promise<void> {
         severity: 'warning',
         title,
         body: `${changed.join('; ')}. Worth checking whether anything we enforce for these makes has moved.`,
-        link: '/ad-generator/oem-assets',
+        // The canonical location. /ad-generator/oem-assets still redirects here for
+        // notifications already sent, which keep their stored link forever.
+        link: '/settings/coop-guidelines',
         meta: { changed },
         // One alert per document per day; a re-fetch loop must not become a pager.
         dedupeKey: `coop-guideline:${changed.slice().sort().join('|')}`,

@@ -41,7 +41,7 @@ function YearPicker({ value, onChange }: { value: number; onChange: (y: number) 
           onClick={() => onChange(y)}
           className={`rounded-md px-3 py-1 text-xs font-medium tabular-nums transition-colors ${
             value === y
-              ? 'bg-[var(--primary)] text-white'
+              ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
               : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
           }`}
         >

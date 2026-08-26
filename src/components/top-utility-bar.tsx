@@ -183,7 +183,7 @@ export function TopUtilityBar() {
           </UtilityIconButton>
           {unreadNotifications > 0 && (
             <span
-              className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold leading-none px-1 rounded-full bg-[var(--primary)] text-white pointer-events-none"
+              className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold leading-none px-1 rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] pointer-events-none"
               aria-hidden
             >
               {unreadNotifications > 9 ? '9+' : unreadNotifications}

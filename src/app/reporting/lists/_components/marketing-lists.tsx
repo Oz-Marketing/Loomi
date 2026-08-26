@@ -216,7 +216,7 @@ export function MarketingLists({ accountKey }: { accountKey: string }) {
         <button
           type="button"
           onClick={() => setEditing('new')}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
         >
           <PlusIcon className="h-4 w-4" />
           New list

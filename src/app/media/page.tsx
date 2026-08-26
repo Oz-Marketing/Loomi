@@ -303,7 +303,7 @@ function AssetOriginBadge({ f }: { f: MediaFile }) {
     <span
       className={`absolute top-2 right-2 z-10 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium backdrop-blur-sm ${
         shared
-          ? 'bg-[var(--primary)]/85 text-white'
+          ? 'bg-[var(--primary)]/85 text-[var(--primary-foreground)]'
           : 'bg-black/50 text-white/90'
       }`}
       title={shared ? `Shared across all ${f.oem} accounts` : label}
@@ -2163,7 +2163,7 @@ export default function MediaPage() {
                   <FunnelIcon className="h-3.5 w-3.5" />
                   Filters
                   {activeFilterCount > 0 && (
-                    <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-white">
+                    <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-[var(--primary-foreground)]">
                       {activeFilterCount}
                     </span>
                   )}
@@ -2605,7 +2605,7 @@ export default function MediaPage() {
               <button
                 onClick={handleRename}
                 disabled={renaming || !renameValue.trim()}
-                className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                className="px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
               >
                 {renaming ? 'Saving...' : 'Save'}
               </button>
@@ -2801,7 +2801,7 @@ export default function MediaPage() {
                         type="button"
                         onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: true }))}
                         className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                          unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                          unpack ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                         }`}
                       >
                         Unpack {info.entries.length} file{info.entries.length === 1 ? '' : 's'}
@@ -2810,7 +2810,7 @@ export default function MediaPage() {
                         type="button"
                         onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: false }))}
                         className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                          !unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                          !unpack ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                         }`}
                       >
                         Keep as one file
@@ -2904,7 +2904,7 @@ export default function MediaPage() {
                 <button
                   onClick={() => handleUpload()}
                   disabled={uploading || stagedFiles.length === 0}
-                  className="px-4 py-2 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+                  className="px-4 py-2 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                   {uploading
                     ? 'Uploading...'

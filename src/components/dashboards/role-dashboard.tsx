@@ -1326,7 +1326,7 @@ function ManagementRoleDashboard({
               <button
                 type="button"
                 onClick={saveSuperAdminPreset}
-                className="h-9 rounded-lg bg-[var(--primary)] px-3 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                className="h-9 rounded-lg bg-[var(--primary)] px-3 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
               >
                 Save
               </button>
@@ -1381,7 +1381,7 @@ function ManagementRoleDashboard({
         <button
           type="button"
           onClick={() => setFiltersPanelOpen(false)}
-          className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] transition-colors"
+          className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] hover:bg-[var(--primary)] transition-colors"
         >
           Done
         </button>

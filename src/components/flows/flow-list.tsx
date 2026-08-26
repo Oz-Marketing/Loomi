@@ -669,7 +669,7 @@ export function FlowList({
               onClick={() => setViewMode('card')}
               className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                 viewMode === 'card'
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
               title="Card view"
@@ -682,7 +682,7 @@ export function FlowList({
               onClick={() => setViewMode('table')}
               className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                 viewMode === 'table'
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
               title="Table view"

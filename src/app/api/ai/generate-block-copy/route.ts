@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 
 // Body-copy variant generator for individual template blocks
 // (heading / text / button). Returns N distinct rewrites informed by:
@@ -117,14 +117,14 @@ export async function POST(req: NextRequest) {
       model: ANTHROPIC_MODEL,
       system: systemPrompt,
       messages: [{ role: 'user', content: userParts.join('\n\n') }],
-      temperature: 0.85,
+      output_config: { effort: 'low' },
       // Body text is the longest output we generate; cap covers ~3
       // 60-word paragraphs plus JSON wrapper.
       max_tokens: 1024,
     });
 
     const content =
-      response.content[0]?.type === 'text' ? response.content[0].text : '';
+      lastTextBlock(response);
     if (!content) {
       return NextResponse.json({ error: 'AI response was empty' }, { status: 502 });
     }

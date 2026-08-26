@@ -339,7 +339,7 @@ export function FilterBuilder({
           <div className="flex flex-col gap-2">
             <button
               onClick={handleApply}
-              className="w-full px-4 py-2.5 text-xs font-medium rounded-xl bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors"
+              className="w-full px-4 py-2.5 text-xs font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors"
             >
               Apply Filter
             </button>
@@ -369,7 +369,7 @@ export function FilterBuilder({
                 <button
                   onClick={handleSave}
                   disabled={!saveName.trim()}
-                  className="px-3 py-2 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50"
+                  className="px-3 py-2 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50"
                 >
                   Save
                 </button>

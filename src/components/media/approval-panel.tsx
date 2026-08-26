@@ -202,7 +202,7 @@ export function ApprovalPanel({
                 onClick={() => act('approve')}
                 disabled={busy || loading || blocks.length > 0}
                 title={blocks.length > 0 ? 'Fix the blocking issues first' : undefined}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {busy ? 'Working…' : 'Approve'}
               </button>

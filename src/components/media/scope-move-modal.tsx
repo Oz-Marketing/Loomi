@@ -133,7 +133,7 @@ export function ScopeMoveModal({
           <button
             onClick={() => onConfirm(target)}
             disabled={busy}
-            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {busy ? (isCopy ? 'Copying…' : 'Moving…') : isCopy ? 'Copy' : 'Move'}
           </button>

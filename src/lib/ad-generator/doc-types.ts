@@ -22,7 +22,17 @@ export type Binding =
   | { kind: 'brand'; key: 'dealerName' | 'logoUrl' | 'brandColor'; variant?: LogoVariant }
   | { kind: 'static'; value: string }; // a literal baked into the template
 
-export type DocElementType = 'text' | 'image' | 'logo' | 'shape' | 'background';
+/**
+ * `offer` is THE OFFER PLATE: one element that draws the label, the figure and the
+ * terms line together, reading the values the offer engine assembles.
+ *
+ * It exists because a plate built from three separate text elements has to be
+ * rebuilt — and kept in sync — for every offer type a template serves, each copy
+ * gated by `visibleWhen`. One element covers lease, APR, discount and sale price,
+ * because `assembleOffer` has already decided what each of them says. See
+ * docs/ad-generator-archetypes.md §8 Phase 2.
+ */
+export type DocElementType = 'text' | 'image' | 'logo' | 'shape' | 'background' | 'offer';
 
 /** CSS mix-blend-mode values — how an element composites over what's beneath it.
  *  Lets a gradient/color layer tint a texture (multiply/overlay), knock lines
@@ -97,6 +107,16 @@ export interface DocElement {
   type: DocElementType;
   /** Designer-set layer name (overrides the binding-derived label). */
   name?: string;
+  /**
+   * What this element IS in the composition, when an archetype placed it: the
+   * offer figure, the disclaimer, the vehicle shot. See `archetypes/types.ts`.
+   *
+   * Kept on the element rather than derived from its id so it survives everything
+   * a designer does afterwards — restyling, renaming, moving between boards — and
+   * so the inspector can say what a layer is for instead of only what it is bound
+   * to. Absent on anything hand-placed, which is not a role, just a box.
+   */
+  role?: string;
   /** Builder-only: a locked element can't be selected, moved, or edited on the
    *  canvas until unlocked. Never affects export. */
   locked?: boolean;
@@ -120,8 +140,25 @@ export interface DocElement {
    * board would mean "fixed" only held on the boards that happened to agree.
    */
   sizeMode?: SizeMode;
-  /** What the element displays. Omitted for plain shapes. */
+  /** What the element displays. Omitted for plain shapes and offer plates. */
   binding?: Binding;
+  /**
+   * `offer` only: which offer in the list this plate shows. 0 (or absent) is the
+   * first; 1 is the second, reading the `o2_` field set.
+   *
+   * This is what makes a dual template two plates rather than a second set of
+   * hand-wired elements — see `offerFieldPrefix`.
+   */
+  offerIndex?: number;
+  /**
+   * `offer` only: the plate's internal proportions, as shares of its own height.
+   * Absent parts fall back to {@link OFFER_PLATE_DEFAULTS}.
+   *
+   * The figure takes whatever the label and terms don't, and each of the three
+   * rows fits its own text — so a short figure like "1.9%" comes out larger than
+   * "$299/mo" on the same plate without anybody configuring per-type type sizes.
+   */
+  offerPlate?: { labelShare?: number; termsShare?: number; gapPx?: number };
   /** Conditional visibility: render this element ONLY when the value of field
    *  `field` is one of `in` (e.g. `{ field: 'offerType', in: ['apr'] }` shows a
    *  `%` badge only for APR offers). Lets one template carry all offer types —
@@ -161,6 +198,21 @@ export interface DocElement {
    *  size (that's FILL). The chosen font size is the CAP. When falsy the element is
    *  FILL instead: the font auto-scales (up + down) to fill the box. Aligned by
    *  `align` (horizontal) + `vAlign` (vertical) in both modes. */
+  /**
+   * Elements sharing a `fitGroup` settle on ONE font size — the smallest any of
+   * them needs.
+   *
+   * For a comparison. Two offer figures each fitted to their own box land at
+   * different sizes, because a short string in a wide column grows until the WIDTH
+   * binds while a longer one is bound by HEIGHT first: measured on a two-offer
+   * square, 71px of ink against 134px. That reads as one offer being the better
+   * deal, which is a claim the design is making by accident.
+   *
+   * The fit script fits each member normally, then drops the whole group to the
+   * minimum. Only members of the same group affect each other, so this is inert
+   * for every element that does not name one.
+   */
+  fitGroup?: string;
   shrink?: boolean;
   /** DEPRECATED — the retired "Wrap" mode (fixed font, clip on overflow). Existing
    *  elements with `wrap` truthy are treated as SHRINK; no new element sets it. */
@@ -218,7 +270,19 @@ export interface DocElement {
   // `DocBackground` canvas fill and the separate full-bleed background image.
   /** Opacity (0–100) of the background's texture layer only. Undefined = 100. */
   bgImageOpacity?: number;
-  /** The background's top fade/overlay gradient (composited over the texture). */
+  /**
+   * A TINT composited over this element's own image — solid or gradient.
+   *
+   * On a `background` this is the fade it always had. On an ordinary `image` it
+   * is the same thing, and it exists because the alternative was worse: darkening
+   * a photo so a headline reads on it meant adding a shape, sizing it to the
+   * photo on every board, and keeping the two in step forever. The tint travels
+   * WITH the image — resize it, recrop it, swap the photo, and the scrim is still
+   * exactly on it.
+   *
+   * A solid tint is a one-stop gradient, so there is one shape here rather than a
+   * colour field and a gradient field that can disagree.
+   */
   overlay?: GradientFill;
   /** Corner radius in px (all four corners). Applies to rectangle shapes AND
    *  images/logos (rounds the image, which is clipped by the wrapper's
@@ -314,9 +378,116 @@ export function boundFieldKeys(doc: Pick<TemplateDoc, 'elements'>): Set<string> 
     // A condition names a field the form still has to expose, or the user can
     // never satisfy it.
     if (el.visibleWhen?.field) keys.add(el.visibleWhen.field);
+    // An offer plate has no single binding — it shows three assembled values, and
+    // the form has to expose the offer TYPE that decides what they say. Without
+    // this, a template whose only offer is a plate looks like it displays no
+    // offer at all, and field prefs could hide the inputs that fill it.
+    if (el.type === 'offer') {
+      const p = offerFieldPrefix(el);
+      keys.add(`${p}offerType`);
+      for (const k of ['offerLabel', 'offerMain', 'offerTerms']) keys.add(`_${p}${k}`);
+    }
   }
   return keys;
 }
+
+/**
+ * THE OFFER SLOT PREFIX. `''` for the first offer, `o2_` for the second, `o3_`
+ * for a third — the one place that spelling is decided.
+ *
+ * Every consumer takes a prefix, so the doc format has always allowed a third
+ * offer: give a plate `offerIndex: 2` and it reads `o3_*`. What did NOT allow it
+ * was the engine, which iterated the literal pair `['', 'o2_']` in half a dozen
+ * places — so an `o3_` field got no computed values, no placeholder guard and no
+ * compliance check, while looking to a designer like any other offer.
+ */
+export function offerSlotPrefix(index: number): string {
+  return index <= 0 ? '' : `o${index + 1}_`;
+}
+
+/** Matches any offer slot prefix, capturing its 1-based number. */
+export const OFFER_SLOT_RE = /^o(\d+)_/;
+
+/** The slot index a key belongs to — 0 for an unprefixed field. */
+export function offerSlotIndex(key: string): number {
+  const m = OFFER_SLOT_RE.exec(key);
+  return m ? Number(m[1]) - 1 : 0;
+}
+
+/** A key with its slot prefix removed: `o3_monthlyPayment` → `monthlyPayment`. */
+export function offerSlotBaseKey(key: string): string {
+  return key.replace(OFFER_SLOT_RE, '');
+}
+
+/**
+ * The offer slots this DATA actually carries, as prefixes, first slot first.
+ *
+ * Derived from the presence of a slot's `offerType`, which is the field every
+ * offer has and the one the field specs condition on. The first slot is always
+ * included: an ad with no offer fields at all still renders one offer's worth of
+ * placeholders, which is what the single-offer templates rely on.
+ */
+export function offerSlotPrefixes(data: Record<string, unknown>): string[] {
+  const found = new Set<number>([0]);
+  for (const key of Object.keys(data)) {
+    if (!key.endsWith('offerType')) continue;
+    const m = OFFER_SLOT_RE.exec(key);
+    if (m) found.add(Number(m[1]) - 1);
+  }
+  return [...found].sort((a, b) => a - b).map(offerSlotPrefix);
+}
+
+/**
+ * The field keys an element READS, for a caller that has to inspect values.
+ *
+ * A `field` binding is its own key. An offer PLATE has no binding at all — it
+ * renders three assembled values chosen by its `offerIndex` — so anything that
+ * only looked at `el.binding.kind === 'field'` could not see a plate.
+ *
+ * That is not hypothetical: preflight's placeholder guard and empty-binding check
+ * both did exactly that, so a plate-based template was UNGUARDED. A design whose
+ * offer figure would render "$X,XXX/mo" passed preflight clean, which on the
+ * unattended pipeline means publishing it. The plate arrived with Phase 2 and
+ * preflight was never taught about it.
+ *
+ * `brand` bindings are excluded deliberately: they resolve from account branding
+ * rather than from ad data, and the callers here are checking ad data.
+ */
+export function elementBoundKeys(el: Pick<DocElement, 'type' | 'binding' | 'offerIndex'>): string[] {
+  if (el.type === 'offer') {
+    const p = offerFieldPrefix(el);
+    return [`_${p}offerLabel`, `_${p}offerMain`, `_${p}offerTerms`];
+  }
+  return el.binding?.kind === 'field' ? [el.binding.key] : [];
+}
+
+/** The field prefix an offer plate reads. */
+export function offerFieldPrefix(el: Pick<DocElement, 'offerIndex'>): string {
+  return offerSlotPrefix(el.offerIndex ?? 0);
+}
+
+/**
+ * Does this layer render the OFFER ITSELF — a computed offer token, or a plate?
+ *
+ * Such a layer must never be gated by offer type. The offer engine already
+ * resolves the label, the figure and the terms for whichever type an ad is
+ * running, so gating one to `lease` does not make a lease-specific layer; it makes
+ * the ad blank for the other three. That was the mechanism behind per-type plate
+ * copies, and behind the builder's Show For control being "extremely finicky".
+ *
+ * The builder withholds Show For on these layers and says why. See
+ * docs/ad-generator-archetypes.md §8 Phase 4b.
+ */
+export function bindsOfferToken(el: Pick<DocElement, 'type' | 'binding'>): boolean {
+  if (el.type === 'offer') return true;
+  const b = el.binding;
+  if (b?.kind === 'field') return /^_(?:o\d+_)?offer/.test(b.key);
+  if (b?.kind === 'static') return /\{\{\s*_(?:o\d+_)?offer/i.test(b.value);
+  return false;
+}
+
+/** The plate's default proportions, as shares of its own height. */
+export const OFFER_PLATE_DEFAULTS = { labelShare: 0.17, termsShare: 0.22, gapPx: 4 } as const;
 
 /** Can a person build a custom ad from this template? */
 export function usableForCustom(doc: Pick<TemplateDoc, 'usage'>): boolean {
@@ -345,10 +516,93 @@ export function templateInSchedule(doc: Pick<TemplateDoc, 'schedule'>, date: Dat
   return true;
 }
 
+/**
+ * The designer-owned styling surface of an archetype — five colours and a fade.
+ *
+ * It lives on the doc, not only in the call that built it, so it stays editable:
+ * a designer who wants the Subaru blue a shade darker changes one value and every
+ * board follows, instead of recolouring eleven layers five times. See
+ * `archetypes/theme.ts` for how a change is applied, and `archetypes/types.ts`
+ * for what each colour is for.
+ */
+export interface Theme {
+  /** Base fill behind everything. */
+  base: string;
+  /** Accent used for the offer figure. */
+  brand: string;
+  /** Body/heading ink. */
+  ink: string;
+  /** Secondary ink — labels, terms, disclaimer. */
+  muted: string;
+  /**
+   * Ink for text sitting ON the brand colour.
+   *
+   * REINSTATED. It was removed when the expiration pill went, on the correct
+   * reasoning that the theme should not decide a colour nothing paints — the pill
+   * was the only thing wearing it. The brand BAND brought the need back and then
+   * some: the vehicle name and the whole disclaimer now sit on a full-bleed panel
+   * of the account's brand colour, so something has to say what colour text is
+   * legible there, and it cannot be `ink` (near-black on a deep brand blue is
+   * unreadable).
+   *
+   * Undefined reads as white, which is what the band composition was designed
+   * against and what a doc stored before this existed should render as.
+   */
+  onBrand?: string;
+  /** The white-fade angle + how far across it runs. */
+  fade?: { angle: number; end: number };
+  /**
+   * DISPLAY face — the vehicle name, the offer label and the offer figure. The
+   * voice of the plate.
+   *
+   * Type is in the theme for the same reason colour is: an archetype styles every
+   * text layer on every board, so a brand face was otherwise a change a designer
+   * had to make one layer at a time and then repeat on the next template. The
+   * account already stores its faces (`Account.branding.fonts`), so this is
+   * mostly about letting the design USE what is already known.
+   *
+   * Empty / undefined = the account's brand font stack, which is exactly what
+   * every archetype doc rendered before typography was part of the theme — so a
+   * doc written earlier is unchanged by this existing.
+   */
+  heading?: string;
+  /**
+   * READING face — the offer terms and the disclaimer. The fine print.
+   *
+   * Falls back to `heading`, then to the account's stack. A theme that names one
+   * face means "use it for everything", which is the common case; naming two is
+   * the display/text pairing a brand book actually specifies.
+   */
+  body?: string;
+}
+
 export interface TemplateDoc {
   id: string;
   name: string;
   description?: string;
+  /**
+   * The archetype this design came from, and the theme it was built with.
+   *
+   * Recorded so the theme stays editable and so the builder can tell a designer
+   * what they are looking at. NOT a constraint: everything after the doc is
+   * produced is an ordinary edit, and a doc whose layout has been reworked by hand
+   * keeps this record — it says where the design started, not what it must remain.
+   */
+  archetype?: {
+    id: string;
+    offers: number;
+    theme: Theme;
+    /**
+     * The design hash this doc was SEEDED with, when it came from
+     * `scripts/seed-archetype-templates.ts`.
+     *
+     * How that script tells "nobody has touched this row" from "a designer has
+     * been working on it": a stamp that still matches the row's own design means
+     * the archetype fix is safe to write, and one that doesn't means the template
+     * belongs to whoever edited it. Absent on anything a person created.
+     */
+    seedHash?: string;
+  };
   /** Industries this template is offered to (account `category` values, e.g.
    *  'Automotive', 'Powersports'). Empty/undefined → derived from content
    *  (vehicle templates default to Automotive + Powersports). Drives which

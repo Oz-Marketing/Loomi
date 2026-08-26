@@ -233,7 +233,9 @@ export default function LandingPageOverviewPage({
               />
             </div>
             <a
-              href={`/lp/${page.slug}`}
+              // Canonical URL rather than the studio path, so opening the
+              // live page doesn't bounce through the custom-domain redirect.
+              href={page.publicUrl}
               target="_blank"
               rel="noopener noreferrer"
               title={published ? 'Open live page in new tab' : 'Open preview (draft — returns 404 until published)'}
@@ -258,7 +260,7 @@ export default function LandingPageOverviewPage({
             />
             <Link
               href={subHref(`/websites/landing-pages/${page.id}/edit`)}
-              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
             >
               <PencilSquareIcon className="w-4 h-4" />
               Edit Page
@@ -341,7 +343,11 @@ function OverviewBody({ page, published }: { page: LandingPageDetail; published:
         />
         <StatCard
           label="Public URL"
-          value={`/lp/${page.slug}`}
+          // The canonical address, not the studio path — this card sat next
+          // to a copy button that already used `publicUrl`, so on an account
+          // with a custom domain the two disagreed about where the page
+          // lives. Scheme stripped to keep the card readable.
+          value={page.publicUrl.replace(/^https?:\/\//, '')}
           Icon={ArrowTopRightOnSquareIcon}
           bgColor="bg-amber-500/15"
           iconColor="text-amber-300"

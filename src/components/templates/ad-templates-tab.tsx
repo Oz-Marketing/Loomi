@@ -13,6 +13,7 @@ import {
   PencilSquareIcon,
   PencilIcon,
   DocumentDuplicateIcon,
+  TableCellsIcon,
   TrashIcon,
   XMarkIcon,
   ChevronLeftIcon,
@@ -376,6 +377,18 @@ export function AdTemplatesTab({
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
     { key: 'clone', label: 'Copy', icon: DocumentDuplicateIcon, run: () => void clone(t) },
+    // The PROOF SHEET: every offer type on every board, with its compliance
+    // check. A template-level question, so it sits with the template-level
+    // actions rather than only behind the builder's cog.
+    {
+      key: 'proof',
+      label: 'Proof sheet',
+      icon: TableCellsIcon,
+      run: () =>
+        router.push(
+          `/ad-generator/proof/${t.id}${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`,
+        ),
+    },
     // Directly below Copy: who can use this one template.
     shareAction(t),
     // The publish WINDOW, without a trip through the builder.
@@ -587,7 +600,7 @@ export function AdTemplatesTab({
                 <button
                   onClick={() => { const t = preview; setPreview(null); void useTemplate(t); }}
                   disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-60"
                 >
                   <ArrowUpRightIcon className="h-4 w-4" />
                   Use this template
@@ -714,7 +727,7 @@ export function AdTemplatesTab({
               <button onClick={() => setRenameFor(null)} disabled={busy} className="rounded-lg border border-[var(--border)] px-3 h-9 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={doRename} disabled={busy} className="rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white hover:bg-[var(--primary)]/90 disabled:opacity-50">
+              <button onClick={doRename} disabled={busy} className="rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50">
                 Save
               </button>
             </div>

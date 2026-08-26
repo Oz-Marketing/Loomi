@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import type { CreativeDefinition } from '@/lib/playbooks/creative';
 
 /**
@@ -47,6 +48,7 @@ export function PlaybookLibrary() {
   });
   const [editing, setEditing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const { confirm } = useLoomiDialog();
 
   const playbooks = data?.playbooks ?? [];
 
@@ -70,6 +72,54 @@ export function PlaybookLibrary() {
     }
   }
 
+  /**
+   * Deleting is one click on a screen that reaches every rooftop, so it asks
+   * first — and the question names the FOLLOWER COUNT, because that is the part
+   * nobody has in their head. It also says what survives: the FK is
+   * `onDelete: SetNull` and each account's config columns already hold the real
+   * template ids, so deleting unlinks rooftops rather than blanking their
+   * creative. Someone who thinks they are about to break eleven stores will
+   * cancel a deletion that was in fact safe.
+   */
+  async function confirmDelete(playbook: PlaybookRow) {
+    const followers = playbook.appliedCount;
+    const ok = await confirm({
+      title: 'Delete playbook',
+      message: followers
+        ? `"${playbook.name}" is followed by ${followers} account${followers === 1 ? '' : 's'}. ` +
+          `Deleting it unlinks ${followers === 1 ? 'that account' : 'them'} — each one keeps the ad ` +
+          'design and email shell it is using today, but stops being told when this bundle changes.'
+        : `Delete "${playbook.name}"? No accounts follow it.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    await post({ id: playbook.id, delete: true });
+  }
+
+  /**
+   * Unpublishing a DRAFT is just a save. Unpublishing a live playbook withdraws
+   * it from every account's picker, so that one asks — followers keep running
+   * what they have, they just can't be pointed at it any more.
+   */
+  async function confirmUnpublish(playbook: PlaybookRow, patch: Record<string, unknown>) {
+    const save = () => post({ id: playbook.id, ...patch, publish: false });
+    if (!playbook.published) return save();
+
+    const followers = playbook.appliedCount;
+    const ok = await confirm({
+      title: 'Unpublish playbook',
+      message: followers
+        ? `"${playbook.name}" is followed by ${followers} account${followers === 1 ? '' : 's'}. ` +
+          'Unpublishing takes it out of every account picker — the ones already following it keep ' +
+          'running it, but nobody new can select it.'
+        : `Take "${playbook.name}" out of the account pickers?`,
+      confirmLabel: 'Unpublish',
+    });
+    if (!ok) return;
+    await save();
+  }
+
   return (
     <div className="mt-6">
       <div className="mb-4 flex items-center justify-between gap-3">
@@ -84,7 +134,7 @@ export function PlaybookLibrary() {
             const created = await post({ name: 'New playbook' });
             if (created) setEditing(created.id);
           }}
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           <PlusIcon className="h-3.5 w-3.5" />
           New playbook
@@ -113,7 +163,8 @@ export function PlaybookLibrary() {
             busy={busy}
             onToggle={() => setEditing(editing === p.id ? null : p.id)}
             onSave={(patch) => post({ id: p.id, ...patch })}
-            onDelete={() => post({ id: p.id, delete: true })}
+            onUnpublish={(patch) => confirmUnpublish(p, patch)}
+            onDelete={() => confirmDelete(p)}
           />
         ))}
       </div>
@@ -128,6 +179,7 @@ function PlaybookCard({
   busy,
   onToggle,
   onSave,
+  onUnpublish,
   onDelete,
 }: {
   playbook: PlaybookRow;
@@ -136,6 +188,7 @@ function PlaybookCard({
   busy: boolean;
   onToggle: () => void;
   onSave: (patch: Record<string, unknown>) => Promise<PlaybookRow | undefined>;
+  onUnpublish: (patch: Record<string, unknown>) => void;
   onDelete: () => void;
 }) {
   const [name, setName] = useState(playbook.name);
@@ -318,17 +371,21 @@ function PlaybookCard({
               Delete
             </button>
             <div className="ml-auto flex items-center gap-2">
+              {/* On a PUBLISHED playbook this button withdraws it from every
+                  account's picker, which "Save as draft" does not say out loud.
+                  Named for what it does, and confirmed when anyone is
+                  following. */}
               <button
-                onClick={() => onSave({ name, scopeValue, definition: def, publish: false })}
+                onClick={() => onUnpublish({ name, scopeValue, definition: def })}
                 disabled={busy}
                 className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium transition-colors hover:bg-[var(--muted)] disabled:opacity-50"
               >
-                Save as draft
+                {playbook.published ? 'Unpublish' : 'Save as draft'}
               </button>
               <button
                 onClick={() => onSave({ name, scopeValue, definition: def, publish: true })}
                 disabled={busy}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[11px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {playbook.published ? 'Save + publish' : 'Publish'}
               </button>

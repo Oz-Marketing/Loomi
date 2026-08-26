@@ -188,8 +188,10 @@ export default function SegmentsPage() {
     [scopedSegments],
   );
 
+  const countAccountKeysKey = exportAccountKeys.join(',');
+
   useEffect(() => {
-    if (!isAccount || !accountKey || !segmentIdsKey) {
+    if (exportAccountKeys.length === 0 || !segmentIdsKey) {
       setMemberCounts(new Map());
       setCountErrors(new Map());
       setContactsLoading(false);
@@ -201,7 +203,10 @@ export default function SegmentsPage() {
     fetch('/api/segments/counts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountKey, ids: segmentIdsKey.split(',') }),
+      body: JSON.stringify({
+        accountKeys: countAccountKeysKey.split(','),
+        ids: segmentIdsKey.split(','),
+      }),
     })
       .then((res) => (res.ok ? res.json() : { counts: [] }))
       .then((data) => {
@@ -235,7 +240,10 @@ export default function SegmentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAccount, accountKey, segmentIdsKey]);
+    // `countAccountKeysKey` stands in for `exportAccountKeys` — a new array
+    // identity every render would refetch every batch on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countAccountKeysKey, segmentIdsKey]);
 
   // ── Search filtering ─────────────────────────────────────────────
   // Scope already applied by `scopedSegments` above — this is search only.
@@ -328,7 +336,7 @@ export default function SegmentsPage() {
             </div>
             <Link
               href={subHref('/contacts/segments/new')}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors"
             >
               <PlusIcon className="w-4 h-4" />
               New segment

@@ -33,7 +33,7 @@ const EDITOR_STEP_PX = 24;
 interface LandingPageHtmlEditorShellProps {
   template: LandingPageHtmlTemplate;
   onChange: (next: LandingPageHtmlTemplate) => void;
-  /** Landing-page id — used by the Iris tab to reach its chat endpoint. */
+  /** Landing-page id — used by the Loomi AI tab to reach its chat endpoint. */
   pageId: string;
   /** Account key for the LP — scopes the Media + Forms tabs in the
    *  Insert modal so the user only sees their subaccount's assets. */
@@ -67,7 +67,7 @@ export function LandingPageHtmlEditorShell({
 }: LandingPageHtmlEditorShellProps) {
   const [previewDevice, setPreviewDevice] = React.useState<'desktop' | 'mobile'>('desktop');
   const [insertModalTab, setInsertModalTab] = React.useState<InsertEmbedTab | null>(null);
-  // Left pane toggles between the raw HTML editor and the Iris chat. Both share
+  // Left pane toggles between the raw HTML editor and the Loomi AI chat. Both share
   // the resizable pane width; the preview on the right stays visible for both,
   // so Iris's edits render live as the user chats.
   const [leftTab, setLeftTab] = React.useState<'html' | 'iris'>('html');
@@ -318,7 +318,7 @@ function LeftPaneTabs({
         active={tab === 'iris'}
         onClick={() => onChange('iris')}
         icon={<SparklesIcon className="w-3.5 h-3.5" />}
-        label="Iris"
+        label="Loomi AI"
       />
     </div>
   );
@@ -342,7 +342,7 @@ function LeftPaneTabButton({
       aria-pressed={active}
       className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
         active
-          ? 'bg-[var(--primary)] text-white'
+          ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
     >
@@ -463,7 +463,7 @@ function PreviewToggleButton({
       aria-pressed={active}
       className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
         active
-          ? 'bg-[var(--primary)] text-white'
+          ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
     >

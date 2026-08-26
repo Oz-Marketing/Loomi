@@ -771,7 +771,7 @@ export function AddPlanButton({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white px-3 py-1.5 text-xs font-medium hover:bg-[var(--primary)] transition-colors"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-3 py-1.5 text-xs font-medium hover:bg-[var(--primary)] transition-colors"
       >
         <PlusIcon className="w-3.5 h-3.5" />
         Add Plan

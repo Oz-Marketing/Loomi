@@ -271,7 +271,7 @@ export function GoogleCompareModal({
           <button
             type="button"
             onClick={onMove}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
             style={{ background: COLORS.lifetime }}
           >
             <ArrowsRightLeftIcon className="h-4 w-4" />

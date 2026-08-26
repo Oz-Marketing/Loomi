@@ -1,5 +1,12 @@
 import { prisma } from '@/lib/prisma';
-import { parseCoopPack, type CoopRule } from './coop-rules';
+import {
+  effectiveSeverity,
+  parseCoopPack,
+  type CoopRule,
+  type CoopRulePack,
+  type RequiredFieldEntry,
+} from './coop-rules';
+import { splitByReviewState } from './coop-pack-store';
 import { listTemplateChecks, type TemplateCheckRow } from './coop-template-check-store';
 import { listGuidelineDocs, type GuidelineDocRow } from './guideline-docs';
 
@@ -55,8 +62,14 @@ export interface PackRow {
   verifiedBy: string | null;
   verifiedAt: string | null;
   isActive: boolean;
+  /** ACCEPTED rules — what is actually enforced. */
   ruleCount: number;
-  /** Rules that report but cannot block, so the page can say how much is live. */
+  /** Drafted rules awaiting a human decision. Enforced by nothing. */
+  proposedCount: number;
+  /** Rules already declined. Kept so a later pass doesn't re-propose them. */
+  rejectedCount: number;
+  /** Rules that report but cannot block, so the page can say how much is live.
+   *  Counted over ACCEPTED rules only — a proposal blocks and warns nothing. */
   warningCount: number;
   errorCount: number;
   updatedAt: string;
@@ -64,6 +77,8 @@ export interface PackRow {
    *  rather than shipping the raw JSON string, so a corrupt row reads as an
    *  empty pack instead of breaking the page. */
   rules: CoopRule[];
+  /** Drafted required-field entries, for the review queue. */
+  requiredFields: RequiredFieldEntry[];
   effectiveFrom: string | null;
   effectiveTo: string | null;
 }
@@ -95,11 +110,22 @@ function jsonArray(raw: string | null): string[] {
   }
 }
 
-function countBySeverity(rules: CoopRule[]): { errorCount: number; warningCount: number } {
+/**
+ * Counted by what a rule can actually DO, not by what it declares.
+ *
+ * Declared severity was the source of the page contradicting itself: a pack nobody
+ * had approved reported "21 can block" while the engine downgraded every one of them
+ * to a warning. Both numbers were true of different things, and together they were
+ * a lie.
+ */
+function countBySeverity(
+  rules: CoopRule[],
+  pack: Pick<CoopRulePack, 'verified'>,
+): { errorCount: number; warningCount: number } {
   let errorCount = 0;
   let warningCount = 0;
   for (const r of rules) {
-    if (r.severity === 'error') errorCount++;
+    if (effectiveSeverity(r, pack) === 'error') errorCount++;
     else warningCount++;
   }
   return { errorCount, warningCount };
@@ -204,7 +230,10 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
       .filter((p) => p.make.trim().toLowerCase() === lower)
       .map((p) => {
         const parsed = parseCoopPack(p.rules);
-        const counts = countBySeverity(parsed?.rules ?? []);
+        // Severity is counted over ACCEPTED rules: "8 errors" has to mean eight
+        // things that can block an ad, not eight things someone might accept later.
+        const split = parsed ? splitByReviewState(parsed) : null;
+        const counts = countBySeverity(split?.accepted.rules ?? [], { verified: p.verified });
         return {
           id: p.id,
           version: p.version,
@@ -214,10 +243,13 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
           verifiedBy: p.verifiedBy,
           verifiedAt: p.verifiedAt?.toISOString() ?? null,
           isActive: p.isActive,
-          ruleCount: parsed?.rules.length ?? 0,
+          ruleCount: split?.accepted.rules.length ?? 0,
+          proposedCount: split?.proposedCount ?? 0,
+          rejectedCount: split?.rejectedCount ?? 0,
           ...counts,
           updatedAt: p.updatedAt.toISOString(),
           rules: parsed?.rules ?? [],
+          requiredFields: parsed?.requiredFields ?? [],
           effectiveFrom: p.effectiveFrom?.toISOString().slice(0, 10) ?? null,
           effectiveTo: p.effectiveTo?.toISOString().slice(0, 10) ?? null,
         };

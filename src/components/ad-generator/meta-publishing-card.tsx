@@ -283,7 +283,7 @@ export function MetaPublishingCard({ accountKey }: { accountKey: string }) {
               type="button"
               onClick={() => void save()}
               disabled={saving || loading || !dirty}
-              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
             >
               {saving ? 'Saving…' : 'Confirm'}
             </button>

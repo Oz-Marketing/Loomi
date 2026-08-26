@@ -1071,7 +1071,7 @@ export default function AdGeneratorPage() {
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Font</label>
-                  <Select value={fontKey} onChange={setFontKey} options={fontOptions} />
+                  <Select value={fontKey} onChange={setFontKey} options={fontOptions} previewFont />
                 </div>
               </div>
             )}
@@ -1217,7 +1217,7 @@ export default function AdGeneratorPage() {
               {isManager && (
                 <Link
                   href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
-                  className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
                   title="Open this ad's layout in the builder"
                 >
                   <PencilIcon className="h-3.5 w-3.5" />
@@ -1304,7 +1304,7 @@ export default function AdGeneratorPage() {
                 onClick={() => download(size.id)}
                 disabled={busy !== null || missing.length > 0 || coopBlocking > 0}
                 title={exportBlockedReason}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2.5 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <ArrowDownTrayIcon className="h-4 w-4" />
                 {busy === size.id ? 'Rendering…' : `Download ${size.label.split(' ')[0]}`}

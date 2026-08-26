@@ -80,7 +80,7 @@ export function FormActionBar({
             title="Outline (block structure)"
             className={`p-1.5 rounded ${
               outlineOpen
-                ? 'bg-[var(--primary)] text-white'
+                ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                 : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
             }`}
           >
@@ -96,7 +96,7 @@ export function FormActionBar({
           title="Desktop"
           className={`p-1.5 rounded ${
             previewWidth === 'desktop'
-              ? 'bg-[var(--primary)] text-white'
+              ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
               : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
           }`}
         >
@@ -107,7 +107,7 @@ export function FormActionBar({
           title="Mobile (375px)"
           className={`p-1.5 rounded ${
             previewWidth === 'mobile'
-              ? 'bg-[var(--primary)] text-white'
+              ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
               : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
           }`}
         >

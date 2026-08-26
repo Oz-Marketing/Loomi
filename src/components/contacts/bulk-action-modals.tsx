@@ -166,7 +166,7 @@ export function AddToListModal({
               type="button"
               onClick={handleCreateAndApply}
               disabled={!newListName.trim() || submitting}
-              className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Creating…' : 'Create + Add'}
             </button>
@@ -185,7 +185,7 @@ export function AddToListModal({
               type="button"
               onClick={handleApply}
               disabled={!selectedListId || submitting}
-              className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? 'Adding…' : 'Add to list'}
             </button>
@@ -222,7 +222,7 @@ export function AddToListModal({
           <button
             type="button"
             onClick={() => setCreating(true)}
-            className="mt-3 inline-flex items-center gap-1.5 px-3 h-9 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+            className="mt-3 inline-flex items-center gap-1.5 px-3 h-9 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
           >
             <PlusIcon className="w-3.5 h-3.5" />
             Create the first list
@@ -431,7 +431,7 @@ export function DndModal({
             type="button"
             onClick={handleApply}
             disabled={!canApply || submitting}
-            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Applying…' : 'Apply'}
           </button>
@@ -474,7 +474,7 @@ function DndChannelRow({
               onClick={() => onChange(option)}
               className={`px-2.5 py-1.5 transition-colors ${
                 active
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >

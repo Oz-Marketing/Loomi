@@ -457,7 +457,7 @@ export function AccountsList({
                   <button
                     onClick={handleCreateManual}
                     disabled={!newKey.trim() || !newDealer.trim() || creating}
-                    className="flex-1 px-4 py-2.5 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                    className="flex-1 px-4 py-2.5 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
                   >
                     {creating ? 'Creating...' : 'Create Account'}
                   </button>
@@ -631,7 +631,7 @@ export function AccountsList({
                 onClick={() => setPage(pageNumber)}
                 className={`px-2 py-1 text-xs rounded-md border transition-colors ${
                   pageNumber === page
-                    ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)] border-[var(--primary)]'
                     : 'border-[var(--border)] hover:bg-[var(--muted)]'
                 }`}
               >

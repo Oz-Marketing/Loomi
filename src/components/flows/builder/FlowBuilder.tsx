@@ -183,7 +183,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   const [busy, setBusy] = useState(false);
   const [triggers, setTriggers] = useState<FlowApiTrigger[]>([]);
 
-  // ── Iris ──
+  // ── Loomi AI ──
   // When open, the left rail shows the chat panel instead of the active
   // FeatureDrawer. The empty-state hero on the canvas opens this panel
   // pre-filled with the user's prompt.
@@ -851,7 +851,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
     setDirty(true);
   }, [edges, setNodes]);
 
-  // ── Iris plumbing ──
+  // ── Loomi AI plumbing ──
   // Snapshot the live canvas + trigger state for the chat panel. Pulled
   // every turn so the model never reasons about stale state.
   const getAiSnapshot = useCallback((): FlowSnapshot => {
@@ -1638,7 +1638,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
           )}
 
           {clipboardNode && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--primary)] text-white text-xs font-semibold shadow-md">
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-semibold shadow-md">
               <span>
                 {NODE_META[clipboardNode.type].label} on clipboard — click any
                 connection to paste

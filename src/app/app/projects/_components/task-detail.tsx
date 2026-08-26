@@ -236,7 +236,7 @@ export function TaskDetail({ initial }: { initial: Thread }) {
                     </div>
                     <a
                       href={getStudioUrl(`/campaign-builder/${linkedCampaign.id}`) ?? '#'}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition hover:opacity-90"
                     >
                       Open in Studio
                       <ArrowTopRightOnSquareIcon className="h-3 w-3" />
@@ -271,7 +271,7 @@ export function TaskDetail({ initial }: { initial: Thread }) {
                     type="button"
                     onClick={launch}
                     disabled={launching}
-                    className="flex-shrink-0 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                    className="flex-shrink-0 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition hover:opacity-90 disabled:opacity-50"
                   >
                     {launching ? 'Opening…' : launchCopy.btn}
                   </button>
@@ -380,7 +380,7 @@ export function TaskDetail({ initial }: { initial: Thread }) {
                   type="button"
                   disabled={posting || !draft.trim()}
                   onClick={postComment}
-                  className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+                  className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-[var(--primary-foreground)] transition hover:opacity-90 disabled:opacity-50"
                 >
                   {posting ? 'Posting…' : 'Comment'}
                 </button>

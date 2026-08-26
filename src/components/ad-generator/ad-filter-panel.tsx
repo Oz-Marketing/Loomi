@@ -112,7 +112,7 @@ export function AdFilterPanel({
         <FunnelIcon className="h-3.5 w-3.5" />
         Filters
         {active > 0 && (
-          <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-white">
+          <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-[var(--primary-foreground)]">
             {active}
           </span>
         )}

@@ -26,6 +26,20 @@ wants for a campaign they are paying to drive traffic to.
 Verifying a domain is a DNS change — see
 [Account settings](/docs/managing-accounts).
 
+# Which address to share
+
+Once an account has a verified domain, that domain is the page's real address.
+It is what the page's **Public URL** shows, what the copy button gives you, and
+what search engines are told to treat as the page's home.
+
+The Loomi address keeps working and forwards to it, so links already in an ad, an
+email, or a printed QR code don't break. UTM tags survive the forward, so a visit
+that arrives the long way round is still attributed to the right campaign.
+
+Share the client's address anyway. Sending traffic to the Loomi address when the
+page lives somewhere else costs an extra hop, and the client sees your platform's
+name in a URL they are paying to promote.
+
 # The parts people forget
 
 | Thing | Why |

@@ -22,7 +22,14 @@ import {
   parseAndValidateFilterDefinition,
   validateFilterDefinition,
 } from '@/lib/smart-list-validate';
-import { collectSegmentContactIds } from './resolve';
+import {
+  collectSegmentContactIds,
+  countSegmentAcrossAccounts,
+  previewSegmentAcrossAccounts,
+  type CrossAccountSegmentPreview,
+  type CrossAccountSegmentResolution,
+  type SegmentAccountPlan,
+} from './resolve';
 
 /**
  * Ceiling on one resolution. Well above any real segment (the largest
@@ -125,6 +132,77 @@ export interface SegmentMembership {
   /** Accounts whose resolution failed, with why. One bad rooftop should
    *  not blank the other seventeen. */
   errors: Array<{ accountKey: string; error: string }>;
+}
+
+export interface SegmentPlanResult {
+  /** One entry per account whose catalogue accepts the definition. */
+  plans: SegmentAccountPlan[];
+  /** Accounts that rejected it, with why. One bad rooftop should not
+   *  blank the other seventeen. */
+  errors: Array<{ accountKey: string; error: string }>;
+}
+
+/**
+ * Validate one definition against every account in scope.
+ *
+ * Per-account on purpose: the field catalogue is per-account, so the same
+ * definition can be valid in one rooftop and reference a deleted custom
+ * field in the next. Everything cross-account starts here.
+ */
+export async function planSegmentAcrossAccounts(
+  definition: FilterDefinition,
+  accountKeys: string[],
+  opts: { excludeSegmentId?: string | null } = {},
+): Promise<SegmentPlanResult> {
+  const plans: SegmentAccountPlan[] = [];
+  const errors: Array<{ accountKey: string; error: string }> = [];
+
+  for (const accountKey of accountKeys) {
+    const fields = await resolveFilterFields(accountKey, opts.excludeSegmentId ?? null);
+    const validation = validateFilterDefinition(definition, fields);
+    if (!validation.ok) {
+      errors.push({ accountKey, error: formatFilterErrors(validation.errors) });
+      continue;
+    }
+    plans.push({ accountKey, definition: validation.definition, fields });
+  }
+
+  // Every account rejected it — that is an error to report, not an empty
+  // segment. Reporting it as zero members is how a broken filter reads as
+  // "nobody qualifies".
+  if (accountKeys.length > 0 && plans.length === 0) {
+    throw new SegmentLookupError(errors[0]!.error);
+  }
+
+  return { plans, errors };
+}
+
+/**
+ * The builder's live preview, over one account or a whole group.
+ *
+ * A group account holds no contacts itself, so previewing against its own
+ * key alone is always zero — see the note at the top of the cross-account
+ * block in resolve.ts.
+ */
+export async function previewSegmentForAccounts(
+  definition: FilterDefinition,
+  accountKeys: string[],
+  opts: { sampleSize?: number; excludeSegmentId?: string | null } = {},
+): Promise<CrossAccountSegmentPreview & { errors: SegmentPlanResult['errors'] }> {
+  const { plans, errors } = await planSegmentAcrossAccounts(definition, accountKeys, opts);
+  const preview = await previewSegmentAcrossAccounts(plans, opts.sampleSize ?? 25);
+  return { ...preview, errors };
+}
+
+/** Exact member count over one account or a whole group. */
+export async function countSegmentForAccounts(
+  definition: FilterDefinition,
+  accountKeys: string[],
+  opts: { excludeSegmentId?: string | null } = {},
+): Promise<CrossAccountSegmentResolution & { errors: SegmentPlanResult['errors'] }> {
+  const { plans, errors } = await planSegmentAcrossAccounts(definition, accountKeys, opts);
+  const totals = await countSegmentAcrossAccounts(plans);
+  return { ...totals, errors };
 }
 
 /**

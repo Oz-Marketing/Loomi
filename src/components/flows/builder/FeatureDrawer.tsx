@@ -12,7 +12,7 @@ import type { RailFeature } from './IconRail';
 import type { FlowValidationIssue } from '@/lib/flows/validation';
 
 // Shared left-side drawer that hosts the active rail feature's content.
-// Iris is mounted by FlowBuilder (it needs flow-state callbacks);
+// Loomi AI is mounted by FlowBuilder (it needs flow-state callbacks);
 // notes / version_history are stub content for now — backend wiring
 // lands in follow-ups. The error_log drawer renders live validation
 // issues from the FlowBuilder.

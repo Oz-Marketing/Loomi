@@ -169,7 +169,7 @@ export function LpAiPanel({ pageId, getHtml, onReplaceHtml, onInsertHtml }: LpAi
             <SparklesIcon className="w-3.5 h-3.5 text-zinc-900" />
           </div>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-[var(--foreground)] truncate leading-tight">Iris</h3>
+            <h3 className="text-sm font-semibold text-[var(--foreground)] truncate leading-tight">Loomi AI</h3>
             <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
               Design, write, refine.
             </p>
@@ -399,7 +399,7 @@ function ApplyModeDropdown({ mode, onChange }: { mode: ApplyMode; onChange: (m: 
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title="How Iris applies its changes"
+        title="How Loomi AI applies its changes"
         className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
       >
         <BoltIcon className="w-3.5 h-3.5" />

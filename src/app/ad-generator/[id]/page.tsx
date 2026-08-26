@@ -1071,7 +1071,7 @@ export default function AdGeneratorPage() {
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Font</label>
-                  <Select value={fontKey} onChange={setFontKey} options={fontOptions} />
+                  <Select value={fontKey} onChange={setFontKey} options={fontOptions} previewFont />
                 </div>
               </div>
             )}

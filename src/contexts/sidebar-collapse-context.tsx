@@ -19,9 +19,19 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 const STORAGE_KEY = 'loomi-sidebar-collapsed';
 
 interface SidebarCollapseContextValue {
+  /** What the rail should DO right now: the saved preference OR a temporary collapse. */
   collapsed: boolean;
   toggle: () => void;
   setCollapsed: (value: boolean) => void;
+  /**
+   * Collapse the rail WITHOUT touching the saved preference.
+   *
+   * For chrome that needs horizontal room for a while — today, the AI panel. It
+   * must not persist: a user who keeps their sidebar expanded should find it
+   * expanded again after they close the panel, not discover that using the
+   * assistant quietly rewrote a setting they chose.
+   */
+  setAutoCollapsed: (value: boolean) => void;
   /** Mobile off-canvas drawer state (not persisted — session-only). */
   mobileOpen: boolean;
   setMobileOpen: (value: boolean) => void;
@@ -30,8 +40,12 @@ interface SidebarCollapseContextValue {
 const SidebarCollapseContext = createContext<SidebarCollapseContextValue | null>(null);
 
 export function SidebarCollapseProvider({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsedState] = useState<boolean>(false);
+  const [preferCollapsed, setCollapsedState] = useState<boolean>(false);
+  const [autoCollapsed, setAutoCollapsed] = useState<boolean>(false);
   const [mobileOpen, setMobileOpen] = useState<boolean>(false);
+
+  // Either reason collapses the rail; only the preference is remembered.
+  const collapsed = preferCollapsed || autoCollapsed;
 
   // Read persisted value once on mount.
   useEffect(() => {
@@ -45,6 +59,9 @@ export function SidebarCollapseProvider({ children }: { children: React.ReactNod
 
   const setCollapsed = useCallback((value: boolean) => {
     setCollapsedState(value);
+    // An explicit expand beats a temporary collapse — otherwise the toggle looks
+    // broken while the AI panel is open.
+    if (!value) setAutoCollapsed(false);
     try {
       window.localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false');
     } catch {
@@ -57,7 +74,9 @@ export function SidebarCollapseProvider({ children }: { children: React.ReactNod
   }, [collapsed, setCollapsed]);
 
   return (
-    <SidebarCollapseContext.Provider value={{ collapsed, toggle, setCollapsed, mobileOpen, setMobileOpen }}>
+    <SidebarCollapseContext.Provider
+      value={{ collapsed, toggle, setCollapsed, setAutoCollapsed, mobileOpen, setMobileOpen }}
+    >
       {children}
     </SidebarCollapseContext.Provider>
   );
@@ -73,6 +92,7 @@ export function useSidebarCollapse(): SidebarCollapseContextValue {
       collapsed: false,
       toggle: () => {},
       setCollapsed: () => {},
+      setAutoCollapsed: () => {},
       mobileOpen: false,
       setMobileOpen: () => {},
     };

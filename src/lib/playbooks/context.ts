@@ -21,12 +21,39 @@ import {
   templateHasOffersMarker,
 } from '@/lib/ad-generator/automation/offer-email-doc';
 import { isV2Template } from '@/lib/email/types';
-import type { AccountAuditContext, CoopFacts, CoopState, ResolvedBranding } from './types';
+import type {
+  AccountAuditContext,
+  CheckWaiver,
+  CoopFacts,
+  CoopState,
+  ResolvedBranding,
+} from './types';
 
 /** Current planning month as YYYY-MM. Inlined rather than imported from
  *  `@/lib/ad-pacer/period`, whose module pulls in a client component. */
 export function currentPeriod(now: Date): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * How far back the two freshness lookups read.
+ *
+ * Both tables grow forever and neither query had a bound, so the audit got
+ * slower every night the automation ran. A year is deliberately far wider than
+ * any threshold that reads them — `adgen.recent_run` flags at 3 days and
+ * `adgen.email_recent` at 35 — so no check's STATUS can change from adding the
+ * window. What it does change, past a year, is the detail string: "last run 400
+ * days ago" becomes "no run on record". For a check whose whole question is
+ * whether the pipeline is alive, those two sentences mean the same thing.
+ *
+ * It also makes the email lookup index-usable: `EmailBlast` has an index on
+ * `createdAt`, while a bare `automationKey startsWith` is a prefix LIKE that a
+ * default-collation btree can't serve.
+ */
+const FRESHNESS_LOOKBACK_DAYS = 365;
+
+function lookbackFrom(now: Date): Date {
+  return new Date(now.getTime() - FRESHNESS_LOOKBACK_DAYS * 86_400_000);
 }
 
 function parseJson<T>(raw: string | null | undefined): T | null {
@@ -141,6 +168,7 @@ export async function loadAuditContexts(
 ): Promise<AccountAuditContext[]> {
   const now = opts.now ?? new Date();
   const period = currentPeriod(now);
+  const since = lookbackFrom(now);
   if (accountKeys.length === 0) return [];
 
   const accountSelect = {
@@ -171,8 +199,16 @@ export async function loadAuditContexts(
     googleConversionAction: true,
   } as const;
 
-  const [allAccounts, launchPresets, plans, automationConfigs, feeds, automationRuns, ingestRuns] =
-    await Promise.all([
+  const [
+    allAccounts,
+    launchPresets,
+    plans,
+    automationConfigs,
+    feeds,
+    automationRuns,
+    ingestRuns,
+    waiverRows,
+  ] = await Promise.all([
       // EVERY account, not just the scoped ones: brand-kit inheritance walks the
       // parent chain, and a rooftop's group account is often outside the scope
       // being audited.
@@ -223,12 +259,29 @@ export async function loadAuditContexts(
       }),
       // NO accountKey filter: a null accountKey is a GLOBAL SWEEP covering every
       // enabled account. Filtering it out reports each rooftop as stale while
-      // the nightly job is running perfectly.
-      prisma.adAutomationRun.groupBy({ by: ['accountKey'], _max: { startedAt: true } }),
+      // the nightly job is running perfectly. Bounded by date instead — see
+      // FRESHNESS_LOOKBACK_DAYS.
+      prisma.adAutomationRun.groupBy({
+        by: ['accountKey'],
+        where: { startedAt: { gte: since } },
+        _max: { startedAt: true },
+      }),
       prisma.ingestRun.groupBy({
         by: ['accountKey'],
-        where: { accountKey: { in: accountKeys } },
+        where: { accountKey: { in: accountKeys }, startedAt: { gte: since } },
         _max: { startedAt: true },
+      }),
+      // Waivers. The author's NAME is resolved in the second batch below — a
+      // reason nobody can be asked about is most of the way to no reason at all.
+      prisma.playbookCheckWaiver.findMany({
+        where: { accountKey: { in: accountKeys } },
+        select: {
+          accountKey: true,
+          checkId: true,
+          reason: true,
+          waivedByUserId: true,
+          createdAt: true,
+        },
       }),
     ]);
 
@@ -319,10 +372,39 @@ export async function loadAuditContexts(
         })
       : Promise.resolve([] as { id: string; accountKey: string | null }[]),
     prisma.emailBlast.findMany({
-      where: { automationKey: { startsWith: 'adgen:' } },
+      where: { automationKey: { startsWith: 'adgen:' }, createdAt: { gte: since } },
       select: { automationKey: true, createdAt: true },
     }),
   ]);
+
+  // ── waivers ──
+  //
+  // One read for every waiver author across every account, then indexed. Names
+  // are display-only, so a user who has since been deleted degrades to the bare
+  // reason rather than dropping the waiver.
+  const waiverUserIds = [
+    ...new Set(waiverRows.map((w) => w.waivedByUserId).filter((id): id is string => !!id)),
+  ];
+  const waiverUsers = waiverUserIds.length
+    ? await prisma.user.findMany({
+        where: { id: { in: waiverUserIds } },
+        select: { id: true, name: true, email: true },
+      })
+    : [];
+  const waiverUserById = new Map(waiverUsers.map((u) => [u.id, u.name || u.email || null]));
+
+  const waiversByAccount = new Map<string, Record<string, CheckWaiver>>();
+  for (const row of waiverRows) {
+    const forAccount = waiversByAccount.get(row.accountKey) ?? {};
+    forAccount[row.checkId] = {
+      checkId: row.checkId,
+      reason: row.reason,
+      waivedByUserId: row.waivedByUserId,
+      waivedByName: row.waivedByUserId ? waiverUserById.get(row.waivedByUserId) ?? null : null,
+      at: row.createdAt,
+    };
+    waiversByAccount.set(row.accountKey, forAccount);
+  }
 
   const shellBySlug = new Map(shellTemplates.map((t) => [t.slug, t]));
   const audienceById = new Map(emailAudiences.map((a) => [a.id, a]));
@@ -397,6 +479,9 @@ export async function loadAuditContexts(
     const configTemplateIds = templateIdsFromMap(config?.templateMap ?? null);
     const makes = normalizeOems(parseJson<string[]>(row.oems) ?? row.oems, row.oem);
     const budget = planByAccount.get(key)?.periodBudgets?.[0];
+    // Resolved once — it parses the shell's whole document, and the two fields
+    // below both want it.
+    const shell = shellState(config?.emailTemplateId ?? null);
 
     // The account's own last run, or the last global sweep — whichever is newer.
     const ownRun = runByAccount.get(key) ?? null;
@@ -451,8 +536,8 @@ export async function loadAuditContexts(
         notifyUserCount: (parseJson<string[]>(config?.notifyUserIds ?? null) ?? []).length,
         emailEnabled: config?.emailEnabled ?? false,
         emailTemplateSlug: config?.emailTemplateId ?? null,
-        emailTemplateOk: shellState(config?.emailTemplateId ?? null).ok,
-        emailTemplateProblem: shellState(config?.emailTemplateId ?? null).problem,
+        emailTemplateOk: shell.ok,
+        emailTemplateProblem: shell.problem,
         emailAudienceId: config?.emailAudienceId ?? null,
         // An audience belonging to another account is worse than none: the
         // generator refuses it, so the draft silently lands untargeted.
@@ -469,6 +554,7 @@ export async function loadAuditContexts(
         vehicleCount: f.vehicleCount,
       })),
       coop: coopFor(configTemplateIds, makes),
+      waivers: waiversByAccount.get(key) ?? {},
       lastAutomationRunAt,
       lastIngestRunAt: ingestByAccount.get(key) ?? null,
       now,

@@ -6,6 +6,7 @@ import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { UnsavedChangesProvider } from '@/contexts/unsaved-changes-context';
 import { LoomiDialogProvider } from '@/contexts/loomi-dialog-context';
 import { SidebarCollapseProvider } from '@/contexts/sidebar-collapse-context';
+import { AiPanelProvider } from '@/contexts/ai-panel-context';
 import { BudgetChannelsProvider } from '@/contexts/budget-channels-context';
 import { Toaster } from 'sonner';
 import { AiBubble } from '@/components/ai-bubble';
@@ -55,6 +56,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <UnsavedChangesProvider>
             <LoomiDialogProvider>
               <SidebarCollapseProvider>
+                {/* Above the shell AND the panel: the shell reads `isOpen` to make
+                    room for the rail, so it cannot live inside the panel. */}
+                <AiPanelProvider>
                 {/* Fetches nothing until a budget screen actually asks — see
                     the note in budget-channels-context. */}
                 <BudgetChannelsProvider>
@@ -68,6 +72,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
                     <AiBubble />
                   </NonClientOnly>
                 </BudgetChannelsProvider>
+                </AiPanelProvider>
               </SidebarCollapseProvider>
             </LoomiDialogProvider>
           </UnsavedChangesProvider>

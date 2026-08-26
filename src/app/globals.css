@@ -55,6 +55,15 @@
   /* Background — dark mode: solid, no gradient art. */
   --gradient-bg: #070112;
 
+  /* The app shell's background as a FLAT colour.
+     In dark mode this is identical to `--gradient-bg`; in light mode
+     `--gradient-bg` is a multi-layer gradient sized to the viewport, so painting
+     a small panel with it would tile a different slice of the gradient and read
+     as a mismatched surface. This is that gradient's flattened value, so any
+     element can sit at "the same colour as the shell" without re-deriving it.
+     Same idea as `--content-fade` below — keep them in sync if the bg changes. */
+  --shell-bg: #070112;
+
   /* The FLATTENED colour of the content card's body — i.e. what
      `--card` (rgba(24,24,27,.62)) actually resolves to once composited over
      `--gradient-bg`. The docked page header paints with this so it reads as
@@ -101,7 +110,9 @@
   --ai-assist-tint-strong: rgba(251, 146, 60, 0.2);
   --ai-assist-tint-soft: rgba(244, 114, 182, 0.22);
   --ai-assist-context-bg: rgba(244, 114, 182, 0.14);
-  --ai-assist-thread-bg: rgba(20, 7, 26, 0.4);
+  /* The conversation reads as a well recessed into the panel — the shell's own
+     colour showing through, rather than a third surface nobody else uses. */
+  --ai-assist-thread-bg: var(--shell-bg);
   --ai-assist-message-bg: rgba(51, 14, 46, 0.46);
 
   /* Editor AI panel tokens — dark */
@@ -152,6 +163,9 @@
   --destructive: #dc2626;
   --ring: #6366f1;
   --radius: 0.5rem;
+
+  /* Flattened `--gradient-bg` for light mode — see the dark-mode note. */
+  --shell-bg: #f1f1f8;
 
   /* Gradient background — light mode */
   --gradient-bg:
@@ -210,7 +224,7 @@
   --ai-assist-tint-strong: rgba(251, 146, 60, 0.17);
   --ai-assist-tint-soft: rgba(244, 114, 182, 0.16);
   --ai-assist-context-bg: rgba(244, 114, 182, 0.12);
-  --ai-assist-thread-bg: rgba(255, 255, 255, 0.56);
+  --ai-assist-thread-bg: var(--shell-bg);
   --ai-assist-message-bg: rgba(255, 255, 255, 0.84);
 
   /* Editor AI panel tokens — light */
@@ -1184,10 +1198,26 @@ body {
   color: #047857;
 }
 
+/* Loomi's own indigo, NOT var(--primary).
+ *
+ * `--primary` is the per-user accent, set as an inline custom property by
+ * applyAppearanceToDocument and persisted locally — so it survives sign-out and
+ * paints the LOGIN page in whatever colour the last person chose. This link was the
+ * only `.auth-*` rule using it: everything around it (.auth-submit, .auth-eyebrow,
+ * .auth-hero-accent) pins brand indigo as literal hex, so a green accent produced a
+ * green link on a violet card.
+ *
+ * Signed out there is no user whose preference could apply, and the sign-in screen
+ * is Loomi's, not the account's. Two values for the same reason .auth-hero-accent
+ * has two: indigo-400 carries on the dark card, indigo-600 on the light one. */
 .auth-link {
-  color: var(--primary);
+  color: #818cf8;
   font-weight: 600;
   transition: opacity 0.15s ease;
+}
+
+[data-theme='light'] .auth-link {
+  color: #4f46e5;
 }
 
 .auth-link:hover {
@@ -1635,14 +1665,49 @@ button.glass-card:hover,
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
+  /* Above the panel's own content. Without this, later DOM children paint over
+     the ring's inner edge — which nobody noticed while every child was
+     translucent, and which clipped the rainbow down both sides the moment the
+     conversation area became an opaque surface. Already `pointer-events: none`,
+     so sitting on top costs nothing. */
+  z-index: 2;
 }
 
 .ai-assist-context {
   background: var(--muted);
 }
 
+/* Transparent: the panel's own surface IS the dark ground now, so the thread has
+   nothing of its own to paint. (It was briefly `--shell-bg` while the panel was
+   the light card — the two swapped, they didn't both change.) */
 .ai-assist-thread {
   background: transparent;
+}
+
+/* Frosted glass on the dark ground. Used by the conversations card in the
+   expanded modal — the ONE element that floats. The title bar and composer
+   deliberately have no surface of their own, so the panel reads as a single
+   sheet with a card on it rather than three stacked bars. */
+.ai-assist-chrome {
+  background: var(--card);
+  backdrop-filter: blur(20px) saturate(160%);
+}
+
+/* The panel docked beside the page card (the global assistant) matches that
+   card's surface exactly, so the two read as one system rather than as a card
+   and a heavier popout stuck next to it.
+   Scoped rather than applied to `.ai-assist-panel` itself: the template editor,
+   flow builder and landing-page panels float over their own canvases, where the
+   stronger `--card-strong` is what keeps them legible. */
+.ai-assist-panel--docked {
+  /* `background-color`, NOT the `background` shorthand. The shorthand resets
+     `background-clip` to its initial `border-box`, which let the fill paint under
+     the 1.5px transparent border and cover the rainbow ring from the inside — the
+     glow looked bitten into along both edges. The longhand leaves the base rule's
+     `background-clip: padding-box` intact. Re-stated below so a future edit that
+     reintroduces the shorthand still lands correctly. */
+  background-color: var(--shell-bg);
+  background-clip: padding-box;
 }
 
 .ai-assist-assistant-message {
@@ -1683,6 +1748,12 @@ button.glass-card:hover,
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
+  /* Above the panel's own content. Without this, later DOM children paint over
+     the ring's inner edge — which nobody noticed while every child was
+     translucent, and which clipped the rainbow down both sides the moment the
+     conversation area became an opaque surface. Already `pointer-events: none`,
+     so sitting on top costs nothing. */
+  z-index: 2;
 }
 .ai-ed-glow {
   /* Was a soft pink radial wash; rainbow brand owns the outline now
@@ -2838,4 +2909,84 @@ input, select, textarea {
   .docs-rail-scrim {
     display: none;
   }
+}
+
+/* Agent teaser — the nudge beside the assistant bubble. Both are behind
+   `motion-safe:` at the call site, so a reduced-motion preference skips them. */
+@keyframes teaser-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes teaser-swap {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* AI panel — slides in from the right edge. The content column animates its
+   padding over the same duration (SurfaceShell), so the two move together. */
+@keyframes ai-panel-in {
+  from { opacity: 0; transform: translateX(1.5rem); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Model output inside the assistant panel.
+   Tighter than `.doc-body`: this is a 24rem column, so headings step down gently
+   and lists stay close to the prose they belong to. Without this the model's
+   markdown rendered as literal asterisks, which is how it shipped first. */
+.agent-md > * + * { margin-top: 0.6rem; }
+.agent-md h1,
+.agent-md h2,
+.agent-md h3,
+.agent-md h4 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--foreground);
+  letter-spacing: 0.01em;
+}
+.agent-md p { color: var(--foreground); }
+.agent-md strong { font-weight: 600; }
+.agent-md em { font-style: italic; }
+.agent-md ul,
+.agent-md ol { padding-left: 1.1rem; }
+.agent-md ul { list-style: disc; }
+.agent-md ol { list-style: decimal; }
+.agent-md li + li { margin-top: 0.25rem; }
+.agent-md li::marker { color: var(--muted-foreground); }
+.agent-md a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.agent-md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.25rem;
+}
+.agent-md pre {
+  background: var(--muted);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+  overflow-x: auto;
+}
+.agent-md pre code { background: none; padding: 0; }
+.agent-md blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.6rem;
+  color: var(--muted-foreground);
+}
+/* Tables are the one thing that genuinely can't reflow at this width. */
+.agent-md table { display: block; overflow-x: auto; border-collapse: collapse; }
+.agent-md th,
+.agent-md td {
+  border: 1px solid var(--border);
+  padding: 0.25rem 0.4rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+@keyframes ai-scrim-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }

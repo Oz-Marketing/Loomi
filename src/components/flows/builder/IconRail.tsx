@@ -40,7 +40,7 @@ interface RailItem {
   toggle?: boolean;
 }
 
-// Iris lives in its own fully-rounded button ABOVE the rail
+// Loomi AI lives in its own fully-rounded button ABOVE the rail
 // container — separate visual treatment because it's the marquee
 // AI entry point. See IrisRailButton below.
 const RAIL_ITEMS: RailItem[] = [
@@ -79,7 +79,7 @@ export function IconRail({
   const irisActive = !!toggleStates.iris;
   return (
     <div className="flex flex-col items-center gap-3">
-      {/* Iris — fully-rounded standalone button above the rail. The
+      {/* Loomi AI — fully-rounded standalone button above the rail. The
           animated rainbow shimmer is the bg; the sparkle icon is
           black so it pops on the colourful surface. */}
       <IrisRailButton active={irisActive} onClick={() => onSelect('iris')} />
@@ -158,7 +158,7 @@ export function IconRail({
   );
 }
 
-// ── Iris button (extracted) ──
+// ── Loomi AI button (extracted) ──
 //
 // Fully-rounded standalone button that lives above the rail container.
 // Visually distinct from the rest of the rail items so the AI entry
@@ -177,7 +177,7 @@ function IrisRailButton({
     <button
       type="button"
       onClick={onClick}
-      aria-label="Iris"
+      aria-label="Loomi AI"
       aria-pressed={active}
       className={`group relative w-12 h-12 rounded-full iris-rainbow-gradient flex items-center justify-center shadow-md transition-transform hover:scale-105 active:scale-95 ${
         active ? 'ring-2 ring-[var(--primary)]/40 ring-offset-2 ring-offset-[var(--card)]' : ''
@@ -188,7 +188,7 @@ function IrisRailButton({
         role="tooltip"
         className="pointer-events-none absolute left-full ml-3 top-1/2 -translate-y-1/2 z-50 whitespace-nowrap px-2.5 py-1 rounded-md text-xs font-medium text-[var(--foreground)] bg-[var(--card-strong)] border border-[var(--border)] backdrop-blur-xl backdrop-saturate-150 shadow-md opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-150 delay-150"
       >
-        Iris
+        Loomi AI
       </span>
     </button>
   );

@@ -13,16 +13,16 @@ import {
 interface ChatRequestBody {
   /** Conversation so far, in order. Last entry must be the new user turn. */
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
-  /** Current page body HTML — Iris's view of what's on the page right now. */
+  /** Current page body HTML — Loomi AI's view of what's on the page right now. */
   html?: string;
 }
 
 /**
  * POST /api/landing-pages/[id]/ai/chat
  *
- * Iris for the landing-page builder. Verifies the caller can access the page,
+ * Loomi AI for the landing-page builder. Verifies the caller can access the page,
  * pulls the account's brand context server-side (trusted, derived from the page
- * row — not the client), and returns Iris's structured reply + optional HTML.
+ * row — not the client), and returns Loomi AI's structured reply + optional HTML.
  */
 export async function POST(
   req: NextRequest,
@@ -32,7 +32,7 @@ export async function POST(
   if (error) return error;
 
   const { id } = await context.params;
-  // Gate on access before letting Iris touch the page. The client also sends the
+  // Gate on access before letting Loomi AI touch the page. The client also sends the
   // current HTML, but the account scope (for branding) is derived from the row.
   const page = await getLandingPage(id, getAccountScope(session!));
   if (!page) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -67,7 +67,7 @@ export async function POST(
     if (err instanceof LpAssistantError) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
-    const message = err instanceof Error ? err.message : 'Failed to run Iris';
+    const message = err instanceof Error ? err.message : 'Failed to run Loomi AI';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

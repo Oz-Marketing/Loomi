@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDownIcon, CheckIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 
@@ -9,6 +9,14 @@ export interface SelectOption {
   label: string;
   /** Optional section header this option is grouped under (e.g. "Serif"). */
   group?: string;
+  /**
+   * A glyph shown before the label, in the trigger and in the menu.
+   *
+   * For lists where the icon carries as much meaning as the words — image fit
+   * modes, alignment — so naming the options does not mean losing the picture
+   * that made them scannable.
+   */
+  icon?: ReactNode;
 }
 
 /** Gap between the trigger and the menu, in px — matches the old mt-2/mb-2. */
@@ -19,18 +27,23 @@ const MENU_OFFSET = 8;
  * an OS control that ignores the app's theme.
  *
  * `previewFont` renders the trigger and each option in its own value as a
- * font-family, so a list of fonts previews itself. It defaults to TRUE for
- * historical reasons (this began life as `FontSelect`): pass `previewFont={false}`
- * for any ordinary option set. A value that isn't a real font family just falls
- * back to the inherited one, so the default is harmless but rarely what a
- * non-font list wants.
+ * font-family, so a list of fonts previews itself. OPT IN — pass it only on a
+ * list of font families.
+ *
+ * It used to default to TRUE, left over from this beginning life as
+ * `FontSelect`, and the old doc called that "harmless". It was not: an option
+ * whose value is `contain` sets `font-family: contain`, which is not a family, so
+ * the browser falls back to its default SERIF and the menu renders in Times while
+ * the rest of the app is sans. Of 66 call sites, 51 had already been made to pass
+ * `previewFont={false}` and not one passed it true — the default was wrong and
+ * every new dropdown paid for it until someone noticed.
  */
 export function Select({
   value,
   onChange,
   options,
   placeholder = 'Select…',
-  previewFont = true,
+  previewFont = false,
   className = '',
   openUp = false,
   disabled = false,
@@ -212,7 +225,10 @@ export function Select({
                     : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                 }`}
               >
-                <span className="truncate">{o.label}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  {o.icon && <span className="flex h-4 w-4 shrink-0 items-center justify-center">{o.icon}</span>}
+                  <span className="truncate">{o.label}</span>
+                </span>
                 {o.value === value && <CheckIcon className="h-3.5 w-3.5 shrink-0" />}
               </button>
             ))}
@@ -235,7 +251,10 @@ export function Select({
         style={previewFont ? { fontFamily: value || undefined } : undefined}
         className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)] focus:border-[var(--primary)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-[var(--border)]"
       >
-        <span className="truncate">{selected?.label ?? placeholder}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {selected?.icon && <span className="flex h-4 w-4 shrink-0 items-center justify-center">{selected.icon}</span>}
+          <span className="truncate">{selected?.label ?? placeholder}</span>
+        </span>
         <ChevronDownIcon
           className={`h-4 w-4 shrink-0 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-180' : ''}`}
         />

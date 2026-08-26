@@ -7,6 +7,7 @@ export type NotificationCategory =
   | 'Projects'
   | 'Ad Generator'
   | 'Asset Library'
+  | 'Playbooks'
   | 'Product Updates';
 
 /**
@@ -28,6 +29,9 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
   // Asset rights expiry — the library lives on Studio alongside the generator
   // that consumes its assets.
   'Asset Library': 'studio',
+  // The coverage sweep and the playbook library both live on Studio, and the
+  // audit's checks straddle both hosts — see docs/playbooks.md §4b.
+  Playbooks: 'studio',
   // Changelog entries describe the whole product, and the changelog panel is in
   // the top bar on every surface — so the opt-out has to be reachable from
   // wherever the user happens to be when they decide they've had enough.

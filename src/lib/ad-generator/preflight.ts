@@ -1,6 +1,6 @@
 import type { AdData } from './types';
 import { OFFER_TYPES } from './offer-text';
-import type { TemplateDoc } from './doc-types';
+import { OFFER_SLOT_RE, elementBoundKeys, offerSlotBaseKey, type TemplateDoc } from './doc-types';
 import { enrichOfferFields } from './offer-text';
 import { missingRequired, type OemOfferRule, FIELD_LABELS } from './compliance';
 import { OFFER_KINDS } from './offer-kinds';
@@ -50,6 +50,14 @@ export interface PreflightIssue {
   ruleId?: string;
   /** co-op only: the source-document reference, so a block can be audited. */
   citation?: string;
+  /**
+   * `design` marks an issue that belongs to the TEMPLATE rather than to this ad —
+   * the replayed design-time co-op verdict. Every ad off the template reports it
+   * identically, so a surface showing many ads at once (the proof sheet) can state
+   * it once instead of once per ad, and point the reader at the designer rather
+   * than at the data.
+   */
+  scope?: 'design';
 }
 
 export interface PreflightResult {
@@ -100,10 +108,8 @@ export function looksLikePlaceholder(value: string | undefined): boolean {
   return /x/i.test(v);
 }
 
-/** Strip a dual-offer slot prefix so `o2_monthlyPayment` maps to its base key. */
-function baseKey(key: string): string {
-  return key.replace(/^o2_/, '');
-}
+/** Strip an offer slot prefix so `o2_monthlyPayment` maps to its base key. */
+const baseKey = offerSlotBaseKey;
 
 /**
  * Bindings that are EMPTY BY DESIGN, and so must not trip the empty-binding check.
@@ -127,8 +133,19 @@ export const OPTIONAL_BINDING_KEYS = [
    * whose disclaimer carries the detail anyway.
    */
   '_offerTerms',
-  '_o2_offerTerms',
 ];
+
+/**
+ * Is this binding exempt from the empty-binding check?
+ *
+ * A list plus a rule, because the offer terms are exempt for EVERY offer slot and
+ * the list could only ever name the ones somebody thought of. `_o2_offerTerms` was
+ * listed literally, so a third offer's terms would have blocked ads that the first
+ * two offers' would not.
+ */
+export function isOptionalBinding(key: string): boolean {
+  return OPTIONAL_BINDING_KEYS.includes(key) || /^_o\d+_offerTerms$/.test(key);
+}
 
 /**
  * Bindings that are empty by design only for CERTAIN offer types.
@@ -163,9 +180,12 @@ const CONDITIONAL_OPTIONAL_BINDINGS: Record<string, (data: AdData) => boolean> =
 /** Whether an empty value for `key` is expected rather than a hole. */
 function bindingMayBeEmpty(key: string, data: AdData): boolean {
   const base = baseKey(key);
-  if (OPTIONAL_BINDING_KEYS.includes(base)) return true;
-  // A second offer's applicability is decided by ITS own offer type.
-  const scoped = key.startsWith('o2_') ? { ...data, offerType: data.o2_offerType } : data;
+  // The un-prefixed key OR the slot-prefixed one — `_o3_offerTerms` is exempt for
+  // the same reason `_offerTerms` is.
+  if (isOptionalBinding(base) || isOptionalBinding(key)) return true;
+  // Judge a prefixed field by ITS OWN offer's type, whichever slot it belongs to.
+  const slot = OFFER_SLOT_RE.exec(key)?.[0];
+  const scoped = slot ? { ...data, offerType: data[`${slot}offerType`] } : data;
   return CONDITIONAL_OPTIONAL_BINDINGS[base]?.(scoped) ?? false;
 }
 
@@ -185,8 +205,8 @@ function visibleElementSizes(
   // preflight demands a value the client form wouldn't even ask for. This is the
   // whole class of bug `costPerThousand` was one instance of: bind an element to
   // an offer-type-specific field, forget the Show-for, and every ad of every
-  // other offer type fails on an empty binding. The o2_ field specs condition on
-  // `o2_offerType`, so the second offer is judged by its own type for free.
+  // other offer type fails on an empty binding. A slot's field specs condition on
+  // that slot's own `offerType`, so each offer is judged by its own type for free.
   const fieldVisibility = new Map<string, { field: string; in: string[] }>();
   for (const f of doc.fields ?? []) {
     if (f.visibleWhen) fieldVisibility.set(f.key, f.visibleWhen);
@@ -312,13 +332,16 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
   const visible = visibleElementSizes(doc, enriched, sizes);
   const placeholderSeen = new Set<string>();
   for (const el of doc.elements) {
-    if (!visible.has(el.id) || el.binding?.kind !== 'field') continue;
-    const key = el.binding.key;
+    if (!visible.has(el.id)) continue;
+    // `elementBoundKeys`, not `el.binding` — an offer PLATE has no binding and was
+    // therefore invisible here, so its figure could render the template
+    // placeholder and pass clean.
+    for (const key of elementBoundKeys(el)) {
     if (placeholderSeen.has(key)) continue;
     // Only numeric-ish fields are eligible: the guarded system fields, plus the
     // derived `_offer*` display values they feed. Free text is exempt, because
     // "Tesla Model X" contains an X and no digits yet is perfectly valid.
-    const eligible = PLACEHOLDER_GUARDED_KEYS.includes(baseKey(key)) || /^_(o2_)?offer/.test(key);
+    const eligible = PLACEHOLDER_GUARDED_KEYS.includes(baseKey(key)) || /^_(?:o\d+_)?offer/.test(key);
     if (!eligible) continue;
     const value = enriched[key];
     if (!looksLikePlaceholder(value)) continue;
@@ -332,6 +355,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       sizes: visible.get(el.id),
       message: `${label} would render the template placeholder "${value}".`,
     });
+    }
   }
 
   // ── 3. Empty bindings ──
@@ -339,14 +363,15 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
   const emptyBySizes = new Map<string, Set<string>>();
   for (const el of doc.elements) {
     const elSizes = visible.get(el.id);
-    if (!elSizes || el.binding?.kind !== 'field') continue;
-    const key = el.binding.key;
-    boundFields.add(key);
-    if (bindingMayBeEmpty(key, enriched)) continue;
-    if ((enriched[key] ?? '').trim() !== '') continue;
-    const acc = emptyBySizes.get(key) ?? new Set<string>();
-    elSizes.forEach((s) => acc.add(s));
-    emptyBySizes.set(key, acc);
+    if (!elSizes) continue;
+    for (const key of elementBoundKeys(el)) {
+      boundFields.add(key);
+      if (bindingMayBeEmpty(key, enriched)) continue;
+      if ((enriched[key] ?? '').trim() !== '') continue;
+      const acc = emptyBySizes.get(key) ?? new Set<string>();
+      elSizes.forEach((s) => acc.add(s));
+      emptyBySizes.set(key, acc);
+    }
   }
   for (const [key, sizeSet] of emptyBySizes) {
     // Don't double-report a field the compliance check already flagged.
@@ -419,6 +444,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       issues.push({
         code: 'coop_design_stale',
         severity: 'warning',
+        scope: 'design',
         message:
           `${coopDesign.make} co-op: this template's layout check is out of date ` +
           `(design or rules changed since it was last run). Re-check it from the OEM guidelines page.`,
@@ -428,6 +454,7 @@ export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }:
       issues.push({
         code: 'coop_violation',
         severity: f.severity,
+        scope: 'design',
         ruleId: f.ruleId,
         citation: f.citation,
         message:

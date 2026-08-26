@@ -52,6 +52,16 @@ An account can publish landing pages on its own domain. It is a DNS change on
 the client's side — a record they add to prove they own it, and once verified,
 pages publish there instead of on the Loomi address.
 
+Verified is the word that matters. Until the record is in place and checked, the
+domain does nothing and pages stay on the Loomi address. After verification the
+client's domain becomes the real address for every landing page in the account,
+and the Loomi address forwards to it.
+
+If an account has more than one verified domain, the first one verified is the
+one pages publish on. Adding a second doesn't move existing pages — that is
+deliberate, because moving a page's address after it has been advertised loses
+whatever standing it had built up.
+
 Give this a lead time. It depends on somebody else making a DNS change, and that
 is rarely same-day.
 

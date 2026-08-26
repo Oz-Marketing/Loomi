@@ -51,7 +51,8 @@ export const RULE_KIND_META: RuleKindMeta[] = [
   {
     kind: 'banned_phrase',
     label: 'Must not say',
-    blurb: 'Wording the manufacturer forbids anywhere in the ad.',
+    blurb:
+      'Wording the manufacturer forbids anywhere in the ad. One rule can carry a whole prohibited-terms list.',
     scope: 'content',
   },
   {
@@ -88,6 +89,8 @@ export const RULE_KIND_META: RuleKindMeta[] = [
 
 /** A rule as the editor holds it — every kind's fields on one loose object. */
 export interface DraftRule {
+  /** A prohibited-terms list — several forbidden terms under one rule. */
+  phrases?: string[];
   id: string;
   kind: RuleKind;
   severity: CoopSeverity;
@@ -155,11 +158,13 @@ export function validateRule(rule: DraftRule): string[] {
         errs.push('Give the wording it must contain.');
       }
       break;
-    case 'banned_phrase':
-      if (!isFilled(rule.phrase) && !isFilled(rule.pattern)) {
+    case 'banned_phrase': {
+      const terms = (rule.phrases ?? []).filter((x) => isFilled(x));
+      if (terms.length === 0 && !isFilled(rule.phrase) && !isFilled(rule.pattern)) {
         errs.push('Give the wording that is not allowed.');
       }
       break;
+    }
     case 'required_element':
       if (!isFilled(rule.field)) errs.push('Choose what has to appear.');
       break;
@@ -284,13 +289,22 @@ export function toCoopRule(d: DraftRule): CoopRule {
         field: d.field!.trim(),
         ...(isFilled(d.pattern) ? { pattern: d.pattern!.trim() } : { phrase: d.phrase!.trim() }),
       };
-    case 'banned_phrase':
+    case 'banned_phrase': {
+      const terms = (d.phrases ?? []).map((x) => x.trim()).filter(Boolean);
       return {
         ...base,
         kind: 'banned_phrase',
         ...(d.fields?.length ? { fields: d.fields } : {}),
-        ...(isFilled(d.pattern) ? { pattern: d.pattern!.trim() } : { phrase: d.phrase!.trim() }),
+        // A list wins where present: it is word-boundary matched, where a single
+        // `phrase` is a plain substring. Falling back the other way would silently
+        // widen a fifty-term list into fifty substring matches.
+        ...(terms.length
+          ? { phrases: terms }
+          : isFilled(d.pattern)
+            ? { pattern: d.pattern!.trim() }
+            : { phrase: d.phrase!.trim() }),
       };
+    }
     case 'required_element':
       return { ...base, kind: 'required_element', field: d.field!.trim() };
     case 'min_font_size':
@@ -341,6 +355,7 @@ export function toDraftRule(r: CoopRule): DraftRule {
     'field',
     'fields',
     'phrase',
+    'phrases',
     'pattern',
     'minPx',
     'minShortEdgeFraction',

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requirePermission } from '@/lib/permissions/require';
-import { filterAccountKeysByAccess } from '@/lib/roles';
 import { playbooksAllowed } from '@/lib/playbooks/access';
+import { resolveAuditScope } from '@/lib/playbooks/scope';
 import { loadAuditContexts, currentPeriod } from '@/lib/playbooks/context';
 import { buildAuditPayload } from '@/lib/playbooks/audit';
 
@@ -38,29 +38,52 @@ export async function GET(req: NextRequest) {
       select: { key: true },
       orderBy: { dealer: 'asc' },
     });
-    const allowed = filterAccountKeysByAccess(
-      all.map((a) => a.key),
-      session!.user.role,
-      session!.user.accountKeys ?? [],
-    );
-
-    // Empty/absent means "everything I may see". A caller that wants a narrow
-    // scope always sends keys, so there is no ambiguity to resolve here — but
-    // the CLIENT must not send an empty list while its account context is still
-    // settling, or it would silently widen to the whole roster.
-    const requested = (req.nextUrl.searchParams.get('accountKeys') ?? '')
-      .split(',')
-      .map((key) => key.trim())
-      .filter(Boolean);
-    const inScope = requested.length
-      ? allowed.filter((key) => requested.includes(key))
-      : allowed;
+    // The intersection lives in `scope.ts` so it can be tested without a
+    // database or a session — see `scope.test.ts`.
+    const inScope = resolveAuditScope({
+      allAccountKeys: all.map((a) => a.key),
+      role: session!.user.role,
+      sessionAccountKeys: session!.user.accountKeys ?? [],
+      requestedParam: req.nextUrl.searchParams.get('accountKeys'),
+    });
 
     const now = new Date();
-    const contexts = await loadAuditContexts(inScope, { now });
-    return NextResponse.json(
-      buildAuditPayload(contexts, { period: currentPeriod(now), generatedAt: now }),
-    );
+    // The newest sweep row, whether or not it finished: a started-and-never-
+    // finished run is exactly the state worth surfacing, so this deliberately
+    // does not filter on `finishedAt`.
+    const [contexts, lastRun] = await Promise.all([
+      loadAuditContexts(inScope, { now }),
+      prisma.playbookRun.findFirst({
+        where: { kind: 'sweep' },
+        orderBy: { startedAt: 'desc' },
+        select: {
+          startedAt: true,
+          finishedAt: true,
+          accountsAudited: true,
+          blockingFails: true,
+          coveragePct: true,
+          error: true,
+        },
+      }),
+    ]);
+
+    const payload = buildAuditPayload(contexts, {
+      period: currentPeriod(now),
+      generatedAt: now,
+    });
+    return NextResponse.json({
+      ...payload,
+      lastSweep: lastRun
+        ? {
+            startedAt: lastRun.startedAt.toISOString(),
+            finishedAt: lastRun.finishedAt?.toISOString() ?? null,
+            accountsAudited: lastRun.accountsAudited,
+            blockingFails: lastRun.blockingFails,
+            coveragePct: lastRun.coveragePct,
+            error: lastRun.error,
+          }
+        : null,
+    });
   } catch (err) {
     console.error('[api/playbooks/audit] GET failed:', err);
     return NextResponse.json({ error: 'Could not run the audit' }, { status: 500 });

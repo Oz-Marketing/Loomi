@@ -16,8 +16,13 @@
 // count on a larger account was a count of a sample that nothing in the
 // UI admitted was a sample.
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
+import {
+  CONTACT_SELECT,
+  contactIdentitySql,
+  serializeContact,
+} from '@/lib/contacts/queries';
 import type { Contact as ApiContact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FieldDefinition, FilterDefinition } from '@/lib/smart-list-types';
@@ -66,8 +71,8 @@ const SCAN_BATCH = 1000;
 const MAX_SCAN_ROWS = 2_000_000;
 
 export class SegmentScanOverflowError extends Error {
-  constructor(accountKey: string) {
-    super(`Segment scan for account ${accountKey} exceeded ${MAX_SCAN_ROWS} contacts`);
+  constructor(accountKey: string, limit = MAX_SCAN_ROWS) {
+    super(`Segment scan for account ${accountKey} exceeded ${limit.toLocaleString()} contacts`);
     this.name = 'SegmentScanOverflowError';
   }
 }
@@ -281,6 +286,265 @@ async function loadContactsByIds(
       const row = byId.get(id);
       if (!row) return null;
       return serializeContact(row);
+    })
+    .filter((c): c is ApiContact => c !== null);
+}
+
+// ── Cross-account resolution (group roll-up) ────────────────────
+//
+// A group account (Young Powersports, Young Automotive Group) owns no
+// contacts of its own — every contact hangs off a rooftop beneath it. So
+// the single-account functions above, which are all `accountKey = $1`,
+// correctly return ZERO for a group, and that is what the segment
+// builder showed while it only ever asked about one key.
+//
+// The rule everywhere else in the product is: a group resolves to itself
+// plus its descendants (see `expandWithDescendants`). These functions
+// apply that rule to segments.
+//
+// Two things make this more than an `IN (...)`:
+//
+//   1. The definition is validated and translated PER ACCOUNT, because
+//      the field catalogue is per-account — the same custom-field key can
+//      exist in one rooftop and not the next. Each account contributes
+//      its own predicate, and they're OR'd together with the account
+//      guard so one rooftop's translation can never leak into another's
+//      rows.
+//   2. Contacts are unique per (accountKey, email), so a shopper who has
+//      bought at three rooftops is three rows. Counting rows would report
+//      three people. Everything user-facing here is therefore grouped by
+//      contact identity — the SAME expression the group Contacts list
+//      groups by — so "12,438 contacts match" and the 12,438 rows you get
+//      when you click through are the same number.
+
+/** One account's slice of a cross-account resolution. */
+export interface SegmentAccountPlan {
+  accountKey: string;
+  /** Already validated against THIS account's field catalogue. */
+  definition: FilterDefinition;
+  fields: FieldDefinition[];
+}
+
+export interface CrossAccountSegmentResolution {
+  /** Distinct PEOPLE matching, across every account in scope. */
+  count: number;
+  reachable: { email: number; phone: number };
+  /** 'scan' when any account in scope needed the JS engine. */
+  strategy: SegmentStrategy;
+  untranslatable: string[];
+}
+
+export interface CrossAccountSegmentPreview extends CrossAccountSegmentResolution {
+  /** Distinct people in the accounts in scope, for the "% of roster" line. */
+  accountTotal: number;
+  contacts: ApiContact[];
+}
+
+/**
+ * Ceiling on the ids one untranslatable account may contribute to a
+ * cross-account predicate. Matches `MAX_SEGMENT_IDS` in lookup.ts — the
+ * same bound, for the same reason: a pathological filter must not turn a
+ * preview into an unbounded array held in memory.
+ */
+const MAX_SCOPE_IDS = 200_000;
+
+/**
+ * The WHERE clause covering every account in scope, plus how it was
+ * arrived at.
+ *
+ * Accounts whose definition translates to SQL contribute a predicate.
+ * Accounts that don't (custom fields — see sql-filter.ts) are scanned for
+ * their ids first and contribute an id list, so the aggregate below is
+ * still one grouped query over the whole scope rather than a per-account
+ * sum that couldn't dedupe.
+ */
+async function buildScopePredicate(plans: SegmentAccountPlan[]): Promise<{
+  predicate: Prisma.Sql;
+  strategy: SegmentStrategy;
+  untranslatable: string[];
+}> {
+  const clauses: Prisma.Sql[] = [];
+  const untranslatable = new Set<string>();
+  const scanIds: string[] = [];
+  let scanned = false;
+
+  for (const plan of plans) {
+    const refs = await loadSegmentRefs(plan.accountKey, plan.definition);
+    const { where, untranslatable: keys } = translateDefinitionToSql(
+      plan.definition,
+      plan.fields,
+      refs,
+    );
+    for (const key of keys) untranslatable.add(key);
+
+    if (where) {
+      clauses.push(
+        Prisma.sql`("Contact"."accountKey" = ${plan.accountKey} AND ${where})`,
+      );
+      continue;
+    }
+
+    scanned = true;
+    const ids = await collectSegmentContactIds(plan.accountKey, plan.definition, plan.fields);
+    if (scanIds.length + ids.length > MAX_SCOPE_IDS) {
+      throw new SegmentScanOverflowError(plan.accountKey, MAX_SCOPE_IDS);
+    }
+    scanIds.push(...ids);
+  }
+
+  if (scanIds.length > 0) {
+    clauses.push(Prisma.sql`("Contact"."id" = ANY(${scanIds}))`);
+  }
+
+  return {
+    // No accounts, or every account resolved to nothing: an explicitly
+    // empty predicate rather than a missing one. `WHERE` with nothing
+    // after it would be a syntax error, and `WHERE TRUE` would return
+    // the whole table — the worst possible default here.
+    predicate: clauses.length > 0 ? Prisma.join(clauses, ' OR ') : Prisma.sql`FALSE`,
+    strategy: scanned ? 'scan' : 'sql',
+    untranslatable: [...untranslatable],
+  };
+}
+
+const IDENTITY = contactIdentitySql('"Contact"');
+
+/** Distinct people matching, and how many carry each identifier. */
+async function aggregateScope(predicate: Prisma.Sql): Promise<{
+  count: number;
+  reachable: { email: number; phone: number };
+}> {
+  const rows = await prisma.$queryRaw<
+    Array<{ count: number; with_email: number; with_phone: number }>
+  >(Prisma.sql`
+    WITH scoped AS (
+      SELECT
+        ${IDENTITY} AS ident,
+        btrim(coalesce("Contact"."email", '')) <> '' AS has_email,
+        btrim(coalesce("Contact"."phone", '')) <> '' AS has_phone
+      FROM "Contact"
+      WHERE ${predicate}
+    ),
+    grouped AS (
+      -- One row per PERSON. bool_or because reachability is a property
+      -- of the person, not of whichever rooftop's row happens to win:
+      -- an email at one store makes them emailable.
+      SELECT ident, bool_or(has_email) AS has_email, bool_or(has_phone) AS has_phone
+      FROM scoped
+      GROUP BY ident
+    )
+    SELECT
+      COUNT(*)::int AS count,
+      COUNT(*) FILTER (WHERE has_email)::int AS with_email,
+      COUNT(*) FILTER (WHERE has_phone)::int AS with_phone
+    FROM grouped
+  `);
+  const row = rows[0];
+  return {
+    count: row?.count ?? 0,
+    reachable: { email: row?.with_email ?? 0, phone: row?.with_phone ?? 0 },
+  };
+}
+
+/** Count a definition across every account in scope. Exact, deduped. */
+export async function countSegmentAcrossAccounts(
+  plans: SegmentAccountPlan[],
+): Promise<CrossAccountSegmentResolution> {
+  const { predicate, strategy, untranslatable } = await buildScopePredicate(plans);
+  const totals = await aggregateScope(predicate);
+  return { ...totals, strategy, untranslatable };
+}
+
+/** Count plus a bounded sample, for the builder's live preview. */
+export async function previewSegmentAcrossAccounts(
+  plans: SegmentAccountPlan[],
+  sampleSize = 25,
+): Promise<CrossAccountSegmentPreview> {
+  const { predicate, strategy, untranslatable } = await buildScopePredicate(plans);
+  const accountKeys = plans.map((p) => p.accountKey);
+
+  const [totals, sampleRows, totalRows] = await Promise.all([
+    aggregateScope(predicate),
+    prisma.$queryRaw<Array<{ rep_id: string }>>(Prisma.sql`
+      WITH scoped AS (
+        SELECT
+          "Contact"."id",
+          "Contact"."dateAdded",
+          "Contact"."createdAt",
+          ${IDENTITY} AS ident
+        FROM "Contact"
+        WHERE ${predicate}
+      ),
+      grouped AS (
+        -- One representative row per person, newest first — the same
+        -- representative the Contacts list picks.
+        SELECT
+          (array_agg("id" ORDER BY "dateAdded" DESC NULLS LAST, "createdAt" DESC))[1] AS rep_id,
+          max("dateAdded") AS last_added,
+          max("createdAt") AS last_created
+        FROM scoped
+        GROUP BY ident
+      )
+      SELECT rep_id
+      FROM grouped
+      ORDER BY last_added DESC NULLS LAST, last_created DESC
+      LIMIT ${sampleSize}
+    `),
+    // The roster the segment is a share OF — also distinct people, or the
+    // percentage would be a fraction with two different denominators.
+    prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+      SELECT COUNT(*)::int AS total
+      FROM (
+        SELECT DISTINCT ${IDENTITY} AS ident
+        FROM "Contact"
+        WHERE "Contact"."accountKey" = ANY(${accountKeys})
+      ) people
+    `),
+  ]);
+
+  return {
+    ...totals,
+    strategy,
+    untranslatable,
+    accountTotal: totalRows[0]?.total ?? 0,
+    contacts: await loadContactsById(sampleRows.map((r) => r.rep_id)),
+  };
+}
+
+/**
+ * Every matching contact id across the scope, NOT deduped — a sync or
+ * export needs the underlying rows, and dedupes them itself by hashed
+ * identity (see eligibility.ts).
+ */
+export async function collectSegmentContactIdsAcrossAccounts(
+  plans: SegmentAccountPlan[],
+): Promise<string[]> {
+  const { predicate } = await buildScopePredicate(plans);
+  const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "Contact"."id"
+    FROM "Contact"
+    WHERE ${predicate}
+    ORDER BY "Contact"."id" ASC
+  `);
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Like `loadContactsByIds` but without an account restriction: the ids
+ * come from a query that was already account-scoped, and a cross-account
+ * sample spans several of them by design.
+ */
+async function loadContactsById(ids: string[]): Promise<ApiContact[]> {
+  if (ids.length === 0) return [];
+  const rows = await prisma.contact.findMany({
+    where: { id: { in: ids } },
+    select: CONTACT_SELECT,
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids
+    .map((id) => {
+      const row = byId.get(id);
+      return row ? serializeContact(row) : null;
     })
     .filter((c): c is ApiContact => c !== null);
 }

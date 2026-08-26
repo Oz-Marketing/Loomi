@@ -183,7 +183,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   const [busy, setBusy] = useState(false);
   const [triggers, setTriggers] = useState<FlowApiTrigger[]>([]);
 
-  // ── Iris ──
+  // ── Loomi AI ──
   // When open, the left rail shows the chat panel instead of the active
   // FeatureDrawer. The empty-state hero on the canvas opens this panel
   // pre-filled with the user's prompt.
@@ -851,7 +851,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
     setDirty(true);
   }, [edges, setNodes]);
 
-  // ── Iris plumbing ──
+  // ── Loomi AI plumbing ──
   // Snapshot the live canvas + trigger state for the chat panel. Pulled
   // every turn so the model never reasons about stale state.
   const getAiSnapshot = useCallback((): FlowSnapshot => {

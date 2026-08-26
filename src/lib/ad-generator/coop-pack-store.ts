@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { parseCoopPack, type CoopRulePack } from './coop-rules';
+import { parseCoopPack, type CoopRule, type CoopRulePack } from './coop-rules';
 
 /**
  * Loading co-op rule packs.
@@ -137,4 +137,99 @@ export async function makesMissingCoopPack(accountKey?: string): Promise<string[
   } catch {
     return [];
   }
+}
+
+/**
+ * A pack's rules split by review state. Pure, so the filtering rule is testable
+ * without a database.
+ *
+ * ABSENT `reviewState` COUNTS AS ACCEPTED. Every rule transcribed by hand predates
+ * the field, and the alternative — treating absence as unreviewed — would silently
+ * switch off the only three packs that exist.
+ */
+export function splitByReviewState(pack: CoopRulePack): {
+  accepted: CoopRulePack;
+  proposedCount: number;
+  rejectedCount: number;
+} {
+  const state = (r: CoopRule) => r.reviewState ?? 'accepted';
+  return {
+    accepted: { ...pack, rules: pack.rules.filter((r) => state(r) === 'accepted') },
+    proposedCount: pack.rules.filter((r) => state(r) === 'proposed').length,
+    rejectedCount: pack.rules.filter((r) => state(r) === 'rejected').length,
+  };
+}
+
+/** The one document every drafted rule cites, or null if they disagree / none do. */
+function soleSourceDocId(rules: CoopRule[]): string | null {
+  const ids = new Set(rules.map((r) => r.sourceDocId).filter((id): id is string => !!id));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+
+export interface AcceptedCoopPack {
+  /** The row id. `AdTemplateCoopCheck` caches against this, not the make. */
+  packId: string;
+  /** ACCEPTED rules only. Never contains a proposal. */
+  pack: CoopRulePack;
+  /** From the DB ROW, never the JSON blob — a hand-edited pack cannot self-certify. */
+  verified: boolean;
+  version: string;
+  /**
+   * The `AdGuidelineDoc` the pack was drafted from, when every drafted rule agrees
+   * on one — enough to deep-link a rule into the reader.
+   *
+   * DERIVED from the rules, because `AdCoopRulePack` has no such column: it stores
+   * `sourceAssetId` (a MediaAsset) and `sourceUrl`, which are not document ids. Null
+   * for a hand-transcribed pack, which recorded no document link at all. A pack-level
+   * column would be cleaner and is worth adding when drafted packs are first written;
+   * deriving it avoids a migration for a field only drafted rules can populate.
+   */
+  sourceDocId: string | null;
+  /**
+   * Drafted rules awaiting review. Report the COUNT; never state what they say.
+   *
+   * ⚠️ NEVER DERIVE THIS BY SUBTRACTION. `total − accepted` folds REJECTED rules into
+   * "awaiting review", which both overstates the queue and implies a rule someone has
+   * already declined might still come back. A rejected rule HAS been reviewed. That is
+   * why the two counts are returned separately rather than left to arithmetic.
+   * (Found for real in a sibling implementation that computed pending that way.)
+   */
+  proposedCount: number;
+}
+
+/**
+ * The pack as anything outside the review queue should see it.
+ *
+ * WHY THIS EXISTS RATHER THAN A FILTER AT EACH CALLER. Once rules can be
+ * AI-drafted, `AdCoopRulePack.rules` holds a mixture of accepted rules and
+ * unreviewed proposals. Any caller reading the blob directly will eventually
+ * present a proposal as settled — a compliance check that blocks an ad on an
+ * unreviewed rule, or an assistant that answers "Chevrolet requires X" citing one.
+ * Both launder a draft into an authority. A filter every caller must remember is
+ * the same defect with extra steps, so the filtering lives here and callers take
+ * this instead.
+ *
+ * `proposedCount` is deliberately part of the return: "there are 3 drafted rules
+ * awaiting review" is useful and safe, where the rules themselves are not.
+ *
+ * Resilient in the same way as {@link loadCoopPack} — an unmigrated or unreadable
+ * table degrades to null, meaning "no checks", never a thrown request.
+ */
+export async function loadAcceptedCoopPack(
+  make: string,
+  at = new Date(),
+): Promise<AcceptedCoopPack | null> {
+  const active = await loadActiveCoopPack(make, at);
+  if (!active) return null;
+  const { accepted, proposedCount } = splitByReviewState(active.pack);
+  return {
+    packId: active.id,
+    pack: accepted,
+    // `loadActiveCoopPack` already overwrites this from the row; restated here so a
+    // future change to either function can't quietly make the blob authoritative.
+    verified: active.pack.verified === true,
+    version: active.pack.version,
+    sourceDocId: soleSourceDocId(accepted.rules),
+    proposedCount,
+  };
 }

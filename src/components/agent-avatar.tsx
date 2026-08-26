@@ -12,10 +12,19 @@
 import { useState } from 'react';
 import { MARK_PATHS, type AgentIdentity } from '@/lib/ai/specialists/identity';
 
+/**
+ * Rendered box per size.
+ *
+ * Sized for a PORTRAIT rather than for the geometric mark these started as. A
+ * face needs more pixels than a glyph to read as a particular person: at 24px
+ * Vera was a lilac smudge beside her own name. `lg` is the empty-state hero and
+ * is deliberately much larger — it is the one place the character is the subject
+ * rather than a label on something else.
+ */
 const SIZES = {
-  sm: { box: 24, stroke: 1.6 },
-  md: { box: 32, stroke: 1.5 },
-  lg: { box: 44, stroke: 1.4 },
+  sm: { box: 30, stroke: 1.6 },
+  md: { box: 38, stroke: 1.5 },
+  lg: { box: 76, stroke: 1.4 },
 } as const;
 
 export function AgentAvatar({
@@ -23,11 +32,26 @@ export function AgentAvatar({
   size = 'md',
   /** Adds a soft pulse — used while the agent is thinking. */
   active = false,
+  /**
+   * Fill the parent instead of using a fixed box — for a container that already
+   * has a size and a shape of its own, like the floating bubble.
+   */
+  fill = false,
+  /**
+   * Drop the tinted disc and ring.
+   *
+   * Those exist to give a face something to sit on when it floats on a flat
+   * panel. Inside the bubble it already has one — the bubble's own gradient — so
+   * the ring reads as a second border drawn inside the first.
+   */
+  bare = false,
   className = '',
 }: {
   identity: AgentIdentity;
   size?: keyof typeof SIZES;
   active?: boolean;
+  fill?: boolean;
+  bare?: boolean;
   className?: string;
 }) {
   const { box, stroke } = SIZES[size];
@@ -41,14 +65,19 @@ export function AgentAvatar({
 
   return (
     <span
-      className={`relative inline-flex shrink-0 items-center justify-center rounded-full ${className}`}
+      className={`relative inline-flex shrink-0 items-center justify-center rounded-full ${
+        fill ? 'h-full w-full' : ''
+      } ${className}`}
       style={{
-        width: box,
-        height: box,
-        // A tint of the agent's accent rather than the accent itself: a saturated
-        // disc at 44px reads as a status dot, not a face.
-        background: `color-mix(in srgb, ${accent} 18%, transparent)`,
-        boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${accent} 45%, transparent)`,
+        ...(fill ? {} : { width: box, height: box }),
+        ...(bare
+          ? {}
+          : {
+              // A tint of the agent's accent rather than the accent itself: a
+              // saturated disc at 44px reads as a status dot, not a face.
+              background: `color-mix(in srgb, ${accent} 18%, transparent)`,
+              boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${accent} 45%, transparent)`,
+            }),
       }}
       aria-hidden="true"
     >
@@ -66,8 +95,8 @@ export function AgentAvatar({
       ) : (
         <svg
           viewBox="0 0 24 24"
-          width={box * 0.58}
-          height={box * 0.58}
+          width={fill ? '58%' : box * 0.58}
+          height={fill ? '58%' : box * 0.58}
           fill="none"
           stroke={accent}
           strokeWidth={stroke}

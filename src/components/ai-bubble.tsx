@@ -1287,7 +1287,10 @@ export function AiBubble() {
         {isSystem ? (
           <SparklesIcon className="w-5 h-5" />
         ) : (
-          <AgentAvatar identity={identity} size="md" />
+          // Fills the bubble with no ring of its own: the button is already a
+          // circle with its own gradient, so the avatar's disc would draw a
+          // second border just inside the first.
+          <AgentAvatar identity={identity} fill bare />
         )}
       </button>
       )}

@@ -32,6 +32,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { CoopPackEditor } from './coop-pack-editor';
 import { CoopRuleReview } from './coop-rule-review';
@@ -330,6 +331,11 @@ export function CoopGuidelinesTab() {
   const [eventDraft, setEventDraft] = useState<ReturnType<typeof emptyEventDraft> | null>(null);
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
   const [pickingLogo, setPickingLogo] = useState(false);
+  /** Mounted guard: `document.body` doesn't exist during SSR, and the modals below
+   *  are portalled onto it. */
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const [reading, setReading] = useState<GuidelineDocRow | null>(null);
   /** Where to land in the reader — set when arriving from a rule's citation. */
   const [readingAt, setReadingAt] = useState<{ page: number; query: string } | null>(null);
@@ -358,6 +364,20 @@ export function CoopGuidelinesTab() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Documents change-watching can actually reach.
+   *
+   * The daily sweep re-downloads and re-fingerprints documents registered by WEB
+   * ADDRESS. A document that was uploaded as a file has no address to re-fetch, and
+   * its bytes cannot change on their own — so it is not watched, and never was. With
+   * none on file the button is disabled rather than cheerfully reporting success
+   * having checked nothing, which is what it used to do.
+   */
+  const watchable = useMemo(
+    () => makes.reduce((n, m) => n + m.docs.filter((d) => d.sourceUrl).length, 0),
+    [makes],
+  );
 
   const act = useCallback(
     async (action: string, extra: Record<string, unknown>, label: string, okMsg: string) => {
@@ -452,6 +472,45 @@ export function CoopGuidelinesTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.make, active?.docs.length]);
 
+  /** Re-check the watched documents and say what actually happened. */
+  const checkForUpdates = useCallback(async () => {
+    setBusy('refresh-docs');
+    try {
+      const res = await fetch('/api/ad-generator/oem-assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refresh_docs' }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        checked?: number;
+        changed?: string[];
+        failed?: string[];
+      };
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const checked = json.checked ?? 0;
+      const changed = json.changed ?? [];
+      const failed = json.failed ?? [];
+      // Say what happened rather than "done". "Checked 4, nothing moved" is the
+      // useful answer and it is also the most common one.
+      if (changed.length) {
+        toast.success(`${changed.length} document${changed.length === 1 ? '' : 's'} changed: ${changed.join(', ')}`);
+      } else if (checked > 0) {
+        toast.success(`Checked ${checked} document${checked === 1 ? '' : 's'} — none have changed.`);
+      } else {
+        toast.info('Nothing to check — no document is registered by web address.');
+      }
+      if (failed.length) {
+        toast.error(`${failed.length} could not be reached: ${failed.join(', ')}`);
+      }
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not check for updates');
+    } finally {
+      setBusy(null);
+    }
+  }, [load]);
+
   const attention = useMemo(
     () => ({
       docs: makes.flatMap((m) =>
@@ -471,32 +530,41 @@ export function CoopGuidelinesTab() {
   }
 
   const totalDocs = makes.reduce((n, m) => n + m.docs.length, 0);
-  const withRules = makes.filter((m) => m.packs.length > 0).length;
+  // Makes with at least one rule a person has ACCEPTED. A pack of unreviewed drafts
+  // enforces nothing, so counting the row would overstate what is live.
+  const withRules = makes.filter((m) => m.packs.some((p) => p.ruleCount > 0)).length;
+  const awaitingReview = makes.reduce(
+    (n, m) => n + m.packs.reduce((k, p) => k + p.proposedCount, 0),
+    0,
+  );
 
   return (
     <div>
       <header className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="max-w-3xl text-sm text-[var(--muted-foreground)]">
-            {makes.length} manufacturers · {totalDocs} guideline documents watched for changes · {withRules} with
-            rules Loomi enforces automatically
+            {/* "watched for changes" was not true: watching needs a web address, and
+                every document here was uploaded as a file. Say what is actually the
+                case rather than describing a capability nobody has. */}
+            {makes.length} manufacturers · {totalDocs} guideline document{totalDocs === 1 ? '' : 's'} on file
+            {watchable > 0 ? `, ${watchable} watched for changes` : ''} · {withRules} with rules Loomi enforces
+            automatically
+            {awaitingReview > 0 ? ` · ${awaitingReview} drafted rules awaiting review` : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => act('refresh_docs', {}, 'refresh-docs', 'Documents re-checked')}
-            disabled={!!busy || loading}
+            onClick={checkForUpdates}
+            disabled={!!busy || loading || watchable === 0}
+            title={
+              watchable === 0
+                ? 'Nothing to check. Change-watching needs a document registered by web address; every document on file was uploaded as a file, and an uploaded file cannot change on its own.'
+                : `Re-download and re-fingerprint the ${watchable} document${watchable === 1 ? '' : 's'} registered by web address.`
+            }
             className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
           >
             <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} />
             Check for updates
-          </button>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Reload
           </button>
         </div>
       </header>
@@ -1052,7 +1120,9 @@ export function CoopGuidelinesTab() {
       )}
 
       {/* ── add / replace a document ── */}
-      {docDraft && (
+      {/* Portalled for the same reason as the event modal below — see the note there. */}
+      {mounted && docDraft && createPortal(
+        (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-1 text-sm font-semibold text-[var(--foreground)]">
@@ -1161,10 +1231,22 @@ export function CoopGuidelinesTab() {
             </div>
           </div>
         </div>
-      )}
+        ), document.body)}
 
       {/* ── add / edit event ── */}
-      {eventDraft && (
+      {/* PORTALLED TO THE BODY, like the reader above it, and for the same reason:
+          `position: fixed` resolves against the nearest ancestor carrying a
+          transform, filter, backdrop-filter or containment — and this page is built
+          from glass cards that all use backdrop-blur. Rendered in place, `inset-0`
+          sized itself to whichever card happened to contain it instead of the
+          viewport, so the modal appeared boxed inside the panel rather than over the
+          screen.
+
+          z-50 is deliberately NOT raised to the drill-in layer (260). The media
+          picker opens FROM this modal and sits at z-[220]; at 260 this overlay would
+          cover the picker and choosing an event mark would become impossible. */}
+      {mounted && eventDraft && createPortal(
+        (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-4 text-sm font-semibold text-[var(--foreground)]">
@@ -1326,7 +1408,7 @@ export function CoopGuidelinesTab() {
             </div>
           </div>
         </div>
-      )}
+        ), document.body)}
 
       {/* ── read a document in place ── */}
       {reading && (

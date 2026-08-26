@@ -54,6 +54,27 @@ describe('host routing', () => {
   });
 });
 
+describe('agent portraits', () => {
+  // Regression: /agents/coop.webp 307'd on first wiring, because the assistant's
+  // avatar is a public asset and public assets follow the host rewrite unless
+  // they are exempted. The panel is mounted on all three surfaces, so an
+  // unexempted portrait would silently fall back to the generated mark on two of
+  // them — a failure that looks like a design choice rather than a bug.
+  it('serves a portrait unrewritten on every host', async () => {
+    for (const host of ['studio.loomilm.com', 'reporting.loomilm.com', 'app.loomilm.com']) {
+      expect(await resolved(host, '/agents/coop.webp')).toBe('/agents/coop.webp');
+    }
+  });
+
+  it('does not exempt a path that merely starts the same way', async () => {
+    // `/agents/` is a public asset directory; `/agentsettings` would be a page
+    // and must still follow its host.
+    expect(await resolved('reporting.loomilm.com', '/agentsettings')).toBe(
+      '/reporting/agentsettings',
+    );
+  });
+});
+
 describe('app icons', () => {
   // Regression: icon.png and apple-icon.png shipped without being added to
   // either exemption list, so both 307'd to /login in production. favicon.ico

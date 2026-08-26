@@ -19,7 +19,7 @@ import { AdAutomationTab } from '@/components/settings/ad-automation-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { IndustriesTab } from '@/components/settings/industries-tab';
-import { KnowledgeBaseTab } from '@/components/settings/knowledge-base-tab';
+import { AgentsTab } from '@/components/settings/agents-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { RateCardsTab } from '@/components/settings/rate-cards-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
@@ -109,7 +109,7 @@ export function SettingsPanel({
       <UsersTab allClients onOpenUser={onOpenUser} onCreateUser={onCreateUser} />
     ),
     teams: () => <TeamsTab />,
-    knowledge: () => <KnowledgeBaseTab />,
+    agents: () => <AgentsTab />,
     industries: () => <IndustriesTab />,
     // Rate cards lead: they're what actually prices work now. The single agency
     // default below them is only the fallback for a channel with no card, so it
@@ -169,7 +169,7 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'users',
   'client-users',
   'teams',
-  'knowledge',
+  'agents',
   'industries',
   'markup',
   'budget-channels',

@@ -19,6 +19,16 @@ import { AgentMessageActions } from './agent-message-actions';
 import { AgentMarkdown } from './agent-markdown';
 import { AgentConversations } from './agent-conversations';
 import { useDictation } from '@/hooks/use-dictation';
+import {
+  ACCEPT,
+  MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES,
+  MAX_TEXT_BYTES,
+  formatBytes,
+  isImageType,
+  toWire,
+  type Attachment,
+} from '@/lib/ai/attachments';
 import { AgentTeaser } from './agent-teaser';
 import {
   SparklesIcon,
@@ -32,6 +42,7 @@ import {
   PencilSquareIcon,
   MicrophoneIcon,
   PaperClipIcon,
+  PhotoIcon,
   StopIcon,
 } from '@heroicons/react/24/outline';
 
@@ -53,6 +64,8 @@ interface ChatMessage {
   truncatedReason?: string | null;
   /** Saved row id, once the turn has been persisted. Absent while in flight. */
   id?: string;
+  /** What was attached to this turn — rendered as chips on the message. */
+  attachments?: Array<{ kind: 'text' | 'image'; name: string }>;
   /**
    * ISO time the turn was sent. Set locally when you send, and restored from the
    * saved thread when one is reopened — so a conversation you come back to a week
@@ -271,26 +284,90 @@ export function AiBubble() {
   // through it AND somewhere to store the file — neither of which should be
   // guessed at behind a paperclip. Inlining a .txt/.md/.csv is genuinely useful
   // today and doesn't pretend to more than it does.
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  /**
+   * Attach files — images or text.
+   *
+   * They become CHIPS above the composer, not text pasted into it. An earlier
+   * version inlined a file's contents into the textarea, which turned attaching a
+   * 300-row CSV into scrolling past 300 rows to find your own sentence, and made
+   * the attachment impossible to remove without deleting it by hand.
+   */
   const attachFile = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.txt,.md,.csv,.json,.log,text/*';
+    input.accept = ACCEPT;
+    input.multiple = true;
     input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      if (file.size > 200_000) {
-        setError('That file is too large to attach — 200 KB max for now.');
-        return;
+      const files = Array.from(input.files ?? []);
+      if (!files.length) return;
+      setError('');
+
+      const next: Attachment[] = [];
+      for (const file of files) {
+        const image = isImageType(file.type);
+        const cap = image ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
+        if (file.size > cap) {
+          setError(
+            `${file.name} is ${formatBytes(file.size)} — ${image ? 'images' : 'text files'} are capped at ${formatBytes(cap)}.`,
+          );
+          continue;
+        }
+        // A file that is neither an accepted image nor readable text: say which,
+        // rather than attaching something the model will receive as mojibake.
+        if (!image && file.type && !file.type.startsWith('text/') && !/\.(txt|md|csv|json|log|tsv|ya?ml)$/i.test(file.name)) {
+          setError(`${file.name} isn't a supported type. Attach an image (JPEG, PNG, GIF, WebP) or a text file.`);
+          continue;
+        }
+
+        try {
+          if (image) {
+            const data = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => {
+                const result = String(reader.result);
+                // Strip the `data:<type>;base64,` prefix — the API wants raw base64.
+                resolve(result.slice(result.indexOf(',') + 1));
+              };
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(file);
+            });
+            next.push({
+              id: `${file.name}-${file.size}-${next.length}`,
+              kind: 'image',
+              name: file.name,
+              size: file.size,
+              data,
+              mediaType: file.type,
+            });
+          } else {
+            next.push({
+              id: `${file.name}-${file.size}-${next.length}`,
+              kind: 'text',
+              name: file.name,
+              size: file.size,
+              text: await file.text(),
+            });
+          }
+        } catch {
+          setError(`Could not read ${file.name}.`);
+        }
       }
-      try {
-        const text = await file.text();
-        setPrompt((prev) =>
-          `${prev ? `${prev.trimEnd()}\n\n` : ''}--- ${file.name} ---\n${text}`.trim(),
-        );
-        inputRef.current?.focus();
-      } catch {
-        setError('Could not read that file.');
-      }
+
+      setAttachments((prev) => {
+        const merged = [...prev, ...next];
+        if (merged.length > MAX_ATTACHMENTS) {
+          setError(`Up to ${MAX_ATTACHMENTS} attachments per message.`);
+          return merged.slice(0, MAX_ATTACHMENTS);
+        }
+        return merged;
+      });
+      inputRef.current?.focus();
     };
     input.click();
   }, []);
@@ -387,7 +464,10 @@ export function AiBubble() {
   const sendMessage = useCallback(
     async (override?: string) => {
       const trimmed = (override ?? prompt).trim();
-      if (!trimmed || loading) return;
+      // An attachment alone is a legitimate message — "what's wrong with this ad?"
+      // is often just the ad.
+      const outgoing = attachments.map(toWire).filter((a) => a !== null);
+      if ((!trimmed && outgoing.length === 0) || loading) return;
 
       if (!override) setPrompt('');
       setError('');
@@ -397,8 +477,12 @@ export function AiBubble() {
         role: 'user',
         content: trimmed,
         at: new Date().toISOString(),
+        attachments: attachments.map((a) => ({ kind: a.kind, name: a.name })),
       };
       setHistory((prev) => [...prev, userMsg]);
+      // Cleared once sent: they belong to the message that carried them, and
+      // leaving them staged would silently re-send them on the next question.
+      setAttachments([]);
 
       const controller = new AbortController();
       abortRef.current = controller;
@@ -442,6 +526,7 @@ export function AiBubble() {
             signal: controller.signal,
             body: JSON.stringify({
               messages: [...priorTurns, { role: 'user', content: trimmed }],
+              attachments: outgoing,
               conversationId: convoId,
               context: { page: pathname, accountKey, accountName: accountData?.dealer || null },
             }),
@@ -539,6 +624,7 @@ export function AiBubble() {
           signal: controller.signal,
           body: JSON.stringify({
             prompt: trimmed,
+            attachments: outgoing,
             history: priorTurns,
             context: {
               page: pathname,
@@ -597,6 +683,7 @@ export function AiBubble() {
       hint,
       identity.key,
       conversationId,
+      attachments,
     ],
   );
 
@@ -863,6 +950,23 @@ export function AiBubble() {
               <div key={`chat-${idx}`} className="group">
                 {msg.role === 'user' ? (
                   <div className="space-y-1">
+                    {msg.attachments && msg.attachments.length > 0 && (
+                      <div className="flex flex-wrap justify-end gap-1">
+                        {msg.attachments.map((a, aIdx) => (
+                          <span
+                            key={`att-${idx}-${aIdx}`}
+                            className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] px-1.5 py-0.5 text-[9px] text-[var(--muted-foreground)]"
+                          >
+                            {a.kind === 'image' ? (
+                              <PhotoIcon className="h-3 w-3" />
+                            ) : (
+                              <DocumentTextIcon className="h-3 w-3" />
+                            )}
+                            <span className="max-w-[9rem] truncate">{a.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex justify-end">
                       {/* Neutral primary-tinted bubble for user messages.
                           Earlier this was a pink gradient with white text;
@@ -1043,6 +1147,40 @@ export function AiBubble() {
                 thing you are typing in. Attach and dictate move below, because
                 they act on the draft rather than submitting it, and crowding four
                 controls onto one line made the field itself the smallest part. */}
+            {/* Staged attachments. Above the field rather than inside it: the
+                composer stays a place to type, and each file stays removable. */}
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {attachments.map((a) => (
+                  <span
+                    key={a.id}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] py-1 pl-1.5 pr-1 text-[10px] text-[var(--foreground)]"
+                  >
+                    {a.kind === 'image' && a.data ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`data:${a.mediaType};base64,${a.data}`}
+                        alt=""
+                        className="h-6 w-6 rounded object-cover"
+                      />
+                    ) : (
+                      <DocumentTextIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                    )}
+                    <span className="max-w-[10rem] truncate">{a.name}</span>
+                    <span className="text-[var(--muted-foreground)]">{formatBytes(a.size)}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(a.id)}
+                      aria-label={`Remove ${a.name}`}
+                      className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                    >
+                      <XMarkIcon className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
             <div className="relative">
               <textarea
                 ref={inputRef}
@@ -1072,7 +1210,7 @@ export function AiBubble() {
                 <button
                   type="button"
                   onClick={() => void sendMessage()}
-                  disabled={!prompt.trim()}
+                  disabled={!prompt.trim() && attachments.length === 0}
                   title="Send"
                   aria-label="Send"
                   className="absolute right-2 bottom-[5px] p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
@@ -1088,8 +1226,8 @@ export function AiBubble() {
               <button
                 type="button"
                 onClick={attachFile}
-                title="Attach a text file"
-                aria-label="Attach a text file"
+                title="Attach images or text files"
+                aria-label="Attach images or text files"
                 className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
               >
                 <PaperClipIcon className="w-4 h-4" />

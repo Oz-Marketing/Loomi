@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type Anthropic from '@anthropic-ai/sdk';
 import { requireAuth } from '@/lib/api-auth';
 import { getChatSystemPrompt } from '@/lib/ai-knowledge';
 import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
+import { attachmentBlocks, type WireAttachment } from '@/lib/ai/attachments';
+
+type MessageParam = Anthropic.MessageParam;
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -19,6 +23,8 @@ interface ChatRequestBody {
     isAdmin?: boolean;
   };
   history?: ConversationMessage[];
+  /** Images and text files attached to this question. */
+  attachments?: WireAttachment[];
 }
 
 interface ChatResponsePayload {
@@ -67,7 +73,7 @@ export async function POST(req: NextRequest) {
 
     // Build message array with conversation history (last 10 messages)
     const systemPrompt = await getChatSystemPrompt();
-    const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    const messages: MessageParam[] = [];
 
     const history = Array.isArray(body.history) ? body.history.slice(-10) : [];
     for (const msg of history) {
@@ -78,7 +84,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    messages.push({ role: 'user', content: userContent });
+    // Same shape as the specialist route: attachments first, question last.
+    const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+    messages.push(
+      attachments.length
+        ? {
+            role: 'user',
+            content: [
+              ...(attachmentBlocks(attachments) as Anthropic.ContentBlockParam[]),
+              { type: 'text', text: userContent },
+            ],
+          }
+        : { role: 'user', content: userContent },
+    );
 
     const response = await client.messages.create({
       model: ANTHROPIC_MODEL,

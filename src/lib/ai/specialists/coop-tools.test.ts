@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const loadCoopPack = vi.fn();
+const loadAcceptedCoopPack = vi.fn();
 const listCoopPacks = vi.fn();
 const getGuidelineDoc = vi.fn();
 const listGuidelineDocs = vi.fn();
 const listEventAssets = vi.fn();
 
-vi.mock('@/lib/ad-generator/coop-pack-store', () => ({ loadCoopPack, listCoopPacks }));
+vi.mock('@/lib/ad-generator/coop-pack-store', () => ({ loadAcceptedCoopPack, listCoopPacks }));
 vi.mock('@/lib/ad-generator/guideline-docs', () => ({ getGuidelineDoc, listGuidelineDocs }));
 vi.mock('@/lib/ad-generator/automation/event-assets', () => ({
   listEventAssets,
@@ -29,7 +29,7 @@ function rule(id: string, extra: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  loadCoopPack.mockReset();
+  loadAcceptedCoopPack.mockReset();
   getGuidelineDoc.mockReset();
   listGuidelineDocs.mockReset();
   getGuidelineDoc.mockResolvedValue(null);
@@ -39,24 +39,21 @@ describe('get_rule_pack — review-state guard', () => {
   it('withholds unreviewed drafts and reports them only as a count', async () => {
     // The harm case: an AI-drafted rule nobody has checked, in the same blob as
     // the reviewed ones. Vera must not be able to state what it says.
-    loadCoopPack.mockResolvedValue({
-      make: 'Chevrolet',
+    // What loadAcceptedCoopPack returns: accepted rules only, with the drafts
+    // reported as a COUNT. The two rejected/proposed rules never reach us.
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-1',
       version: '2026-Q3',
       verified: true,
-      rules: [
-        rule('accepted-1', { reviewState: 'accepted' }),
-        rule('draft-1', { reviewState: 'proposed', description: 'SECRET DRAFT TEXT' }),
-        rule('draft-2', { reviewState: 'proposed' }),
-        rule('nope-1', { reviewState: 'rejected', description: 'REJECTED TEXT' }),
-      ],
+      sourceDocId: null,
+      proposedCount: 2,
+      pack: { make: 'Chevrolet', version: '2026-Q3', rules: [rule('accepted-1')] },
     });
 
     const res = await executeCoopTool('get_rule_pack', { make: 'Chevrolet' });
 
     expect(res.isError).toBe(false);
     expect(res.resultText).toContain('accepted-1');
-    expect(res.resultText).not.toContain('SECRET DRAFT TEXT');
-    expect(res.resultText).not.toContain('REJECTED TEXT');
     expect(res.resultText).toContain('1 reviewed rule(s)');
     // Drafts are surfaced as a count with an explicit prohibition.
     expect(res.resultText).toContain('2 further rule(s) are DRAFTED BUT NOT YET REVIEWED');
@@ -66,11 +63,13 @@ describe('get_rule_pack — review-state guard', () => {
   it('treats an absent reviewState as accepted — every pack that exists today', async () => {
     // The three real packs were hand-transcribed by a person and carry no
     // reviewState. If absence meant "unreviewed", they would all switch off.
-    loadCoopPack.mockResolvedValue({
-      make: 'Mazda',
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-2',
       version: '2026-Q1',
       verified: true,
-      rules: [rule('hand-1'), rule('hand-2')],
+      sourceDocId: null,
+      proposedCount: 0,
+      pack: { make: 'Mazda', version: '2026-Q1', rules: [rule('hand-1'), rule('hand-2')] },
     });
 
     const res = await executeCoopTool('get_rule_pack', { make: 'Mazda' });
@@ -79,11 +78,13 @@ describe('get_rule_pack — review-state guard', () => {
   });
 
   it('says plainly that nothing is enforced when every rule is still a draft', async () => {
-    loadCoopPack.mockResolvedValue({
-      make: 'Kia',
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-3',
       version: '2026-Q2',
       verified: false,
-      rules: [rule('d1', { reviewState: 'proposed' })],
+      sourceDocId: null,
+      proposedCount: 1,
+      pack: { make: 'Kia', version: '2026-Q2', rules: [] },
     });
 
     const res = await executeCoopTool('get_rule_pack', { make: 'Kia' });
@@ -92,11 +93,13 @@ describe('get_rule_pack — review-state guard', () => {
   });
 
   it('flags an unverified pack so the answer can say so', async () => {
-    loadCoopPack.mockResolvedValue({
-      make: 'Subaru',
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-4',
       version: '2026-Q1',
       verified: false,
-      rules: [rule('r1')],
+      sourceDocId: null,
+      proposedCount: 0,
+      pack: { make: 'Subaru', version: '2026-Q1', rules: [rule('r1')] },
     });
 
     const res = await executeCoopTool('get_rule_pack', { make: 'Subaru' });
@@ -104,7 +107,7 @@ describe('get_rule_pack — review-state guard', () => {
   });
 
   it('reports a missing pack as "nothing enforced", not as an error', async () => {
-    loadCoopPack.mockResolvedValue(null);
+    loadAcceptedCoopPack.mockResolvedValue(null);
     const res = await executeCoopTool('get_rule_pack', { make: 'Genesis' });
     expect(res.isError).toBe(false);
     expect(res.resultText).toContain('No rule pack has been transcribed for Genesis');
@@ -115,14 +118,22 @@ describe('get_rule_pack — per-rule citations', () => {
   it('emits a citation per rule that names its document and page', async () => {
     // A pack drafted from TWO documents — the case a pack-level document id gets
     // wrong by sending half the rules to the wrong PDF.
-    loadCoopPack.mockResolvedValue({
-      make: 'Kia',
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-5',
       version: '2026-Q3',
       verified: true,
-      rules: [
-        rule('r1', { sourceDocId: 'doc-reimburse', sourcePage: 11, sourceQuote: 'quote one' }),
-        rule('r2', { sourceDocId: 'doc-brand', sourcePage: 4, sourceQuote: 'quote two' }),
-      ],
+      // Null because the two rules disagree — which is exactly why the per-rule
+      // field is the one that matters.
+      sourceDocId: null,
+      proposedCount: 0,
+      pack: {
+        make: 'Kia',
+        version: '2026-Q3',
+        rules: [
+          rule('r1', { sourceDocId: 'doc-reimburse', sourcePage: 11, sourceQuote: 'quote one' }),
+          rule('r2', { sourceDocId: 'doc-brand', sourcePage: 4, sourceQuote: 'quote two' }),
+        ],
+      },
     });
     getGuidelineDoc.mockImplementation(async (id: string) =>
       id === 'doc-reimburse'
@@ -141,11 +152,17 @@ describe('get_rule_pack — per-rule citations', () => {
   });
 
   it('falls back to the free-text citation, and flags rules with neither', async () => {
-    loadCoopPack.mockResolvedValue({
-      make: 'Mazda',
+    loadAcceptedCoopPack.mockResolvedValue({
+      packId: 'pack-6',
       version: '2026-Q1',
       verified: true,
-      rules: [rule('r1', { citation: '§4.2 p.11' }), rule('r2')],
+      sourceDocId: null,
+      proposedCount: 0,
+      pack: {
+        make: 'Mazda',
+        version: '2026-Q1',
+        rules: [rule('r1', { citation: '§4.2 p.11' }), rule('r2')],
+      },
     });
 
     const res = await executeCoopTool('get_rule_pack', { make: 'Mazda' });

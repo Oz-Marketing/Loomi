@@ -11,6 +11,7 @@ import {
 import { getSpecialist } from '@/lib/ai/specialists/registry';
 import { agentIdentity } from '@/lib/ai/specialists/identity';
 import { appendMessage } from '@/lib/ai/conversation-store';
+import { attachmentBlocks, type WireAttachment } from '@/lib/ai/attachments';
 import { suggestFollowUps } from '@/lib/ai/follow-ups';
 
 /**
@@ -28,6 +29,8 @@ import { suggestFollowUps } from '@/lib/ai/follow-ups';
 
 interface ChatRequestBody {
   messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  /** Images and text files attached to the LAST user turn. */
+  attachments?: WireAttachment[];
   /**
    * Persist this turn into a saved conversation. Optional: the panel can run
    * unsaved, and a failure to persist must never cost the user their answer.
@@ -88,6 +91,20 @@ export async function POST(
     content: m.content,
   }));
 
+  // Attachments belong to the LAST user turn, and go BEFORE its text: the model
+  // reads a document then the question about it far better than the reverse.
+  const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+  if (attachments.length) {
+    const last = messages[messages.length - 1];
+    const text = typeof last.content === 'string' ? last.content : '';
+    last.content = [
+      ...(attachmentBlocks(attachments) as Anthropic.ContentBlockParam[]),
+      // A turn can be attachment-only ("what's wrong with this ad?" is often just
+      // the ad), and an empty text block is a 400.
+      ...(text ? [{ type: 'text' as const, text }] : []),
+    ];
+  }
+
   // Volatile context rides as a system-role message in the conversation rather than
   // in `system`, so it can change every turn without invalidating the cached prefix.
   const where = body.context?.accountName
@@ -123,7 +140,12 @@ export async function POST(
               userId: session!.user.id,
               conversationId: body.conversationId,
               role: 'user',
-              content: userTurn.content,
+              // Note the attachments in the saved copy: a thread reopened later
+              // that shows a question with no sign of the image it was about is
+              // a thread nobody can interpret.
+              content: attachments.length
+                ? `${userTurn.content}\n\n[attached: ${attachments.map((a) => a.name).join(', ')}]`
+                : userTurn.content,
             });
             assistantMessageId = await appendMessage({
               userId: session!.user.id,

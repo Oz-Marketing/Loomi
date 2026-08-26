@@ -21,9 +21,9 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import { listGuidelineDocs, getGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
-import { loadCoopPack, listCoopPacks } from '@/lib/ad-generator/coop-pack-store';
+import { loadAcceptedCoopPack, listCoopPacks } from '@/lib/ad-generator/coop-pack-store';
 import { ruleScope } from '@/lib/ad-generator/coop-rules';
-import { findHits } from '@/components/ad-generator/guideline-search';
+import { searchPages, type CorpusHit } from '@/lib/ad-generator/guideline-quotes';
 import { listEventAssets, coversDate } from '@/lib/ad-generator/automation/event-assets';
 import type { AgentToolResult } from '@/lib/ai/agent-runtime';
 
@@ -37,6 +37,20 @@ export interface CoopCitation {
   snippet: string;
   /** The section heading the match falls under, when the document has an outline. */
   section?: string;
+  /**
+   * Offsets into the ORIGINAL page text — what `matchBoxes` needs to draw the
+   * highlight in the reader. Absent on citations that came from a rule's recorded
+   * provenance rather than from a search.
+   */
+  start?: number;
+  end?: number;
+  /**
+   * `loose` means the matcher bridged text interleaved INSIDE the match — a
+   * pull-quote landing mid-sentence, routine in extracted PDF text. The passage is
+   * real, but the highlighted span is wider than what was typed, so it gets
+   * labelled rather than passed off as an exact hit.
+   */
+  matchType?: 'exact' | 'loose';
 }
 
 export const COOP_TOOLS: Anthropic.Tool[] = [
@@ -303,7 +317,14 @@ export async function executeCoopTool(
             continue;
           }
           const sections = parseSections(doc);
-          for (const hit of findHits(pages, query)) {
+          // `searchPages`, not plain substring matching. Extracted PDF text follows
+          // glyph positions rather than reading order, so a sidebar callout lands
+          // INSIDE a sentence — Mazda §5a extracts as "...must be used once and
+          // should be(top placed prominently in the ad." Someone searching that
+          // sentence as they'd READ it gets zero substring hits on a passage that is
+          // definitely there. `limit` bounds the WORK, not just the result, so a
+          // narrow cap doesn't scan all 60 pages.
+          for (const hit of searchPages(pages, query, { limit: MAX_HITS_RETURNED })) {
             citations.push({
               docId: doc.id,
               make: doc.make,
@@ -311,6 +332,9 @@ export async function executeCoopTool(
               page: hit.page,
               snippet: hit.snippet,
               section: sectionForPage(sections, hit.page),
+              start: hit.start,
+              end: hit.end,
+              matchType: hit.matchType,
             });
           }
         }
@@ -326,7 +350,11 @@ export async function executeCoopTool(
         const shown = citations.slice(0, MAX_HITS_RETURNED);
         const lines = shown.map(
           (c) =>
-            `- ${c.make} "${c.title}" p.${c.page}${c.section ? ` (§ ${c.section})` : ''} [${c.docId}]\n    …${c.snippet}…`,
+            `- ${c.make} "${c.title}" p.${c.page}${c.section ? ` (§ ${c.section})` : ''}` +
+            (c.matchType === 'loose'
+              ? ' [LOOSE MATCH — other text sits inside this passage; quote it carefully]'
+              : '') +
+            ` [${c.docId}]\n    …${c.snippet}…`,
         );
         const more =
           citations.length > shown.length
@@ -358,23 +386,29 @@ export async function executeCoopTool(
       case 'get_rule_pack': {
         const make = typeof input.make === 'string' ? input.make : '';
         if (!make) return fail('make is required.');
-        const pack = await loadCoopPack(make);
-        if (!pack) {
+        // `loadAcceptedCoopPack` withholds unreviewed drafts AT THE SOURCE, so a
+        // proposal can never reach this function to be described. That is stronger
+        // than filtering here: the guarantee belongs to the loader, not to every
+        // caller remembering to apply it.
+        const loaded = await loadAcceptedCoopPack(make);
+        if (!loaded) {
           return ok(
             `No rule pack has been transcribed for ${make}. The Ad Generator therefore ` +
               'enforces nothing automatically for this make — the guideline documents may ' +
               'still exist; search them.',
           );
         }
-        // `verified` is read from the DB row by the store, never from the JSON blob,
-        // so a hand-edited pack cannot self-certify. See loadActiveCoopPack.
-        const accepted = pack.rules.filter(isAccepted);
-        const pendingReview = pack.rules.filter(isAwaitingReview).length;
+        const { pack, verified, version, proposedCount } = loaded;
+        const accepted = pack.rules;
+        // Taken from the accessor, NEVER derived as total − accepted: that folds
+        // rejected rules into "awaiting review", overstating the queue and implying
+        // a rule someone already declined might still come back.
+        const pendingReview = proposedCount;
 
         const header =
-          `${pack.make} rule pack, version ${pack.version}` +
+          `${pack.make} rule pack, version ${version}` +
           (pack.source ? ` (from "${pack.source}")` : '') +
-          (pack.verified
+          (verified
             ? ' — VERIFIED against its source.'
             : ' — NOT VERIFIED against its source; findings are downgraded to warnings and ' +
               'you must say it is unverified when you rely on it.');
@@ -387,7 +421,13 @@ export async function executeCoopTool(
         // Rules that name a source document and page can be linked into the reader
         // exactly like a search hit. Resolve the (few) distinct documents once.
         const provenances = accepted.map(ruleProvenance);
-        const docIds = [...new Set(provenances.map((p) => p.docId).filter((d): d is string => !!d))];
+        const docIds = [
+          ...new Set(
+            [...provenances.map((p) => p.docId), loaded.sourceDocId].filter(
+              (d): d is string => !!d,
+            ),
+          ),
+        ];
         const docsById = new Map(
           (await Promise.all(docIds.map((id) => getGuidelineDoc(id))))
             .filter((d): d is NonNullable<typeof d> => !!d)
@@ -397,7 +437,10 @@ export async function executeCoopTool(
         const ruleCitations: CoopCitation[] = [];
         const rules = accepted.map((r, i) => {
           const prov = provenances[i];
-          const doc = prov.docId ? docsById.get(prov.docId) : undefined;
+          // Per-rule doc id first; the pack-level one is a derived convenience that
+          // is only set when every drafted rule agrees on one document.
+          const resolvedDocId = prov.docId ?? loaded.sourceDocId ?? undefined;
+          const doc = resolvedDocId ? docsById.get(resolvedDocId) : undefined;
           if (doc && prov.page) {
             ruleCitations.push({
               docId: doc.id,

@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import type Anthropic from '@anthropic-ai/sdk';
 import { requirePermission } from '@/lib/permissions/require';
 import { getFlow } from '@/lib/services/loomi-flows';
-import { ANTHROPIC_FLOW_MODEL, getAnthropicClient } from '@/lib/anthropic';
+import { ANTHROPIC_FLOW_MODEL } from '@/lib/anthropic';
+import { runAgent, AgentRunError, type AgentSpec } from '@/lib/ai/agent-runtime';
 import {
   FLOW_AI_SYSTEM_PROMPT,
   FLOW_AI_TOOLS,
@@ -73,85 +74,45 @@ export async function POST(
     triggers: Array.isArray(body.snapshot.triggers) ? body.snapshot.triggers : [],
   };
 
+  // The working graph is per-request state the tools mutate, so the spec is built
+  // here rather than hoisted to module scope: each caller gets its own graph, and
+  // two concurrent flow edits can never share one.
   const graph = createWorkingGraph(snapshot);
-  const actions: FlowAiAction[] = [];
 
-  const client = getAnthropicClient();
+  const spec: AgentSpec<FlowAiAction> = {
+    key: 'flow-builder',
+    model: ANTHROPIC_FLOW_MODEL,
+    maxTokens: 16000,
+    maxIterations: MAX_LOOP_ITERATIONS,
+    systemPrompt: FLOW_AI_SYSTEM_PROMPT,
+    tools: FLOW_AI_TOOLS,
+    execute: (toolName, input) => {
+      const result = executeFlowTool(graph, toolName, input);
+      return {
+        resultText: result.resultText,
+        isError: result.isError,
+        emit: result.action,
+      };
+    },
+    fallbackReply: (actions) =>
+      actions.length
+        ? `Done — applied ${actions.length} change${actions.length === 1 ? '' : 's'}.`
+        : "I'm not sure what to do with that. Could you say more?",
+  };
 
-  // Conversation is the running `messages` array we send to Claude. We
-  // append (a) the user's text turns, (b) assistant turns (which may
-  // contain tool_use blocks), and (c) tool_result user turns. The model
-  // sees the same shape across iterations of the loop.
   const conversation: Anthropic.MessageParam[] = body.messages.map((m) => ({
     role: m.role,
     content: m.content,
   }));
 
-  let finalReply = '';
-
-  for (let iter = 0; iter < MAX_LOOP_ITERATIONS; iter++) {
-    let response;
-    try {
-      response = await client.messages.create({
-        model: ANTHROPIC_FLOW_MODEL,
-        max_tokens: 16000,
-        // Opus 4.7 supports adaptive thinking but only with display: "summarized"
-        // if we want to surface it. We don't surface thinking to the user (yet),
-        // so leave the default — keeps response bytes small.
-        thinking: { type: 'adaptive' },
-        system: FLOW_AI_SYSTEM_PROMPT,
-        tools: FLOW_AI_TOOLS,
-        messages: conversation,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'AI call failed';
-      return NextResponse.json({ error: message }, { status: 502 });
+  try {
+    const run = await runAgent(spec, conversation);
+    const payload: ChatResponseBody = { reply: run.reply, actions: run.emitted };
+    return NextResponse.json(payload);
+  } catch (err) {
+    if (err instanceof AgentRunError) {
+      return NextResponse.json({ error: err.message }, { status: 502 });
     }
-
-    // Append the assistant turn verbatim so subsequent iterations carry the
-    // tool_use blocks the next user (tool_result) turn references.
-    conversation.push({ role: 'assistant', content: response.content });
-
-    // Collect any text the model emitted this iteration — last non-empty wins
-    // as `finalReply`. Tool-only turns leave it untouched.
-    for (const block of response.content) {
-      if (block.type === 'text' && block.text.trim()) {
-        finalReply = block.text;
-      }
-    }
-
-    if (response.stop_reason !== 'tool_use') {
-      break;
-    }
-
-    // Execute every tool_use in this turn, in order, and feed all results
-    // back in a single user turn — that's the shape the API expects.
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const block of response.content) {
-      if (block.type !== 'tool_use') continue;
-      const result = executeFlowTool(
-        graph,
-        block.name,
-        (block.input ?? {}) as Record<string, unknown>,
-      );
-      if (result.action) actions.push(result.action);
-      toolResults.push({
-        type: 'tool_result',
-        tool_use_id: block.id,
-        content: result.resultText,
-        is_error: result.isError,
-      });
-    }
-
-    conversation.push({ role: 'user', content: toolResults });
+    throw err;
   }
-
-  if (!finalReply) {
-    finalReply = actions.length
-      ? `Done — applied ${actions.length} change${actions.length === 1 ? '' : 's'}.`
-      : "I'm not sure what to do with that. Could you say more?";
-  }
-
-  const payload: ChatResponseBody = { reply: finalReply, actions };
-  return NextResponse.json(payload);
 }

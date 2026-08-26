@@ -68,7 +68,7 @@ function messageForAuthError(code: string | null): string {
 const HIGHLIGHTS = [
   {
     icon: SparklesIcon,
-    title: 'Build with Iris',
+    title: 'Build with Loomi AI',
     body: 'Generate campaigns, ads, and landing pages with your brand already loaded.',
   },
   {

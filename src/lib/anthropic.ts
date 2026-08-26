@@ -22,14 +22,51 @@ export function anthropicConfigured(): boolean {
   return !!process.env.ANTHROPIC_API_KEY;
 }
 
-export const ANTHROPIC_MODEL = 'claude-sonnet-4-5-20250929';
+/**
+ * The default model for every AI feature.
+ *
+ * Opus 5. Three things about this family that callers MUST honour, each of which
+ * fails loudly (400) or silently (empty output) if ignored:
+ *
+ *  1. `temperature` / `top_p` / `top_k` are REJECTED. Steering is the prompt plus
+ *     `output_config.effort` — there is no sampling knob any more.
+ *  2. `budget_tokens` is REJECTED. Thinking is `{ type: 'adaptive' }`, and on Opus 5
+ *     it is ON BY DEFAULT — omitting `thinking` still thinks, unlike Opus 4.7.
+ *  3. Because thinking is on, `content[0]` is a THINKING block, not the answer.
+ *     Read the reply with {@link lastTextBlock}; indexing content[0] yields '' and
+ *     every downstream JSON parse fails with a misleading "response was empty".
+ *
+ * Thinking tokens count against `max_tokens`, so a caller that used to want ~500
+ * tokens of JSON needs real headroom now — budget for the thinking, and use
+ * `output_config.effort` to keep short mechanical calls cheap.
+ */
+export const ANTHROPIC_MODEL = 'claude-opus-5';
 
-// Opus 4.7 for the flow builder's "Iris" assistant — the model
-// orchestrates multi-tool graph edits (add node → connect → configure)
-// in a single turn, where the extra reasoning headroom is worth it.
-// Note: Opus 4.7 rejects temperature/top_p/top_k and budget_tokens —
-// callers must use adaptive thinking + effort instead.
-export const ANTHROPIC_FLOW_MODEL = 'claude-opus-4-7';
+/**
+ * The model for tool-orchestrating assistants — the flow builder's Loomi AI, the
+ * landing-page assistant — where one turn plans and executes several tool calls.
+ *
+ * Now the same model as {@link ANTHROPIC_MODEL}; kept as a separate export because
+ * these callers are the ones we would move first if we ever wanted a different tier
+ * for agentic work, and the call sites read better naming the intent.
+ */
+export const ANTHROPIC_FLOW_MODEL = 'claude-opus-5';
+
+/**
+ * The model's answer text, ignoring thinking blocks.
+ *
+ * The LAST non-empty text block, not the first: a turn can emit text before a tool
+ * call and again after it, and it's the final one that is the reply. With thinking
+ * enabled the first block is never the answer, which is why reading `content[0]`
+ * broke everywhere when we moved off Sonnet 4.5.
+ */
+export function lastTextBlock(message: Anthropic.Message): string {
+  let text = '';
+  for (const block of message.content) {
+    if (block.type === 'text' && block.text.trim()) text = block.text;
+  }
+  return text;
+}
 
 /** Attempt to parse JSON from an AI response, stripping markdown fences if needed. */
 export function parseAiJson(raw: string): unknown {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { getChatSystemPrompt } from '@/lib/ai-knowledge';
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 
 interface ConversationMessage {
   role: 'user' | 'assistant';
@@ -84,12 +84,13 @@ export async function POST(req: NextRequest) {
       model: ANTHROPIC_MODEL,
       system: systemPrompt,
       messages,
-      temperature: 0.4,
-      max_tokens: 1024,
+      // Opus 5 rejects temperature; effort is the steering knob now. A chat reply
+      // is short, but thinking counts against max_tokens — hence the headroom.
+      output_config: { effort: 'low' },
+      max_tokens: 8000,
     });
 
-    const content =
-      response.content[0]?.type === 'text' ? response.content[0].text : '';
+    const content = lastTextBlock(response);
     if (!content) {
       return NextResponse.json({ error: 'AI response was empty' }, { status: 502 });
     }

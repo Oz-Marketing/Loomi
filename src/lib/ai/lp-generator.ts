@@ -8,7 +8,7 @@
  * id can't be hallucinated). Branding is enforced from the account context;
  * uploaded landingPage/generic assets are offered for placement.
  */
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import { isHtmlLandingPageTemplate, type LandingPageHtmlTemplate } from '@/lib/landing-pages/types';
 import { assetsForKind } from '@/lib/campaigns/asset-matching';
 import type { CampaignPlanAsset, CampaignPlanLandingPageSpec } from '@/lib/campaigns/types';
@@ -89,10 +89,10 @@ export async function generateLandingPageForSpec(
       model: ANTHROPIC_MODEL,
       system: LP_SYSTEM,
       messages: [{ role: 'user', content: buildLpPrompt(spec, opts) }],
-      temperature: 0.4,
+      output_config: { effort: 'medium' },
       max_tokens: 16000,
     });
-    const text = res.content[0]?.type === 'text' ? res.content[0].text : '';
+    const text = lastTextBlock(res);
     const parsed = parseAiJson(text) as { html?: unknown } | null;
     if (parsed && typeof parsed.html === 'string' && parsed.html.trim()) html = parsed.html;
   } catch {

@@ -36,9 +36,10 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  invites        UserInvite[]
-  passwordResets PasswordReset[]
-  accounts       Account[] // accounts where this user is the rep
+  invites            UserInvite[]
+  agentConversations AgentConversation[]
+  passwordResets     PasswordReset[]
+  accounts           Account[] // accounts where this user is the rep
 
   templatesCreated   Template[]                  @relation("TemplateCreatedBy")
   templatesUpdated   Template[]                  @relation("TemplateUpdatedBy")
@@ -5404,4 +5405,76 @@ model BudgetChannel {
 
   @@index([sortOrder])
   @@index([billingKey])
+}
+
+// ─────────────────────────────────────────────────────
+// AI specialists — conversation log
+// ─────────────────────────────────────────────────────
+//
+// One row per conversation a person has with an agent, so the assistant stops
+// being a scratchpad that forgets everything the moment the panel closes.
+//
+// Kept PER USER AND PER AGENT rather than one global thread: what you asked Vera
+// about Chevrolet co-op has nothing to do with what you asked Loomi AI about email
+// templates, and interleaving them would make both harder to find. It also means a
+// specialist's history is a record of what that specialist has been asked — the
+// raw material for the curated notes its owning team writes.
+//
+// Deliberately NOT a compliance record. A person can rename and delete their own
+// conversations freely; nothing here is relied on to prove what an ad was checked
+// against. That job belongs to the co-op tables, which nobody can edit casually.
+model AgentConversation {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Which agent this thread is with — 'coop', 'system', and so on. A string
+  /// rather than an enum because the roster is code-owned and grows; a migration
+  /// per new specialist would be pure ceremony.
+  agentKey String
+
+  /// Shown in the conversation list. Seeded from the first message and editable,
+  /// same as every chat app — an auto-title is a starting point, not a verdict.
+  title String
+
+  /// Which account was in scope when the thread started. Context for the reader
+  /// ("this was about Young Chevrolet"), never a permission: every tool re-checks
+  /// scope at call time against the CURRENT session.
+  accountKey String?
+
+  messages AgentMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The conversation list is "my threads with this agent, most recent first".
+  @@index([userId, agentKey, updatedAt])
+}
+
+// One turn. Assistant turns carry what the answer was BUILT FROM, which is what
+// makes a bad answer diagnosable later instead of merely disputed.
+model AgentMessage {
+  id             String            @id @default(cuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  role    String // user | assistant
+  content String @db.Text
+
+  /// JSON of what the agent cited, as the tools emitted it. Stored so a saved
+  /// conversation reopens with its citations intact — an answer that loses its
+  /// sources on reload is worth much less than one that keeps them.
+  citations String? @db.Text
+
+  /// JSON token usage for this turn. Per-message rather than per-conversation so
+  /// cost is attributable to the turn that caused it.
+  usage String? @db.Text
+
+  /// Set when the model ran out of room or hit the tool-call cap: this answer is
+  /// INCOMPLETE and must not be re-read later as though it were finished.
+  truncatedReason String?
+
+  createdAt DateTime @default(now())
+
+  @@index([conversationId, createdAt])
 }

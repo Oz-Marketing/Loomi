@@ -9,7 +9,7 @@
  * Phase 1 channels: email + sms. The plan shape carries landingPages/forms/
  * flows arrays for forward-compat; the planner leaves them empty for now.
  */
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import {
   CAMPAIGN_PLAN_VERSION,
   SMS_MAX_CHARS,
@@ -251,11 +251,11 @@ export async function generateCampaignPlan(input: {
     model: ANTHROPIC_MODEL,
     system: buildSystemPrompt(input.channels),
     messages: [{ role: 'user', content: buildUserContent(input.goal, input.accountContext) }],
-    temperature: 0.5,
-    max_tokens: 2048,
+    output_config: { effort: 'medium' },
+    max_tokens: 8000,
   });
 
-  const content = response.content[0]?.type === 'text' ? response.content[0].text : '';
+  const content = lastTextBlock(response);
   if (!content) throw new Error('Campaign planner returned an empty response');
 
   let parsed: unknown;

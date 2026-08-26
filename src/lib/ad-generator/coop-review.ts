@@ -1,0 +1,129 @@
+import type { CoopRule, CoopRulePack } from './coop-rules';
+
+/**
+ * Deciding on drafted rules — the human gate.
+ *
+ * Accepting a rule is the moment it starts affecting ads, so this is the one place
+ * where a drafted rule changes from inert to enforced. Three properties matter:
+ *
+ *   • ONLY A RULE IN REVIEW CAN BE DECIDED. A hand-written rule carries no
+ *     `reviewState`, is not in the queue, and must not be reachable by a review
+ *     action — otherwise a stray id in a bulk request could reject a rule a person
+ *     wrote and enforce for years. Those are reported as `notInReview`, never
+ *     applied.
+ *   • DECISIONS ARE ATTRIBUTED. An accepted rule records who accepted it, for the
+ *     same reason the pack records who verified it.
+ *   • REJECTION IS NOT DELETION. A rejected rule stays in the pack, marked. It
+ *     evaluates as nothing, and keeping it means a later drafting pass recognises
+ *     it as already-decided instead of proposing it again every month.
+ *
+ * Pure: no DB, no network, no clock — `now` and `reviewer` are passed in so a test
+ * can assert on them and two callers can't disagree about the time.
+ */
+
+export type ReviewDecision = 'accepted' | 'rejected';
+
+export interface RuleReview {
+  ruleId: string;
+  state: ReviewDecision;
+}
+
+export interface ApplyReviewsResult {
+  pack: CoopRulePack;
+  /** Rules whose state actually changed. */
+  applied: { ruleId: string; from: string; to: ReviewDecision }[];
+  /** Ids not present in the pack at all. */
+  notFound: string[];
+  /** Ids that resolve to a rule which was never in review — refused. */
+  notInReview: string[];
+  /** Already in the requested state; a no-op rather than an error. */
+  unchanged: string[];
+}
+
+/** A rule is in review if it carries an explicit reviewState. */
+function reviewStateOf(rule: CoopRule): string | null {
+  return rule.reviewState ?? null;
+}
+
+export function applyRuleReviews(
+  pack: CoopRulePack,
+  reviews: RuleReview[],
+  reviewer: string,
+  now: Date,
+): ApplyReviewsResult {
+  const wanted = new Map<string, ReviewDecision>();
+  for (const r of reviews) {
+    const id = r.ruleId?.trim();
+    if (id) wanted.set(id, r.state);
+  }
+
+  const applied: ApplyReviewsResult['applied'] = [];
+  const notInReview: string[] = [];
+  const unchanged: string[] = [];
+  const seen = new Set<string>();
+  const stamp = now.toISOString();
+
+  const rules = pack.rules.map((rule) => {
+    const want = wanted.get(rule.id);
+    if (!want) return rule;
+    seen.add(rule.id);
+
+    const state = reviewStateOf(rule);
+    if (state === null) {
+      // A hand-written rule. Not in the queue, so not decidable here.
+      notInReview.push(rule.id);
+      return rule;
+    }
+    if (state === want) {
+      unchanged.push(rule.id);
+      return rule;
+    }
+    applied.push({ ruleId: rule.id, from: state, to: want });
+    return { ...rule, reviewState: want, reviewedBy: reviewer, reviewedAt: stamp };
+  });
+
+  const notFound = [...wanted.keys()].filter((id) => !seen.has(id));
+  return { pack: { ...pack, rules }, applied, notFound, notInReview, unchanged };
+}
+
+/** The rules a reviewer still has to decide on, in the order they were drafted. */
+export function pendingRules(pack: CoopRulePack): CoopRule[] {
+  return pack.rules.filter((r) => r.reviewState === 'proposed');
+}
+
+/**
+ * Does accepting or rejecting any of these change what is ENFORCED?
+ *
+ * Used to decide whether cached template verdicts must be dropped. Rejecting a
+ * proposal changes nothing that was in force (a proposal enforced nothing), but
+ * ACCEPTING one does, and re-opening an accepted rule back to rejected does too.
+ */
+export function changesEnforcement(applied: ApplyReviewsResult['applied']): boolean {
+  return applied.some((a) => a.to === 'accepted' || a.from === 'accepted');
+}
+
+/**
+ * Pending rules grouped for review, biggest group first.
+ *
+ * Grouped by KIND because that is how the source document is shaped: a
+ * prohibited-terms list arrives as thirty `banned_phrase` rules together, the layout
+ * requirements arrive together, and a reviewer forms one opinion per group far more
+ * often than one per rule. Biggest first because the largest group is both the one
+ * most likely to be decided in one action and the one that would otherwise be
+ * buried under three singletons.
+ *
+ * Extracted from the review panel so the ordering is verifiable without a DOM.
+ */
+export function groupPendingByKind(rules: CoopRule[]): { kind: string; rules: CoopRule[] }[] {
+  const by = new Map<string, CoopRule[]>();
+  for (const r of pendingRules({ rules } as CoopRulePack)) {
+    const list = by.get(r.kind) ?? [];
+    list.push(r);
+    by.set(r.kind, list);
+  }
+  return [...by.entries()]
+    .map(([kind, list]) => ({ kind, rules: list }))
+    // Ties broken by kind name so the order is stable across renders rather than
+    // depending on which rule the drafter happened to emit first.
+    .sort((a, b) => b.rules.length - a.rules.length || a.kind.localeCompare(b.kind));
+}

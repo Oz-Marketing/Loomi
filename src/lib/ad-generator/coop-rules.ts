@@ -75,6 +75,13 @@ interface CoopRuleBase {
   sourcePage?: number;
   /** The verified span the rule rests on. Shown to a reviewer beside the rule. */
   sourceQuote?: string;
+  /**
+   * Who decided, and when. An accepted rule is an ASSERTION by a named person that
+   * this is what the manufacturer requires — unattributed acceptance is not much
+   * better than none, which is the same reasoning as `verifiedBy` on the pack row.
+   */
+  reviewedBy?: string;
+  reviewedAt?: string;
 }
 
 /** The ad data field a text rule inspects (e.g. `disclaimer`, `tagline`). */

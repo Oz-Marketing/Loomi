@@ -34,6 +34,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { CoopPackEditor } from './coop-pack-editor';
+import { CoopRuleReview } from './coop-rule-review';
 import { toDraftRule, type DraftPack } from '@/lib/ad-generator/coop-rule-authoring';
 import type { CoopRule } from '@/lib/ad-generator/coop-rules';
 import {
@@ -81,7 +82,11 @@ interface PackRow {
   verifiedBy: string | null;
   verifiedAt: string | null;
   isActive: boolean;
+  /** ACCEPTED rules — what is enforced. */
   ruleCount: number;
+  /** Drafted rules awaiting a decision in the review queue. Enforce nothing. */
+  proposedCount: number;
+  rejectedCount: number;
   warningCount: number;
   errorCount: number;
   updatedAt: string;
@@ -326,6 +331,8 @@ export function CoopGuidelinesTab() {
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
   const [pickingLogo, setPickingLogo] = useState(false);
   const [reading, setReading] = useState<GuidelineDocRow | null>(null);
+  /** Where to land in the reader — set when arriving from a rule's citation. */
+  const [readingAt, setReadingAt] = useState<{ page: number; query: string } | null>(null);
   /** Document currently being renamed inline, and the text being typed. */
   const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   /** Cover thumbnails, fetched per document on demand — the list omits them. */
@@ -811,7 +818,8 @@ export function CoopGuidelinesTab() {
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-medium text-[var(--foreground)]">{p.version}</span>
                               <span className="text-[11px] text-[var(--muted-foreground)]">
-                                {p.ruleCount} rules · {p.errorCount} can block
+                                {p.ruleCount} enforced · {p.errorCount} can block
+                                {p.proposedCount > 0 ? ` · ${p.proposedCount} awaiting review` : ''}
                               </span>
                               <button
                                 onClick={() =>
@@ -859,6 +867,27 @@ export function CoopGuidelinesTab() {
                             {p.verified ? 'Approved' : 'Approve for enforcement'}
                           </button>
                         </div>
+
+                        <CoopRuleReview
+                          make={active.make}
+                          packId={p.id}
+                          packVerified={p.verified}
+                          rules={p.rules}
+                          docs={active.docs.map((d) => ({
+                            id: d.id,
+                            title: d.title,
+                            pageCount: d.pageCount,
+                            sourceUrl: d.sourceUrl,
+                          }))}
+                          busy={!!busy}
+                          onRead={(doc, page, query) => {
+                            const full = active.docs.find((d) => d.id === doc.id);
+                            if (!full) return;
+                            setReadingAt({ page, query });
+                            setReading(full);
+                          }}
+                          onDecided={load}
+                        />
                       </div>
                     ))}
 
@@ -1306,7 +1335,12 @@ export function CoopGuidelinesTab() {
           title={reading.title}
           pageCount={reading.pageCount}
           sourceUrl={reading.sourceUrl}
-          onClose={() => setReading(null)}
+          initialPage={readingAt?.page}
+          initialQuery={readingAt?.query}
+          onClose={() => {
+            setReading(null);
+            setReadingAt(null);
+          }}
         />
       )}
 

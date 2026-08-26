@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { parseCoopPack, type CoopRule } from './coop-rules';
+import { splitByReviewState } from './coop-pack-store';
 import { listTemplateChecks, type TemplateCheckRow } from './coop-template-check-store';
 import { listGuidelineDocs, type GuidelineDocRow } from './guideline-docs';
 
@@ -55,8 +56,14 @@ export interface PackRow {
   verifiedBy: string | null;
   verifiedAt: string | null;
   isActive: boolean;
+  /** ACCEPTED rules — what is actually enforced. */
   ruleCount: number;
-  /** Rules that report but cannot block, so the page can say how much is live. */
+  /** Drafted rules awaiting a human decision. Enforced by nothing. */
+  proposedCount: number;
+  /** Rules already declined. Kept so a later pass doesn't re-propose them. */
+  rejectedCount: number;
+  /** Rules that report but cannot block, so the page can say how much is live.
+   *  Counted over ACCEPTED rules only — a proposal blocks and warns nothing. */
   warningCount: number;
   errorCount: number;
   updatedAt: string;
@@ -204,7 +211,10 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
       .filter((p) => p.make.trim().toLowerCase() === lower)
       .map((p) => {
         const parsed = parseCoopPack(p.rules);
-        const counts = countBySeverity(parsed?.rules ?? []);
+        // Severity is counted over ACCEPTED rules: "8 errors" has to mean eight
+        // things that can block an ad, not eight things someone might accept later.
+        const split = parsed ? splitByReviewState(parsed) : null;
+        const counts = countBySeverity(split?.accepted.rules ?? []);
         return {
           id: p.id,
           version: p.version,
@@ -214,7 +224,9 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
           verifiedBy: p.verifiedBy,
           verifiedAt: p.verifiedAt?.toISOString() ?? null,
           isActive: p.isActive,
-          ruleCount: parsed?.rules.length ?? 0,
+          ruleCount: split?.accepted.rules.length ?? 0,
+          proposedCount: split?.proposedCount ?? 0,
+          rejectedCount: split?.rejectedCount ?? 0,
           ...counts,
           updatedAt: p.updatedAt.toISOString(),
           rules: parsed?.rules ?? [],

@@ -2,7 +2,8 @@
  * OEM guidelines + sales events — /api/ad-generator/oem-assets
  *
  * GET  → per-make guideline packs and event calendar, with staleness state.
- * POST → save_event | delete_event | set_verified | attach_source
+ * POST → save_event | delete_event | set_verified | save_pack | delete_pack |
+ *        review_rules | attach_source | register_doc | refresh_docs | recheck_template
  *
  * Owned by the co-op team: they hold the manufacturer relationships that produce
  * both the guideline documents and the event marks.
@@ -26,6 +27,8 @@ import {
   type DraftRule,
 } from '@/lib/ad-generator/coop-rule-authoring';
 import { invalidatePackChecks, resolveTemplateCoopCheck } from '@/lib/ad-generator/coop-template-check-store';
+import { applyRuleReviews, changesEnforcement } from '@/lib/ad-generator/coop-review';
+import { parseCoopPack } from '@/lib/ad-generator/coop-rules';
 import { getGuidelineDoc, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
@@ -115,6 +118,8 @@ export async function POST(req: NextRequest) {
     version?: string;
     source?: string;
     rules?: unknown;
+    // review_rules
+    decisions?: { ruleId?: unknown; state?: unknown }[];
   };
   try {
     body = await req.json();
@@ -191,6 +196,73 @@ export async function POST(req: NextRequest) {
         // run recompute.
         const dropped = await invalidatePackChecks(row.id);
         return NextResponse.json({ ok: true, pack: { id: row.id, verified: row.verified }, rechecksQueued: dropped });
+      }
+
+      // ── deciding on drafted rules ──────────────────────────────────────
+      //
+      // BULK BY CONSTRUCTION: `decisions` is an array, so accepting one rule and
+      // accepting forty are the same request. A separate bulk endpoint would be a
+      // second code path over the same invariants, and the whole point of the queue
+      // is that a reviewer works through a prohibited-terms list in one pass.
+      case 'review_rules': {
+        const packId = (body.packId ?? '').trim();
+        const decisions = Array.isArray(body.decisions) ? body.decisions : [];
+        if (!packId) return NextResponse.json({ error: 'packId is required' }, { status: 400 });
+        if (decisions.length === 0) {
+          return NextResponse.json({ error: 'decisions is required' }, { status: 400 });
+        }
+        const reviews = decisions
+          .map((d: { ruleId?: unknown; state?: unknown }) => ({
+            ruleId: typeof d?.ruleId === 'string' ? d.ruleId : '',
+            state: d?.state === 'accepted' ? ('accepted' as const) : ('rejected' as const),
+          }))
+          .filter((d: { ruleId: string }) => d.ruleId);
+        if (reviews.length === 0) {
+          return NextResponse.json({ error: 'No usable decisions' }, { status: 400 });
+        }
+
+        const row = await prisma.adCoopRulePack.findUnique({ where: { id: packId } });
+        if (!row) return NextResponse.json({ error: 'Pack not found' }, { status: 404 });
+        const parsed = parseCoopPack(row.rules);
+        if (!parsed) {
+          return NextResponse.json(
+            { error: 'That pack cannot be read, so its rules cannot be reviewed.' },
+            { status: 409 },
+          );
+        }
+
+        const u = session?.user as { id?: string; name?: string | null; email?: string | null } | undefined;
+        const reviewer = u?.name || u?.email || u?.id || 'unknown';
+        const result = applyRuleReviews(parsed, reviews, reviewer, new Date());
+
+        if (result.applied.length > 0) {
+          await prisma.adCoopRulePack.update({
+            where: { id: packId },
+            // `verified` is untouched: it records that a person checked the rules
+            // that were already accepted, and deciding on a draft doesn't revisit
+            // that. Re-verification is its own action.
+            data: { rules: JSON.stringify(result.pack) },
+          });
+        }
+
+        // Accepting a rule CHANGES WHAT IS ENFORCED, so cached template verdicts
+        // computed under the old rule set are stale. Rejecting a proposal does not —
+        // it enforced nothing — and dropping every verdict to record a "no" would
+        // mean recomputing the whole template library for nothing.
+        const rechecksQueued = changesEnforcement(result.applied)
+          ? await invalidatePackChecks(packId)
+          : 0;
+
+        return NextResponse.json({
+          ok: true,
+          applied: result.applied.length,
+          accepted: result.applied.filter((a) => a.to === 'accepted').length,
+          rejected: result.applied.filter((a) => a.to === 'rejected').length,
+          unchanged: result.unchanged.length,
+          notFound: result.notFound,
+          notInReview: result.notInReview,
+          rechecksQueued,
+        });
       }
 
       // ── authoring a rule pack ──────────────────────────────────────────

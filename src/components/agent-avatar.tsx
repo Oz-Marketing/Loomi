@@ -9,6 +9,7 @@
  * marks come first.
  */
 
+import { useState } from 'react';
 import { MARK_PATHS, type AgentIdentity } from '@/lib/ai/specialists/identity';
 
 const SIZES = {
@@ -31,6 +32,12 @@ export function AgentAvatar({
 }) {
   const { box, stroke } = SIZES[size];
   const { accent, mark, portraitUrl, name } = identity;
+  // A portrait that 404s must not leave a broken-image glyph in the panel header.
+  // Falling back to the mark means a missing file degrades to the generated face
+  // rather than to nothing, which also lets an identity name its portrait before
+  // the artwork exists.
+  const [portraitFailed, setPortraitFailed] = useState(false);
+  const showPortrait = Boolean(portraitUrl) && !portraitFailed;
 
   return (
     <span
@@ -45,10 +52,15 @@ export function AgentAvatar({
       }}
       aria-hidden="true"
     >
-      {portraitUrl ? (
+      {showPortrait ? (
+        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={portraitUrl}
           alt=""
+          onError={() => setPortraitFailed(true)}
+          // The portrait's own background is transparent, so the accent tint
+          // behind it shows through around the head — which is what gives the
+          // paler characters something to sit against in light mode.
           className="h-full w-full rounded-full object-cover"
         />
       ) : (

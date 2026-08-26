@@ -211,7 +211,7 @@ export function ShareTemplateModal({
               <button
                 onClick={save}
                 disabled={busy || !changed}
-                className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {busy ? 'Saving…' : changed ? 'Save access' : 'Saved'}
               </button>

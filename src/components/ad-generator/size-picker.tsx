@@ -46,7 +46,7 @@ export function TagFilterChips({
         onClick={() => onChange([])}
         className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
           selected.length === 0
-            ? 'bg-[var(--primary)] text-white'
+            ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
             : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
         }`}
       >
@@ -162,7 +162,7 @@ export function SizePicker({
                 </span>
                 <span
                   className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border ${
-                    on ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'
+                    on ? 'border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]' : 'border-[var(--muted-foreground)]/50'
                   }`}
                 >
                   {on && <CheckIcon className="h-3 w-3" strokeWidth={3} />}

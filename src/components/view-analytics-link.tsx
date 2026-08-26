@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowTopRightOnSquareIcon, ChartBarSquareIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon } from '@heroicons/react/24/outline';
+import { SECTOR_ICONS } from '@/components/icons/sector-icons';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
@@ -16,6 +17,8 @@ import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
  * to other actions. Returns `null` until hydration so the URL is
  * resolved against `window.location.host`.
  */
+const ReportingMark = SECTOR_ICONS.reporting;
+
 export function ViewAnalyticsLink({
   area,
   label = 'View Analytics',
@@ -48,7 +51,7 @@ export function ViewAnalyticsLink({
       href={href}
       className="inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:border-[var(--primary)]/50 hover:bg-[var(--accent)]"
     >
-      <ChartBarSquareIcon className="h-4 w-4" />
+      <ReportingMark className="h-[1.125rem] w-[1.125rem]" />
       {label}
       <ArrowTopRightOnSquareIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
     </a>

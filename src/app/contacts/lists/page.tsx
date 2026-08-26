@@ -324,7 +324,7 @@ export default function ListsPage() {
             <button
               type="button"
               onClick={() => setShowCreate(true)}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
             >
               <PlusIcon className="w-4 h-4" />
               New List
@@ -667,7 +667,7 @@ function RenameListModal({
           <button
             type="submit"
             disabled={!canSubmit}
-            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Saving…' : 'Save'}
           </button>
@@ -868,7 +868,7 @@ function NewListModal({
           <button
             type="submit"
             disabled={!canSubmit}
-            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? 'Creating…' : file ? 'Create + Continue' : 'Create List'}
           </button>

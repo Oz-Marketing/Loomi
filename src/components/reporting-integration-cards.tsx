@@ -428,7 +428,7 @@ function ProviderModal({
               type="button"
               onClick={save}
               disabled={busy || !canSave}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50"
             >
               {busy ? 'Saving…' : connected ? 'Save' : 'Connect'}
             </button>

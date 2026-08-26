@@ -84,7 +84,7 @@ export function PlaybookLibrary() {
             const created = await post({ name: 'New playbook' });
             if (created) setEditing(created.id);
           }}
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
         >
           <PlusIcon className="h-3.5 w-3.5" />
           New playbook
@@ -328,7 +328,7 @@ function PlaybookCard({
               <button
                 onClick={() => onSave({ name, scopeValue, definition: def, publish: true })}
                 disabled={busy}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[11px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 {playbook.published ? 'Save + publish' : 'Publish'}
               </button>

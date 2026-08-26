@@ -76,7 +76,7 @@ export function OfferCard({
                 key={val}
                 onClick={() => setDualVehicleMode(val)}
                 className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  dualVehicleMode === val ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  dualVehicleMode === val ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
                 {label}

@@ -153,7 +153,7 @@ function CampaignBuilderProgress({
               <span
                 className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold ${
                   isActive
-                    ? 'bg-[var(--primary)] text-white'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : isDone
                       ? 'bg-[var(--foreground)]/15 text-[var(--foreground)]'
                       : 'bg-[var(--muted)] text-[var(--muted-foreground)]'

@@ -342,7 +342,7 @@ function LeftPaneTabButton({
       aria-pressed={active}
       className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
         active
-          ? 'bg-[var(--primary)] text-white'
+          ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
     >
@@ -463,7 +463,7 @@ function PreviewToggleButton({
       aria-pressed={active}
       className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
         active
-          ? 'bg-[var(--primary)] text-white'
+          ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
     >

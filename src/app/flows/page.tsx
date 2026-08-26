@@ -147,7 +147,7 @@ function AddTemplateButton({
         disabled={creating}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+        className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-60"
       >
         <PlusIcon className="w-4 h-4" />
         {creating ? 'Creating…' : 'Add Flow'}
@@ -657,7 +657,7 @@ function FlowsPageBody({
                 type="button"
                 onClick={handleCreate}
                 disabled={creating}
-                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-60"
               >
                 <PlusIcon className="w-4 h-4" />
                 {creating ? 'Creating…' : 'Create Flow'}

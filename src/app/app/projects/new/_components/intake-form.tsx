@@ -921,7 +921,7 @@ export function IntakeForm() {
           type="button"
           disabled={submitting}
           onClick={submit}
-          className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] accent-glow transition hover:opacity-90 disabled:opacity-50"
         >
           {submitting ? 'Submitting…' : 'Submit ticket'}
         </button>

@@ -176,7 +176,7 @@ export function DateRangeFilter({
             <button
               onClick={handleApply}
               disabled={!startInput || !endInput || startInput > endInput}
-              className="w-full py-2 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full py-2 px-4 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Apply Range
             </button>

@@ -241,7 +241,7 @@ function ListView({
         <button
           type="button"
           onClick={onOpenPicker}
-          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-[var(--primary)] text-white text-xs font-semibold hover:opacity-90 transition-opacity"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-semibold hover:opacity-90 transition-opacity"
         >
           <PlusIcon className="w-3.5 h-3.5" />
           Add Trigger

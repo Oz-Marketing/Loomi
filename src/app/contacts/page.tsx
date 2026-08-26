@@ -495,7 +495,7 @@ function AdminContactsView({
                   ? 'Add a single contact to this account'
                   : 'Filter to a single account to enable'
               }
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <PlusIcon className="w-4 h-4" />
               Add Contact
@@ -789,7 +789,7 @@ function AccountContactsView({
               type="button"
               onClick={() => setShowAddModal(true)}
               disabled={!accountKey}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <PlusIcon className="w-4 h-4" />
               Add Contact

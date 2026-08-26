@@ -198,7 +198,7 @@ function AddDomainForm({
         <button
           type="submit"
           disabled={!hostname.trim() || submitting}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50"
         >
           <PlusIcon className="w-4 h-4" />
           {submitting ? 'Adding…' : 'Add'}
@@ -350,7 +350,7 @@ function DomainCard({
               type="button"
               onClick={handleVerify}
               disabled={verifying}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50"
             >
               <ArrowPathIcon className={`w-3.5 h-3.5 ${verifying ? 'animate-spin' : ''}`} />
               {verifying ? 'Checking…' : 'Verify'}

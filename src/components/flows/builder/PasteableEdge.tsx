@@ -112,7 +112,7 @@ export function PasteableEdge(props: EdgeProps) {
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               pointerEvents: 'all',
             }}
-            className="nodrag nopan inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--primary)] text-white text-[10px] font-semibold shadow-md hover:opacity-90 transition-opacity"
+            className="nodrag nopan inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-[10px] font-semibold shadow-md hover:opacity-90 transition-opacity"
           >
             <ClipboardDocumentCheckIcon className="w-3 h-3" />
             Paste here

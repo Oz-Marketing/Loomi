@@ -181,7 +181,7 @@ export function AdMeetingBuilder({
           type="button"
           onClick={assemble}
           disabled={assembling}
-          className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {assembling ? (
             <ArrowPathIcon className="h-4 w-4 animate-spin" />

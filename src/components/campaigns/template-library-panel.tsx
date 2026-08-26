@@ -151,7 +151,7 @@ function CreateNewMenu({ onCreate }: { onCreate: (mode: 'visual' | 'code') => vo
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-2 text-sm font-medium text-white hover:bg-[var(--primary)] transition-colors whitespace-nowrap"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-2 text-sm font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)] transition-colors whitespace-nowrap"
       >
         <PlusIcon className="w-4 h-4" />
         Create New

@@ -161,7 +161,7 @@ export function BudgetAddLineModal({
                 onClick={() => setMode(m)}
                 className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${
                   mode === m
-                    ? 'bg-[var(--primary)] text-white shadow-sm'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow-sm'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
@@ -360,7 +360,7 @@ export function BudgetAddLineModal({
             type="button"
             disabled={saving}
             onClick={() => void submit()}
-            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition hover:opacity-90 disabled:opacity-50"
           >
             {saving
               ? 'Adding…'

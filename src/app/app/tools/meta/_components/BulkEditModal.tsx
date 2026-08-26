@@ -262,7 +262,7 @@ export function BulkEditModal({
             type="button"
             onClick={handleSubmit}
             disabled={submitDisabled}
-            className="px-3 py-1.5 text-sm rounded-lg bg-[var(--primary)] text-white font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1.5 text-sm rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Apply to {noun}
           </button>

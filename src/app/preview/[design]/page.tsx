@@ -437,7 +437,7 @@ export default function TemplatePreviewPage() {
             <button
               onClick={handleCreateEmail}
               disabled={!emailName.trim() || saving}
-              className="px-4 py-1.5 text-sm font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+              className="px-4 py-1.5 text-sm font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity disabled:opacity-50"
             >
               {saving ? 'Creating...' : 'Create'}
             </button>
@@ -451,7 +451,7 @@ export default function TemplatePreviewPage() {
         ) : (
           <button
             onClick={() => { setShowCreateEmail(true); setEmailName(''); }}
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity"
+            className="px-5 py-2 text-sm font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity"
           >
             Use This Template
           </button>

@@ -309,7 +309,7 @@ export function CopyPlanModal({
             type="button"
             onClick={handleCopy}
             disabled={selected.size === 0 || copying}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
           >
             {copying
               ? 'Copying…'

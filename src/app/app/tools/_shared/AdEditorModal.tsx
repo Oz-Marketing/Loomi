@@ -291,7 +291,7 @@ function ActivityLogPanel({
                         type="button"
                         onClick={() => saveEdit(u.id)}
                         disabled={editSaving || !editText.trim()}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="inline-flex items-center gap-1 px-2 py-1 text-[10px] font-medium rounded border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] hover:bg-[var(--primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
                         <CheckIcon className="w-3 h-3" />
                         {editSaving ? 'Saving…' : 'Save'}
@@ -566,7 +566,7 @@ export function AdEditorModal({
               <button
                 type="button"
                 onClick={() => onSave(draft)}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white text-xs font-medium hover:bg-[var(--primary)] transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] text-xs font-medium hover:bg-[var(--primary)] transition-colors"
               >
                 Save
               </button>

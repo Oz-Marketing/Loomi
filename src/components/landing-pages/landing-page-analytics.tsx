@@ -88,7 +88,7 @@ function RangeBar({
             aria-pressed={range === r.value}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
               range === r.value
-                ? 'bg-[var(--primary)] text-white'
+                ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                 : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
             }`}
           >

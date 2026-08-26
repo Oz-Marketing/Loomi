@@ -98,7 +98,7 @@ export function KnowledgeBaseTab() {
               onClick={() => setShowPreview(false)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                 !showPreview
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)]'
               }`}
             >
@@ -108,7 +108,7 @@ export function KnowledgeBaseTab() {
               onClick={() => setShowPreview(true)}
               className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
                 showPreview
-                  ? 'bg-[var(--primary)] text-white'
+                  ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                   : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] border border-[var(--border)]'
               }`}
             >

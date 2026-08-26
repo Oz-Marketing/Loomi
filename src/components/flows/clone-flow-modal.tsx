@@ -296,7 +296,7 @@ export function CloneFlowModal({
               type="button"
               onClick={handleClone}
               disabled={selected.size === 0 || cloning}
-              className="inline-flex items-center gap-1.5 px-3 h-9 text-xs font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="inline-flex items-center gap-1.5 px-3 h-9 text-xs font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <DocumentDuplicateIcon className="w-3.5 h-3.5" />
               {cloning ? 'Cloning…' : `Clone${selected.size > 0 ? ` (${selected.size})` : ''}`}

@@ -159,7 +159,7 @@ export function GoogleApplyConfirmModal({
             type="button"
             onClick={onConfirm}
             disabled={pushing || changes.length === 0}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <BoltIcon className="h-4 w-4" />
             {pushing ? 'Setting…' : single ? 'Set in Google' : `Set ${changes.length} in Google`}

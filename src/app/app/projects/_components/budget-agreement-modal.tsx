@@ -469,7 +469,7 @@ function AgreementForm({
                 onClick={() => setSpansMonths(opt.key)}
                 className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${
                   spansMonths === opt.key
-                    ? 'bg-[var(--primary)] text-white shadow-sm'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow-sm'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
@@ -734,7 +734,7 @@ function AgreementForm({
           type="button"
           disabled={!canSave}
           onClick={() => void save()}
-          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition hover:opacity-90 disabled:opacity-50"
         >
           {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Budget'}
         </button>

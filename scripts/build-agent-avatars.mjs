@@ -16,7 +16,10 @@
  * Deriving rather than hand-cropping means the next eleven characters cost one
  * line each, and the framing rule stays identical across all of them.
  *
- * Usage: node scripts/build-agent-avatars.mjs <key> <source.png>
+ * Usage: node scripts/build-agent-avatars.mjs <slug> <source.png>
+ *
+ * Writes into public/agents/library/ and prints the AVATAR_LIBRARY line to paste
+ * into src/lib/ai/specialists/avatar-library.ts.
  */
 
 import sharp from 'sharp';
@@ -98,7 +101,7 @@ const side = Math.round(radius * 2 * PAD);
 console.log(`head ${x1 - x0 + 1}x${y1 - y0 + 1}; enclosing radius ${Math.round(radius)} -> ${side}px square`);
 
 const left = Math.round(cx - side / 2), top = Math.round(cy - side / 2);
-await mkdir('public/agents', { recursive: true });
+await mkdir('public/agents/library', { recursive: true });
 
 // Extract, padding with transparency wherever the square runs off the source, so
 // the head stays centred rather than being shoved inward by a clamp.
@@ -143,12 +146,12 @@ if (squaredMeta.width !== squaredMeta.height) {
 await sharp(squared)
   .resize(AVATAR, AVATAR, { fit: 'fill' })
   .webp({ quality: 92, alphaQuality: 100 })
-  .toFile(`public/agents/${key}.webp`);
+  .toFile(`public/agents/library/${key}.webp`);
 
 await sharp(srcPath)
   .resize({ height: FULL_H, fit: 'inside' })
   .webp({ quality: 92, alphaQuality: 100 })
-  .toFile(`public/agents/${key}-full.webp`);
+  .toFile(`public/agents/library/${key}-full.webp`);
 
 /**
  * The accent behind the avatar, taken from the character's HAIR.
@@ -157,7 +160,7 @@ await sharp(srcPath)
  * the pale face and land on a washed-out lilac that reads as no colour at all;
  * sharp's own `dominant` counts the transparent surround as black.
  */
-const avatar = await sharp(`public/agents/${key}.webp`).ensureAlpha().raw()
+const avatar = await sharp(`public/agents/library/${key}.webp`).ensureAlpha().raw()
   .toBuffer({ resolveWithObject: true });
 const buckets = new Map();
 for (let i = 0; i < avatar.data.length; i += avatar.info.channels) {
@@ -179,4 +182,7 @@ for (let i = 0; i < avatar.data.length; i += avatar.info.channels) {
 const [, top1] = [...buckets.entries()].sort((a, b) => b[1].n - a[1].n)[0];
 const accent = '#' + [top1.r, top1.g, top1.b]
   .map((v) => Math.round(v / top1.n).toString(16).padStart(2, '0')).join('');
-console.log(`accent ${accent}  ->  set on the ${key} identity`);
+console.log(`accent ${accent}`);
+console.log(
+  `add to AVATAR_LIBRARY:  { slug: '${key}', name: '${key[0].toUpperCase()}${key.slice(1)}', url: '/agents/library/${key}.webp', accent: '${accent}' },`,
+);

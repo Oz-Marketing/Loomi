@@ -91,7 +91,7 @@ describe('settings registry', () => {
       'users',
       'client-users',
       'teams',
-      'knowledge',
+      'agents',
     ]);
     // Notifications is sector-owned now (its categories ARE a sector's);
     // Appearance stays because it follows the USER across all three surfaces.
@@ -131,7 +131,7 @@ describe('settings registry', () => {
       'users',
       'client-users',
       'teams',
-      'knowledge',
+      'agents',
       'industries',
     ]) {
       expect(keys).not.toContain(agencyOnly);

@@ -27,7 +27,7 @@ export type SettingsTabKey =
   | 'users'
   | 'client-users'
   | 'teams'
-  | 'knowledge'
+  | 'agents'
   | 'industries'
   | 'markup'
   | 'budget-channels'
@@ -227,9 +227,9 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     rail: 'sector',
   },
   {
-    key: 'knowledge',
-    label: 'Knowledge Base',
-    titleLabel: 'Knowledge Base Settings',
+    key: 'agents',
+    label: 'Agents',
+    titleLabel: 'AI Agents',
     group: 'manage',
     icon: SparklesIcon,
     visible: (s) => s.hasAdminAccess && s.isAdmin,

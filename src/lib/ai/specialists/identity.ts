@@ -81,7 +81,7 @@ export const AGENT_IDENTITIES: Record<SpecialistKey, AgentIdentity> = {
     // Sampled from her hair by scripts/build-agent-avatars.mjs, so the ring drawn
     // behind the portrait belongs to the same palette as the portrait.
     accent: '#5d44d9',
-    portraitUrl: '/agents/coop.webp',
+    portraitUrl: '/agents/library/vera.webp',
   },
 };
 

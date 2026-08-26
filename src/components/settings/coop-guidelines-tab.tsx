@@ -819,9 +819,12 @@ export function CoopGuidelinesTab() {
                       never auto-approve, so a person sees every one. Nothing is skipped.
                     </p>
                     <p>
-                      <strong>Approve for enforcement</strong> means a person checked the transcription against the
-                      document. Until then findings only warn, so a half-finished transcription can&rsquo;t block a
-                      brand&rsquo;s month.
+                      A rule blocks an ad only once a person has <strong>signed off on it</strong> — either by
+                      accepting it in the review queue below, or in bulk with <strong>Approve for enforcement</strong>.
+                      Everything else warns, so a half-finished transcription can&rsquo;t block a brand&rsquo;s month.
+                    </p>
+                    <p>
+                      That is one question, not two: the counts above say what can actually block today.
                     </p>
                   </HelpTip>
                 </h3>
@@ -872,9 +875,15 @@ export function CoopGuidelinesTab() {
                               </button>
                             </div>
                             <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                              {/* Says the SAME thing as the counts above rather than a
+                                  second, contradicting thing. A rule blocks once a
+                                  person has signed off on it — individually in the
+                                  review queue, or in bulk by approving the pack. */}
                               {p.verified
-                                ? `Approved${p.verifiedBy ? ` by ${p.verifiedBy}` : ''}${p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — these can block a non-compliant ad.`
-                                : 'Not approved — findings only warn, and ads for this make stay drafts.'}
+                                ? `Approved${p.verifiedBy ? ` by ${p.verifiedBy}` : ''}${p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — signed-off rules block a non-compliant ad.`
+                                : p.errorCount > 0
+                                  ? 'Pack not approved, so only the rules accepted in review can block. Approve it to promote the rest.'
+                                  : 'Pack not approved — every rule warns rather than blocks, and ads for this make stay drafts.'}
                             </p>
                           </div>
                           <button

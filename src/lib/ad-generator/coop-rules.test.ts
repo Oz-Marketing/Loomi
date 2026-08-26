@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   coopPassed,
+  effectiveSeverity,
   evaluateCoopRules,
   parseCoopPack,
   splitCoopPack,
@@ -622,5 +623,45 @@ describe('banned_phrase — prohibited-terms lists', () => {
       description: 'no clearance', citation: 'x', phrase: 'clearance',
     };
     expect(run({ headline: 'Clearance event' }, single)).toHaveLength(1);
+  });
+});
+
+describe('effectiveSeverity — one gate, asked per rule', () => {
+  const unapproved = { verified: false };
+  const approved = { verified: true };
+
+  it('a legacy rule in an unapproved pack warns, whatever it declares', () => {
+    // The three hand-transcribed packs were written in seed scripts whose own
+    // comments say a human must check them before they can block.
+    expect(effectiveSeverity({ severity: 'error' }, unapproved)).toBe('warning');
+  });
+
+  // The bug this whole change exists to kill: accepting a rule bought nothing.
+  it('an ACCEPTED rule blocks even in an unapproved pack', () => {
+    expect(effectiveSeverity({ severity: 'error', reviewState: 'accepted' }, unapproved)).toBe('error');
+  });
+
+  it('approving the pack promotes the legacy rules in bulk', () => {
+    expect(effectiveSeverity({ severity: 'error' }, approved)).toBe('error');
+  });
+
+  it('never promotes a rule that only ever warned', () => {
+    expect(effectiveSeverity({ severity: 'warning', reviewState: 'accepted' }, approved)).toBe('warning');
+    expect(effectiveSeverity({ severity: 'warning' }, unapproved)).toBe('warning');
+  });
+
+  it('applies it to real findings', () => {
+    const rule: CoopRule = {
+      id: 'r', kind: 'required_element', field: 'disclaimer',
+      severity: 'error', description: 'Needs a disclaimer.', citation: 'x',
+    };
+    const d = doc([textEl('h', 'headline')]);
+    const warnPack: CoopRulePack = { make: 'M', version: '1', verified: false, rules: [rule] };
+    const blockPack: CoopRulePack = {
+      make: 'M', version: '1', verified: false,
+      rules: [{ ...rule, reviewState: 'accepted' }],
+    };
+    expect(evaluateCoopRules({ doc: d, data: LEASE, pack: warnPack })[0].severity).toBe('warning');
+    expect(evaluateCoopRules({ doc: d, data: LEASE, pack: blockPack })[0].severity).toBe('error');
   });
 });

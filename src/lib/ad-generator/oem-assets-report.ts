@@ -1,5 +1,11 @@
 import { prisma } from '@/lib/prisma';
-import { parseCoopPack, type CoopRule, type RequiredFieldEntry } from './coop-rules';
+import {
+  effectiveSeverity,
+  parseCoopPack,
+  type CoopRule,
+  type CoopRulePack,
+  type RequiredFieldEntry,
+} from './coop-rules';
 import { splitByReviewState } from './coop-pack-store';
 import { listTemplateChecks, type TemplateCheckRow } from './coop-template-check-store';
 import { listGuidelineDocs, type GuidelineDocRow } from './guideline-docs';
@@ -104,11 +110,22 @@ function jsonArray(raw: string | null): string[] {
   }
 }
 
-function countBySeverity(rules: CoopRule[]): { errorCount: number; warningCount: number } {
+/**
+ * Counted by what a rule can actually DO, not by what it declares.
+ *
+ * Declared severity was the source of the page contradicting itself: a pack nobody
+ * had approved reported "21 can block" while the engine downgraded every one of them
+ * to a warning. Both numbers were true of different things, and together they were
+ * a lie.
+ */
+function countBySeverity(
+  rules: CoopRule[],
+  pack: Pick<CoopRulePack, 'verified'>,
+): { errorCount: number; warningCount: number } {
   let errorCount = 0;
   let warningCount = 0;
   for (const r of rules) {
-    if (r.severity === 'error') errorCount++;
+    if (effectiveSeverity(r, pack) === 'error') errorCount++;
     else warningCount++;
   }
   return { errorCount, warningCount };
@@ -216,7 +233,7 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
         // Severity is counted over ACCEPTED rules: "8 errors" has to mean eight
         // things that can block an ad, not eight things someone might accept later.
         const split = parsed ? splitByReviewState(parsed) : null;
-        const counts = countBySeverity(split?.accepted.rules ?? []);
+        const counts = countBySeverity(split?.accepted.rules ?? [], { verified: p.verified });
         return {
           id: p.id,
           version: p.version,

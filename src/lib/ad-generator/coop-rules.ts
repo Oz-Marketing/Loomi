@@ -351,6 +351,41 @@ function inScope(rule: CoopRule, offerType: string, sizeId?: string): boolean {
 }
 
 /** Build a case-insensitive matcher from a rule's `phrase` or `pattern`. */
+/**
+ * What a rule can actually DO, once sign-off is taken into account.
+ *
+ * ── WHY THIS IS NOT JUST `rule.severity` ──
+ *
+ * There used to be two independent gates and they contradicted each other. The pack
+ * carried `verified`, which downgraded EVERY error to a warning; rules carried
+ * `reviewState`, which decided whether a rule was evaluated at all. So a reviewer
+ * could accept a rule, watch the page report "21 can block", and still have nothing
+ * block — because the pack as a whole had not been approved. Accepting a rule bought
+ * nothing, which is the worst possible thing for a review queue to be.
+ *
+ * One question now, asked per rule: HAS A HUMAN SIGNED OFF ON THIS RULE?
+ *
+ *   • accepted by a person  → it does what its severity says
+ *   • otherwise, in a pack nobody has approved → it warns, whatever it says
+ *
+ * A legacy rule carries no `reviewState` at all — the three hand-transcribed packs
+ * were written in seed scripts whose own comments say a human must check them against
+ * the PDF before they can block. So absence means "not signed off", and those keep
+ * warning exactly as they do today. Approving the pack is still the bulk answer for
+ * them; individually accepting a rule is now the precise one, and it finally has an
+ * effect.
+ *
+ * Pure.
+ */
+export function effectiveSeverity(
+  rule: Pick<CoopRule, 'severity' | 'reviewState'>,
+  pack: Pick<CoopRulePack, 'verified'>,
+): CoopSeverity {
+  if (rule.severity !== 'error') return rule.severity;
+  if (rule.reviewState === 'accepted') return 'error';
+  return pack.verified === false ? 'warning' : 'error';
+}
+
 /** Escape a literal for use in a regex. */
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -496,10 +531,8 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
   const sizes = sizeIds?.length ? sizeIds : doc.sizes.map((s) => s.id);
   const offerType = data.offerType || 'custom';
   const findings: CoopFinding[] = [];
-  const downgrade = pack.verified === false;
-
   const push = (f: CoopFinding) => {
-    findings.push(downgrade && f.severity === 'error' ? { ...f, severity: 'warning' } : f);
+    findings.push(f);
   };
 
   for (const rule of pack.rules) {
@@ -523,7 +556,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
         if (!test(value)) {
           push({
             ruleId: rule.id,
-            severity: rule.severity,
+            severity: effectiveSeverity(rule, pack),
             description: rule.description,
             citation: rule.citation,
             field: rule.field,
@@ -550,7 +583,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
           if (hit === null) continue;
           push({
             ruleId: rule.id,
-            severity: rule.severity,
+            severity: effectiveSeverity(rule, pack),
             description: rule.description,
             citation: rule.citation,
             field: key,
@@ -628,7 +661,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
         if (violates) {
           push({
             ruleId: rule.id,
-            severity: rule.severity,
+            severity: effectiveSeverity(rule, pack),
             description: rule.description,
             citation: rule.citation,
             field: rule.field,
@@ -647,7 +680,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
         if (!visibleSomewhere) {
           push({
             ruleId: rule.id,
-            severity: rule.severity,
+            severity: effectiveSeverity(rule, pack),
             description: rule.description,
             citation: rule.citation,
             field: rule.field,
@@ -678,7 +711,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
             if (declared > 0 && declared < floor) {
               push({
                 ruleId: rule.id,
-                severity: rule.severity,
+                severity: effectiveSeverity(rule, pack),
                 description: rule.description,
                 citation: rule.citation,
                 field: rule.field,
@@ -707,7 +740,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
               const pct = (n: number) => `${Math.round(n * 100)}%`;
               push({
                 ruleId: rule.id,
-                severity: rule.severity,
+                severity: effectiveSeverity(rule, pack),
                 description: rule.description,
                 citation: rule.citation,
                 field: rule.field,
@@ -737,7 +770,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
               if (tooShort) parts.push(`height ${pct(b.h)} < ${pct(rule.minHeightFraction!)}`);
               push({
                 ruleId: rule.id,
-                severity: rule.severity,
+                severity: effectiveSeverity(rule, pack),
                 description: rule.description,
                 citation: rule.citation,
                 field: rule.field,

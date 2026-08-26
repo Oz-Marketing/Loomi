@@ -37,6 +37,7 @@ export type SettingsTabKey =
   | 'ad-disclaimers'
   | 'ad-oem-rules'
   | 'ad-automation'
+  | 'email-texts'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'integrations'
@@ -340,6 +341,25 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     visible: (s) => s.surface === 'studio' && s.hasAdminAccess && s.oemRelevant,
     rail: 'sector',
   },
+  // Sending config, email footer and suppressions for the account in scope.
+  //
+  // MOVED HERE from the sub-account drill-in's rail (2026-08-25). It is per-ACCOUNT
+  // config — the SendGrid key, sender identity, postal address and suppression list
+  // all gate whether this one account can send — so it stays account-scoped, the
+  // same way General does. What was wrong was the placement: it sat in a rail whose
+  // path segment was never read, so every "fix this in settings" deep link from the
+  // blast preflight landed on General instead.
+  {
+    key: 'email-texts',
+    label: 'Email & Texts',
+    titleLabel: 'Email & Texts',
+    description:
+      'Sender identity, the email footer and the suppression list for this account \u2014 what decides whether it can send at all.',
+    group: 'configure',
+    icon: PaperAirplaneIcon,
+    visible: (s) => s.surface === 'studio' && s.isAccount,
+    rail: 'sector',
+  },
   // ── Ad Generator config ──
   //
   // The four screens that used to hang off a cog on the Ad Generator's own
@@ -487,7 +507,6 @@ export type SubaccountSectionKey =
   | 'integrations'
   | 'domains'
   | 'contact-fields'
-  | 'email-texts'
   | 'notifications'
   | 'reports'
   | 'appearance';
@@ -565,13 +584,6 @@ const SUBACCOUNT_REGISTRY: SubaccountEntry[] = [
   // still deep-link to the right one.
   //
   // Studio-only: Reporting and Projects don't send anything.
-  {
-    key: 'email-texts',
-    label: 'Email & Texts',
-    group: 'sector',
-    icon: PaperAirplaneIcon,
-    visible: (s) => s.surface === 'studio',
-  },
 
   // Which reports this sub-account's CLIENT users see. Reporting-only, and
   // staff-only to reach: it needs `reporting.configure`, which no client role

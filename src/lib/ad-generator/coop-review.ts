@@ -327,3 +327,76 @@ export function mergeMustInclude(
 
   return [...byField.values()].sort((a, b) => a.field.localeCompare(b.field));
 }
+
+// ── superseded per-term proposals ────────────────────────────────────────────
+
+/** Lowercased words, for comparing a term against a list entry. */
+function termWords(s: string): string {
+  return s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(' ');
+}
+
+export interface SupersededRule {
+  ruleId: string;
+  /** The single term this rule bans. */
+  phrase: string;
+  /** The list rule that already covers it. */
+  coveredBy: string;
+  coverState: 'accepted' | 'proposed';
+}
+
+/**
+ * Proposed one-term rules that a list rule already covers.
+ *
+ * Drafting used to emit one rule per banned word: Subaru produced fifty-one of them
+ * from a single page. Those proposals are still queued, and a fresh pass adds LIST
+ * rules beside them rather than replacing them — nothing can tell that one
+ * twenty-eight-term rule supersedes twenty-eight single-term ones, because by id and
+ * by content they are unrelated. So the queue gets worse before it gets better, and
+ * the fix is to decline the singles the lists have absorbed.
+ *
+ * NARROW ON PURPOSE:
+ *
+ *   • Only `proposed` rules. A hand-written rule carries no `reviewState` and is not
+ *     in the queue; an accepted one is somebody's decision. Neither is touched.
+ *   • Only rules whose term a list rule actually contains. A standalone ban that
+ *     appears in no list is not superseded — it is the only thing covering that
+ *     term, and declining it would silently drop the requirement.
+ *   • By default only ACCEPTED list rules count as cover. A proposed list could
+ *     itself be declined later, which would leave the terms covered by nothing;
+ *     pass `includeProposedLists` when you intend to accept the lists anyway.
+ *
+ * Pure.
+ */
+export function findSupersededPhraseRules(
+  pack: CoopRulePack,
+  opts: { includeProposedLists?: boolean } = {},
+): SupersededRule[] {
+  const covers = new Map<string, { id: string; state: 'accepted' | 'proposed' }>();
+  for (const r of pack.rules) {
+    if (r.kind !== 'banned_phrase') continue;
+    const list = (r as { phrases?: string[] }).phrases ?? [];
+    if (list.length === 0) continue;
+    const state = r.reviewState;
+    if (state !== 'accepted' && !(opts.includeProposedLists && state === 'proposed')) continue;
+    for (const term of list) {
+      const key = termWords(term);
+      // First cover wins, and an accepted one always beats a proposed one, so the
+      // report names the strongest cover rather than whichever came first.
+      const existing = covers.get(key);
+      if (!key || (existing && existing.state === 'accepted')) continue;
+      covers.set(key, { id: r.id, state: state === 'accepted' ? 'accepted' : 'proposed' });
+    }
+  }
+
+  const out: SupersededRule[] = [];
+  for (const r of pack.rules) {
+    if (r.kind !== 'banned_phrase' || r.reviewState !== 'proposed') continue;
+    const single = (r as { phrase?: string }).phrase;
+    const hasList = ((r as { phrases?: string[] }).phrases ?? []).length > 0;
+    if (!single?.trim() || hasList) continue;
+    const cover = covers.get(termWords(single));
+    if (!cover || cover.id === r.id) continue;
+    out.push({ ruleId: r.id, phrase: single, coveredBy: cover.id, coverState: cover.state });
+  }
+  return out;
+}

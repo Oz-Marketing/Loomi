@@ -28,17 +28,42 @@ import type { AcceptedRequiredField, AcceptedRule } from './coop-draft';
  * Pure: no DB, no network, no clock.
  */
 
-/** Identity of a rule for duplicate detection, independent of its id. */
+/**
+ * Identity of a rule for duplicate detection, independent of its id.
+ *
+ * `phrases` IS PART OF IT. Leaving it out meant every prohibited-terms list computed
+ * the same signature — `banned_phrase|||`, since a list carries no single `phrase` —
+ * so the first list to arrive made every other list look like a duplicate of it. A
+ * Subaru run landed one of four: the 28-term, 5-term and 4-term lists were all
+ * discarded as "the same rule, re-drafted".
+ *
+ * Sorted, because term order is not identity: the same list read twice may come back
+ * in a different order and that must not read as a different rule.
+ */
 function signature(rule: CoopRule): string {
   const r = rule as CoopRule & Record<string, unknown>;
+  const phrases = Array.isArray(r.phrases)
+    ? [...(r.phrases as string[])].map((x) => x.trim().toLowerCase()).sort().join('+')
+    : '';
   const parts = [
     rule.kind,
     String(r.field ?? ''),
     (Array.isArray(r.fields) ? (r.fields as string[]).join('+') : ''),
     String(r.phrase ?? ''),
+    phrases,
     String(r.pattern ?? ''),
   ];
   return parts.join('|').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** An id not already taken, suffixed only as far as needed. */
+function freeId(base: string, taken: Set<string>): string {
+  if (!taken.has(base)) return base;
+  for (let n = 2; n < 100; n++) {
+    const candidate = `${base}-${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}-${taken.size + 1}`;
 }
 
 export type SkipReason =
@@ -132,8 +157,14 @@ export function mergeDraftedRules(
       });
       continue;
     }
+    // ID CLASH, DIFFERENT RULE → RENAME IT, don't discard it.
+    //
+    // Ids are slugs derived from the description, so two genuinely different rules
+    // can compute the same one — and dropping the second loses a real requirement
+    // over a naming coincidence. A clash where the SIGNATURE also matches is a true
+    // duplicate and is still skipped, by the check below.
     const clash = byId.get(rule.id);
-    if (clash) {
+    if (clash && signature(clash) === signature(rule)) {
       skipped.push({
         reason: 'duplicate_id',
         ruleId: rule.id,
@@ -141,6 +172,9 @@ export function mergeDraftedRules(
         description: rule.description,
       });
       continue;
+    }
+    if (clash) {
+      rule.id = freeId(rule.id, new Set([...byId.keys(), ...added.map((a) => a.id)]));
     }
     const same = bySignature.get(signature(rule));
     if (same) {

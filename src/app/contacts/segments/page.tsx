@@ -188,8 +188,10 @@ export default function SegmentsPage() {
     [scopedSegments],
   );
 
+  const countAccountKeysKey = exportAccountKeys.join(',');
+
   useEffect(() => {
-    if (!isAccount || !accountKey || !segmentIdsKey) {
+    if (exportAccountKeys.length === 0 || !segmentIdsKey) {
       setMemberCounts(new Map());
       setCountErrors(new Map());
       setContactsLoading(false);
@@ -201,7 +203,10 @@ export default function SegmentsPage() {
     fetch('/api/segments/counts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountKey, ids: segmentIdsKey.split(',') }),
+      body: JSON.stringify({
+        accountKeys: countAccountKeysKey.split(','),
+        ids: segmentIdsKey.split(','),
+      }),
     })
       .then((res) => (res.ok ? res.json() : { counts: [] }))
       .then((data) => {
@@ -235,7 +240,10 @@ export default function SegmentsPage() {
     return () => {
       cancelled = true;
     };
-  }, [isAccount, accountKey, segmentIdsKey]);
+    // `countAccountKeysKey` stands in for `exportAccountKeys` — a new array
+    // identity every render would refetch every batch on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countAccountKeysKey, segmentIdsKey]);
 
   // ── Search filtering ─────────────────────────────────────────────
   // Scope already applied by `scopedSegments` above — this is search only.

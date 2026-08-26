@@ -53,9 +53,18 @@ export interface OfferMainSpec {
   /** The `AdData` key holding the figure. */
   field: string;
   format: OfferFigureFormat;
-  /** Appended verbatim to the formatted figure (`/mo`, `% APR`). Never appended
+  /** Appended verbatim to the formatted figure (`/mo`, `%`). Never appended
    *  to the em-dash placeholder — a missing number reads `—`, not `—/mo`. */
   suffix?: string;
+  /**
+   * Extra words the figure needs to make sense IN A SENTENCE, where there is no
+   * label element beside it to carry the meaning.
+   *
+   * On the creative, "1.9%" sits under a label reading "APR" and the pair says
+   * everything. In a caption — "2026 Trax — 1.9%." — the same figure says
+   * nothing, so the prose form re-attaches the word. See `OfferBlock.prose`.
+   */
+  proseSuffix?: string;
 }
 
 /** One supporting line under the headline. Dropped entirely when its field is
@@ -135,7 +144,12 @@ export const VEHICLE_OFFER_TYPE_SPECS: OfferTypeSpec[] = [
     required: ['aprRate', 'aprTerm'],
     label: 'APR Financing',
     defaultLabel: 'APR',
-    main: { field: 'aprRate', format: 'percent', suffix: '% APR' },
+    // Just the rate. The word APR is the LABEL's job — `defaultLabel` above —
+    // and carrying it here too made every design that showed both read
+    // "APR / 1.9% APR". Changed deliberately 2026-08-22: it rewrites the
+    // headline of existing APR ads from "1.9% APR" to "1.9%", which is the
+    // point. See docs/ad-generator-archetypes.md §5.
+    main: { field: 'aprRate', format: 'percent', suffix: '%', proseSuffix: ' APR' },
     // Just the financing term — the financial institution still rides in the
     // disclaimer, but the on-image terms line stays clean.
     terms: [{ field: 'aprTerm', format: 'number', text: 'for {value} months' }],

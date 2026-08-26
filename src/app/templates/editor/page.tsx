@@ -9030,7 +9030,7 @@ export default function TemplateEditorPage() {
           )}
           {/* Secondary actions consolidated into a single 3-dot menu:
               Send Test, Save as template, Change template (last two only
-              in campaign-builder mode). Ask Iris removed at this level
+              in campaign-builder mode). Ask Loomi AI removed at this level
               per UX cleanup — it lives inside the editor pane already. */}
           <div ref={manageTemplateMenuRef} className="relative">
             <button
@@ -10254,7 +10254,7 @@ export default function TemplateEditorPage() {
                     <SparklesIcon className="w-3.5 h-3.5 text-zinc-900" />
                   </div>
                   <p className="text-sm font-semibold text-[var(--foreground)]">
-                    Ask Iris
+                    Ask Loomi AI
                   </p>
                   <span className="text-[10px] text-[var(--muted-foreground)] bg-[var(--muted)] px-1.5 py-0.5 rounded">
                     ⌘⇧A

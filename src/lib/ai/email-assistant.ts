@@ -12,7 +12,7 @@ import {
   buildAccountContext,
   type AccountContextInput,
 } from '@/lib/ai-knowledge';
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import { componentSchemas } from '@/lib/component-schemas';
 import type { TemplateBuild, TemplateBuildComponent } from '@/lib/email/build-to-html';
 
@@ -213,11 +213,13 @@ export async function runEmailAssistant(input: {
     model: ANTHROPIC_MODEL,
     system: systemPrompt,
     messages,
-    temperature: 0.4,
-    max_tokens: input.maxTokens ?? 4096,
+    // Opus 5 rejects temperature. This one builds whole emails, so it gets real
+    // effort — and headroom for the thinking that now precedes the JSON.
+    output_config: { effort: 'medium' },
+    max_tokens: input.maxTokens ?? 16000,
   });
 
-  const content = response.content[0]?.type === 'text' ? response.content[0].text : '';
+  const content = lastTextBlock(response);
   if (!content) throw new EmailAssistantError('AI response was empty', 'empty');
 
   let parsed: unknown;

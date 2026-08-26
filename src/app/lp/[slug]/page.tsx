@@ -1,13 +1,17 @@
 import { headers } from 'next/headers';
-import { notFound } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 import type { Metadata } from 'next';
+import type { AccountDomain } from '@prisma/client';
 import {
   getPublishedLandingPageById,
   getPublishedLandingPageBySlug,
   getPublishedLandingPageByAccountAndSlug,
   type LandingPageDetail,
 } from '@/lib/services/landing-pages';
-import { findVerifiedDomainByHostname } from '@/lib/services/account-domains';
+import {
+  findCanonicalDomainForAccount,
+  findVerifiedDomainByHostname,
+} from '@/lib/services/account-domains';
 import { getPublishedFormById } from '@/lib/services/forms';
 import { getSnippetsByIds } from '@/lib/services/account-snippets';
 import {
@@ -28,6 +32,7 @@ import { LpJsonLd } from '@/lib/landing-pages/LpJsonLd';
 import { LpAttributionProvider } from '@/lib/landing-pages/lp-attribution-context';
 import { collectFieldBlocks, getFieldName, parseFormTemplate } from '@/lib/forms/types';
 import { parseEmbedParams, type RawSearchParams } from '@/lib/forms/embed-params';
+import { withQuery } from '@/lib/landing-pages/canonical';
 
 // Sentinel slug used by middleware when a custom-domain visitor hits
 // the root path — resolved here to the domain's `homeLandingPageId`.
@@ -54,9 +59,26 @@ interface PageProps {
  * we read it via `next/headers` rather than passing it as a prop.
  */
 async function resolveLandingPage(slug: string): Promise<LandingPageDetail | null> {
+  return (await resolveLandingPageForRequest(slug))?.page ?? null;
+}
+
+/** As `resolveLandingPage`, but also reports the verified custom domain
+ *  the request arrived on (null on the studio host). The page component
+ *  needs that to decide whether to redirect to the canonical host, and
+ *  resolving both together keeps it to one hostname lookup per request. */
+async function resolveLandingPageForRequest(
+  slug: string,
+): Promise<{ page: LandingPageDetail; onCustomDomain: AccountDomain | null } | null> {
   const host = await readHost();
   const onCustomDomain = host ? await findVerifiedDomainByHostname(host) : null;
+  const page = await resolvePageRow(slug, onCustomDomain);
+  return page ? { page, onCustomDomain } : null;
+}
 
+async function resolvePageRow(
+  slug: string,
+  onCustomDomain: AccountDomain | null,
+): Promise<LandingPageDetail | null> {
   if (onCustomDomain) {
     if (slug === HOME_SENTINEL) {
       if (!onCustomDomain.homeLandingPageId) return null;
@@ -99,6 +121,14 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
     // want lingering in search, or internal-only campaigns. Default is
     // index, follow so published LPs are crawlable out of the box.
     robots: page.noindex ? 'noindex, nofollow' : 'index, follow',
+    // Every LP is reachable at more than one URL: the studio host, the
+    // account's custom domain, and (for a domain home) both `/` and
+    // `/<slug>` on that domain. Without this tag search engines are free
+    // to pick whichever they crawl first, so a studio link pasted into an
+    // ad can end up indexed in place of the page we want ranking.
+    // `publicUrl` resolves to the custom domain when the account has a
+    // verified one, so this agrees with the sitemap by construction.
+    alternates: { canonical: page.publicUrl },
     // Per-LP favicon if configured. Next merges this into the head as
     // <link rel="icon" href=...>; falls back to the studio default
     // when null.
@@ -134,8 +164,29 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
  */
 export default async function PublicLandingPage({ params, searchParams }: PageProps) {
   const [{ slug }, sp] = await Promise.all([params, searchParams]);
-  const page = await resolveLandingPage(slug);
-  if (!page) notFound();
+  const resolved = await resolveLandingPageForRequest(slug);
+  if (!resolved) notFound();
+  const { page, onCustomDomain } = resolved;
+
+  // Studio-host hit on a page that lives on a custom domain — send the
+  // visitor to the canonical host so link equity, analytics and any
+  // cached share of this URL all converge on one address.
+  //
+  // Gated on the account actually HAVING a verified domain rather than on
+  // a host mismatch: `publicUrl` falls back to NEXT_PUBLIC_APP_URL, which
+  // in local dev often isn't the host you're browsing, and a mismatch
+  // test would bounce every dev request at studio.loomilm.com.
+  //
+  // Compares HOSTS, never full URLs. Middleware rewrites `/` to
+  // `/lp/__home__` on a custom domain, so the pathname seen here is the
+  // rewritten one — redirecting on a path mismatch would loop forever.
+  if (!onCustomDomain && page.accountKey) {
+    const canonical = await findCanonicalDomainForAccount(page.accountKey);
+    const currentHost = await readHost();
+    if (canonical && canonical.hostname !== currentHost) {
+      permanentRedirect(withQuery(page.publicUrl, sp));
+    }
+  }
 
   // Walk the schema for embedded form ids (blocks-mode embedded_form
   // blocks OR html-mode data-loomi-form placeholders) and fetch each

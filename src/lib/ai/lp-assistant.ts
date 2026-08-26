@@ -1,7 +1,7 @@
 /**
  * Iris — the landing-page builder assistant.
  *
- * Powers the "Iris" chat tab in the HTML landing-page editor. Unlike the flow
+ * Powers the Loomi AI chat tab in the HTML landing-page editor. Unlike the flow
  * builder's Iris (which drives a node graph via tool-use), a landing page is a
  * single HTML artifact, so this assistant returns a structured JSON response:
  * a conversational reply plus, when it's building/editing, the page HTML and how
@@ -53,7 +53,7 @@ const MAX_TOKENS = 32000;
 
 function buildSystemPrompt(accountContext?: string): string {
   return [
-    'You are Iris, an expert conversion-focused landing-page designer working inside Loomi\'s landing page builder. You help marketers plan, write, build, and refine high-converting landing pages. You are collaborative, decisive, and tasteful — you produce clean, modern, professional pages every time.',
+    'You are Loomi AI, an expert conversion-focused landing-page designer working inside Loomi\'s landing page builder. You help marketers plan, write, build, and refine high-converting landing pages. You are collaborative, decisive, and tasteful — you produce clean, modern, professional pages every time.',
     'You work on ONE landing page at a time. You can hold a normal conversation, ask questions, explain your choices, and produce HTML for the page.',
     '',
     '## How you respond',
@@ -194,7 +194,7 @@ export function normalizeLpResponse(raw: unknown): LpAssistantResponse {
 }
 
 /**
- * Run Iris for the landing-page builder. Builds the system + user messages,
+ * Run Loomi AI for the landing-page builder. Builds the system + user messages,
  * calls Claude (Opus, with adaptive thinking for design reasoning), and parses
  * the structured response. `history` is prior turns (current prompt excluded).
  */
@@ -224,7 +224,7 @@ export async function runLpAssistant(input: {
     .stream({
       model: ANTHROPIC_FLOW_MODEL,
       max_tokens: MAX_TOKENS,
-      // Opus 4.7 supports adaptive thinking; it rejects temperature/top_p/top_k.
+      // Adaptive thinking; this family rejects temperature/top_p/top_k.
       thinking: { type: 'adaptive' },
       system: systemPrompt,
       messages,
@@ -236,13 +236,13 @@ export async function runLpAssistant(input: {
   for (const block of response.content) {
     if (block.type === 'text' && block.text.trim()) content = block.text;
   }
-  if (!content) throw new LpAssistantError('Iris returned an empty response', 'empty');
+  if (!content) throw new LpAssistantError('Loomi AI returned an empty response', 'empty');
 
   let parsed: unknown;
   try {
     parsed = parseLpJson(content);
   } catch {
-    throw new LpAssistantError('Iris response was not valid JSON', 'invalid-json');
+    throw new LpAssistantError('Loomi AI response was not valid JSON', 'invalid-json');
   }
 
   return normalizeLpResponse(parsed);

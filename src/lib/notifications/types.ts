@@ -25,6 +25,8 @@ export type NotificationType =
   // Ad Generator (Studio surface) — autonomous generation
   | 'incentive_ads_ready'
   | 'coop_guideline_changed'
+  // Playbooks (Studio surface) — nightly coverage sweep
+  | 'playbook_drift'
   // Media Library (Studio surface) — rights management
   | 'asset_rights_expiring'
   | 'asset_rights_expired'
@@ -225,6 +227,17 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     category: 'Ad Generator',
     // Immediate: every ad generated between the reissue and someone noticing is
     // built against rules that may no longer be in force.
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'playbook_drift',
+    label: 'Playbook check started blocking',
+    description:
+      'The nightly coverage sweep found a blocking check that was passing before. Only NEW failures alert — a standing backlog does not re-announce itself every morning.',
+    category: 'Playbooks',
+    // Immediate: a blocking check means publishing is impossible for that
+    // rooftop, so every day it sits unnoticed is a day of nothing shipping.
     channel: 'immediate',
     defaultEnabled: true,
   },

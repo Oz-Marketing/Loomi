@@ -96,7 +96,7 @@ export default async function MarketingPage() {
         }}
       />
 
-      {/* Iris aurora — the five independently-drifting brand blobs, full-bleed
+      {/* Loomi aurora — the five independently-drifting brand blobs, full-bleed
           behind everything. Same classes as the in-app AI heroes. */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
         <span className="iris-aurora-blob iris-aurora-blob-1" />

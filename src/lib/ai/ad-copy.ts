@@ -1,4 +1,4 @@
-import { getAnthropicClient, ANTHROPIC_MODEL, parseAiJson } from '@/lib/anthropic';
+import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import {
   type AdCopyRequest,
   type AdCopyResult,
@@ -138,11 +138,14 @@ export async function generateAdCopy(req: AdCopyRequest): Promise<AdCopyResult> 
   const client = getAnthropicClient();
   const response = await client.messages.create({
     model: ANTHROPIC_MODEL,
-    max_tokens: 2000,
+    // Thinking counts against max_tokens on Opus 5; copy is short, the reasoning
+    // before it is not.
+    output_config: { effort: 'low' },
+    max_tokens: 8000,
     system: SYSTEM,
     messages: [{ role: 'user', content: buildPrompt(req) }],
   });
-  const raw = response.content[0]?.type === 'text' ? response.content[0].text : '';
+  const raw = lastTextBlock(response);
   const parsed = parseAiJson(raw);
   return normalizeCopyResult(parsed, req);
 }

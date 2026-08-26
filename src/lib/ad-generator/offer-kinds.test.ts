@@ -260,6 +260,7 @@ describe('the custom kind', () => {
     expect(assembleOffer({ offerType: 'flat_price', offerPrice: '79.95', regularPrice: '109' })).toEqual({
       label: 'SPECIAL',
       main: '$79.95',
+      prose: '$79.95',
       value: '79.95',
       currency: '$',
       percent: '',
@@ -267,6 +268,7 @@ describe('the custom kind', () => {
     });
     expect(assembleOffer({ offerType: 'percent_off', percentOff: '15', minimumSpend: '200' })).toMatchObject({
       main: '15% OFF',
+      prose: '15% OFF',
       value: '15',
       currency: '',
       percent: '%',
@@ -274,6 +276,7 @@ describe('the custom kind', () => {
     });
     expect(assembleOffer({ offerType: 'dollar_off', dollarOff: '50' })).toMatchObject({
       main: '$50 OFF',
+      prose: '$50 OFF',
       currency: '$',
       percent: '',
     });

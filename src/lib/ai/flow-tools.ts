@@ -1,4 +1,4 @@
-// Tool surface for the in-builder "Iris" assistant.
+// Tool surface for the in-builder Loomi AI assistant.
 //
 // Design notes
 // ────────────
@@ -340,7 +340,7 @@ export const FLOW_AI_TOOLS: Anthropic.Tool[] = [
 // Lives next to the schemas so it can reference the same NODE_TYPE_VALUES
 // list — keeps the model's worldview in sync with what we actually accept.
 
-export const FLOW_AI_SYSTEM_PROMPT = `You are Iris, an assistant embedded inside the Loomi Studio drip-flow builder. You help users plan, build, edit, explain, and diagnose marketing automation flows.
+export const FLOW_AI_SYSTEM_PROMPT = `You are Loomi AI, the assistant embedded inside the Loomi Studio drip-flow builder. You help users plan, build, edit, explain, and diagnose marketing automation flows.
 
 ## What you can do
 

@@ -138,6 +138,24 @@ export interface CoopFacts {
   state: CoopState;
 }
 
+/**
+ * A check someone has deliberately marked "not a question here".
+ *
+ * Applicability in Phase 0 is INFERRED, so the audit is wrong in both directions
+ * (docs/playbooks.md §4.3). A waiver is how that judgement gets recorded instead
+ * of lost — and a waived check scores as `na`, excluded from coverage, because
+ * "this does not apply to us" is precisely what the person is asserting.
+ *
+ * `reason` is never blank: a waiver without one is how a real red gets buried.
+ */
+export interface CheckWaiver {
+  checkId: string;
+  reason: string;
+  waivedByUserId: string | null;
+  waivedByName: string | null;
+  at: Date;
+}
+
 export interface AccountAuditContext {
   accountKey: string;
   dealer: string;
@@ -174,6 +192,13 @@ export interface AccountAuditContext {
   coop: CoopFacts[];
 
   /**
+   * Waivers on this account, keyed by check id. Applied by `audit.ts` AFTER the
+   * check runs, so the observed state is still computed and still shown — a
+   * waiver says "we accept this", not "don't look".
+   */
+  waivers: Record<string, CheckWaiver>;
+
+  /**
    * Latest AdAutomationRun that covered this account — INCLUDING global sweeps,
    * whose `accountKey` is null. Filtering runs by accountKey alone reports every
    * rooftop as stale while the nightly sweep is running fine.
@@ -193,6 +218,12 @@ export interface CheckResult extends CheckOutcome {
   why: string;
   severity: CheckSeverity;
   fix?: { surface: Surface; path: string; label: string };
+  /**
+   * Present when this result is `na` BECAUSE someone waived it, rather than
+   * because the playbook doesn't apply. `detail` still carries the observed
+   * state, so the UI can show what was accepted and by whom.
+   */
+  waived?: CheckWaiver;
 }
 
 export interface PlaybookResult {
@@ -219,9 +250,28 @@ export interface AccountCoverage {
   blockingFails: number;
 }
 
+/**
+ * The last nightly sweep, so the page can say when the audit last ran on its
+ * own rather than only when this request ran it.
+ *
+ * Null means no sweep has ever completed — which on a flag-gated feature is
+ * ordinary, and is a different statement from "the sweep is behind". A
+ * `finishedAt` of null on the newest row means it started and never finished.
+ */
+export interface SweepSummary {
+  startedAt: string;
+  finishedAt: string | null;
+  accountsAudited: number;
+  blockingFails: number;
+  coveragePct: number | null;
+  error: string | null;
+}
+
 export interface AuditPayload {
   generatedAt: string;
   period: string;
+  /** Filled by the route, not by the pure builder — it is a database fact. */
+  lastSweep?: SweepSummary | null;
   accounts: AccountCoverage[];
   /** Cross-account rollup per check — the view that scopes Phase 1. */
   byCheck: {

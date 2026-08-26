@@ -54,7 +54,8 @@ export async function POST(req: NextRequest) {
 
     if (body.delete) {
       if (!body.id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
-      await deletePlaybook(body.id);
+      const removed = await deletePlaybook(body.id);
+      if (!removed) return NextResponse.json({ error: 'Playbook not found' }, { status: 404 });
       return NextResponse.json({ ok: true });
     }
 
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest) {
         scopeValue: body.scopeValue,
         definition,
         publish: body.publish,
+        userId: session?.user?.id ?? null,
       });
       if (!updated) return NextResponse.json({ error: 'Playbook not found' }, { status: 404 });
       return NextResponse.json({ playbook: updated });

@@ -472,45 +472,6 @@ export function CoopGuidelinesTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.make, active?.docs.length]);
 
-  /** Re-check the watched documents and say what actually happened. */
-  const checkForUpdates = useCallback(async () => {
-    setBusy('refresh-docs');
-    try {
-      const res = await fetch('/api/ad-generator/oem-assets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'refresh_docs' }),
-      });
-      const json = (await res.json()) as {
-        error?: string;
-        checked?: number;
-        changed?: string[];
-        failed?: string[];
-      };
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      const checked = json.checked ?? 0;
-      const changed = json.changed ?? [];
-      const failed = json.failed ?? [];
-      // Say what happened rather than "done". "Checked 4, nothing moved" is the
-      // useful answer and it is also the most common one.
-      if (changed.length) {
-        toast.success(`${changed.length} document${changed.length === 1 ? '' : 's'} changed: ${changed.join(', ')}`);
-      } else if (checked > 0) {
-        toast.success(`Checked ${checked} document${checked === 1 ? '' : 's'} — none have changed.`);
-      } else {
-        toast.info('Nothing to check — no document is registered by web address.');
-      }
-      if (failed.length) {
-        toast.error(`${failed.length} could not be reached: ${failed.join(', ')}`);
-      }
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not check for updates');
-    } finally {
-      setBusy(null);
-    }
-  }, [load]);
-
   const attention = useMemo(
     () => ({
       docs: makes.flatMap((m) =>
@@ -551,21 +512,6 @@ export function CoopGuidelinesTab() {
             automatically
             {awaitingReview > 0 ? ` · ${awaitingReview} drafted rules awaiting review` : ''}
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={checkForUpdates}
-            disabled={!!busy || loading || watchable === 0}
-            title={
-              watchable === 0
-                ? 'Nothing to check. Change-watching needs a document registered by web address; every document on file was uploaded as a file, and an uploaded file cannot change on its own.'
-                : `Re-download and re-fingerprint the ${watchable} document${watchable === 1 ? '' : 's'} registered by web address.`
-            }
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} />
-            Check for updates
-          </button>
         </div>
       </header>
 

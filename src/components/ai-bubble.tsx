@@ -104,7 +104,6 @@ export function AiBubble() {
   // The saved thread this exchange belongs to. Null until the first message —
   // opening the panel and closing it again should leave nothing behind.
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [conversationTitle, setConversationTitle] = useState<string>('');
   const [showHistory, setShowHistory] = useState(false);
   /** What the agent is doing right now, oldest first. Cleared when a turn ends. */
   const [trail, setTrail] = useState<string[]>([]);
@@ -417,7 +416,6 @@ export function AiBubble() {
   /** Start a fresh thread. The saved one stays in history untouched. */
   const startNewConversation = useCallback(() => {
     setConversationId(null);
-    setConversationTitle('');
     setHistory([]);
     setError('');
     setShowHistory(false);
@@ -431,7 +429,6 @@ export function AiBubble() {
       if (!res.ok) return;
       const { conversation } = await res.json();
       setConversationId(conversation.id);
-      setConversationTitle(conversation.title);
       setHistory(
         (conversation.messages as Array<{
           role: 'user' | 'assistant';
@@ -508,7 +505,6 @@ export function AiBubble() {
               const created = await res.json();
               convoId = created.id;
               setConversationId(created.id);
-              setConversationTitle(created.title);
             }
           } catch {
             // Unsaved is a worse outcome than no answer, but only slightly —
@@ -790,7 +786,6 @@ export function AiBubble() {
               activeId={conversationId}
               onOpen={(id) => void openConversation(id)}
               onNew={startNewConversation}
-              onClose={() => setShowHistory(false)}
               onActiveDeleted={startNewConversation}
             />
           )}
@@ -899,7 +894,6 @@ export function AiBubble() {
                 activeId={conversationId}
                 onOpen={(id) => void openConversation(id)}
                 onNew={startNewConversation}
-                onClose={() => setShowHistory(false)}
                 onActiveDeleted={startNewConversation}
               />
             )}

@@ -387,7 +387,7 @@ export function ImportFromMetaModal({
               type="button"
               onClick={doImport}
               disabled={importing || selected.size === 0}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg bg-[var(--primary)] text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {importing ? (
                 <ArrowPathIcon className="w-4 h-4 animate-spin" />

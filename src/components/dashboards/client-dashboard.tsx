@@ -69,7 +69,7 @@ export function ClientDashboard() {
       <div className="mb-8">
         <div className="flex items-center gap-4 mb-2">
           <div
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-white font-bold text-lg bg-[var(--primary)]"
+            className="w-10 h-10 rounded-lg flex items-center justify-center text-[var(--primary-foreground)] font-bold text-lg bg-[var(--primary)]"
           >
             {clientData.dealer.charAt(0).toUpperCase()}
           </div>
@@ -100,7 +100,7 @@ export function ClientDashboard() {
       <div className="flex gap-3 mb-8">
         <Link
           href={href('/library')}
-          className="flex-1 text-center py-3 px-4 rounded-xl bg-[var(--primary)] text-white font-medium text-sm hover:opacity-90 transition-opacity"
+          className="flex-1 text-center py-3 px-4 rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] font-medium text-sm hover:opacity-90 transition-opacity"
         >
           Browse Templates
         </Link>

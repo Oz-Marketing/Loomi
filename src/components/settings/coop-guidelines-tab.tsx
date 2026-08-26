@@ -899,7 +899,7 @@ export function CoopGuidelinesTab() {
                             className={`flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
                               p.verified
                                 ? 'border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]/40'
-                                : 'bg-[var(--primary)] text-white hover:opacity-90'
+                                : 'bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90'
                             }`}
                           >
                             {p.verified ? (
@@ -1200,7 +1200,7 @@ export function CoopGuidelinesTab() {
                   if (ok) setDocDraft(null);
                 }}
                 disabled={!!busy || !docDraft.title.trim() || (!docDraft.file && !docDraft.sourceUrl.trim())}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {busy === 'upload-doc' ? 'Uploading…' : docDraft.file ? 'Upload' : 'Add'}
               </button>
@@ -1332,7 +1332,7 @@ export function CoopGuidelinesTab() {
                         }
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                           on
-                            ? 'bg-[var(--primary)] text-white'
+                            ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                             : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40'
                         }`}
                       >
@@ -1377,7 +1377,7 @@ export function CoopGuidelinesTab() {
                   !eventDraft.effectiveFrom ||
                   !eventDraft.effectiveTo
                 }
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 Save
               </button>

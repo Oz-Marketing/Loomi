@@ -354,7 +354,7 @@ export function CropEditorModal({ file, saving, onClose, onSave, confirmLabel = 
           <button
             onClick={handleSave}
             disabled={!canSave}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
           >
             <CropIcon className="w-4 h-4" />
             {saving ? 'Cropping…' : confirmLabel}

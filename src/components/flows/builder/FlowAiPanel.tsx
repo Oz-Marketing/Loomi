@@ -221,7 +221,7 @@ export function FlowAiPanel({
           <div key={`chat-${idx}`}>
             {msg.role === 'user' ? (
               <div className="flex justify-end">
-                <div className="max-w-[85%] bg-[var(--primary)] text-white rounded-xl rounded-br-sm px-3 py-2">
+                <div className="max-w-[85%] bg-[var(--primary)] text-[var(--primary-foreground)] rounded-xl rounded-br-sm px-3 py-2">
                   <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
                 </div>
               </div>

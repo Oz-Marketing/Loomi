@@ -428,7 +428,7 @@ export function BudgetHub() {
             type="button"
             disabled={!accountKey}
             onClick={() => setAddFlow('new-budget')}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-[var(--primary-foreground)] transition hover:opacity-90 disabled:opacity-50"
           >
             <PlusIcon className="h-4 w-4" />
             Add Budget
@@ -683,7 +683,7 @@ export function BudgetHub() {
                     onClick={() => setView(v)}
                     className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition ${
                       view === v
-                        ? 'bg-[var(--primary)] text-white shadow-sm'
+                        ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow-sm'
                         : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                     }`}
                   >
@@ -839,7 +839,7 @@ export function BudgetHub() {
                                         // hover state, so on a 12-column grid you
                                         // couldn't tell at a glance which cell the
                                         // list below belonged to.
-                                        'bg-[var(--primary)] font-semibold text-white shadow-sm ring-2 ring-[var(--primary)]/30'
+                                        'bg-[var(--primary)] font-semibold text-[var(--primary-foreground)] shadow-sm ring-2 ring-[var(--primary)]/30'
                                       : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                                   }`}
                                 >

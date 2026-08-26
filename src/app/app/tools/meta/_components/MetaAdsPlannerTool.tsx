@@ -1168,7 +1168,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           type="button"
           onClick={() => setImportOpen(true)}
           disabled={!!plan?.frozen}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-60"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <MetaBrandIcon className="w-3.5 h-3.5 brightness-0 invert" />
           Import from Meta
@@ -1290,7 +1290,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
               {activeFilterCount(filters) > 0 && (
                 <span
                   className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full text-[10px] font-bold"
-                  style={{ background: 'var(--primary)', color: 'white' }}
+                  style={{ background: 'var(--primary)', color: 'var(--primary-foreground)' }}
                 >
                   {activeFilterCount(filters)}
                 </span>
@@ -1591,7 +1591,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
                         aria-pressed={reconView === v}
                         className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                           reconView === v
-                            ? 'bg-[var(--primary)] text-white'
+                            ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                             : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                         }`}
                       >

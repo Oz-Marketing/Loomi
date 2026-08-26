@@ -4585,7 +4585,7 @@ export default function AdBuilderPage() {
           <button
             onClick={() => save(false)}
             disabled={saving}
-            className="rounded-lg bg-[var(--primary)] px-5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="rounded-lg bg-[var(--primary)] px-5 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
@@ -5665,7 +5665,7 @@ export default function AdBuilderPage() {
                         >
                           <span
                             className={`inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] border ${
-                              checked ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'
+                              checked ? 'border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)]' : 'border-[var(--muted-foreground)]/50'
                             }`}
                           >
                             {checked && <CheckIcon className="h-2.5 w-2.5" strokeWidth={3} />}
@@ -6393,7 +6393,7 @@ function TokenTextArea({
                 onMouseDown={(e) => { e.preventDefault(); insert(o); }}
                 onMouseEnter={() => setAcIdx(i)}
                 className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
-                  i === Math.min(acIdx, matches.length - 1) ? 'bg-[var(--primary)] text-white' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+                  i === Math.min(acIdx, matches.length - 1) ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                 }`}
               >
                 <span className="truncate">{o.label}</span>
@@ -7946,7 +7946,7 @@ function RailButton({ label, Icon, active, onClick, primary, activeClassName, no
   // view-guide toggles) instead of the default brand-tinted background.
   // `noTooltip` skips the hover tooltip (e.g. Margins, which shows its own popup).
   const cls = primary
-    ? 'bg-[var(--primary)] text-white shadow-sm hover:opacity-90'
+    ? 'bg-[var(--primary)] text-[var(--primary-foreground)] shadow-sm hover:opacity-90'
     : active
       ? activeClassName ?? 'bg-[var(--primary)]/15 text-[var(--primary)]'
       : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]';
@@ -8992,7 +8992,7 @@ function SizesManager({
             <span className="text-[11px] text-[var(--muted-foreground)]">Pick a size to edit it, or add more.</span>
             <button
               onClick={() => setAddSizeOpen(true)}
-              className="flex items-center gap-1 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+              className="flex items-center gap-1 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
             >
               <PlusIcon className="h-3.5 w-3.5" />
               Add sizes
@@ -9073,7 +9073,7 @@ function SizesManager({
               <button
                 onClick={addPicked}
                 disabled={!pickedCount}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 Add {pickedCount || ''} {pickedCount === 1 ? 'size' : 'sizes'}
               </button>

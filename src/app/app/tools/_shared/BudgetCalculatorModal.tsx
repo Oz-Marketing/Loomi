@@ -538,7 +538,7 @@ export function BudgetCalculatorModal({
                 onClick={() => setCalcMode(m.key)}
                 className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
                   active
-                    ? 'bg-[var(--primary)] text-white'
+                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
@@ -680,7 +680,7 @@ export function BudgetCalculatorModal({
             <button
               type="button"
               onClick={handleSpread}
-              className="px-3 py-1 text-[11px] font-semibold rounded-md bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors whitespace-nowrap"
+              className="px-3 py-1 text-[11px] font-semibold rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors whitespace-nowrap"
             >
               Spread remainder
             </button>
@@ -1010,7 +1010,7 @@ export function BudgetCalculatorModal({
                 type="button"
                 onClick={handleApply}
                 disabled={includedCount === 0 || overBudget || hasUnderSpent}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
               >
                 Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
               </button>
@@ -1020,7 +1020,7 @@ export function BudgetCalculatorModal({
               type="button"
               onClick={handleApply}
               disabled={includedCount === 0 || overBudget || hasUnderSpent}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
             >
               Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
             </button>

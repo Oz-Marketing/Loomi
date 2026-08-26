@@ -336,7 +336,7 @@ export function BudgetLogDrawer({
               type="button"
               onClick={handleLog}
               disabled={posting || adsSnapshot.length === 0}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
             >
               <CheckIcon className="w-3.5 h-3.5" />
               {posting ? 'Logging…' : 'Log this budget'}

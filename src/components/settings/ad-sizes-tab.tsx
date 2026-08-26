@@ -245,7 +245,7 @@ export function AdSizesTab() {
         <button
           onClick={create}
           disabled={busy}
-          className="flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 h-10 text-sm font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-50"
+          className="flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 h-10 text-sm font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-50"
         >
           <PlusIcon className="h-4 w-4" />
           Add size

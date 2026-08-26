@@ -257,7 +257,7 @@ export function TemplateSyncModal({
           {results ? (
             <button
               onClick={onClose}
-              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white"
+              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)]"
             >
               Done
             </button>
@@ -273,7 +273,7 @@ export function TemplateSyncModal({
               <button
                 onClick={apply}
                 disabled={busy || !ids.length}
-                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
               >
                 {busy ? 'Applying…' : `Apply to ${ids.length} ad${ids.length === 1 ? '' : 's'}`}
               </button>

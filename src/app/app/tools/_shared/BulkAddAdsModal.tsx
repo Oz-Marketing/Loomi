@@ -255,7 +255,7 @@ export function BulkAddAdsModal({
               type="button"
               onClick={handleCreate}
               disabled={ready.length === 0 || unnamed.length > 0}
-              className="rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-2 text-xs font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               {ready.length > 1
                 ? `Create ${ready.length} ad sets`

@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Squares2X2Icon, RectangleStackIcon, ChartBarSquareIcon } from '@heroicons/react/24/outline';
+import { useEffect, useState, type ReactElement, type SVGProps } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import {
@@ -12,6 +11,7 @@ import {
   getStudioUrl,
 } from '@/lib/cross-site';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
+import { SECTOR_ICONS } from '@/components/icons/sector-icons';
 
 type Surface = 'studio' | 'reporting' | 'app';
 
@@ -44,10 +44,19 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
     setAppUrl(withCtx(getAppUrl('/projects')));
   }, [theme, accountKey]);
 
-  const items: { key: Surface; label: string; href: string | null; icon: typeof Squares2X2Icon }[] = [
-    { key: 'studio', label: 'Studio', href: studioUrl, icon: Squares2X2Icon },
-    { key: 'reporting', label: 'Reporting', href: reportingUrl, icon: ChartBarSquareIcon },
-    { key: 'app', label: 'Projects', href: appUrl, icon: RectangleStackIcon },
+  // The marks are the per-surface `sector-icons` glyphs rather than Heroicons
+  // outlines: each surface owns a fixed colour, so the switch is legible by
+  // colour alone before you read a label. They deliberately do not follow
+  // `--primary` — see the note in sector-icons.tsx.
+  const items: {
+    key: Surface;
+    label: string;
+    href: string | null;
+    icon: (props: SVGProps<SVGSVGElement>) => ReactElement;
+  }[] = [
+    { key: 'studio', label: 'Studio', href: studioUrl, icon: SECTOR_ICONS.studio },
+    { key: 'reporting', label: 'Reporting', href: reportingUrl, icon: SECTOR_ICONS.reporting },
+    { key: 'app', label: 'Projects', href: appUrl, icon: SECTOR_ICONS.app },
   ];
 
   if (collapsed) {
@@ -67,7 +76,7 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
                 aria-label={`Switch to ${it.label}`}
                 className="surface-switch-rail-item"
               >
-                <it.icon className="h-5 w-5" />
+                <it.icon className="h-[1.375rem] w-[1.375rem]" />
               </a>
             </SidebarTooltip>
           ))}
@@ -95,7 +104,7 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
                 aria-label={it.label}
                 className="surface-switch-seg surface-switch-seg-active"
               >
-                <it.icon className="h-4 w-4 flex-shrink-0" />
+                <it.icon className="h-[1.125rem] w-[1.125rem] flex-shrink-0" />
                 <span className="truncate">{it.label}</span>
               </span>
             </SidebarTooltip>
@@ -112,7 +121,7 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
               aria-label={`Switch to ${it.label}`}
               className="surface-switch-seg"
             >
-              <it.icon className="h-4 w-4 flex-shrink-0" />
+              <it.icon className="h-[1.125rem] w-[1.125rem] flex-shrink-0" />
             </a>
           </SidebarTooltip>
         );

@@ -202,7 +202,7 @@ export function NewFormModal({
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit}
-            className="px-4 h-10 text-sm font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 h-10 text-sm font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {submitting ? 'Creating…' : selectedId === 'blank' ? 'Create + open builder' : 'Create form'}
           </button>

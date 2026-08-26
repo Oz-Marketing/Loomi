@@ -741,20 +741,40 @@ body {
   background: rgba(255, 255, 255, 0.9);
 }
 
-/* Follows the chosen accent. The gradient's second stop is derived from
-   --primary rather than hardcoded, so every accent keeps the same lit-pill
-   depth cue; --primary-foreground keeps the label readable on bright accents
-   like yellow and lime, where white text would vanish. */
+/* Accent-coloured drop glow for primary buttons.
+
+   These carried a hardcoded `rgba(59,130,246,.3)` — blue-500, from back when
+   the accent was always blue. It survived the move to a themeable accent, so a
+   lime or rose button sat in a blue halo. Deriving it from --primary keeps the
+   glow the same hue as the button at every accent. */
+.accent-glow {
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--primary) 32%, transparent);
+}
+
+/* The active segment reads as a RAISED chip in the recessed track — the
+   contrast is tonal, not chromatic.
+
+   It used to be a --primary gradient pill. That stopped working the moment the
+   surface marks took fixed per-sector colours: a violet pinwheel sitting on an
+   indigo pill muddies the very mark the pill exists to highlight, and on a
+   warm accent it fights it outright. Going neutral also means the highlight
+   looks identical on all three surfaces, so the only COLOUR in the switch is
+   the sector's own — never the user's accent. */
 .surface-switch-seg-active {
-  color: var(--primary-foreground);
-  background-image: linear-gradient(
-    135deg,
-    var(--primary) 0%,
-    color-mix(in oklab, var(--primary) 78%, white) 100%
-  );
+  color: var(--sidebar-foreground);
+  background: rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 3px 10px color-mix(in srgb, var(--primary) 42%, transparent),
-    inset 0 1px 0 rgba(255, 255, 255, 0.26);
+    0 1px 3px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* On the light track a tint would barely register, so the raised chip is the
+   page's own white with a hairline edge to keep it off the track. */
+[data-theme='light'] .surface-switch-seg-active {
+  background: #ffffff;
+  box-shadow:
+    0 1px 3px rgba(15, 23, 42, 0.13),
+    0 0 0 1px rgba(15, 23, 42, 0.05);
 }
 
 /* Collapsed rail — the sidebar is icon-width, so the inactive surfaces stack

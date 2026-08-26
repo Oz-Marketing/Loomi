@@ -39,7 +39,7 @@ export default async function InitiativeDetailPage({
         </Link>
         <Link
           href="/projects/new"
-          className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90"
+          className="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-3 py-2 text-sm font-medium text-[var(--primary-foreground)] accent-glow transition hover:opacity-90"
         >
           <PlusIcon className="h-4 w-4" />
           New ticket

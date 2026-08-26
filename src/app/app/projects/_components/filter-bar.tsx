@@ -87,7 +87,7 @@ export function ProjectsFilterBar({
         </div>
         <Link
           href="/projects/new"
-          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3.5 py-2 text-sm font-medium text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90"
+          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3.5 py-2 text-sm font-medium text-[var(--primary-foreground)] accent-glow transition hover:opacity-90"
         >
           <PlusIcon className="h-4 w-4" />
           New ticket
@@ -281,7 +281,7 @@ function FilterPopover({
         <FunnelIcon className="h-4 w-4" />
         Filters
         {activeCount > 0 && (
-          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[11px] font-semibold text-white">
+          <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[11px] font-semibold text-[var(--primary-foreground)]">
             {activeCount}
           </span>
         )}

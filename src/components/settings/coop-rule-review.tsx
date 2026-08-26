@@ -447,7 +447,7 @@ export function CoopRuleReview({
                 <button
                   onClick={() => decideInclude('accepted', mustInclude.filter((r) => incSel.has(r.key)))}
                   disabled={disabled}
-                  className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   <CheckIcon className="h-3 w-3" /> Accept
                 </button>
@@ -471,7 +471,7 @@ export function CoopRuleReview({
             <button
               onClick={() => decide('accepted', [...selected])}
               disabled={disabled}
-              className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               <CheckIcon className="h-3 w-3" /> Accept
             </button>

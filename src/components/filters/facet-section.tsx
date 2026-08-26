@@ -158,7 +158,7 @@ export function FacetSegmented<T extends string>({
             onClick={() => onChange(o.value)}
             className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
               value === o.value
-                ? 'bg-[var(--primary)] text-white'
+                ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                 : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
             }`}
           >

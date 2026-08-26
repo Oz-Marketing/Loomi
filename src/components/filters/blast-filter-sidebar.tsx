@@ -542,7 +542,7 @@ function DateRangeSection({
             type="button"
             onClick={handleCustomApply}
             disabled={!startInput || !endInput || startInput > endInput}
-            className="w-full py-1.5 text-[11px] font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+            className="w-full py-1.5 text-[11px] font-medium rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Apply Custom Range
           </button>
@@ -682,7 +682,7 @@ export function BlastFilterSidebar({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] transition-colors"
+              className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] hover:bg-[var(--primary)] transition-colors"
             >
               Done
             </button>

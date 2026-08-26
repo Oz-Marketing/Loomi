@@ -240,7 +240,7 @@ export function FlowSettingsForm({
           type="button"
           onClick={save}
           disabled={saving || !dirty}
-          className="px-3 h-9 text-sm font-semibold rounded-lg bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          className="px-3 h-9 text-sm font-semibold rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {saving ? 'Saving…' : 'Save settings'}
         </button>

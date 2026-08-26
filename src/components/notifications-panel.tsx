@@ -138,7 +138,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
             <BellAlertIcon className="w-5 h-5 text-black dark:text-[var(--primary)]" />
             <h3 className="text-sm font-bold tracking-tight">Notifications</h3>
             {unreadCount > 0 && (
-              <span className="text-[10px] font-semibold rounded-full px-1.5 py-0.5 bg-[var(--primary)] text-white">
+              <span className="text-[10px] font-semibold rounded-full px-1.5 py-0.5 bg-[var(--primary)] text-[var(--primary-foreground)]">
                 {unreadCount}
               </span>
             )}

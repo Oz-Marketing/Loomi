@@ -234,7 +234,7 @@ export function LabelChips({
               type="button"
               onClick={addDraft}
               disabled={!normalizeLabel(draft)}
-              className="rounded bg-[var(--primary)] px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-40"
+              className="rounded bg-[var(--primary)] px-2 py-1 text-[11px] font-semibold text-[var(--primary-foreground)] disabled:opacity-40"
             >
               Add
             </button>

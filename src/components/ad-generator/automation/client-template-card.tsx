@@ -103,7 +103,7 @@ export function ClientTemplateCard({
           type="button"
           onClick={save}
           disabled={!dirty || saving}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
         >
           <CheckIcon className="h-3.5 w-3.5" />
           {saving ? 'Saving…' : dirty ? 'Save design' : 'Saved'}

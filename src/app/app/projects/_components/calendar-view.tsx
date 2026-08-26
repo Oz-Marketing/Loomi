@@ -171,7 +171,7 @@ export function CalendarView() {
                   <span
                     className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-[11px] ${
                       isToday
-                        ? 'bg-[var(--primary)] font-semibold text-white'
+                        ? 'bg-[var(--primary)] font-semibold text-[var(--primary-foreground)]'
                         : inMonth
                           ? 'text-[var(--foreground)]'
                           : 'text-[var(--muted-foreground)]'

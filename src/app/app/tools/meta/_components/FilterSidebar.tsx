@@ -419,7 +419,7 @@ export function MetaAdsPacerFilterSidebar({
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] transition-colors"
+              className="px-3 py-2 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-[var(--primary-foreground)] hover:bg-[var(--primary)] transition-colors"
             >
               Done
             </button>

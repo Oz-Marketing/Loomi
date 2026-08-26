@@ -51,7 +51,7 @@ export function CampaignEmailGallery({
         aria-label={label}
         aria-pressed={isActive}
         className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition ${
-          isActive ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+          isActive ? 'bg-[var(--primary)] text-[var(--primary-foreground)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
         }`}
       >
         <Icon className="h-4 w-4" />

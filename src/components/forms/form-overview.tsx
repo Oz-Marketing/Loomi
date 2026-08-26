@@ -255,7 +255,7 @@ export function FormOverview() {
             </button>
             <Link
               href={subHref(`/websites/forms/${form.id}/edit`)}
-              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
             >
               <PencilSquareIcon className="w-4 h-4" />
               Edit Form

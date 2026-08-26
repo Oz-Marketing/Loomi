@@ -36,7 +36,7 @@ import { FlowIcon } from '@/components/icon-map';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
-import { AppLogo } from '@/components/app-logo';
+import { SectorBrand } from '@/components/sector-brand';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
 
@@ -292,7 +292,7 @@ export function Sidebar() {
 
   return (
     <SidebarFrame
-      brand={<AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
+      brand={<SectorBrand surface="studio" />}
       account={
         // Account switcher sits under the logo (admins/non-clients). Opens
         // downward — clients don't get a switcher (Settings is in the footer).

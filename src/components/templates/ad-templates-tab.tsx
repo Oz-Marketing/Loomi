@@ -600,7 +600,7 @@ export function AdTemplatesTab({
                 <button
                   onClick={() => { const t = preview; setPreview(null); void useTemplate(t); }}
                   disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-[var(--primary-foreground)] transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-60"
                 >
                   <ArrowUpRightIcon className="h-4 w-4" />
                   Use this template
@@ -727,7 +727,7 @@ export function AdTemplatesTab({
               <button onClick={() => setRenameFor(null)} disabled={busy} className="rounded-lg border border-[var(--border)] px-3 h-9 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={doRename} disabled={busy} className="rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white hover:bg-[var(--primary)]/90 disabled:opacity-50">
+              <button onClick={doRename} disabled={busy} className="rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50">
                 Save
               </button>
             </div>

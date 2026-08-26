@@ -391,7 +391,7 @@ function DndShell({
 function PaletteDragPreview({ type }: { type: LandingPageBlockType }) {
   const schema = BLOCK_SCHEMA_BY_TYPE[type];
   return (
-    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-[12px] font-semibold shadow-lg bg-[var(--primary)] text-white">
+    <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md text-[12px] font-semibold shadow-lg bg-[var(--primary)] text-[var(--primary-foreground)]">
       {schema ? <PaletteIcon name={schema.icon} className="w-4 h-4" /> : null}
       <span>{schema?.label ?? type}</span>
     </div>

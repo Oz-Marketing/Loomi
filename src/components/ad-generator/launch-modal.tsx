@@ -375,7 +375,7 @@ export function LaunchModal({
             <button
               onClick={launch}
               disabled={busy || !targetId || !!adSetsBlocked}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white transition-opacity disabled:opacity-40"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity disabled:opacity-40"
             >
               <RocketLaunchIcon className="h-3.5 w-3.5" />
               {busy ? 'Publishing…' : 'Create paused ad'}
@@ -384,7 +384,7 @@ export function LaunchModal({
           {result?.status === 'blocked' && (
             <button
               onClick={() => setResult(null)}
-              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-white"
+              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)]"
             >
               Try again
             </button>

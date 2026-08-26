@@ -260,7 +260,7 @@ export function LpAiPanel({ pageId, getHtml, onReplaceHtml, onInsertHtml }: LpAi
                   <button
                     type="button"
                     onClick={() => applyMessage(idx)}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--primary)] hover:text-white transition-colors"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium border border-[var(--primary)] text-[var(--primary)] hover:bg-[var(--primary)] hover:text-[var(--primary-foreground)] transition-colors"
                   >
                     {msg.htmlMode === 'insert' ? (
                       <>

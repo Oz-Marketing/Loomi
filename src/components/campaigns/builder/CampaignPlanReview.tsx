@@ -157,7 +157,7 @@ export function CampaignPlanReview({
                   onClick={() => update({ emailFormat: f })}
                   className={`rounded-md px-3 py-1.5 text-xs font-semibold transition ${
                     active
-                      ? 'bg-[var(--primary)] text-white'
+                      ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
                       : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                   }`}
                 >

@@ -239,7 +239,7 @@ export function ChangelogPanel({ onClose }: ChangelogPanelProps) {
           <button
             onClick={onSubmit}
             disabled={saving || !title.trim() || !content.trim()}
-            className="px-3 py-1.5 text-xs font-medium bg-[var(--primary)] text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="px-3 py-1.5 text-xs font-medium bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {saving ? 'Saving...' : submitLabel}
           </button>
@@ -278,7 +278,7 @@ export function ChangelogPanel({ onClose }: ChangelogPanelProps) {
             {canEdit && !showCreate && (
               <button
                 onClick={() => { setShowCreate(true); setEditId(null); }}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[var(--primary)] text-white rounded-lg hover:opacity-90 transition-opacity"
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg hover:opacity-90 transition-opacity"
               >
                 <PlusIcon className="w-3.5 h-3.5" /> New
               </button>

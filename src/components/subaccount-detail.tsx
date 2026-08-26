@@ -773,7 +773,7 @@ export function SubAccountDetailPage({
               <button
                 onClick={handleSave}
                 disabled={saving || !hasFormChanges}
-                className="px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
+                className="px-4 py-2 bg-[var(--primary)] text-[var(--primary-foreground)] rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity flex-shrink-0"
               >
                 {saving ? 'Saving...' : 'Save Changes'}
               </button>
@@ -1278,7 +1278,7 @@ export function SubAccountDetailPage({
                   type="button"
                   onClick={handleFontUpload}
                   disabled={fontUploading}
-                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
                   {fontUploading ? 'Uploading…' : 'Upload font'}
                 </button>
@@ -1490,7 +1490,7 @@ export function SubAccountDetailPage({
                     type="button"
                     onClick={handleSaveIntegration}
                     disabled={savingIntegration}
-                    className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {savingIntegration ? 'Saving…' : 'Save'}
                   </button>

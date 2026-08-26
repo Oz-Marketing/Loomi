@@ -91,7 +91,7 @@ export function BulkMetadataModal({
             <button
               onClick={() => onApply(body)}
               disabled={busy || fieldCount === 0}
-              className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               {busy ? 'Applying…' : `Apply to ${count}`}
             </button>

@@ -530,7 +530,7 @@ function DeployModal({
                       <div
                         className={`w-5 h-5 rounded-md border flex items-center justify-center ${
                           isSelected
-                            ? 'bg-[var(--primary)] border-[var(--primary)] text-white'
+                            ? 'bg-[var(--primary)] border-[var(--primary)] text-[var(--primary-foreground)]'
                             : 'border-[var(--border)]'
                         }`}
                       >

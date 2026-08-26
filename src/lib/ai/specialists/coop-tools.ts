@@ -23,7 +23,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { listGuidelineDocs, getGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import { loadAcceptedCoopPack, listCoopPacks } from '@/lib/ad-generator/coop-pack-store';
 import { ruleScope } from '@/lib/ad-generator/coop-rules';
-import { searchPages, type CorpusHit } from '@/lib/ad-generator/guideline-quotes';
+import { searchPages } from '@/lib/ad-generator/guideline-quotes';
 import { listEventAssets, coversDate } from '@/lib/ad-generator/automation/event-assets';
 import type { AgentToolResult } from '@/lib/ai/agent-runtime';
 
@@ -182,43 +182,11 @@ function sectionForPage(
   return best;
 }
 
-/**
- * Is this rule safe to state as fact?
- *
- * The AI-drafted compliance work (co-op drafting Phase 2, separate branch) adds a
- * per-rule `reviewState` of 'proposed' | 'accepted' | 'rejected', where a proposed
- * rule is an AI DRAFT that no human has checked. Those rules live in the same
- * `AdCoopRulePack.rules` blob this tool reads.
- *
- * So this filter exists BEFORE the field does, deliberately: whichever branch lands
- * first, Vera must never state a machine's unreviewed draft as a manufacturer
- * requirement. That is the mirror of the rule in docs/specialist-agents.md —
- * advisory output must not become gating input, and unreviewed gating drafts must
- * not become advisory truth.
- *
- * Unknown/absent reviewState reads as accepted, which is correct for every pack
- * that exists today: they were all hand-transcribed by a person.
- */
-function isAccepted(rule: unknown): boolean {
-  const state = (rule as { reviewState?: unknown }).reviewState;
-  return state === undefined || state === 'accepted';
-}
-
-/**
- * Is this rule a draft still waiting on a person?
- *
- * Only `proposed` counts. A REJECTED rule has been reviewed — a human looked at it
- * and said no — so folding it into "awaiting review" both overstates the queue and
- * implies the rule might yet come back. Withheld either way; counted only here.
- */
-function isAwaitingReview(rule: unknown): boolean {
-  return (rule as { reviewState?: unknown }).reviewState === 'proposed';
-}
 
 /**
  * Where a rule came from in the source document, when it says.
  *
- * Read defensively for the same reason as {@link isAccepted}: the co-op drafting
+ * Read defensively because it may not be there yet: the co-op drafting
  * branch adds `sourceDocId` / `sourcePage` / `sourceQuote` to `CoopRuleBase`, and
  * this must work whichever branch lands first. Absent on all three hand-transcribed
  * packs, which recorded only a free-text `citation` like "§4.2 p.11".

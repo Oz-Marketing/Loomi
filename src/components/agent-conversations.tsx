@@ -40,7 +40,6 @@ export function AgentConversations({
   activeId,
   onOpen,
   onNew,
-  onClose,
   /** Told when the ACTIVE thread is deleted, so the panel can clear itself. */
   onActiveDeleted,
   variant = 'overlay',
@@ -49,7 +48,6 @@ export function AgentConversations({
   activeId: string | null;
   onOpen: (id: string) => void;
   onNew: () => void;
-  onClose: () => void;
   onActiveDeleted: () => void;
   /**
    * 'overlay' covers the thread — the only option at 24rem. 'inline' is a real

@@ -12,6 +12,7 @@ import { getSpecialist } from '@/lib/ai/specialists/registry';
 import { agentIdentity } from '@/lib/ai/specialists/identity';
 import { appendMessage } from '@/lib/ai/conversation-store';
 import { attachmentBlocks, type WireAttachment } from '@/lib/ai/attachments';
+import { resolveProfile } from '@/lib/ai/agent-profile-store';
 import { suggestFollowUps } from '@/lib/ai/follow-ups';
 
 /**
@@ -71,13 +72,20 @@ export async function POST(
 
   const identity = agentIdentity(specialist.key);
 
-  // Profiles are Phase 2; until then the code default is the profile. The seam is
-  // here so that switching to a DB row is a one-line change.
-  const profile = specialist.defaultProfile;
+  // The stored override if a human has edited this specialist, the registry
+  // default otherwise. Resolved per request rather than cached: an edit has to
+  // take effect on the next question, not on the next deploy — that is the whole
+  // point of the profile existing.
+  const profile = await resolveProfile(
+    specialist.key,
+    specialist.defaultProfile,
+    specialist.effort,
+    { name: identity.name, portraitUrl: identity.portraitUrl },
+  );
 
   const spec: AgentSpec<unknown> = {
     key: specialist.key,
-    effort: specialist.effort,
+    effort: profile.effort,
     maxIterations: specialist.maxIterations,
     systemPrompt: specialist.buildSystemPrompt(profile),
     tools: specialist.tools,
@@ -167,7 +175,7 @@ export async function POST(
           assistantMessageId,
           reply: run.reply,
           emitted: citations,
-          agent: { key: identity.key, name: identity.name },
+              agent: { key: identity.key, name: profile.name, portraitUrl: profile.portraitUrl },
           truncated: run.truncated,
           truncationReason: run.truncationReason,
           usage: run.usage,

@@ -117,6 +117,9 @@ export function changesEnforcement(applied: ApplyReviewsResult['applied']): bool
 export function groupPendingByKind(rules: CoopRule[]): { kind: string; rules: CoopRule[] }[] {
   const by = new Map<string, CoopRule[]>();
   for (const r of pendingRules({ rules } as CoopRulePack)) {
+    // `required_element` is reviewed in the merged "must include" list instead —
+    // see mergeMustInclude. Leaving it here too would ask the same question twice.
+    if (r.kind === 'required_element') continue;
     const list = by.get(r.kind) ?? [];
     list.push(r);
     by.set(r.kind, list);
@@ -219,4 +222,108 @@ export function foldRequiredFields(
     }
   }
   return out;
+}
+
+// ── "the ad must include X" ───────────────────────────────────────────────────
+
+/**
+ * ONE list of things the ad must include, merged from the two mechanisms that
+ * enforce it.
+ *
+ * ── WHY THIS EXISTS ──
+ *
+ * There are two genuinely different checks. `required_element` asks whether the
+ * TEMPLATE has a place for a field, evaluated once against the design.
+ * `AdOemOfferRule.requiredFields` asks whether an AD carries a value, evaluated per
+ * ad. A template can have an MSRP element while an ad leaves MSRP blank, and only
+ * one of the two catches it — so both have to exist.
+ *
+ * What should NOT exist is a reviewer having to know that. "The ad must show the
+ * MSRP" is one requirement from the document; which of our two mechanisms enforces
+ * it is our business, and it is DERIVABLE: a field a person fills needs both checks,
+ * a logo or a computed offer value can only be checked in the design. So the two
+ * halves are merged here and the enforcement is decided by the field, not asked of
+ * the person.
+ *
+ * `fillable` is passed in rather than imported to keep this module pure and free of
+ * the offer-kind registry.
+ */
+export interface MustIncludeRow {
+  /** Stable row identity for selection. */
+  key: string;
+  field: string;
+  /** What the document requires, for the reviewer. */
+  reason: string;
+  /** Where it is checked. Derived from the field, never asked. */
+  enforcement: 'design' | 'data' | 'both';
+  offerTypes: string[];
+  /** The underlying items this row stands for, dispatched to on accept. */
+  ruleId?: string;
+  fieldKey?: string;
+  sourceQuote?: string;
+  sourcePage?: number;
+  sourceDocId?: string;
+  citation?: string;
+}
+
+export function mergeMustInclude(
+  rules: CoopRule[],
+  requiredFields: RequiredFieldEntry[],
+  fillable: Set<string>,
+): MustIncludeRow[] {
+  const byField = new Map<string, MustIncludeRow>();
+
+  const designRules = rules.filter(
+    (r) => r.kind === 'required_element' && r.reviewState === 'proposed',
+  );
+  for (const r of designRules) {
+    const field = (r as { field?: string }).field ?? '';
+    if (!field) continue;
+    byField.set(field, {
+      key: `f:${field}`,
+      field,
+      reason: r.description,
+      // A design rule alone can only speak for the design; if a data requirement for
+      // the same field turns up below, this becomes `both`.
+      enforcement: 'design',
+      offerTypes: r.scope?.offerTypes ?? [],
+      ruleId: r.id,
+      sourceQuote: r.sourceQuote,
+      sourcePage: r.sourcePage,
+      sourceDocId: r.sourceDocId,
+      citation: r.citation,
+    });
+  }
+
+  for (const e of requiredFields) {
+    if (e.reviewState !== 'proposed') continue;
+    const existing = byField.get(e.field);
+    if (existing) {
+      existing.enforcement = 'both';
+      existing.fieldKey = requiredFieldKey(e);
+      // Union the scopes: the design rule may be unscoped while the data
+      // requirement names offer types, and the row has to cover both.
+      if (existing.offerTypes.length && e.offerTypes.length) {
+        existing.offerTypes = [...new Set([...existing.offerTypes, ...e.offerTypes])];
+      } else {
+        existing.offerTypes = [];
+      }
+      continue;
+    }
+    byField.set(e.field, {
+      key: `f:${e.field}`,
+      field: e.field,
+      reason: e.reason,
+      // A fillable field with no design rule is still worth checking in the design —
+      // but we have no design evidence for it, so claim only what we can enforce.
+      enforcement: fillable.has(e.field) ? 'data' : 'design',
+      offerTypes: e.offerTypes,
+      fieldKey: requiredFieldKey(e),
+      sourceQuote: e.sourceQuote,
+      sourcePage: e.sourcePage,
+      sourceDocId: e.sourceDocId,
+    });
+  }
+
+  return [...byField.values()].sort((a, b) => a.field.localeCompare(b.field));
 }

@@ -7,8 +7,9 @@ import {
   applyRequiredFieldReviews,
   pendingRequiredFields,
   foldRequiredFields,
+  mergeMustInclude,
 } from './coop-review';
-import type { CoopRule, CoopRulePack } from './coop-rules';
+import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
 
 const NOW = new Date('2026-08-25T12:00:00.000Z');
 
@@ -134,9 +135,10 @@ describe('groupPendingByKind', () => {
       kindRule('r1', 'required_element'),
       kindRule('r2', 'required_element'),
     ]);
+    // `required_element` is deliberately absent: it is reviewed in the merged
+    // "must include" list, and appearing here too would ask the same question twice.
     expect(groups.map((g) => `${g.kind}:${g.rules.length}`)).toEqual([
       'banned_phrase:3',
-      'required_element:2',
       'min_font_size:1',
     ]);
   });
@@ -223,5 +225,84 @@ describe('required fields — review and fold', () => {
 
   it('reports pending entries and nothing else', () => {
     expect(pendingRequiredFields(pack).map((e) => e.field)).toEqual(['vin', 'expiration']);
+  });
+});
+
+describe('mergeMustInclude — one list, enforcement derived', () => {
+  const FILLABLE = new Set(['msrp', 'expiration', 'vin', 'monthlyPayment']);
+
+  const designRule = (field: string, id = field): CoopRule =>
+    ({
+      id,
+      kind: 'required_element',
+      field,
+      severity: 'error',
+      description: `The ad must show the ${field}.`,
+      citation: 'SAF §6a, p.40',
+      reviewState: 'proposed',
+      origin: 'ai',
+      sourcePage: 40,
+      sourceQuote: `the ${field} must appear`,
+    }) as CoopRule;
+
+  const dataEntry = (field: string, offerTypes: string[] = []): RequiredFieldEntry => ({
+    field,
+    offerTypes,
+    reason: `${field} must be stated on every ad.`,
+    reviewState: 'proposed',
+    origin: 'ai',
+    sourcePage: 41,
+    sourceQuote: `must state the ${field}`,
+  });
+
+  it('merges the two halves for the same field into ONE row', () => {
+    const rows = mergeMustInclude([designRule('msrp')], [dataEntry('msrp')], FILLABLE);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].enforcement).toBe('both');
+    // Both underlying items are addressable, so accepting the row decides both.
+    expect(rows[0].ruleId).toBe('msrp');
+    expect(rows[0].fieldKey).toBe('msrp|');
+  });
+
+  it('a branding field is design-only — nobody fills a logo per ad', () => {
+    const rows = mergeMustInclude([designRule('logoUrl')], [], FILLABLE);
+    expect(rows[0].enforcement).toBe('design');
+    expect(rows[0].fieldKey).toBeUndefined();
+  });
+
+  it('a fillable field with only a data requirement is data-only', () => {
+    const rows = mergeMustInclude([], [dataEntry('expiration')], FILLABLE);
+    expect(rows[0].enforcement).toBe('data');
+    expect(rows[0].ruleId).toBeUndefined();
+  });
+
+  it('never claims a design check it has no evidence for', () => {
+    // A non-fillable field arriving only as a data requirement is a modelling
+    // mistake; the row claims the check it can actually run, not both.
+    const rows = mergeMustInclude([], [dataEntry('brandColor')], FILLABLE);
+    expect(rows[0].enforcement).toBe('design');
+  });
+
+  it('unions offer-type scopes, and an unscoped half wins', () => {
+    const scoped = { ...designRule('vin'), scope: { offerTypes: ['lease'] } } as CoopRule;
+    expect(mergeMustInclude([scoped], [dataEntry('vin', ['apr'])], FILLABLE)[0].offerTypes.sort()).toEqual([
+      'apr',
+      'lease',
+    ]);
+    // Unscoped means every offer type, so it cannot be narrowed by the other half.
+    expect(mergeMustInclude([designRule('vin')], [dataEntry('vin', ['apr'])], FILLABLE)[0].offerTypes).toEqual([]);
+  });
+
+  it('ignores anything already decided', () => {
+    const done = { ...designRule('msrp'), reviewState: 'accepted' } as CoopRule;
+    expect(mergeMustInclude([done], [{ ...dataEntry('vin'), reviewState: 'rejected' }], FILLABLE)).toEqual([]);
+  });
+
+  it('keeps required_element out of the kind-grouped list, so it is asked once', () => {
+    const groups = groupPendingByKind([
+      designRule('msrp'),
+      { id: 'b', kind: 'banned_phrase', severity: 'error', description: 'no', phrase: 'x', reviewState: 'proposed' } as CoopRule,
+    ]);
+    expect(groups.map((g) => g.kind)).toEqual(['banned_phrase']);
   });
 });

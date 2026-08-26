@@ -35,7 +35,12 @@ import { CheckIcon, XMarkIcon, ArrowTopRightOnSquareIcon } from '@heroicons/reac
 import { Checkbox } from '@/components/ui/checkbox';
 import { HelpTip } from '@/components/ui/help-tip';
 import { RULE_KIND_META } from '@/lib/ad-generator/coop-rule-authoring';
-import { groupPendingByKind, requiredFieldKey } from '@/lib/ad-generator/coop-review';
+import {
+  groupPendingByKind,
+  mergeMustInclude,
+  type MustIncludeRow,
+} from '@/lib/ad-generator/coop-review';
+import { fillableFieldKeys } from '@/lib/ad-generator/coop-draft';
 import type { CoopRule, RequiredFieldEntry } from '@/lib/ad-generator/coop-rules';
 
 /** Plain-language label for a rule kind, written for whoever is reviewing. */
@@ -52,6 +57,13 @@ export interface ReviewDoc {
   pageCount: number | null;
   sourceUrl: string | null;
 }
+
+/** Said plainly, because "design scope" is our word and not the reviewer's. */
+const ENFORCEMENT_LABEL: Record<MustIncludeRow['enforcement'], string> = {
+  design: 'checked in the template',
+  data: 'required on every ad',
+  both: 'checked in the template and required on every ad',
+};
 
 /** The terms a banned-phrase rule carries, if it carries a list. */
 function termsOf(rule: CoopRule): string[] {
@@ -97,20 +109,19 @@ export function CoopRuleReview({
   onDecided: () => void;
 }) {
   const pending = useMemo(() => rules.filter((r) => r.reviewState === 'proposed'), [rules]);
-  const pendingFields = useMemo(
-    () => (requiredFields ?? []).filter((e) => e.reviewState === 'proposed'),
-    [requiredFields],
+  // ONE list, from the two mechanisms that enforce it. See mergeMustInclude.
+  const mustInclude = useMemo(
+    () => mergeMustInclude(rules, requiredFields ?? [], fillableFieldKeys()),
+    [rules, requiredFields],
   );
+  const [incSel, setIncSel] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  /** Kept apart from `selected`: the two lists are decided by different endpoints,
-   *  and one bar acting on both would need to fire two requests to mean one thing. */
-  const [fieldSel, setFieldSel] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
 
   // Grouping and ordering live in coop-review.ts so they are testable without a DOM.
   const groups = useMemo(() => groupPendingByKind(rules), [rules]);
 
-  if (pending.length === 0 && pendingFields.length === 0) return null;
+  if (pending.length === 0 && mustInclude.length === 0) return null;
 
   const docById = new Map(docs.map((d) => [d.id, d]));
   const allSelected = selected.size === pending.length;
@@ -135,49 +146,76 @@ export function CoopRuleReview({
     });
   }
 
-  async function decide(
-    state: 'accepted' | 'rejected',
-    ids: string[],
-    action: 'review_rules' | 'review_required_fields' = 'review_rules',
-  ) {
-    if (ids.length === 0 || sending) return;
+  /**
+   * Record decisions. ONE logical operation, even when it is two requests.
+   *
+   * A merged row can stand for a design rule AND a data requirement, which live in
+   * different places and are decided by different endpoints. That split is ours, so
+   * the reviewer gets one confirmation and one refresh, not two of each — and
+   * `sending` is held across both, which two separate calls would race on.
+   */
+  async function submit(state: 'accepted' | 'rejected', ruleIds: string[], fieldKeys: string[]) {
+    if (sending || (ruleIds.length === 0 && fieldKeys.length === 0)) return;
     setSending(true);
     try {
-      const res = await fetch('/api/ad-generator/oem-assets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action,
-          packId,
-          decisions: ids.map((ruleId) => ({ ruleId, state })),
-        }),
-      });
-      const json = (await res.json()) as {
-        error?: string;
-        applied?: number;
-        rechecksQueued?: number;
-        notInReview?: string[];
-      };
-      if (!res.ok) throw new Error(json.error || 'Could not save the decision');
+      let applied = 0;
+      let rechecks = 0;
+      const notInReview: string[] = [];
+
+      for (const [action, ids] of [
+        ['review_rules', ruleIds],
+        ['review_required_fields', fieldKeys],
+      ] as const) {
+        if (ids.length === 0) continue;
+        const res = await fetch('/api/ad-generator/oem-assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, packId, decisions: ids.map((ruleId) => ({ ruleId, state })) }),
+        });
+        const json = (await res.json()) as {
+          error?: string;
+          applied?: number;
+          rechecksQueued?: number;
+          notInReview?: string[];
+        };
+        if (!res.ok) throw new Error(json.error || 'Could not save the decision');
+        applied += json.applied ?? ids.length;
+        rechecks += json.rechecksQueued ?? 0;
+        notInReview.push(...(json.notInReview ?? []));
+      }
 
       const verb = state === 'accepted' ? 'accepted' : 'declined';
-      const recheck = json.rechecksQueued
-        ? ` ${json.rechecksQueued} template check${json.rechecksQueued === 1 ? '' : 's'} will re-run.`
+      const recheck = rechecks
+        ? ` ${rechecks} template check${rechecks === 1 ? '' : 's'} will re-run.`
         : '';
-      toast.success(`${json.applied ?? ids.length} rule${(json.applied ?? ids.length) === 1 ? '' : 's'} ${verb}.${recheck}`);
+      toast.success(`${applied} requirement${applied === 1 ? '' : 's'} ${verb}.${recheck}`);
       // Surfaced rather than swallowed: it means an id reached the request that was
       // never in review, which is a defect worth seeing rather than a quiet no-op.
-      if (json.notInReview?.length) {
-        toast.error(`${json.notInReview.length} rule(s) were not in review and were left alone.`);
+      if (notInReview.length) {
+        toast.error(`${notInReview.length} item(s) were not in review and were left alone.`);
       }
       setSelected(new Set());
-      setFieldSel(new Set());
+      setIncSel(new Set());
       onDecided();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the decision');
     } finally {
       setSending(false);
     }
+  }
+
+  /** Merged rows: one click, whichever halves the rows carry. */
+  function decideInclude(state: 'accepted' | 'rejected', rows: MustIncludeRow[]) {
+    return submit(
+      state,
+      rows.map((r) => r.ruleId).filter((x): x is string => !!x),
+      rows.map((r) => r.fieldKey).filter((x): x is string => !!x),
+    );
+  }
+
+  /** Rules reviewed in the kind-grouped list. */
+  function decide(state: 'accepted' | 'rejected', ids: string[]) {
+    return submit(state, ids, []);
   }
 
   const disabled = busy || sending;
@@ -313,91 +351,79 @@ export function CoopRuleReview({
         })}
       </div>
 
-      {pendingFields.length > 0 && (
+      {mustInclude.length > 0 && (
         <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--card)]/40">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-2.5 py-1.5">
             <span className="flex items-center gap-1.5 text-[11px]">
               <Checkbox
-                checked={fieldSel.size === pendingFields.length}
-                indeterminate={fieldSel.size > 0 && fieldSel.size < pendingFields.length}
-                onChange={(on) =>
-                  setFieldSel(on ? new Set(pendingFields.map(requiredFieldKey)) : new Set())
-                }
+                checked={incSel.size === mustInclude.length}
+                indeterminate={incSel.size > 0 && incSel.size < mustInclude.length}
+                onChange={(on) => setIncSel(on ? new Set(mustInclude.map((r) => r.key)) : new Set())}
                 disabled={disabled}
                 size="sm"
-                label={
-                  <span className="font-medium text-[var(--foreground)]">
-                    Fields a person must fill in
-                  </span>
-                }
+                label={<span className="font-medium text-[var(--foreground)]">The ad must include</span>}
               />
-              <span className="text-[var(--muted-foreground)]">{pendingFields.length}</span>
-              <HelpTip title="A different check from the rules above">
+              <span className="text-[var(--muted-foreground)]">{mustInclude.length}</span>
+              <HelpTip title="Where each one is checked">
                 <p>
-                  The rules above ask whether the <strong>design</strong> has a place for something. These ask
-                  whether the <strong>ad&rsquo;s data</strong> carries a value — an expiration date, a VIN, the
-                  term.
+                  One requirement from the document, checked wherever it can be. A figure a person fills in is
+                  checked twice — the template needs somewhere to put it, and the ad needs a value. A logo or a
+                  computed offer figure can only be checked in the design.
                 </p>
-                <p>
-                  Accepting one adds it to {make}&rsquo;s required fields, which blocks export while that field
-                  is empty. It never removes anything already required.
-                </p>
+                <p>Loomi decides which from the field; you decide whether the requirement is real.</p>
               </HelpTip>
             </span>
             <button
-              onClick={() =>
-                decide('accepted', pendingFields.map(requiredFieldKey), 'review_required_fields')
-              }
+              onClick={() => decideInclude('accepted', mustInclude)}
               disabled={disabled}
               className="rounded-lg border border-[var(--border)] px-2 py-0.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] disabled:opacity-50"
             >
-              Accept all {pendingFields.length}
+              Accept all {mustInclude.length}
             </button>
           </div>
 
           <ul className="divide-y divide-[var(--border)]">
-            {pendingFields.map((entry) => {
-              const key = requiredFieldKey(entry);
-              const doc = entry.sourceDocId ? docById.get(entry.sourceDocId) : undefined;
+            {mustInclude.map((row) => {
+              const doc = row.sourceDocId ? docById.get(row.sourceDocId) : undefined;
               return (
-                <li key={key} className="flex items-start gap-2 px-2.5 py-2">
+                <li key={row.key} className="flex items-start gap-2 px-2.5 py-2">
                   <div className="pt-0.5">
                     <Checkbox
-                      checked={fieldSel.has(key)}
+                      checked={incSel.has(row.key)}
                       onChange={(on) =>
-                        setFieldSel((prev) => {
+                        setIncSel((prev) => {
                           const next = new Set(prev);
-                          if (on) next.add(key);
-                          else next.delete(key);
+                          if (on) next.add(row.key);
+                          else next.delete(row.key);
                           return next;
                         })
                       }
                       disabled={disabled}
                       size="sm"
-                      aria-label={`Select ${entry.field}`}
+                      aria-label={`Select ${row.field}`}
                     />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-[11px] leading-snug text-[var(--foreground)]">
-                      <code className="rounded bg-[var(--muted)]/50 px-1 py-0.5 font-medium">{entry.field}</code>{' '}
-                      {entry.reason}
+                      <code className="rounded bg-[var(--muted)]/50 px-1 py-0.5 font-medium">{row.field}</code>{' '}
+                      {row.reason}
                     </p>
-                    {entry.sourceQuote && (
-                      <p className="mt-1 border-l-2 border-[var(--border)] pl-2 text-[11px] italic leading-snug text-[var(--muted-foreground)]">
-                        &ldquo;{entry.sourceQuote}&rdquo;
+                    {row.sourceQuote && (
+                      <p className="mt-1 line-clamp-2 border-l-2 border-[var(--border)] pl-2 text-[11px] italic leading-snug text-[var(--muted-foreground)]">
+                        &ldquo;{row.sourceQuote}&rdquo;
                       </p>
                     )}
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
-                      <span>
-                        {entry.offerTypes.length ? entry.offerTypes.join(', ') : 'every offer type'}
-                      </span>
-                      {doc && entry.sourcePage && (
+                      <span>{ENFORCEMENT_LABEL[row.enforcement]}</span>
+                      <span>{row.offerTypes.length ? row.offerTypes.join(', ') : 'every offer type'}</span>
+                      {row.citation && <span>{shortCite(row.citation)}</span>}
+                      {doc && row.sourcePage && (
                         <button
-                          onClick={() => onRead(doc, entry.sourcePage!, entry.sourceQuote ?? '')}
+                          onClick={() => onRead(doc, row.sourcePage!, row.sourceQuote ?? '')}
                           className="inline-flex items-center gap-1 font-medium text-[var(--primary)] hover:underline"
                         >
                           <ArrowTopRightOnSquareIcon className="h-3 w-3" />
-                          Open page {entry.sourcePage}
+                          Open page {row.sourcePage}
                         </button>
                       )}
                     </div>
@@ -407,21 +433,19 @@ export function CoopRuleReview({
             })}
           </ul>
 
-          {fieldSel.size > 0 && (
+          {incSel.size > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] px-2.5 py-1.5">
-              <span className="text-[11px] font-medium text-[var(--foreground)]">
-                {fieldSel.size} selected
-              </span>
+              <span className="text-[11px] font-medium text-[var(--foreground)]">{incSel.size} selected</span>
               <div className="flex items-center gap-1.5">
                 <button
-                  onClick={() => decide('rejected', [...fieldSel], 'review_required_fields')}
+                  onClick={() => decideInclude('rejected', mustInclude.filter((r) => incSel.has(r.key)))}
                   disabled={disabled}
                   className="inline-flex items-center gap-1 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
                 >
                   <XMarkIcon className="h-3 w-3" /> Decline
                 </button>
                 <button
-                  onClick={() => decide('accepted', [...fieldSel], 'review_required_fields')}
+                  onClick={() => decideInclude('accepted', mustInclude.filter((r) => incSel.has(r.key)))}
                   disabled={disabled}
                   className="inline-flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 >

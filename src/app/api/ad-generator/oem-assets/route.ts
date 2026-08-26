@@ -3,7 +3,9 @@
  *
  * GET  → per-make guideline packs and event calendar, with staleness state.
  * POST → save_event | delete_event | set_verified | save_pack | delete_pack |
- *        review_rules | attach_source | register_doc | refresh_docs | recheck_template
+ *        review_rules | review_required_fields | attach_source | register_doc |
+ *        refresh_docs | rename_doc | save_doc_notes | set_doc_active | delete_doc |
+ *        recheck_template
  *
  * Owned by the co-op team: they hold the manufacturer relationships that produce
  * both the guideline documents and the event marks.
@@ -124,8 +126,10 @@ export async function POST(req: NextRequest) {
     version?: string;
     source?: string;
     rules?: unknown;
-    // review_rules
+    // review_rules / review_required_fields
     decisions?: { ruleId?: unknown; state?: unknown }[];
+    // set_doc_active
+    active?: boolean;
   };
   try {
     body = await req.json();
@@ -529,6 +533,20 @@ export async function POST(req: NextRequest) {
           data: { notes: body.notes?.trim() || null },
         });
         return NextResponse.json({ ok: true, doc: { id: row.id } });
+      }
+
+      // Archive rather than destroy. A compliance library should be able to say
+      // "we held this edition until April" — a hard delete cannot. `delete_doc`
+      // stays for a document registered by mistake.
+      case 'set_doc_active': {
+        const docId = (body.docId ?? '').trim();
+        if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });
+        const active = body.active === true;
+        const row = await prisma.adGuidelineDoc.update({
+          where: { id: docId },
+          data: { isActive: active },
+        });
+        return NextResponse.json({ ok: true, doc: { id: row.id, isActive: row.isActive } });
       }
 
       case 'delete_doc': {

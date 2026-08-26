@@ -229,6 +229,7 @@ function DocMenu({
   downloadUrl,
   onRename,
   onReplace,
+  onArchive,
   onRemove,
 }: {
   label: string;
@@ -238,6 +239,8 @@ function DocMenu({
   downloadUrl?: string | null;
   onRename: () => void;
   onReplace: () => void;
+  /** Archive: hides it from the library without destroying the record. */
+  onArchive: () => void;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -314,6 +317,7 @@ function DocMenu({
           )}
           {item('Rename', onRename)}
           {item('Replace', onReplace)}
+          {item('Archive', onArchive)}
           {item('Remove', onRemove, true)}
         </div>
       )}
@@ -776,6 +780,14 @@ export function CoopGuidelinesTab() {
                                 downloadUrl={d.sourceUrl}
                                 onRename={() => setRenaming({ id: d.id, title: d.title })}
                                 onReplace={() => setDocDraft({ ...emptyDocDraft(active.make), title: d.title })}
+                                onArchive={() =>
+                                  act(
+                                    'set_doc_active',
+                                    { docId: d.id, active: false },
+                                    `da-${d.id}`,
+                                    'Document archived — re-upload it to bring it back',
+                                  )
+                                }
                                 onRemove={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
                               />
                             </div>

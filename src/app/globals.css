@@ -1178,10 +1178,26 @@ body {
   color: #047857;
 }
 
+/* Loomi's own indigo, NOT var(--primary).
+ *
+ * `--primary` is the per-user accent, set as an inline custom property by
+ * applyAppearanceToDocument and persisted locally — so it survives sign-out and
+ * paints the LOGIN page in whatever colour the last person chose. This link was the
+ * only `.auth-*` rule using it: everything around it (.auth-submit, .auth-eyebrow,
+ * .auth-hero-accent) pins brand indigo as literal hex, so a green accent produced a
+ * green link on a violet card.
+ *
+ * Signed out there is no user whose preference could apply, and the sign-in screen
+ * is Loomi's, not the account's. Two values for the same reason .auth-hero-accent
+ * has two: indigo-400 carries on the dark card, indigo-600 on the light one. */
 .auth-link {
-  color: var(--primary);
+  color: #818cf8;
   font-weight: 600;
   transition: opacity 0.15s ease;
+}
+
+[data-theme='light'] .auth-link {
+  color: #4f46e5;
 }
 
 .auth-link:hover {

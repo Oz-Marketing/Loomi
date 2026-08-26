@@ -576,6 +576,12 @@ export function CoopGuidelinesTab() {
                   <button
                     key={m.make}
                     onClick={() => setSelected(m.make)}
+                    // The visible label is built from nested spans and counts, which
+                    // computes to no accessible name at all — the rail read as
+                    // twenty-four unnamed buttons. `aria-current` then says which one
+                    // you are on, which colour alone was carrying.
+                    aria-label={m.make}
+                    aria-current={isActive ? 'true' : undefined}
                     className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
                       isActive ? 'bg-[var(--primary)]/10 text-[var(--foreground)]' : 'hover:bg-[var(--muted)]/40'
                     }`}

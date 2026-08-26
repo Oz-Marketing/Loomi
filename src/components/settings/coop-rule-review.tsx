@@ -53,6 +53,25 @@ export interface ReviewDoc {
   sourceUrl: string | null;
 }
 
+/** The terms a banned-phrase rule carries, if it carries a list. */
+function termsOf(rule: CoopRule): string[] {
+  const list = (rule as { phrases?: unknown }).phrases;
+  return Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
+}
+
+/**
+ * Just the section and page.
+ *
+ * A citation reads "Subaru SAF Guidelines, April 2026 (Subaru_SAF_Guidelines_2026.pdf)
+ * — §6l, p.42". Repeated down sixty rows the document name is most of the pixels and
+ * none of the information: every rule in the panel came from the same document, which
+ * the card above already names.
+ */
+function shortCite(citation: string): string {
+  const tail = citation.split('—').pop()?.trim();
+  return tail && tail.length < citation.length ? tail : citation;
+}
+
 export function CoopRuleReview({
   make,
   packId,
@@ -251,13 +270,28 @@ export function CoopRuleReview({
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] leading-snug text-[var(--foreground)]">{rule.description}</p>
+                        {/* A prohibited-terms list shows its terms rather than a
+                            paragraph of prose: the terms ARE the rule, and fifty of
+                            them read faster as chips than as a sentence. */}
+                        {termsOf(rule).length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {termsOf(rule).map((term) => (
+                              <span
+                                key={term}
+                                className="rounded bg-[var(--muted)]/60 px-1.5 py-0.5 text-[10px] text-[var(--foreground)]"
+                              >
+                                {term}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         {rule.sourceQuote && (
-                          <p className="mt-1 border-l-2 border-[var(--border)] pl-2 text-[11px] italic leading-snug text-[var(--muted-foreground)]">
+                          <p className="mt-1 line-clamp-2 border-l-2 border-[var(--border)] pl-2 text-[11px] italic leading-snug text-[var(--muted-foreground)]">
                             &ldquo;{rule.sourceQuote}&rdquo;
                           </p>
                         )}
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
-                          {rule.citation && <span>{rule.citation}</span>}
+                          {rule.citation && <span>{shortCite(rule.citation)}</span>}
                           {rule.severity === 'warning' && <span>warns only</span>}
                           {doc && rule.sourcePage && (
                             <button

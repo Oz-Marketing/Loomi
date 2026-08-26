@@ -131,6 +131,8 @@ export type DropReason =
   | 'unknown_offer_type';
 
 export interface AcceptedRule {
+  /** List terms removed because they were not on the cited page. Reported, not hidden. */
+  trimmedTerms?: string[];
   rule: DraftRule;
   /** Always `ai` here. Flips to `human` when a reviewer edits it. */
   origin: 'ai';
@@ -341,6 +343,38 @@ export function screenRuleProposals(
       continue;
     }
 
+    // ── every term of a list must be findable on the quoted page ──
+    //
+    // Checked against the PAGE, not against the quote. Requiring each term to appear
+    // inside the quote was the first design and it cost two real lists — 36 of
+    // Subaru's prohibited terms — because it pushed the model into composing a long
+    // quote out of the list itself, which then failed verification as a span that
+    // does not exist. The introducing sentence is the evidence that these are
+    // forbidden; the terms are evidenced by being on the page.
+    //
+    // Absent terms are TRIMMED rather than discarding the rule. Losing a
+    // twenty-nine-term list because one term was mistyped is a bad trade, and the
+    // trims are reported so nobody has to guess what happened.
+    const listTerms = (raw.phrases ?? []).map((x) => String(x).trim()).filter(Boolean);
+    let trimmedTerms: string[] = [];
+    if (listTerms.length > 0) {
+      const pageText = (pages[quote.at.page - 1] ?? '').toLowerCase();
+      const onPage = (term: string) => {
+        const needed = words(term);
+        return needed.length > 0 && needed.every((w) => pageText.includes(w));
+      };
+      const kept = listTerms.filter(onPage);
+      trimmedTerms = listTerms.filter((x) => !kept.includes(x));
+      if (kept.length === 0) {
+        drop(
+          'evidence_mismatch',
+          `None of the ${listTerms.length} term(s) appear on page ${quote.at.page}.`,
+        );
+        continue;
+      }
+      raw.phrases = kept;
+    }
+
     // ── the evidence must be about THIS rule ──
     //
     // Only meaningful for a list entry, and essential there. Working down a list of
@@ -380,6 +414,7 @@ export function screenRuleProposals(
       origin: 'ai',
       source: { ...quote.at, quote: proposal.quote, section: proposal.section },
       rationale: proposal.rationale,
+      ...(trimmedTerms.length ? { trimmedTerms } : {}),
     });
   }
 

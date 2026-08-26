@@ -565,3 +565,62 @@ describe('coopPassed', () => {
     ).toBe(false);
   });
 });
+
+describe('banned_phrase — prohibited-terms lists', () => {
+  // Shaped like Subaru §6l/§6m: fifty-one terms stated once, as a list.
+  const listRule: CoopRule = {
+    id: 'subaru-prohibited-terms',
+    kind: 'banned_phrase',
+    severity: 'error',
+    description: 'Subaru prohibits these terms in advertising.',
+    citation: 'SAF 2026 §6l/§6m, p.42',
+    phrases: ['invoice', 'our cost', 'blowout', 'penny over', 'wholesale pricing'],
+  };
+  const d = doc([textEl('h', 'headline')]);
+  const run = (data: Partial<AdData>, rule: CoopRule = listRule) =>
+    evaluateCoopRules({ doc: d, data: { ...LEASE, ...data } as AdData, pack: pack([rule]) });
+
+  it('flags any term in the list', () => {
+    const f = run({ headline: 'Blowout prices this week' });
+    expect(f).toHaveLength(1);
+    expect(f[0].ruleId).toBe('subaru-prohibited-terms');
+  });
+
+  it('NAMES the term that was found', () => {
+    // Being told "one of fifty-one words is present" is not actionable.
+    expect(run({ headline: 'Below our cost!' })[0].observed).toContain('"our cost"');
+  });
+
+  it('matches a multi-word term across irregular spacing', () => {
+    expect(run({ headline: 'wholesale   pricing today' })).toHaveLength(1);
+  });
+
+  it('passes an ad using none of them', () => {
+    expect(run({ headline: 'Great lease offers' })).toEqual([]);
+  });
+
+  // Why the list form needs word boundaries: the single-`phrase` form is plain
+  // substring matching, and its documented mitigation was "transcribe phrases, not
+  // bare verbs" — which a fifty-one-word list makes impossible to rely on.
+  it('does NOT fire on a term embedded in a longer word', () => {
+    expect(run({ headline: 'Costumes and invoicing' })).toEqual([]);
+  });
+
+  it('still fires where the boundary genuinely ends', () => {
+    expect(run({ headline: 'See the invoice today' })).toHaveLength(1);
+  });
+
+  it('ignores blank entries rather than matching everything', () => {
+    const sloppy: CoopRule = { ...listRule, phrases: ['', '   ', 'blowout'] };
+    expect(run({ headline: 'Nice cars' }, sloppy)).toEqual([]);
+    expect(run({ headline: 'Blowout' }, sloppy)).toHaveLength(1);
+  });
+
+  it('leaves the single-phrase form working unchanged', () => {
+    const single: CoopRule = {
+      id: 'one', kind: 'banned_phrase', severity: 'error',
+      description: 'no clearance', citation: 'x', phrase: 'clearance',
+    };
+    expect(run({ headline: 'Clearance event' }, single)).toHaveLength(1);
+  });
+});

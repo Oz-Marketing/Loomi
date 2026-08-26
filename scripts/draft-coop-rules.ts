@@ -150,6 +150,15 @@ async function main() {
   console.log(
     `Required fields: ${screened.requiredFields.length} kept, ${screened.droppedRequiredFields.length} dropped`,
   );
+  const lists = screened.accepted.filter((a) => (a.rule as { phrases?: string[] }).phrases?.length);
+  if (lists.length) {
+    const terms = lists.reduce((n, a) => n + ((a.rule as { phrases?: string[] }).phrases?.length ?? 0), 0);
+    const trimmed = lists.reduce((n, a) => n + (a.trimmedTerms?.length ?? 0), 0);
+    console.log(
+      `Term lists: ${lists.length} rule(s) carrying ${terms} term(s)` +
+        (trimmed ? ` · ${trimmed} term(s) trimmed as not on the cited page` : ''),
+    );
+  }
   console.log(
     `Unexpressible: ${screened.notes.length} kept, ${screened.droppedNotes.length} dropped`,
   );

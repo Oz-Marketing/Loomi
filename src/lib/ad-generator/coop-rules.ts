@@ -99,6 +99,20 @@ export interface BannedPhraseRule extends CoopRuleBase {
   /** Fields to scan. Omitted = every string field in the ad data. */
   fields?: string[];
   phrase?: string;
+  /**
+   * A PROHIBITED-TERMS LIST — several forbidden terms under one rule.
+   *
+   * These documents ban wording in bulk: Subaru §6l and §6m list fifty-one terms
+   * across one page. One rule per term made that fifty-one rules to review, fifty-one
+   * rows to read, and fifty-one chances to mis-click — when the document states it
+   * once, as a list. A finding names WHICH term was found, so a blocked ad is still
+   * told exactly what to change.
+   *
+   * Matched on WORD BOUNDARIES, unlike `phrase`. That is not a detail: a fifty-term
+   * list makes the substring hazard near-certain, and a banned "cost" that fires
+   * inside "costume" blocks an ad for a word nobody used.
+   */
+  phrases?: string[];
   pattern?: string;
 }
 
@@ -337,6 +351,42 @@ function inScope(rule: CoopRule, offerType: string, sizeId?: string): boolean {
 }
 
 /** Build a case-insensitive matcher from a rule's `phrase` or `pattern`. */
+/** Escape a literal for use in a regex. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A word-boundary matcher for one literal term.
+ *
+ * `\b` is added only where the term's own edge is a word character: a term like
+ * "$1,000 off" or "(dealer)" has punctuation at the edge, and `\b` there would
+ * refuse to match at all. Internal whitespace is made flexible, because extracted
+ * and typed text disagree about how many spaces sit between two words.
+ */
+function termMatcher(term: string): ((text: string) => boolean) | null {
+  const trimmed = term.trim();
+  if (!trimmed) return null;
+  const body = escapeRe(trimmed).replace(/\\?\s+/g, '\\s+');
+  const lead = /^\w/.test(trimmed) ? '\\b' : '';
+  const tail = /\w$/.test(trimmed) ? '\\b' : '';
+  try {
+    const re = new RegExp(`${lead}${body}${tail}`, 'i');
+    return (text) => re.test(text);
+  } catch {
+    return null;
+  }
+}
+
+/** Which term of a list appears in `text`, or null. */
+function firstMatchingTerm(terms: string[], text: string): string | null {
+  for (const term of terms) {
+    const test = termMatcher(term);
+    if (test && test(text)) return term;
+  }
+  return null;
+}
+
 function matcher(rule: { phrase?: string; pattern?: string }): ((text: string) => boolean) | null {
   if (rule.pattern) {
     try {
@@ -484,8 +534,9 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
       }
 
       case 'banned_phrase': {
-        const test = matcher(rule);
-        if (!test) break;
+        const terms = rule.phrases?.filter((x) => x.trim()) ?? [];
+        const test = terms.length ? null : matcher(rule);
+        if (!test && terms.length === 0) break;
         // Scan the named fields, or every string value when unscoped. Skip the
         // internal `_`-prefixed bookkeeping keys — they never reach the canvas.
         const entries = rule.fields?.length
@@ -493,16 +544,20 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
           : Object.entries(data).filter(([k]) => !k.startsWith('_'));
         for (const [key, value] of entries) {
           if (typeof value !== 'string' || !value.trim()) continue;
-          if (test(value)) {
-            push({
-              ruleId: rule.id,
-              severity: rule.severity,
-              description: rule.description,
-              citation: rule.citation,
-              field: key,
-              observed: `${key} contains it: "${value.slice(0, 120)}"`,
-            });
-          }
+          // A list names the term that was found; whoever is blocked needs to know
+          // which of fifty-one words to change, not that one of them is present.
+          const hit = terms.length ? firstMatchingTerm(terms, value) : test?.(value) ? '' : null;
+          if (hit === null) continue;
+          push({
+            ruleId: rule.id,
+            severity: rule.severity,
+            description: rule.description,
+            citation: rule.citation,
+            field: key,
+            observed: hit
+              ? `${key} contains "${hit}": "${value.slice(0, 120)}"`
+              : `${key} contains it: "${value.slice(0, 120)}"`,
+          });
         }
         break;
       }

@@ -4339,14 +4339,14 @@ model PlaybookRun {
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  accountsAudited Int @default(0)
-  checksRun       Int @default(0)
-  passCount       Int @default(0)
-  warnCount       Int @default(0)
-  failCount       Int @default(0)
+  accountsAudited Int  @default(0)
+  checksRun       Int  @default(0)
+  passCount       Int  @default(0)
+  warnCount       Int  @default(0)
+  failCount       Int  @default(0)
   /// Failing checks whose severity is `blocking` — the triage number, tracked
   /// over time so a trend is visible without recomputing history.
-  blockingFails   Int @default(0)
+  blockingFails   Int  @default(0)
   /// Mean coverage across scored accounts, 0-100. Null when nothing scored.
   coveragePct     Int?
 
@@ -5477,4 +5477,91 @@ model AgentMessage {
   createdAt DateTime @default(now())
 
   @@index([conversationId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────
+// AI specialists — the editable half of an agent
+// ─────────────────────────────────────────────────────
+//
+// A specialist is six things (docs/specialist-agents.md). Its identity, its tools
+// and its guardrails are CODE — tools query Postgres under a permission check, and
+// a guardrail a user can loosen is not a guardrail. This row is the rest: the
+// brief, the house notes, and how hard it thinks.
+//
+// The row is an OVERRIDE, not a requirement. With no row, a specialist runs on the
+// default brief compiled into the registry, which is why shipping this changes
+// nothing until somebody edits something — and why deleting a row is a working
+// "reset to default" rather than a way to break an agent.
+model AgentProfile {
+  id String @id @default(cuid())
+
+  /// Non-null = a FIRST-PARTY specialist, whose tools and guardrails the code
+  /// registry owns; this row only carries what a human may edit. Null = an agent
+  /// composed entirely in the builder. Custom agents aren't built yet, so today
+  /// every row has a key — but the column is what makes shipping them later an
+  /// addition rather than a migration.
+  specialistKey String? @unique
+
+  /// Editable so a team can call their specialist what they actually call her.
+  name         String
+  instructions String  @db.Text
+  /// Curated notes: what isn't in any document. Rep guidance, verbal exceptions,
+  /// known rejections. The reason a specialist beats reading the PDF yourself.
+  ///
+  /// Deliberately NOT the same field as a disclaimer addendum: these are advisory
+  /// prose, those are cited clauses appended to live ad copy. Merging the two
+  /// would put unreviewed text into legal copy on published ads.
+  notes        String? @db.Text
+
+  /// How hard it thinks: low | medium | high | max. A setting rather than a
+  /// hardcoded law — an advisory specialist is supposed to be turned up.
+  effort String @default("high")
+
+  /// Chosen face, as a path into the committed avatar library. Null means the
+  /// registry's default portrait. Stored rather than code-owned because which
+  /// character represents a realm is taste, and taste shouldn't need a deploy.
+  portraitUrl String?
+
+  /// WHO OWNS THIS AGENT. 'agency' is the only value v1 writes; 'account' is what
+  /// per-rooftop agents will use. Present from the start deliberately: retrofitting
+  /// an owner onto rows that already exist means backfilling a scope decision
+  /// nobody recorded at the time.
+  ownerScope      String  @default("agency") // agency | account
+  /// Set only when ownerScope = 'account'.
+  ownerAccountKey String?
+
+  revisions AgentProfileRevision[]
+
+  isActive  Boolean  @default(true)
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerScope, ownerAccountKey])
+}
+
+// Every past version of a profile, written before each change.
+//
+// History rather than an audit gate: nobody has to attest to anything, and a save
+// is never blocked. But when an answer turns out wrong, "what was she told, and by
+// whom, and when" is the first question — and without this the only answer is what
+// she is told NOW, which is the one thing you already know.
+model AgentProfileRevision {
+  id        String       @id @default(cuid())
+  profileId String
+  profile   AgentProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// The values as they were BEFORE the change this row records.
+  name         String
+  instructions String  @db.Text
+  notes        String? @db.Text
+  effort       String
+
+  /// Who replaced them, and when. Null for the synthetic first revision that
+  /// captures the code default at the moment a profile is first overridden.
+  changedBy String?
+  changedAt DateTime @default(now())
+
+  @@index([profileId, changedAt])
 }

@@ -171,6 +171,11 @@ function isGlobalAppPath(pathname: string): boolean {
     // Loomi's own brand marks. Host-rewriting these would look for
     // /reporting/brand/... and 404 the logo on every non-studio surface.
     pathname.startsWith('/brand/') ||
+    // Specialist portraits. The assistant is mounted on every surface, so its
+    // avatar has to resolve on every surface — host-rewriting would look for
+    // /reporting/agents/coop.webp and leave the panel showing the fallback mark
+    // on two hosts out of three.
+    pathname.startsWith('/agents/') ||
     // Public media links. Shared outward to people with no Loomi account and no
     // idea which host they're on, so they must resolve identically everywhere —
     // exactly like /login. Host-rewriting one would 404 the recipient.

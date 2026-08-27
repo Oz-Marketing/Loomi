@@ -55,7 +55,18 @@ export interface AgentIdentity {
    * never collide with a status colour.
    */
   accent: string;
-  /** Optional illustrated portrait. When set, the avatar renders this instead of the mark. */
+  /**
+   * Illustrated portrait, square and cropped to the head.
+   *
+   * Derived from a full-figure source by scripts/build-agent-avatars.mjs rather
+   * than hand-cropped: the source art is a whole character (bun to collar) in
+   * portrait aspect, which at 24px would render the face a few pixels tall and
+   * which a circular mask would cut by a third. The derived asset is padded until
+   * the head survives a circle.
+   *
+   * The mark stays as the fallback — for characters not yet drawn, for custom
+   * agents, and for when the image fails to load.
+   */
   portraitUrl?: string;
 }
 
@@ -67,7 +78,10 @@ export const AGENT_IDENTITIES: Record<SpecialistKey, AgentIdentity> = {
     greeting:
       "I'm Vera. I know the co-op guidelines on file inside out — ask me what a program allows, and I'll show you the page it's on.",
     mark: 'aperture',
-    accent: '#38bdf8',
+    // Sampled from her hair by scripts/build-agent-avatars.mjs, so the ring drawn
+    // behind the portrait belongs to the same palette as the portrait.
+    accent: '#5d44d9',
+    portraitUrl: '/agents/library/vera.webp',
   },
 };
 

@@ -105,7 +105,9 @@ describe('the disclaimer', () => {
     const found = auditTemplate({ doc: { ...doc, layouts } });
     const f = found.find((x) => x.check === 'disclaimer_illegible')!;
     expect(f.severity).toBe('warning');
-    expect(f.message).toContain('12px where 14px fits');
+    // The measurement rides per board, not in the sentence — a fault on seventeen
+    // boards has seventeen numbers and only one thing wrong with it.
+    expect(f.sizeDetail?.fb).toBe('12px where 14px fits');
   });
 
   it('scales what it asks for to the board, rather than one flat number', () => {
@@ -129,7 +131,7 @@ describe('the disclaimer', () => {
     const found = auditTemplate({ doc: { ...doc, layouts } });
     const f = found.find((x) => x.check === 'disclaimer_illegible' && x.sizes.includes('fb'))!;
     expect(f.severity).toBe('error');
-    expect(f.message).toContain('6px');
+    expect(f.sizeDetail?.fb).toBe('6px');
   });
 
   it('takes the roomiest of two disclaimer layers, not the first', () => {
@@ -315,6 +317,79 @@ describe('geometry', () => {
     layouts.fb[id] = { ...layouts.fb[id], h: 0.01 };
     const found = auditTemplate({ doc: { ...doc, layouts }, sizeIds: ['google'] });
     expect(checks(found)).not.toContain('text_illegible');
+  });
+});
+
+/**
+ * A fault is a property of the DESIGN, so it gets ONE line however many boards it
+ * lands on. This is the check that a twenty-two-board template cannot report the
+ * same three faults thirty-five times — which is what it did, and what made the
+ * blocking list unreadable at exactly the moment it mattered most.
+ */
+describe('a fault that lands on every board is stated once', () => {
+  const doc = youngSubaruSingleOffer();
+
+  it('collapses an illegible disclaimer into one finding carrying every board', () => {
+    const layouts = structuredClone(doc.layouts);
+    const id = doc.elements.find((e) => e.role === 'disclaimer')!.id;
+    // Pinned at 6px everywhere: one fault, five boards, one fix.
+    for (const sizeId of Object.keys(layouts)) {
+      layouts[sizeId][id] = { ...layouts[sizeId][id], fontSize: 6 };
+    }
+    const found = auditTemplate({ doc: { ...doc, layouts } });
+    const illegible = found.filter((f) => f.check === 'disclaimer_illegible');
+    expect(illegible).toHaveLength(1);
+    expect(illegible[0].sizes.sort()).toEqual(doc.sizes.map((s) => s.id).sort());
+    // The count is in the sentence; the boards and their numbers are alongside it.
+    expect(illegible[0].message).toContain(`${doc.sizes.length} boards`);
+    expect(illegible[0].sizeDetail?.google).toBe('6px');
+  });
+
+  it('keeps the two causes apart, because they are two different fixes', () => {
+    const layouts = structuredClone(doc.layouts);
+    const id = doc.elements.find((e) => e.role === 'disclaimer')!.id;
+    // Pinned too small on one board; given no height on another.
+    layouts.fb[id] = { ...layouts.fb[id], fontSize: 6 };
+    layouts.google[id] = { ...layouts.google[id], h: 0.02 };
+    const illegible = auditTemplate({ doc: { ...doc, layouts } }).filter(
+      (f) => f.check === 'disclaimer_illegible' && f.severity === 'error',
+    );
+    expect(illegible).toHaveLength(2);
+    expect(illegible.flatMap((f) => f.sizes).sort()).toEqual(['fb', 'google']);
+    // One says raise the type, the other says give it room — never merged.
+    expect(new Set(illegible.map((f) => f.fix)).size).toBe(2);
+  });
+
+  it('collapses a layer that hangs off every board, per layer', () => {
+    const layouts = structuredClone(doc.layouts);
+    const offer = doc.elements.find((e) => e.role === 'offer')!.id;
+    const name = doc.elements.find((e) => e.role === 'vehicleName')!.id;
+    for (const sizeId of Object.keys(layouts)) {
+      layouts[sizeId][offer] = { ...layouts[sizeId][offer], x: 0.9 };
+      layouts[sizeId][name] = { ...layouts[sizeId][name], x: 0.9 };
+    }
+    const off = auditTemplate({ doc: { ...doc, layouts } }).filter(
+      (f) => f.check === 'element_off_board',
+    );
+    // Two layers, five boards each: two findings, not ten.
+    expect(off).toHaveLength(2);
+    expect(new Set(off.map((f) => f.elementId))).toEqual(new Set([offer, name]));
+    for (const f of off) expect(f.sizes).toHaveLength(doc.sizes.length);
+  });
+
+  it('collapses illegible text per layer, with the measurement per board', () => {
+    const layouts = structuredClone(doc.layouts);
+    const id = doc.elements.find((e) => e.role === 'vehicleName')!.id;
+    layouts.fb[id] = { ...layouts.fb[id], h: 0.01 };
+    layouts.google[id] = { ...layouts.google[id], h: 0.01 };
+    const text = auditTemplate({ doc: { ...doc, layouts } }).filter(
+      (f) => f.check === 'text_illegible',
+    );
+    expect(text).toHaveLength(1);
+    expect(text[0].sizes.sort()).toEqual(['fb', 'google']);
+    // 1% of 628 is 6px, of 250 is 3px — same fault, different distance to move.
+    expect(text[0].sizeDetail?.fb).toBe('6px');
+    expect(text[0].sizeDetail?.google).toBe('3px');
   });
 });
 

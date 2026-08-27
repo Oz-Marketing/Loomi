@@ -82,6 +82,7 @@ import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
+import { ProofSheetModal } from '@/components/ad-generator/proof-sheet-view';
 import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
@@ -121,7 +122,7 @@ import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
 import { OFFER_TOKENS, OFFER_TOKENS_O2, offerTokensNumbered } from '@/lib/ad-generator/offer-tokens';
 import { archetypeStartGroups, docFromStart, type ArchetypeStart } from '@/lib/ad-generator/archetypes/registry';
 import { offerTypeAccent, offerTypePill, offerTypeShort } from '@/lib/ad-generator/offer-type-style';
-import { surfacedFields } from '@/lib/ad-generator/template-audit';
+import { auditTemplate, surfacedFields, type AuditFinding } from '@/lib/ad-generator/template-audit';
 import { roleNote } from '@/lib/ad-generator/archetypes/roles';
 import { composeBoard } from '@/lib/ad-generator/archetypes/theme';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
@@ -947,6 +948,32 @@ export default function AdBuilderPage() {
     }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
   }, [doc, oemRule, docKind]);
   const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
+  /**
+   * THE DESIGN CHECK, live on the artboard.
+   *
+   * The same `auditTemplate` the proof sheet runs, on the doc in hand. It was only
+   * reachable through the proof sheet, which is a new tab and a saved row — so the
+   * faults a designer most needs while moving boxes (a disclaimer pinned at 7px on
+   * a board they have not opened, a layer dragged off the edge of the tower) were
+   * found after the design was finished rather than while it was being made.
+   *
+   * Cheap enough to run on every doc change: pure arithmetic over the layouts, no
+   * render and no network. It audits EVERY board, not the one on screen, which is
+   * the whole point — the boards nobody opens are where these hide.
+   *
+   * `required_field_unplaced` is dropped when the compliance chip is showing, which
+   * reports the same finding per field WITH a button that places it. Two chips
+   * saying the same thing, one of them able to fix it, is a worse answer than one.
+   */
+  const designFaults = useMemo(() => auditTemplate({ doc, oemRule }), [doc, oemRule]);
+  const complianceChipShown = !!doc.make && !!compliance && compliance.length > 0;
+  const shownFaults = useMemo(
+    () =>
+      complianceChipShown
+        ? designFaults.filter((f) => f.check !== 'required_field_unplaced')
+        : designFaults,
+    [designFaults, complianceChipShown],
+  );
   // Compliance "insert": drop a text element bound to the missing field onto the
   // artboard, shown for that offer type — so the ad now surfaces it and the
   // warning clears. The field itself already exists (fixed schema); this is
@@ -1051,6 +1078,8 @@ export default function AdBuilderPage() {
   const publishRef = useRef<HTMLDivElement>(null);
   // Deploy-to-subaccounts modal.
   const [deployOpen, setDeployOpen] = useState(false);
+  // The proof sheet, over the editor. See ProofSheetModal for why it is not a route.
+  const [proofOpen, setProofOpen] = useState(false);
   /** Set after a save that would affect ads following this template (see save()). */
   const [syncImpact, setSyncImpact] = useState<SyncImpact | null>(null);
   /** Ad mode: whether the open ad still follows its source template. */
@@ -1132,7 +1161,14 @@ export default function AdBuilderPage() {
    * rather than the resting state.
    */
   // Show every offer block at once (off-type ghosted) vs only the previewed type.
-  const [showAllOfferTypes, setShowAllOfferTypes] = useState(false);
+  /*
+   * THE "ALL" PREVIEW WAS HERE — one tab that drew every offer block at once with
+   * the off-type ones ghosted, so a designer could see the whole stack. It made
+   * sense when a template carried a saved block per offer type; the blocks are
+   * gone, so it showed a pile of overlapping plates nobody was going to ship and
+   * cost the action bar its widest control. `renderDoc`'s `dimOffType` option is
+   * kept (and tested) so the view can come back without re-plumbing the renderer.
+   */
   const [editScope, setEditScope] = useState<EditScope>('all');
   useEffect(() => {
     const stored = window.localStorage.getItem(EDIT_SCOPE_KEY);
@@ -1336,8 +1372,8 @@ export default function AdBuilderPage() {
   );
 
   const html = useMemo(
-    () => renderDoc(doc, canvasData, size, { preview: true, dimOffType: showAllOfferTypes }),
-    [doc, canvasData, size, showAllOfferTypes],
+    () => renderDoc(doc, canvasData, size, { preview: true }),
+    [doc, canvasData, size],
   );
 
   // Patch the canvas iframe's document IN PLACE on every edit instead of swapping
@@ -1571,28 +1607,28 @@ export default function AdBuilderPage() {
    * Elements the canvas is currently showing — the basis for outlines, hit-testing,
    * marquee and drag.
    *
-   * Excludes wrong-offer-type elements unless the All tab is on, matching what the
-   * renderer draws. Without this, previewing one offer type still left the OTHER
-   * types' empty frames outlined on the artboard: the boxes you couldn't see the
-   * content of, but could still click.
+   * Excludes wrong-offer-type elements, matching what the renderer draws. Without
+   * this, previewing one offer type still left the OTHER types' empty frames
+   * outlined on the artboard: the boxes you couldn't see the content of, but could
+   * still click.
    */
   const placed = useMemo(() => {
     return doc.elements
-      .filter((el) => showAllOfferTypes || isElementVisibleFor(el, previewData))
+      .filter((el) => isElementVisibleFor(el, previewData))
       .map((el) => ({ el, box: layout[el.id] }))
       .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box))
       .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0));
-  }, [doc.elements, layout, previewData, showAllOfferTypes]);
+  }, [doc.elements, layout, previewData]);
 
   // Switching to a single offer type can hide what was selected; keep the panel
   // honest by dropping any selection the canvas is no longer showing.
   useEffect(() => {
-    if (showAllOfferTypes || !selectedIds.length) return;
+    if (!selectedIds.length) return;
     const shown = new Set(placed.map((p) => p.el.id));
     const stillThere = selectedIds.filter((id) => shown.has(id));
     if (stillThere.length !== selectedIds.length) setSelectedIds(stillThere);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [placed, showAllOfferTypes]);
+  }, [placed]);
 
   // Panning is disabled on a fresh/empty artboard — there's nothing to pan to,
   // and it kept the onboarding card from feeling anchored. Re-enabled the moment
@@ -4510,10 +4546,12 @@ export default function AdBuilderPage() {
                             toast.error('Save this template first, then you can proof it.');
                             return;
                           }
-                          // `account` so the new tab draws with the same rooftop's
-                          // branding — the account context reads it from the URL.
-                          const q = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
-                          window.open(`/ad-generator/proof/${templateId}${q}`, '_blank', 'noopener');
+                          // OVER THE EDITOR, not a new tab. The sheet's whole use is
+                          // "find the board that is wrong, then go fix it", and a tab
+                          // in the app shell made that a round trip through a sidebar
+                          // and an account switcher. Closing the modal puts the
+                          // designer back on the board they were on, still selected.
+                          setProofOpen(true);
                           setSettingsOpen(false);
                         }}
                         title="Every offer type on every board, with its compliance check"
@@ -4950,73 +4988,27 @@ export default function AdBuilderPage() {
                 switcher (flips which offer block shows + how the computed offer
                 text reads, without a field panel). */}
             <div className="mr-auto flex items-center gap-2">
-              {doc.make && compliance && compliance.length > 0 && (
-                <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} onInsert={insertComplianceField} />
+              {/* The design check, on every board, live. Leftmost because a blocking
+                  fault outranks everything else on this bar. */}
+              <DesignCheckChip
+                faults={shownFaults}
+                sizes={doc.sizes}
+                onGoTo={(elementId, sizeId) => {
+                  if (sizeId) setSizeId(sizeId);
+                  setSelectedIds(elementId ? [elementId] : []);
+                }}
+                onOpenProof={templateId ? () => setProofOpen(true) : undefined}
+              />
+              {complianceChipShown && (
+                <ComplianceChip make={doc.make!} compliance={compliance!} missing={complianceMissing} onInsert={insertComplianceField} />
               )}
               {usesOffer && usedOfferTypes.length > 0 && (
-                /* PER OFFER, not one switch for the board.
-                   A dual's realistic content is a MIX — offer 1 a lease, offer 2
-                   an APR — so a single control that forced both to the same type
-                   made the preview less truthful, not more. One row per offer
-                   previews the combination that will actually run, and still lets
-                   either plate be flipped to check a type on its own. */
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Preview</span>
-                  {/* All is GLOBAL: it is about which blocks are drawn, not which
-                      offer's data is showing, so it stays one control. */}
-                  <button
-                    type="button"
-                    onClick={() => setShowAllOfferTypes(true)}
-                    title="Show every offer block at once — off-type blocks are ghosted"
-                    aria-pressed={showAllOfferTypes}
-                    className={`rounded-full border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      showAllOfferTypes
-                        ? 'bg-[var(--muted)] text-[var(--foreground)]'
-                        : 'bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    All
-                  </button>
-                  <div className="flex flex-col gap-0.5">
-                    {offerTypeKeys.map((key, i) => (
-                      <div key={key} className="flex items-center gap-1">
-                        {offerTypeKeys.length > 1 && (
-                          <span className="w-3 text-right text-[10px] font-semibold tabular-nums text-[var(--muted-foreground)]">
-                            {i + 1}
-                          </span>
-                        )}
-                        <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
-                          {usedOfferTypes.map((t) => {
-                            const color = offerTypeAccent(t.value);
-                            const active =
-                              !showAllOfferTypes && String(previewData[key] ?? 'lease') === t.value;
-                            const which =
-                              offerTypeKeys.length > 1 ? `offer ${i + 1}` : 'this offer';
-                            return (
-                              <button
-                                key={t.value}
-                                type="button"
-                                onClick={() => {
-                                  setShowAllOfferTypes(false);
-                                  writeFieldValue(key, t.value);
-                                }}
-                                title={`Preview ${which} as ${t.label}`}
-                                aria-pressed={active}
-                                className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                                  active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                                }`}
-                                style={active ? { backgroundColor: `${color}1f`, color } : undefined}
-                              >
-                                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
-                                {offerTypeShort(t.value)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <PreviewTypeChip
+                  offerKeys={offerTypeKeys}
+                  types={usedOfferTypes}
+                  valueFor={(key) => String(previewData[key] ?? 'lease')}
+                  onPick={writeFieldValue}
+                />
               )}
 
               {/* Where an edit lands. Only meaningful with more than one board. */}
@@ -5391,7 +5383,6 @@ export default function AdBuilderPage() {
                       key={s.id}
                       doc={doc}
                       previewData={canvasData}
-                      dimOffType={showAllOfferTypes}
                       size={s}
                       scale={scale}
                       order={i}
@@ -5835,6 +5826,19 @@ export default function AdBuilderPage() {
           onSaved={setSharedAccountKeys}
         />
       )}
+      {proofOpen && templateId && (
+        <ProofSheetModal
+          templateId={templateId}
+          templateName={templateName}
+          onClose={() => setProofOpen(false)}
+          onOpenInTab={() => {
+            // `account` so the new tab draws with the same rooftop's branding —
+            // the account context reads it from the URL.
+            const q = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
+            window.open(`/ad-generator/proof/${templateId}${q}`, '_blank', 'noopener');
+          }}
+        />
+      )}
       {cropModal && (
         <CropEditorModal
           file={{ url: cropModal.url, name: cropModal.name }}
@@ -5955,6 +5959,325 @@ export default function AdBuilderPage() {
           </div>,
           document.body,
         )}
+    </div>
+  );
+}
+
+/**
+ * WHICH OFFER TYPE THE CANVAS IS PREVIEWING — a dropdown, not a row of pills.
+ *
+ * PER OFFER, not one switch for the board. A dual's realistic content is a MIX —
+ * offer 1 a lease, offer 2 an APR — so a single control that forced both to the
+ * same type made the preview less truthful, not more. The menu has a section per
+ * offer, and each can be flipped on its own to check a type in isolation.
+ *
+ * It was five pills in a row (six with "All"), which was the widest thing on the
+ * action bar and pushed the checks and the edit-scope switch off the end on a
+ * laptop. Collapsed: the button says what is showing, the menu says what else is
+ * available, and a template with two offers no longer stacks two rows of pills.
+ */
+function PreviewTypeChip({
+  offerKeys,
+  types,
+  valueFor,
+  onPick,
+}: {
+  /** `offerType`, `o2_offerType` — one per offer the doc carries. */
+  offerKeys: string[];
+  types: { value: string; label: string }[];
+  valueFor: (key: string) => string;
+  onPick: (key: string, value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+  const dual = offerKeys.length > 1;
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Which offer type the canvas is drawing. It changes the preview, not the template."
+        className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+      >
+        <span>Preview</span>
+        {/* The current combination, in each type's own color — so the button says
+            what is on screen without opening it. */}
+        {offerKeys.map((key, i) => {
+          const v = valueFor(key);
+          return (
+            <span key={key} className="inline-flex items-center gap-1">
+              {i > 0 && <span className="text-[var(--muted-foreground)]/50">·</span>}
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: offerTypeAccent(v) }}
+              />
+              <span style={{ color: offerTypeAccent(v) }}>{offerTypeShort(v)}</span>
+            </span>
+          );
+        })}
+        <ChevronDownIcon className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-[95] mt-1 w-56 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-2 shadow-2xl backdrop-blur-2xl">
+          <p className="px-1.5 pb-1.5 text-[10px] leading-snug text-[var(--muted-foreground)]">
+            Draws the canvas as this offer type. It changes what you see, not what the template
+            offers.
+          </p>
+          {offerKeys.map((key, i) => (
+            <div key={key} className={i > 0 ? 'mt-1.5 border-t border-[var(--border)] pt-1.5' : ''}>
+              {dual && (
+                <p className="px-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Offer {i + 1}
+                </p>
+              )}
+              {types.map((t) => {
+                const color = offerTypeAccent(t.value);
+                const active = valueFor(key) === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => { onPick(key, t.value); setOpen(false); }}
+                    aria-pressed={active}
+                    className={`flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left text-[11px] font-medium transition-colors ${
+                      active ? '' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+                    }`}
+                    style={active ? { backgroundColor: `${color}1f`, color } : undefined}
+                  >
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                    <span className="flex-1">{t.label}</span>
+                    {active && <CheckIcon className="h-3 w-3 shrink-0" strokeWidth={2.5} />}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ONE FAULT, one row, however many boards it lands on.
+ *
+ * `auditTemplate` collapses per board before this ever sees it, so the boards are
+ * chips on the row rather than a row each — and each chip carries its own
+ * measurement, because a layer 3px tall on the rectangle and 6px on the banner is
+ * one fault with two distances to move. The chips are BUTTONS: clicking one shows
+ * that board and selects the layer at fault, which is the whole reason this lives
+ * in the builder instead of only on the proof sheet.
+ */
+function DesignFaultRow({
+  fault,
+  sizes,
+  onGoTo,
+}: {
+  fault: AuditFinding;
+  sizes: AdSize[];
+  onGoTo: (elementId: string | undefined, sizeId?: string) => void;
+}) {
+  const err = fault.severity === 'error';
+  // Every board, and nothing per-board to add: say so rather than printing the
+  // same chip twenty-two times.
+  const everyBoard = fault.sizes.length > 1 && fault.sizes.length === sizes.length && !fault.sizeDetail;
+  return (
+    <li className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 px-2 py-1.5 text-[11px] leading-snug">
+      <span className={err ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}>
+        {fault.message}
+      </span>
+      {fault.offerTypes.length > 0 && (
+        <span className="ml-1 inline-flex flex-wrap items-center gap-1">
+          {fault.offerTypes.map((t) => (
+            <span
+              key={t}
+              className="rounded-full border px-1.5 py-px text-[9px] font-medium leading-tight"
+              style={offerTypePill(t)}
+            >
+              {offerTypeShort(t)}
+            </span>
+          ))}
+        </span>
+      )}
+      {fault.fix && <span className="mt-0.5 block text-[10px] text-[var(--muted-foreground)]">{fault.fix}</span>}
+      {fault.sizes.length > 0 && (
+        <span className="mt-1 flex flex-wrap items-center gap-1">
+          {everyBoard ? (
+            <span className="rounded border border-[var(--border)] px-1 py-px text-[9px] leading-tight text-[var(--muted-foreground)]">
+              every board ({sizes.length})
+            </span>
+          ) : (
+            fault.sizes.map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => onGoTo(fault.elementId, id)}
+                title={`Show this board${fault.elementId ? ' and select the layer' : ''}`}
+                className="rounded border border-[var(--border)] px-1 py-px font-mono text-[9px] leading-tight text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                {sizes.find((s) => s.id === id)?.label.replace(/\s*\(.*\)$/, '') ?? id}
+                {fault.sizeDetail?.[id] && (
+                  <span className={`ml-1 font-sans font-medium ${err ? 'text-red-500' : 'text-amber-500'}`}>
+                    {fault.sizeDetail[id]}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </span>
+      )}
+      {/* A fault about the whole design has no board to jump to, but it still has
+          a layer — the disclaimer nobody placed, the text box with no room. */}
+      {fault.sizes.length === 0 && fault.elementId && (
+        <button
+          type="button"
+          onClick={() => onGoTo(fault.elementId)}
+          className="mt-1 block text-[10px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80"
+        >
+          Select the layer
+        </button>
+      )}
+    </li>
+  );
+}
+
+/**
+ * THE DESIGN CHECK CHIP — what is wrong with this template, across every board,
+ * while it is still being drawn.
+ *
+ * The proof sheet answers the same question better (it draws all twenty ads), but
+ * it is a new tab on a saved row and a designer reaches it once, at the end. These
+ * checks are arithmetic over the layouts, so they can be live: the count moves as
+ * boxes move, and the board that is wrong is one click away.
+ *
+ * Blocking and warnings are separate groups for the same reason as on the sheet:
+ * one is "this cannot ship", the other is "look at this when you can", and a single
+ * undifferentiated list makes the reader do that sorting.
+ */
+function DesignCheckChip({
+  faults,
+  sizes,
+  onGoTo,
+  onOpenProof,
+}: {
+  faults: AuditFinding[];
+  sizes: AdSize[];
+  onGoTo: (elementId: string | undefined, sizeId?: string) => void;
+  /** The proof sheet — these checks are arithmetic; that one draws the ads. */
+  onOpenProof?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+  const blocking = faults.filter((f) => f.severity === 'error');
+  const warnings = faults.filter((f) => f.severity !== 'error');
+  const ok = faults.length === 0;
+  const tone = blocking.length
+    ? 'text-red-600 hover:bg-red-500/10 dark:text-red-400'
+    : warnings.length
+      ? 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-400'
+      : 'text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400';
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Design check — the same checks the proof sheet runs, on every board"
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${tone}`}
+      >
+        {ok ? (
+          <CheckIcon className="h-4 w-4" strokeWidth={2.5} />
+        ) : blocking.length ? (
+          <XMarkIcon className="h-4 w-4" strokeWidth={2.5} />
+        ) : (
+          <ExclamationTriangleIcon className="h-4 w-4" />
+        )}
+        <span>
+          {ok
+            ? 'Design checks pass'
+            : [
+                blocking.length ? `${blocking.length} blocking` : '',
+                warnings.length ? `${warnings.length} to look at` : '',
+              ]
+                .filter(Boolean)
+                .join(', ')}
+        </span>
+        <ChevronDownIcon className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-[95] mt-1 flex max-h-[70vh] w-[26rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+          <div className="border-b border-[var(--border)] p-3">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-semibold text-[var(--foreground)]">Design check</span>
+              <Tooltip label="Faults in the DESIGN, measured on every board this template defines — not just the one on screen. An error means impossible (nothing under 10px can be read); a warning is worth a look. The proof sheet runs the same checks against the saved template, with all the ads drawn.">
+                <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+              </Tooltip>
+              <span className="ml-auto text-[10px] font-medium text-[var(--muted-foreground)]">
+                {sizes.length} board{sizes.length === 1 ? '' : 's'} checked
+              </span>
+            </div>
+            {ok && (
+              <p className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">
+                Nothing structural is wrong: the disclaimer is placed and legible everywhere, the
+                dealer is identifiable, and no layer is off the edge or too small to read.
+              </p>
+            )}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {blocking.length > 0 && (
+              <>
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">
+                  Blocking — no ad can ship
+                </p>
+                <ul className="mb-3 space-y-1.5">
+                  {blocking.map((f, n) => (
+                    <DesignFaultRow key={`${f.check}-${f.elementId ?? n}-${f.message}`} fault={f} sizes={sizes} onGoTo={onGoTo} />
+                  ))}
+                </ul>
+              </>
+            )}
+            {warnings.length > 0 && (
+              <>
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                  Worth fixing — nothing is blocked
+                </p>
+                <ul className="space-y-1.5">
+                  {warnings.map((f, n) => (
+                    <DesignFaultRow key={`${f.check}-${f.elementId ?? n}-${f.message}`} fault={f} sizes={sizes} onGoTo={onGoTo} />
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+          {/* The second half of the answer. These checks prove what is IMPOSSIBLE
+              from the numbers; the sheet draws all twenty ads, which is the only
+              way to see the plate that overflows or the photo that fights the
+              headline. A designer who has just read a fault is one click from it. */}
+          {onOpenProof && (
+            <div className="border-t border-[var(--border)] p-3">
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onOpenProof(); }}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                <TableCellsIcon className="h-3.5 w-3.5" />
+                Open the proof sheet
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -8688,14 +9011,12 @@ function PreviewBoard({
   doc,
   previewData,
   size,
-  dimOffType,
   scale,
   order,
   onActivate,
 }: {
   doc: TemplateDoc;
   previewData: AdData;
-  dimOffType: boolean;
   size: AdSize;
   scale: number;
   order: number;
@@ -8704,8 +9025,8 @@ function PreviewBoard({
   // Render this size's HTML once per (doc, previewData, size) — it feeds an
   // <iframe srcDoc>, so recomputing on every zoom tick would reload the iframe.
   const html = useMemo(
-    () => renderDoc(doc, previewData, size, { preview: true, dimOffType }),
-    [doc, previewData, size, dimOffType],
+    () => renderDoc(doc, previewData, size, { preview: true }),
+    [doc, previewData, size],
   );
   return (
     <div className="flex flex-col items-center gap-1.5" style={{ order }}>

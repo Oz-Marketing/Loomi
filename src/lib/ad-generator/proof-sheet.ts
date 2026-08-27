@@ -81,6 +81,12 @@ export interface ProofTemplateFault {
   offerTypes: string[];
   /** Boards it was observed on. Empty means every board. */
   sizes: string[];
+  /**
+   * The measurement per board — `{ 'ksl-320x50': '2px' }`. A fault collapsed across
+   * boards fails by a different amount on each, and the amount is what says how far
+   * the layer has to move. Shown on the board chip rather than in the sentence.
+   */
+  sizeDetail?: Record<string, string>;
   /** What to do about it, where the fault itself doesn't say. */
   fix?: string;
   /**
@@ -388,6 +394,7 @@ function auditAsFaults(findings: AuditFinding[]): ProofTemplateFault[] {
     severity: f.severity,
     offerTypes: f.offerTypes,
     sizes: f.sizes,
+    sizeDetail: f.sizeDetail,
     fix: f.fix,
     source: 'audit' as const,
   }));

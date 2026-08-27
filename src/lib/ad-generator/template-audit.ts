@@ -93,6 +93,15 @@ export interface AuditFinding {
   fix?: string;
   /** Boards it was observed on. Empty means the whole design. */
   sizes: string[];
+  /**
+   * The measurement behind the finding, per board — `{ 'ksl-320x50': '2px' }`.
+   *
+   * A collapsed finding covers boards that fail for the same REASON but not by the
+   * same amount, and the amount is what a designer needs in order to know how much
+   * to move. It rides alongside the board list rather than in the sentence, which
+   * is what made seventeen near-identical sentences out of one fault.
+   */
+  sizeDetail?: Record<string, string>;
   /** Offer types it applies to. Empty means every type. */
   offerTypes: string[];
   /** The element at fault, where there is one. */
@@ -210,6 +219,18 @@ function offerTypePhrase(value: string): string {
   return `${/^[aeiou]/i.test(name) ? 'An' : 'A'} ${name}`;
 }
 
+/**
+ * "one board", "17 boards" — how many boards a collapsed finding covers.
+ *
+ * The boards themselves are named by the `sizes` list the finding carries, so the
+ * sentence states the SHAPE of the fault and the chips beside it say where. Naming
+ * them in the prose instead is what produced seventeen consecutive lines reading
+ * "the disclaimer is set to 7px" with only the board name different.
+ */
+function boardCount(n: number): string {
+  return n === 1 ? 'one board' : `${n} boards`;
+}
+
 /** Is a text element expected to carry words a reader has to read? */
 function isReadableText(el: DocElement): boolean {
   return el.type === 'text' || el.type === 'offer';
@@ -261,20 +282,30 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
         severity: 'error',
         sizes: missingOn,
         elementId: disclaimers[0].id,
-        message: `The disclaimer is not on ${missingOn.length === 1 ? 'one board' : `${missingOn.length} boards`}.`,
+        message: `The disclaimer is not on ${boardCount(missingOn.length)}.`,
         fix: 'Place it on every size. A board too small to carry a legible disclaimer is a board this template should not offer.',
       });
     }
-    for (const i of illegible) {
+    // Grouped by CAUSE, not by board. A twenty-two-board template failed the same
+    // way on every one of them, so the sheet printed twenty-two lines that differed
+    // only in a board name and a pixel count — and the reader had to notice for
+    // themselves that they were one fault. The two causes stay apart because their
+    // fixes differ: pinned type is changed on the layer, a short box is given room.
+    for (const declared of [true, false]) {
+      const on = illegible.filter((i) => i.declared === declared);
+      if (!on.length) continue;
       add({
         check: 'disclaimer_illegible',
         severity: 'error',
-        sizes: [i.sizeId],
+        sizes: on.map((i) => i.sizeId),
+        sizeDetail: Object.fromEntries(on.map((i) => [i.sizeId, `${Math.round(i.px)}px`])),
         elementId: disclaimers[0].id,
-        message: i.declared
-          ? `The disclaimer is set to ${Math.round(i.px)}px — under the ${LEGIBILITY_FLOOR_PX}px nobody can read.`
-          : `The disclaimer has ${Math.round(i.px)}px of height to render in, so no line of it can clear ${LEGIBILITY_FLOOR_PX}px.`,
-        fix: 'Give it more height, or drop this board from the template.',
+        message: declared
+          ? `The disclaimer is pinned under the ${LEGIBILITY_FLOOR_PX}px nobody can read on ${boardCount(on.length)}.`
+          : `The disclaimer has too little height to clear ${LEGIBILITY_FLOOR_PX}px on ${boardCount(on.length)}.`,
+        fix: declared
+          ? `Raise the type above ${LEGIBILITY_FLOOR_PX}px, or drop ${on.length === 1 ? 'that board' : 'those boards'} from the template.`
+          : `Give it more height, or drop ${on.length === 1 ? 'that board' : 'those boards'} from the template.`,
       });
     }
     if (belowTarget.length) {
@@ -282,8 +313,11 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
         check: 'disclaimer_illegible',
         severity: 'warning',
         sizes: belowTarget.map((b) => b.sizeId),
+        sizeDetail: Object.fromEntries(
+          belowTarget.map((b) => [b.sizeId, `${Math.round(b.px)}px where ${b.target}px fits`]),
+        ),
         elementId: disclaimers[0].id,
-        message: `The disclaimer is smaller than this board can carry on ${belowTarget.length === 1 ? 'one board' : `${belowTarget.length} boards`} (${belowTarget.map((b) => `${Math.round(b.px)}px where ${b.target}px fits`).join(', ')}).`,
+        message: `The disclaimer is smaller than the board can carry on ${boardCount(belowTarget.length)}.`,
         fix: "A disclaimer wants about 2.2% of the board's short edge — above every manufacturer minimum in the library, and legible on a phone at arm's length.",
       });
     }
@@ -328,6 +362,16 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
   }
 
   // ── 4. Geometry ──
+  // Every board is measured, and then the findings are collapsed by ELEMENT before
+  // anything is reported. Geometry travels: a layer nudged off the edge is off the
+  // edge on all twenty-two boards, and one finding per board made five faults read
+  // as thirty-five. The boards ride along in `sizes`, the measurement per board in
+  // `sizeDetail`, and the sentence is stated once.
+  const offBoard = new Map<string, { el: DocElement; on: string[] }>();
+  const illegibleText = new Map<
+    string,
+    { el: DocElement; declared: boolean; on: string[]; detail: Record<string, string> }
+  >();
   for (const size of sizes) {
     const layout = doc.layouts?.[size.id] ?? {};
     for (const el of doc.elements) {
@@ -354,14 +398,9 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
           overBottom / Math.max(box.h, 0.001),
         );
         if (overhang > 0.2) {
-          add({
-            check: 'element_off_board',
-            severity: 'warning',
-            sizes: [size.id],
-            elementId: el.id,
-            message: `${el.name || el.id} hangs off the edge of the ${size.label} board.`,
-            fix: 'Move it back inside, or mark it as bleed if the overhang is deliberate.',
-          });
+          const seen = offBoard.get(el.id) ?? { el, on: [] };
+          seen.on.push(size.id);
+          offBoard.set(el.id, seen);
         }
       }
 
@@ -372,18 +411,40 @@ export function auditTemplate({ doc, oemRule, sizeIds }: AuditInput): AuditFindi
       if (el.role === 'disclaimer' || elementFieldRefs(el).includes('disclaimer')) continue; // said above
       const { px, declared } = lineCeilingPx(box, size);
       if (px < LEGIBILITY_FLOOR_PX) {
-        add({
-          check: 'text_illegible',
-          severity: 'error',
-          sizes: [size.id],
-          elementId: el.id,
-          message: declared
-            ? `${el.name || el.id} is set to ${Math.round(px)}px on the ${size.label} board.`
-            : `${el.name || el.id} has ${Math.round(px)}px of height on the ${size.label} board — too little for a readable line.`,
-          fix: `Nothing under ${LEGIBILITY_FLOOR_PX}px can be read. Give it height, or shed it on this board rather than shipping it invisible.`,
-        });
+        // Keyed on the cause as well as the layer: the same box can be pinned too
+        // small on one board and simply too short on another, and those are two
+        // different things to go and do.
+        const key = JSON.stringify([el.id, declared]);
+        const seen = illegibleText.get(key) ?? { el, declared, on: [], detail: {} };
+        seen.on.push(size.id);
+        seen.detail[size.id] = `${Math.round(px)}px`;
+        illegibleText.set(key, seen);
       }
     }
+  }
+
+  for (const { el, on } of offBoard.values()) {
+    add({
+      check: 'element_off_board',
+      severity: 'warning',
+      sizes: on,
+      elementId: el.id,
+      message: `${el.name || el.id} hangs off the edge of ${boardCount(on.length)}.`,
+      fix: 'Move it back inside, or mark it as bleed if the overhang is deliberate.',
+    });
+  }
+  for (const { el, declared, on, detail } of illegibleText.values()) {
+    add({
+      check: 'text_illegible',
+      severity: 'error',
+      sizes: on,
+      sizeDetail: detail,
+      elementId: el.id,
+      message: declared
+        ? `${el.name || el.id} is pinned under ${LEGIBILITY_FLOOR_PX}px on ${boardCount(on.length)}.`
+        : `${el.name || el.id} has too little height for a readable line on ${boardCount(on.length)}.`,
+      fix: `Nothing under ${LEGIBILITY_FLOOR_PX}px can be read. Give it height, or shed it on ${on.length === 1 ? 'that board' : 'those boards'} rather than shipping it invisible.`,
+    });
   }
 
   return findings;

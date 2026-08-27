@@ -11,7 +11,8 @@ import {
   type AiAssistOpenDetail,
 } from '@/lib/ui-events';
 import { pageHint } from '@/lib/ai/specialists/page-hints';
-import { agentIdentity, isSystemAgent, SYSTEM_AGENT } from '@/lib/ai/specialists/identity';
+import { isSystemAgent, SYSTEM_AGENT } from '@/lib/ai/specialists/identity';
+import { useAgentIdentity } from '@/hooks/use-agent-identity';
 import { useAiPanel, AI_PANEL_WIDTH } from '@/contexts/ai-panel-context';
 import { RainbowSparklesIcon } from './icons/rainbow-sparkles';
 import { AgentAvatar } from './agent-avatar';
@@ -125,7 +126,12 @@ export function AiBubble() {
 
   // Who the panel is FOR. Loomi AI unless a specialist owns this page — the
   // generalist keeps the sparkle, a specialist takes the slot with its own face.
-  const identity = hint ? agentIdentity(hint.specialist) : SYSTEM_AGENT;
+  //
+  // Resolved through the hook rather than read straight from the registry, so a
+  // specialist someone renamed or re-faced in settings shows up that way here
+  // too — otherwise the panel would keep calling her by a name nobody uses.
+  const specialistIdentity = useAgentIdentity(hint ? hint.specialist : 'system');
+  const identity = hint ? specialistIdentity : SYSTEM_AGENT;
   const isSystem = isSystemAgent(identity);
   // A specialist's page suggests its own questions; otherwise the platform ones.
   const presets = hint ? hint.examples.slice(0, 3) : PRESETS;
@@ -1287,7 +1293,10 @@ export function AiBubble() {
         {isSystem ? (
           <SparklesIcon className="w-5 h-5" />
         ) : (
-          <AgentAvatar identity={identity} size="md" />
+          // Fills the bubble with no ring of its own: the button is already a
+          // circle with its own gradient, so the avatar's disc would draw a
+          // second border just inside the first.
+          <AgentAvatar identity={identity} fill bare />
         )}
       </button>
       )}

@@ -8,6 +8,7 @@ import {
   pendingRequiredFields,
   foldRequiredFields,
   mergeMustInclude,
+  findSupersededPhraseRules,
 } from './coop-review';
 import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
 
@@ -304,5 +305,69 @@ describe('mergeMustInclude — one list, enforcement derived', () => {
       { id: 'b', kind: 'banned_phrase', severity: 'error', description: 'no', phrase: 'x', reviewState: 'proposed' } as CoopRule,
     ]);
     expect(groups.map((g) => g.kind)).toEqual(['banned_phrase']);
+  });
+});
+
+describe('findSupersededPhraseRules', () => {
+  const single = (id: string, phrase: string, reviewState: CoopRule['reviewState'] = 'proposed'): CoopRule =>
+    ({ id, kind: 'banned_phrase', severity: 'error', description: `no ${phrase}`, phrase, reviewState }) as CoopRule;
+  const list = (id: string, phrases: string[], reviewState: CoopRule['reviewState']): CoopRule =>
+    ({ id, kind: 'banned_phrase', severity: 'error', description: 'list', phrases, reviewState }) as CoopRule;
+  const pack = (rules: CoopRule[]): CoopRulePack => ({ make: 'Subaru', version: '1', rules });
+
+  it('finds a single-term proposal an ACCEPTED list already covers', () => {
+    const r = findSupersededPhraseRules(
+      pack([list('L', ['invoice', 'blowout'], 'accepted'), single('s1', 'blowout')]),
+    );
+    expect(r).toEqual([{ ruleId: 's1', phrase: 'blowout', coveredBy: 'L', coverState: 'accepted' }]);
+  });
+
+  it('leaves a term no list covers alone', () => {
+    // It is the only thing covering that term; declining it drops the requirement.
+    const r = findSupersededPhraseRules(pack([list('L', ['invoice'], 'accepted'), single('s1', 'clearance')]));
+    expect(r).toEqual([]);
+  });
+
+  it('ignores a PROPOSED list by default', () => {
+    // A proposed list could itself be declined, leaving the terms covered by nothing.
+    const p = pack([list('L', ['blowout'], 'proposed'), single('s1', 'blowout')]);
+    expect(findSupersededPhraseRules(p)).toEqual([]);
+    expect(findSupersededPhraseRules(p, { includeProposedLists: true })).toHaveLength(1);
+  });
+
+  it('never touches a hand-written rule', () => {
+    const hand = { ...single('h', 'blowout'), reviewState: undefined } as CoopRule;
+    expect(findSupersededPhraseRules(pack([list('L', ['blowout'], 'accepted'), hand]))).toEqual([]);
+  });
+
+  it('never touches an already-decided proposal', () => {
+    const done = single('s1', 'blowout', 'accepted');
+    const gone = single('s2', 'invoice', 'rejected');
+    const r = findSupersededPhraseRules(pack([list('L', ['blowout', 'invoice'], 'accepted'), done, gone]));
+    expect(r).toEqual([]);
+  });
+
+  it('matches across punctuation and case', () => {
+    const r = findSupersededPhraseRules(
+      pack([list('L', ['“Employee Pricing”'], 'accepted'), single('s1', 'employee pricing')]),
+    );
+    expect(r).toHaveLength(1);
+  });
+
+  it('prefers an accepted cover over a proposed one when both exist', () => {
+    const r = findSupersededPhraseRules(
+      pack([
+        list('P', ['blowout'], 'proposed'),
+        list('A', ['blowout'], 'accepted'),
+        single('s1', 'blowout'),
+      ]),
+      { includeProposedLists: true },
+    );
+    expect(r[0].coveredBy).toBe('A');
+    expect(r[0].coverState).toBe('accepted');
+  });
+
+  it('does not report a list rule as superseding itself', () => {
+    expect(findSupersededPhraseRules(pack([list('L', ['blowout'], 'accepted')]))).toEqual([]);
   });
 });

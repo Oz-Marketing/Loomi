@@ -40,9 +40,8 @@ import { TemplateFilterRail } from '@/components/templates/template-filter-rail'
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
-import { OFFER_KINDS } from '@/lib/ad-generator/offer-kinds';
 import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
-import { templateInIndustry } from '@/lib/ad-generator/industry';
+import { kindInIndustry, offerKindsForIndustry, templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 type DocTemplate = {
@@ -110,9 +109,17 @@ export function AdTemplatesTab({
       (data?.templates ?? [])
         .filter((t) => t.doc)
         .filter((t) => (accountKey ? t.accountKey === accountKey : true))
-        .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category)),
+        .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category))
+        // …and to the offer kinds this industry can use at all. A vehicle-offer
+        // template asks a marketing agency for a lease term and a VIN, so it is
+        // withheld the same way an Automotive-TAGGED template already was.
+        .filter((t) => kindInIndustry(t.doc!, accountData?.category)),
     [data, accountKey, accountData?.category],
   );
+  // The starting points the New-template modal offers. When the account can
+  // only use one kind it isn't a choice, so the modal drops the question and
+  // uses that kind's sole-choice wording.
+  const startingKinds = useMemo(() => offerKindsForIndustry(accountData?.category), [accountData?.category]);
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
   // How often each template is actually used, for the card's usage bar and the
   // Analytics deep-link. Its own request so a slow/absent count never delays the
@@ -655,7 +662,11 @@ export function AdTemplatesTab({
             <div className="mb-4 flex items-start justify-between gap-2">
               <div>
                 <h2 className="text-sm font-bold text-[var(--foreground)]">New template</h2>
-                <p className="text-xs text-[var(--muted-foreground)]">Pick what kind of ad it is — that sets the questions the form asks — or duplicate a published template.</p>
+                <p className="text-xs text-[var(--muted-foreground)]">
+                  {startingKinds.length > 1
+                    ? 'Pick what kind of ad it is — that sets the questions the form asks — or duplicate a published template.'
+                    : 'Start from a blank canvas, or duplicate a published template.'}
+                </p>
               </div>
               <button onClick={() => setNewOpen(false)} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
                 <XMarkIcon className="h-5 w-5" />
@@ -664,7 +675,11 @@ export function AdTemplatesTab({
 
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="mb-4 space-y-2">
-                {OFFER_KINDS.map((k) => (
+                {startingKinds.map((k) => {
+                  // Sole-choice wording when there's nothing to tell it apart
+                  // from — see `OfferKind.soleChoiceCopy`.
+                  const copy = startingKinds.length === 1 ? k.soleChoiceCopy ?? k : k;
+                  return (
                   <button
                     key={k.id}
                     onClick={() => startBlank(k.id)}
@@ -675,11 +690,12 @@ export function AdTemplatesTab({
                       <PlusIcon className="h-5 w-5" />
                     </span>
                     <span>
-                      <span className="block text-sm font-semibold text-[var(--foreground)]">Blank {k.label.toLowerCase()}</span>
-                      <span className="block text-[11px] text-[var(--muted-foreground)]">{k.description}</span>
+                      <span className="block text-sm font-semibold text-[var(--foreground)]">Blank {copy.label.toLowerCase()}</span>
+                      <span className="block text-[11px] text-[var(--muted-foreground)]">{copy.description}</span>
                     </span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
 
               {publishedTemplates.length > 0 && (

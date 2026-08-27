@@ -111,6 +111,20 @@ export interface OfferKind {
   /** One line, shown where a designer chooses the kind. */
   description: string;
   /**
+   * Label + description for when this kind is the ONLY one on offer.
+   *
+   * Kind copy is written for the PICKER, where each line's job is to tell this
+   * kind apart from the others — so `custom` is named for what it is not (a
+   * vehicle offer) and its examples are the fixed-ops ones a dealer would look
+   * for. Neither reads right for an account that never sees the vehicle kind:
+   * a marketing agency has no "custom offer" to distinguish from anything, and
+   * naming parts and service tells them the tool is not for them.
+   *
+   * Only kinds that can be an account's sole choice need this — see
+   * `offerKindsForIndustry`. Omitted ⇒ `label` / `description` are used.
+   */
+  soleChoiceCopy?: { label: string; description: string };
+  /**
    * Compact name for the badge on an ad / template card — "Vehicle", not
    * "Vehicle offer". Rendered uppercase at 9px, so it has to survive being read
    * at a glance in a grid.
@@ -220,6 +234,12 @@ const customKind: OfferKind = {
   shortLabel: 'Custom',
   tone: 'amber',
   description: 'Service, parts, hiring, events — a price, a percentage, dollars off, or no offer at all.',
+  // What a non-vehicle account sees: this is simply "an ad" to them, and the
+  // fixed-ops examples belong to the dealership reading of the same kind.
+  soleChoiceCopy: {
+    label: 'Ad',
+    description: 'A headline, an image, and an optional offer — a price, a percentage, dollars off, or no offer at all.',
+  },
   fields: customOfferFields,
   defaults: customOfferDefaults,
   offerTypes: CUSTOM_OFFER_TYPE_SPECS,

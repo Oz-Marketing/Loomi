@@ -29,6 +29,12 @@ export interface SpecialistDefinition {
   key: SpecialistKey;
   /** Who may talk to this specialist at all. Checked before the loop starts. */
   permission: Permission;
+  /**
+   * Who may EDIT its brief and notes — a different, narrower question than who may
+   * ask it something. The team that owns the realm owns the specialist: co-op is
+   * managed by the people who manage co-op, not by whoever can open Agency Settings.
+   */
+  managePermission: Permission;
   tools: Anthropic.Tool[];
   execute(
     toolName: string,
@@ -80,6 +86,7 @@ export const SPECIALISTS: Record<SpecialistKey, SpecialistDefinition> = {
     key: 'coop',
     // Reading the guideline library is what the co-op surface already gates on.
     permission: 'studio.adgen.view',
+    managePermission: 'agency.coop.manage',
     tools: COOP_TOOLS,
     execute: executeCoopTool,
     describeToolCall: describeCoopTool,

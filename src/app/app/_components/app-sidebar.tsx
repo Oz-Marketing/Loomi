@@ -56,6 +56,9 @@ type NavItem = {
   matchExact?: boolean;
   /** Active-state prefix when it differs from `href` (e.g. a section root). */
   match?: string;
+  /** Parked — render a disabled "Soon" row that doesn't navigate. The route
+      still resolves if you type the URL, which is how dev works on it. */
+  comingSoon?: boolean;
 };
 
 type NavGroup = {
@@ -69,12 +72,24 @@ type NavEntry = NavItem | NavGroup;
 
 const isGroup = (e: NavEntry): e is NavGroup => 'children' in e;
 
+/**
+ * Project management is parked until later this year — the only live surface on
+ * this rail is Ad Planning & Pacing. The five ticket/budget destinations stay in
+ * the nav as greyed "Soon" rows rather than disappearing, so the shape of what's
+ * coming is still legible, and the New ticket CTA is hidden along with them
+ * (there's nowhere to work a ticket once created).
+ *
+ * Nothing is removed: the routes still render if you type the URL, which is how
+ * they get built. Flip this to `true` to resurface all six together.
+ */
+const PROJECTS_ENABLED = false;
+
 const NAV: NavEntry[] = [
-  { key: 'initiatives', label: 'Initiatives', href: '/projects', icon: RectangleStackIcon, matchExact: true },
-  { key: 'tasks', label: 'Tasks', href: '/projects/tasks', icon: ViewColumnsIcon },
-  { key: 'my-work', label: 'My Work', href: '/projects/my-work', icon: UserCircleIcon },
-  { key: 'calendar', label: 'Calendar', href: '/projects/calendar', icon: CalendarIcon },
-  { key: 'budget', label: 'Budget', href: '/projects/budget', icon: BanknotesIcon },
+  { key: 'initiatives', label: 'Initiatives', href: '/projects', icon: RectangleStackIcon, matchExact: true, comingSoon: !PROJECTS_ENABLED },
+  { key: 'tasks', label: 'Tasks', href: '/projects/tasks', icon: ViewColumnsIcon, comingSoon: !PROJECTS_ENABLED },
+  { key: 'my-work', label: 'My Work', href: '/projects/my-work', icon: UserCircleIcon, comingSoon: !PROJECTS_ENABLED },
+  { key: 'calendar', label: 'Calendar', href: '/projects/calendar', icon: CalendarIcon, comingSoon: !PROJECTS_ENABLED },
+  { key: 'budget', label: 'Budget', href: '/projects/budget', icon: BanknotesIcon, comingSoon: !PROJECTS_ENABLED },
   // Ad Planning & Pacing — Meta and Google kept fully separate (different
   // specialists). Relocated from Studio /tools/*; the proxy rewrites those to
   // /app/tools/* on this host. Account-scoped by the global selector.
@@ -156,8 +171,8 @@ export function AppSidebar() {
         <SettingsNav backHref={`${prefix}/projects`} backLabel="Back to Projects" collapsed={showCollapsed} />
       ) : (
         <>
-          {/* New ticket — primary CTA */}
-          <NewTicketButton collapsed={showCollapsed} prefix={prefix} />
+          {/* New ticket — primary CTA. Hidden while Projects is parked. */}
+          {PROJECTS_ENABLED && <NewTicketButton collapsed={showCollapsed} prefix={prefix} />}
 
           <div className="mt-4 space-y-px">
             {NAV.map((entry) =>
@@ -169,6 +184,8 @@ export function AppSidebar() {
                   pathname={pathname}
                   prefix={prefix}
                 />
+              ) : entry.comingSoon ? (
+                <SoonLeaf key={entry.key} item={entry} collapsed={showCollapsed} />
               ) : (
                 <LeafNav
                   key={entry.key}
@@ -226,6 +243,36 @@ function LeafNav({
     </Link>
   );
   return collapsed ? <SidebarTooltip label={item.label}>{link}</SidebarTooltip> : link;
+}
+
+/**
+ * A parked destination: same row, greyed out, with a "Soon" pill and no link.
+ * Mirrors the Studio rail's `comingSoon` row (`src/components/sidebar.tsx`) so
+ * the two surfaces read identically.
+ */
+function SoonLeaf({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+  const row = (
+    <div
+      title="Coming soon"
+      aria-disabled="true"
+      className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal text-[var(--sidebar-muted-foreground)]/50 cursor-not-allowed select-none`}
+    >
+      <item.icon className="h-5 w-5 opacity-60" />
+      {!collapsed && (
+        <>
+          <span className="flex-1">{item.label}</span>
+          <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[8px] font-semibold uppercase tracking-wider text-[var(--sidebar-muted-foreground)]">
+            Soon
+          </span>
+        </>
+      )}
+    </div>
+  );
+  return collapsed ? (
+    <SidebarTooltip label={`${item.label} — coming soon`}>{row}</SidebarTooltip>
+  ) : (
+    row
+  );
 }
 
 /** A collapsible parent with child links (e.g. Ad Planning & Pacing → Meta/Google). */

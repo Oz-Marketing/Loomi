@@ -26,7 +26,7 @@ One Next.js app serves several host classes (routed by an edge proxy in `src/pro
 
 - **Marketing** (`loomilm.com` apex + `www.`; dev `marketing.localhost:3000`) — the public, unauthenticated marketing site. Currently a single full-screen hero teaser (`src/app/marketing/`). The proxy rewrites the apex to `/marketing`, and the root layout detects the marketing host (`isMarketingHost` → `surface === 'marketing'`) and renders it **bare + server-side** (no app providers), locked to the dark theme — the app's `ThemeProvider` returns `null` until client hydration, so providers-wrapped pages don't server-render (fine for the auth'd app, bad for SEO). SEO is wired up: `metadata`/OpenGraph/Twitter/canonical (`src/app/marketing/layout.tsx` + `src/lib/marketing/seo.ts`), JSON-LD on the page, a host-aware `/sitemap.xml`, and a marketing branch in `/robots.txt`. Sign-in CTAs link to `/login?callbackUrl=<app-origin>` so login lands on the **App** surface (the root admin), not Studio — the login page honors a same-site `callbackUrl` (`resolveSafeCallbackUrl`).
 - **Studio** (`studio.loomilm.com`) — the main marketing workspace: Dashboard, Campaigns, Templates, Audiences, Emails & SMS, Website (Forms + Landing Pages), Flows, Ad Generator, Media.
-- **App** (`app.loomilm.com`) — internal delivery surface: **Projects** (project management) and the **Ad Pacing / Planner** tools.
+- **App** (`app.loomilm.com`) — internal delivery surface. The **Ad Pacing / Planner** tools are the only live destinations; **Projects** (project management) is built but parked — its nav rows render greyed with a "Soon" pill and the New ticket CTA is hidden, until the team takes project management up later in 2026.
 - **Reporting** (`reporting.loomilm.com`) — client-facing analytics dashboards.
 - **Public** — client custom domains and the anonymous routes `/lp/[slug]` (landing pages) and `/f/[slug]` (forms).
 
@@ -87,8 +87,10 @@ The `/templates` page hosts every template kind in tabs — **Email, Forms, Land
 ### Reporting
 Client-facing dashboards on their own subdomain — engagement, contacts, reputation, ads, and account profile views (some rollups in progress).
 
-### Projects (internal delivery management)
-A project-management surface on the App host. **Initiatives** (account-scoped bodies of work) wrap **Tasks** (typed tickets — design, dev, email, ads, video, print, etc.) routed to **Teams** (departments). Views: Initiatives, Tasks (Kanban board + spreadsheet table), My Work, Calendar. Multi-account ticket intake with shared-vs-unique creative fanout, comment threads with mentions, audit trail, assignment/due-soon notifications, and daily digests.
+### Projects (internal delivery management) — parked
+A project-management surface on the App host. **Initiatives** (account-scoped bodies of work) wrap **Tasks** (typed tickets — design, dev, email, ads, video, print, etc.) routed to **Teams** (departments). Views: Initiatives, Tasks (Kanban board + spreadsheet table), My Work, Calendar, plus the Budget hub. Multi-account ticket intake with shared-vs-unique creative fanout, comment threads with mentions, audit trail, assignment/due-soon notifications, and daily digests.
+
+**Not reachable from the UI.** All five destinations render as greyed "Soon" rows in the App rail and the New ticket CTA is hidden (`PROJECTS_ENABLED` in `src/app/app/_components/app-sidebar.tsx`). The routes themselves are untouched and still open by URL, which is how the surface gets finished. Flipping that one constant resurfaces everything together.
 
 ---
 

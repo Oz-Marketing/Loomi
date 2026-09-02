@@ -7,6 +7,14 @@ applied to an account, kept in sync with it, and audited against it.
 Status: **Phase 0 built** (read-only coverage audit, flag-gated). Phases 1–3
 specified, unbuilt. See §7.
 
+**Parked in the UI (2026-09-02).** The Studio rail shows Playbooks greyed with a
+"Soon" pill instead of a link, for every staff role. The server gate
+(`playbooksAllowed`, `src/lib/playbooks/access.ts`) is deliberately unchanged, so
+`/playbooks` still opens by typing the URL wherever the gate already allowed it —
+a developer, or an environment with `ENABLE_PLAYBOOKS` set. That means the nav
+gate and the server gate no longer agree, on purpose; drop `comingSoon` from
+`playbooksNav` in `src/components/sidebar.tsx` to hand the link back.
+
 Rebased onto `main` on 2026-08-16, at which point the audit grew four checks
 covering the ad generator's companion offer email — see §4.4 and §8.
 

@@ -27,7 +27,6 @@ import {
   RectangleStackIcon,
   PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
-import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -106,11 +105,18 @@ const adGeneratorNav: NavItem = {
 // templates (an ad design plus an email shell), so it reads as the next step
 // up from the library rather than a separate tool. Global, like Ad Generator —
 // it spans every account rather than scoping to the active one.
+//
+// Parked: still half-built, so the rail shows it greyed with a "Soon" pill
+// instead of a working link. Nothing is removed — the server gate
+// (`playbooksAllowed`) is untouched, so /playbooks still opens by URL for a
+// developer (or wherever `ENABLE_PLAYBOOKS` is set), which is how it gets
+// finished. Drop `comingSoon` to hand it back to everyone.
 const playbooksNav: NavItem = {
   href: '/playbooks',
   label: 'Playbooks',
   icon: BookOpenIcon,
   absolute: true,
+  comingSoon: true,
 };
 // Media library — re-added below Ad Generator.
 const mediaNav: NavItem = { href: '/media', label: 'Assets', icon: PhotoIcon };
@@ -230,15 +236,17 @@ export function Sidebar() {
     navItems = isClientRole ? subaccountClientNavItems : adminNavItems;
   }
 
-  // Playbooks is flag-gated, with the SAME developer bypass the server gate
-  // uses (`playbooksAllowed` in src/lib/playbooks/access.ts). Gating the nav on
-  // the flag alone let a developer open /playbooks directly while having no
-  // link to it — the two gates have to agree or the bypass is only half real.
+  // Playbooks renders for every staff role, but as a disabled "Soon" row (see
+  // `playbooksNav`) — so the flag and the developer bypass no longer decide
+  // whether the ROW appears, only whether the route opens. That divergence from
+  // `playbooksAllowed` is deliberate while the feature is parked: the link is
+  // gone for everyone, and a developer reaches it by typing the URL. Don't
+  // "fix" the two gates back into agreement without also un-parking the row.
   //
   // Spliced here rather than in the module-level list above, which is built at
   // import time, before any role is known. It sits after Templates, since a
   // playbook bundles the ad design and email template that live there.
-  if (!isClientRole && (PLAYBOOKS_ENABLED || userRole === 'developer')) {
+  if (!isClientRole) {
     const at = navItems.findIndex((e) => !('divider' in e) && e.href === templatesNav.href);
     navItems =
       at === -1

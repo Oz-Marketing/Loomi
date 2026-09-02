@@ -30,13 +30,13 @@ import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
-import { OFFER_KINDS, DEFAULT_OFFER_KIND } from '@/lib/ad-generator/offer-kinds';
+import { DEFAULT_OFFER_KIND } from '@/lib/ad-generator/offer-kinds';
 import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
 import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
 import { SizePicker } from '@/components/ad-generator/size-picker';
-import { templateInIndustry } from '@/lib/ad-generator/industry';
+import { kindInIndustry, offerKindsForIndustry, templateInIndustry } from '@/lib/ad-generator/industry';
 import { templateInSchedule, usableForCustom } from '@/lib/ad-generator/doc-types';
 import {
   facetsForAd,
@@ -183,6 +183,11 @@ export default function AdGeneratorListPage() {
         // better offered than silently withheld.
         const doc = templateDocs[t.id];
         if (!doc) return true;
+        // The template's KIND has to fit the account's industry too. The
+        // `industries` tag above is a filing choice and an untagged template is
+        // global — but a vehicle offer's questions (VIN, lease term, cost per
+        // $1,000) have no answers outside a dealership.
+        if (!kindInIndustry(doc, accountData?.category)) return false;
         // The ad generator builds CUSTOM ads now. A design meant for the
         // automation expects the feed to fill it and would hand a person a form
         // of fields they have no source for.
@@ -1155,6 +1160,7 @@ export default function AdGeneratorListPage() {
       {scratchOpen && (
         <ScratchSetupModal
           creating={creating}
+          industry={accountData?.category ?? null}
           onClose={() => !creating && setScratchOpen(false)}
           onStart={(name, sizes, kind, vehicleMode) => void createBlank(name, sizes, kind, vehicleMode)}
         />
@@ -1238,13 +1244,19 @@ export default function AdGeneratorListPage() {
  * two-offer variant — gated on `capabilities.dualOffer`, because "Two vehicles"
  * merges the VEHICLE field kit and would be meaningless (or wrong) elsewhere.
  *
+ * Scoped to the ACCOUNT'S industry: outside automotive/powersports there is no
+ * vehicle to offer, and the whole control collapses to a single choice — which
+ * the modal then stops asking about.
+ *
  * The old control here was "Vehicle offer fields — Blank / Single vehicle / Two
  * vehicles", and Blank and Single vehicle produced BYTE-IDENTICAL docs: every doc
  * was stamped with the whole vehicle schema regardless, so "Blank" never gave
  * anyone a blank form. Offer kinds are what make the choice mean something.
  */
-const AD_TYPES: { kind: string; mode: VehicleFieldsMode; label: string; hint: string }[] =
-  OFFER_KINDS.flatMap((k) => [
+type AdType = { kind: string; mode: VehicleFieldsMode; label: string; hint: string };
+
+const adTypesForIndustry = (industry: string | null | undefined): AdType[] =>
+  offerKindsForIndustry(industry).flatMap((k) => [
     { kind: k.id, mode: 'none' as VehicleFieldsMode, label: k.label, hint: k.description },
     ...(k.capabilities.dualOffer
       ? [{
@@ -1267,14 +1279,18 @@ const AD_TYPES: { kind: string; mode: VehicleFieldsMode; label: string; hint: st
  */
 function ScratchSetupModal({
   creating,
+  industry,
   onClose,
   onStart,
 }: {
   creating: boolean;
+  /** The account's industry — decides which ad types exist here at all. */
+  industry: string | null;
   onClose: () => void;
   onStart: (name: string, sizes: LibrarySize[], kind: string, vehicleMode: VehicleFieldsMode) => void;
 }) {
   const { sizes, facets, loading } = useSizeLibrary();
+  const adTypes = useMemo(() => adTypesForIndustry(industry), [industry]);
   const [name, setName] = useState('Untitled ad');
   const [adType, setAdType] = useState(0);
   const [selected, setSelected] = useState<LibrarySize[]>([]);
@@ -1316,6 +1332,10 @@ function ScratchSetupModal({
           />
         </label>
 
+        {/* One ad type is not a choice — outside automotive the vehicle offer
+            isn't on the menu, so asking "what kind?" of a one-item list is a
+            control that can only be answered one way. */}
+        {adTypes.length > 1 && (
         <div className="mb-4">
           <div className="mb-1.5 flex items-center gap-1.5">
             <span className="text-xs font-medium text-[var(--foreground)]">Ad type</span>
@@ -1324,7 +1344,7 @@ function ScratchSetupModal({
             </Tooltip>
           </div>
           <div className="flex flex-wrap gap-1.5">
-            {AD_TYPES.map((opt, i) => (
+            {adTypes.map((opt, i) => (
               <Tooltip key={`${opt.kind}:${opt.mode}`} label={opt.hint}>
                 <button
                   type="button"
@@ -1339,6 +1359,7 @@ function ScratchSetupModal({
             ))}
           </div>
         </div>
+        )}
 
         <div className="mb-1.5 flex items-baseline justify-between">
           <span className="text-xs font-medium text-[var(--foreground)]">Starting sizes</span>
@@ -1359,7 +1380,7 @@ function ScratchSetupModal({
             Cancel
           </button>
           <button
-            onClick={() => onStart(name, selected, AD_TYPES[adType]?.kind ?? DEFAULT_OFFER_KIND, AD_TYPES[adType]?.mode ?? 'none')}
+            onClick={() => onStart(name, selected, adTypes[adType]?.kind ?? DEFAULT_OFFER_KIND, adTypes[adType]?.mode ?? 'none')}
             disabled={creating || selected.length === 0}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >

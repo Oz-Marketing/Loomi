@@ -298,10 +298,34 @@ jobs:
             echo "=== Starting candidate app: $NEXT_APP on port $NEXT_PORT ==="
             pm2 stop "$NEXT_APP" || true
             pm2 delete "$NEXT_APP" || true
-            NODE_ENV=production NODE_OPTIONS="--max-old-space-size=768" pm2 start ./node_modules/.bin/next \
+            # ── Memory limits come from ecosystem.config.js, not from here ──
+            #
+            # They used to be hardcoded on this line, which meant the app never
+            # got the fix that file documents: a 768MB heap ceiling ABOVE a 512MB
+            # kill threshold. V8 sizes GC pressure to the limit it is given, so it
+            # stayed relaxed on the way to a budget pm2 would never let it reach —
+            # and pm2 killed the process instead of V8 ever collecting hard. Every
+            # in-flight request died together, which is what a burst of
+            # same-second 502s is (nginx: "upstream prematurely closed
+            # connection"). Only the WORKER read that file, so only the worker was
+            # ever fixed.
+            #
+            # Reading them from the release keeps one source of truth, and lets
+            # that file scale the budget to the box (prod is 8GB/4vCPU, staging is
+            # 2GB/1vCPU) without this workflow knowing which host it is on.
+            APP_MEM=$(node -e 'const a=require(process.argv[1]).apps.find(x=>x.name==="loomi-studio");console.log(a.max_memory_restart, a.env.NODE_OPTIONS)' "$NEW_RELEASE/ecosystem.config.js" 2>/dev/null || true)
+            APP_RESTART=$(echo "$APP_MEM" | awk '{print $1}')
+            APP_NODE_OPTIONS=$(echo "$APP_MEM" | cut -d' ' -f2-)
+            if [ -z "$APP_RESTART" ] || [ -z "$APP_NODE_OPTIONS" ]; then
+              echo "WARN: could not read app memory limits from ecosystem.config.js — using conservative defaults"
+              APP_RESTART=512M
+              APP_NODE_OPTIONS="--max-old-space-size=384"
+            fi
+            echo "App memory budget: max_memory_restart=$APP_RESTART NODE_OPTIONS=$APP_NODE_OPTIONS"
+            NODE_ENV=production NODE_OPTIONS="$APP_NODE_OPTIONS" pm2 start ./node_modules/.bin/next \
               --name "$NEXT_APP" \
               --cwd "$NEW_RELEASE" \
-              --max-memory-restart 512M \
+              --max-memory-restart "$APP_RESTART" \
               --merge-logs \
               -- start -p "$NEXT_PORT"
 

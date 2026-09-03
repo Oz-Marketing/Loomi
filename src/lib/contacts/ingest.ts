@@ -24,9 +24,12 @@
 
 import { prisma } from '@/lib/prisma';
 import {
-  normaliseEmail,
+  ADDITIONAL_EMAILS_FIELD,
+  UNPARSED_EMAIL_FIELD,
+  isAmbiguousEmailCell,
   normalisePhone,
   parseDateCell,
+  parseEmailCell,
 } from './normalize';
 
 // Scalar (string) fields we accept and pass straight through after a
@@ -178,7 +181,13 @@ function normalise(
   input: IngestContactInput,
   defaultSource: string | undefined,
 ): NormalisedContact | null {
-  const email = input.email ? normaliseEmail(String(input.email)) || null : null;
+  // The powersports feed sends every address it holds for a person in this
+  // one field, semicolon-joined. `Contact.email` is one address.
+  const rawEmail = input.email ? String(input.email) : '';
+  const cell = parseEmailCell(rawEmail);
+  const ambiguous = isAmbiguousEmailCell(cell);
+  const addresses = ambiguous ? [] : cell.addresses;
+  const email = addresses[0] ?? null;
   const phone = input.phone ? normalisePhone(String(input.phone)) || null : null;
   if (!email && !phone) return null;
 
@@ -213,6 +222,16 @@ function normalise(
       const val = String(v).trim();
       if (val !== '') customFields[k] = val;
     }
+  }
+
+  // Keep the alternates the packed cell carried — the sender gave us those
+  // addresses, and there is no second email column to put them in. An
+  // ambiguous cell is parked whole rather than guessed at.
+  if (addresses.length > 1 && !(ADDITIONAL_EMAILS_FIELD in customFields)) {
+    customFields[ADDITIONAL_EMAILS_FIELD] = addresses.slice(1).join('; ');
+  }
+  if (ambiguous && !(UNPARSED_EMAIL_FIELD in customFields)) {
+    customFields[UNPARSED_EMAIL_FIELD] = rawEmail.trim();
   }
 
   // Deliberately NOT `?? defaultSource` unconditionally. The bridge sends a

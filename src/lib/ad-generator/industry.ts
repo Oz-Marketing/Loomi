@@ -89,3 +89,31 @@ export function kindInIndustry(
   const kind = offerKindForDoc(doc);
   return offerKindsForIndustry(industry).some((k) => k.id === kind.id);
 }
+
+/**
+ * Split an account's OWN templates into the ones it can use and the ones the
+ * industry gate withholds.
+ *
+ * Both halves are the point. The library used to apply the two filters above and
+ * keep only the survivors, so an account whose every template was withheld
+ * showed the same "none yet" empty state as an account that had never had one —
+ * and the designer who built them read that as data loss. Counting the withheld
+ * half is what lets the UI say which of the two actually happened.
+ *
+ * Takes templates ALREADY narrowed to the account (the accountKey cut is a
+ * `where` on the query); this is only the industry/kind pair, which is the part
+ * that silently hides work.
+ */
+export function splitTemplatesByIndustry<T extends { doc: (Pick<AdTemplate, 'industries'> & Pick<TemplateDoc, 'offerKind'>) | null }>(
+  owned: T[],
+  industry: string | null | undefined,
+): { visible: T[]; hidden: T[] } {
+  const visible: T[] = [];
+  const hidden: T[] = [];
+  for (const t of owned) {
+    if (!t.doc) continue; // an unreadable doc is neither usable nor "hidden by industry"
+    const ok = templateInIndustry(t.doc, industry) && kindInIndustry(t.doc, industry);
+    (ok ? visible : hidden).push(t);
+  }
+  return { visible, hidden };
+}

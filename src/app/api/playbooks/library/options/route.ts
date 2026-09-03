@@ -25,7 +25,7 @@ export async function GET() {
     const [adRows, emailRows] = await Promise.all([
       prisma.adTemplateDoc
         .findMany({
-          where: { status: 'published', isActive: true, accountKey: null },
+          where: { status: 'published', isActive: true, accountKey: null, deletedAt: null },
           select: { id: true, name: true, doc: true },
           orderBy: { updatedAt: 'desc' },
         })

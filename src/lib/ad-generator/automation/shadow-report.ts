@@ -9,7 +9,7 @@ import {
 import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import type { SkippedVehicle } from './skip-reasons';
-import { templatesForAccount } from '../template-access';
+import { LIVE_TEMPLATE, templatesForAccount } from '../template-access';
 import { stockGate, stockGatePassed } from './inventory-match';
 import { isV2Template } from '@/lib/email/types';
 import { templateHasOffersMarker } from './offer-email-doc';
@@ -555,7 +555,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   const templateRows = await prisma.adTemplateDoc
     .findMany({
       // Shared-with counts as in scope; a shared global one no longer does.
-      where: { status: 'published', isActive: true },
+      where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
       select: { id: true, name: true, accountKey: true, sharedAccountKeys: true, doc: true },
       orderBy: { updatedAt: 'desc' },
     })

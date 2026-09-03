@@ -3511,8 +3511,28 @@ model AdTemplateDoc {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  /// Soft delete. Deleting a template used to be a hard row delete, which threw
+  /// away work a designer could spend days on with no way back — the one
+  /// destructive action in the builder that no backup short of a point-in-time
+  /// restore could undo.
+  ///
+  /// A TIMESTAMP rather than a boolean, matching `MediaAsset.archivedAt` and
+  /// AdCreative's convention: "when" is the part anyone asks about afterwards,
+  /// and it stays orthogonal to `status` (draft/published) and `isActive`, which
+  /// answer different questions. A deleted template keeps whatever status it had
+  /// so restoring puts it back exactly as it was.
+  ///
+  /// Every SELECTION path filters on this (see `LIVE_TEMPLATE` in
+  /// lib/ad-generator/template-access.ts). Fetch-by-id deliberately does NOT, so
+  /// the row can still be read to restore it.
+  deletedAt         DateTime?
+  /// Who deleted it, for the same reason the create path records its author.
+  deletedBy         String?
+
   @@index([status, isActive])
   @@index([accountKey])
+  // The library's own read: "this account's templates that aren't deleted".
+  @@index([accountKey, deletedAt])
 }
 
 // A reusable "block": a saved cluster of builder elements (e.g. a Lease/APR

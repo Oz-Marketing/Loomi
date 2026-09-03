@@ -326,7 +326,7 @@ export async function loadAuditContexts(
   const [templates, approvals] = await Promise.all([
     templateIds.length
       ? prisma.adTemplateDoc.findMany({
-          where: { id: { in: templateIds } },
+          where: { id: { in: templateIds }, deletedAt: null },
           select: { id: true, name: true, doc: true },
         })
       : Promise.resolve([] as { id: string; name: string; doc: string }[]),

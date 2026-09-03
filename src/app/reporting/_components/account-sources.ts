@@ -31,6 +31,14 @@ export interface SourceResult {
   /** Why it's missing — the route's own words, shown to the user. */
   note?: string;
   metrics: Record<string, number> | null;
+  /**
+   * Carried through from the source's `SourceDef` so every consumer reads the
+   * same declared value. The Ad Meeting document builder takes these results
+   * as its `platforms` and needs the same classification the dashboard uses —
+   * without it, a non-media source lands in the deck's "Media performance"
+   * table as a row of zeros.
+   */
+  media: boolean;
 }
 
 export interface SourceDef {
@@ -39,20 +47,36 @@ export interface SourceDef {
   path: string;
   /** Whether the route accepts start_date/end_date. */
   dated: boolean;
+  /**
+   * Paid media — this source's spend, impressions and clicks roll into the
+   * combined totals.
+   *
+   * Declared per source rather than inferred. This was previously a denylist
+   * ("everything except ga4 and reputation"), which meant every source added
+   * here was silently counted as paid media and summed into the spend and
+   * impression totals. That is the wrong default: it fails toward overstating
+   * spend, and it fails quietly.
+   */
+  media: boolean;
 }
 
 /** Order here is the order channels appear in both surfaces. */
 export const ACCOUNT_SOURCES: SourceDef[] = [
-  { key: 'google', label: 'Google Ads', path: '/api/reporting/google', dated: true },
-  { key: 'meta', label: 'Meta', path: '/api/reporting/ads', dated: true },
-  { key: 'stackadapt', label: 'OTT / CTV', path: '/api/reporting/stackadapt', dated: true },
+  { key: 'google', label: 'Google Ads', path: '/api/reporting/google', dated: true, media: true },
+  { key: 'meta', label: 'Meta', path: '/api/reporting/ads', dated: true, media: true },
+  { key: 'stackadapt', label: 'OTT / CTV', path: '/api/reporting/stackadapt', dated: true, media: true },
   // Repointed from the old standalone email route (now deleted), which carried
   // only the previous provider's sends AND nested them under `stats` — a key
   // extractMetrics below never reads, so this channel came back empty whatever
   // the account had. The merged route exposes `summary`, which it does read.
-  { key: 'email', label: 'Email & text', path: '/api/reporting/blasts', dated: true },
-  { key: 'ga4', label: 'Website', path: '/api/reporting/ga4', dated: true },
-  { key: 'reputation', label: 'Reputation', path: '/api/reporting/reputation', dated: false },
+  { key: 'email', label: 'Email & text', path: '/api/reporting/blasts', dated: true, media: true },
+  { key: 'ga4', label: 'Website', path: '/api/reporting/ga4', dated: true, media: false },
+  { key: 'reputation', label: 'Reputation', path: '/api/reporting/reputation', dated: false, media: false },
+  // Earned and owned presence, not bought. Both were in ODT's Marketing
+  // Dashboard and its Ad Meeting fan-out; neither reports a spend, so they
+  // belong in the picture without touching the media totals.
+  { key: 'call-tracking', label: 'Call tracking', path: '/api/reporting/call-tracking', dated: true, media: false },
+  { key: 'gbp', label: 'Business Profile', path: '/api/reporting/gbp', dated: true, media: false },
 ];
 
 /**
@@ -98,6 +122,7 @@ export async function fetchSource(
       return {
         key: src.key,
         label: src.label,
+        media: src.media,
         status: 'unavailable',
         // The route's own message distinguishes "not configured" from "the
         // vendor is down", which a generic string would flatten.
@@ -107,10 +132,11 @@ export async function fetchSource(
     }
     const metrics = extractMetrics(src.key, body);
     return metrics
-      ? { key: src.key, label: src.label, status: 'ok', metrics }
+      ? { key: src.key, label: src.label, media: src.media, status: 'ok', metrics }
       : {
           key: src.key,
           label: src.label,
+          media: src.media,
           status: 'unavailable',
           note: 'No data reported for this period',
           metrics: null,
@@ -119,6 +145,7 @@ export async function fetchSource(
     return {
       key: src.key,
       label: src.label,
+      media: src.media,
       status: 'unavailable',
       note: err instanceof Error ? err.message : 'Could not be reached',
       metrics: null,
@@ -156,7 +183,7 @@ export function sourceSpend(r: SourceResult): number {
   return n(r.metrics?.spend ?? r.metrics?.cost);
 }
 
-/** Media sources only — GA4 and Reputation buy nothing. */
+/** Paid media only — website, reputation, calls and Business Profile buy nothing. */
 export function isMediaSource(r: SourceResult): boolean {
-  return r.key !== 'ga4' && r.key !== 'reputation';
+  return r.media;
 }

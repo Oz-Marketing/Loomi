@@ -656,6 +656,10 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
       {showFilterBuilder && (
         <FilterBuilder
           fields={filterableFields}
+          // Offer to persist the segment from the primary button. Without
+          // this the only way out of the builder was Apply, which produced
+          // an unnamed ad-hoc selection the send consumed and discarded.
+          offerSave
           onApply={(definition) => {
             setSelection({
               kind: 'segment',

@@ -6,6 +6,9 @@ import {
   type EmailBlastSummary,
 } from '@/lib/services/email-blasts';
 import { listSmsBlasts, type SmsBlastSummary } from '@/lib/services/sms-blasts';
+// Shared with the engagement aggregation so the number of rows this can return
+// never exceeds the number it can supply metrics for.
+import { CAMPAIGN_ROW_LIMIT } from '@/lib/services/email-analytics';
 
 /**
  * GET /api/blasts/loomi/list?accountKey=<key>
@@ -65,8 +68,8 @@ export async function GET(req: NextRequest) {
     sourceParam === 'flows' || sourceParam === 'all' ? sourceParam : 'blasts';
 
   const [emails, sms] = await Promise.all([
-    listEmailBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter, source }),
-    listSmsBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter, source }),
+    listEmailBlasts({ limit: CAMPAIGN_ROW_LIMIT, accountKeys: visibilityScope, statusFilter, source }),
+    listSmsBlasts({ limit: CAMPAIGN_ROW_LIMIT, accountKeys: visibilityScope, statusFilter, source }),
   ]);
 
   function matchesAccount(accountKeys: string[]): boolean {

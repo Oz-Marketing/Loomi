@@ -157,6 +157,16 @@ export default function SegmentsPage() {
     return savedSegments;
   }, [savedSegments, isAccount, isRollup, accountKey, scopedAccountKeys]);
 
+  // Name for the current scope, used by the empty state so it can say WHICH
+  // account has no segments rather than blaming the (empty) search box.
+  const scopeLabel = useMemo(() => {
+    if (isRollup) return 'this group';
+    if (isAccount && accountKey) {
+      return accountData?.dealer || accounts[accountKey]?.dealer || 'this account';
+    }
+    return 'this account';
+  }, [isRollup, isAccount, accountKey, accountData?.dealer, accounts]);
+
   // Which accounts an export resolves against. A group exports the union
   // across its rooftops; a leaf account exports its own. With neither
   // resolved there is no account to size the segment against, and the
@@ -350,9 +360,9 @@ export default function SegmentsPage() {
         <div className="flex items-center justify-between mb-3">
           <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">
             Saved segments
-            {!loading && savedSegments.length > 0 && (
+            {!loading && scopedSegments.length > 0 && (
               <span className="ml-2 text-[var(--muted-foreground)]/60">
-                ({savedSegments.length})
+                ({scopedSegments.length})
               </span>
             )}
           </p>
@@ -370,18 +380,33 @@ export default function SegmentsPage() {
           </div>
         )}
 
-        {!loading && savedSegments.length === 0 && (
+        {!loading && scopedSegments.length === 0 && (
           <div className="text-center py-16 border border-dashed border-[var(--border)] rounded-xl">
             <FunnelIcon className="w-9 h-9 mx-auto text-[var(--muted-foreground)] mb-2 opacity-60" />
-            <p className="text-sm font-medium">No saved segments yet</p>
+            <p className="text-sm font-medium">
+              {savedSegments.length > 0
+                ? `No segments on ${scopeLabel} yet`
+                : 'No saved segments yet'}
+            </p>
             <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md mx-auto">
-              Click <span className="font-medium">New segment</span> to build a filter-driven
-              audience, or customize one of the presets above.
+              {savedSegments.length > 0 ? (
+                <>
+                  Segments belong to the account they were built on. There
+                  {savedSegments.length === 1 ? ' is 1 segment' : ` are ${savedSegments.length} segments`}{' '}
+                  on your other accounts — switch accounts to see them, or click{' '}
+                  <span className="font-medium">New segment</span> to build one here.
+                </>
+              ) : (
+                <>
+                  Click <span className="font-medium">New segment</span> to build a filter-driven
+                  audience, or customize one of the presets above.
+                </>
+              )}
             </p>
           </div>
         )}
 
-        {!loading && savedSegments.length > 0 && visibleSavedSegments.length === 0 && (
+        {!loading && scopedSegments.length > 0 && visibleSavedSegments.length === 0 && (
           <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
             <p className="text-sm">No segments match your search.</p>
           </div>

@@ -27,6 +27,7 @@ import {
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
   BoltIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Engagement helpers ──
@@ -69,6 +70,10 @@ interface Campaign {
   scheduledAt?: string;
   sentAt?: string;
   sentCount?: number;
+  /** Recipients the send hard-failed on. Non-zero on 'partial' and 'failed'. */
+  failedCount?: number;
+  /** Audience size at send time — the denominator for sent/failed. */
+  totalRecipients?: number;
   locationId?: string;
   accountKey?: string;
   dealer?: string;
@@ -167,6 +172,8 @@ function campaignAccountKey(campaign: Campaign): string | null {
 
 const STATUS_BADGE: Record<string, string> = {
   sent:       'bg-green-500/10 text-green-400',
+  partial:    'bg-amber-500/10 text-amber-400',
+  failed:     'bg-red-500/10 text-red-400',
   scheduled:  'bg-blue-500/10 text-blue-400',
   draft:      'bg-zinc-500/10 text-zinc-400',
   paused:     'bg-orange-500/10 text-orange-400',
@@ -175,6 +182,8 @@ const STATUS_BADGE: Record<string, string> = {
 
 const STATUS_ICON: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
   sent:       CheckCircleIcon,
+  partial:    ExclamationTriangleIcon,
+  failed:     XCircleIcon,
   scheduled:  ClockIcon,
   draft:      DocumentTextIcon,
   paused:     PauseCircleIcon,
@@ -185,6 +194,10 @@ const PAGE_SIZE = 10;
 
 function normalizeStatus(status: string): string {
   const s = status.toLowerCase().trim();
+  // Terminal-with-errors states, checked before the fuzzy substring pass so
+  // 'partial' never gets swept into 'sent' by a future rule change.
+  if (s === 'partial') return 'partial';
+  if (s === 'failed' || s === 'failure') return 'failed';
   if (s.includes('complete') || s.includes('deliver') || s.includes('finish') || s.includes('sent')) return 'sent';
   if (s.includes('active') || s.includes('sched') || s.includes('queue') || s.includes('start') || s.includes('running') || s.includes('progress')) return 'scheduled';
   if (s.includes('draft')) return 'draft';
@@ -200,6 +213,8 @@ function statusBadgeClass(status: string): string {
 function statusLabel(status: string): string {
   const normalized = normalizeStatus(status);
   if (normalized === 'draft') return 'In Progress';
+  if (normalized === 'partial') return 'Sent with errors';
+  if (normalized === 'failed') return 'Failed';
   const withSpaces = normalized.replace(/_/g, ' ');
   return withSpaces.replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -254,7 +269,7 @@ type CampaignSortField = 'status' | 'send' | 'updated';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_ORDER: Record<string, number> = {
-  sent: 0, scheduled: 1, draft: 2, paused: 3, cancelled: 4,
+  sent: 0, partial: 1, failed: 2, scheduled: 3, draft: 4, paused: 5, cancelled: 6,
 };
 
 function compareCampaigns(a: Campaign, b: Campaign, field: CampaignSortField, dir: SortDir): number {
@@ -552,13 +567,23 @@ function CampaignTableRow({
     normalizedStatus !== 'scheduled' &&
     item.status !== 'queued' &&
     item.status !== 'processing';
+  // A blast that went out — cleanly ('sent'/'completed'), with some
+  // recipients erroring ('partial'), or erroring outright ('failed').
+  // All three are past the point of editing, so all three open the
+  // read-only detail drawer. Treating only 'sent' as sendable used to
+  // leave partial/failed rows dead: no metrics, no drawer, no way to
+  // find out which recipients failed or why.
   const isSent = isLoomi && normalizedStatus === 'sent';
+  const hasSendResult =
+    isLoomi && (isSent || normalizedStatus === 'partial' || normalizedStatus === 'failed');
   // Sent rows open the read-only detail drawer instead of the editor;
   // draft/scheduled rows keep navigating to the builder.
-  const rowClickable = Boolean(loomiEditUrl) || isSent;
+  const rowClickable = Boolean(loomiEditUrl) || hasSendResult;
+  const failedCount = item.failedCount ?? 0;
+  const failedNote = failedCount > 0 ? `${formatNum(failedCount)} failed` : null;
 
   function handleRowClick() {
-    if (isSent) {
+    if (hasSendResult) {
       onOpenSentDetail(item);
       return;
     }
@@ -617,23 +642,24 @@ function CampaignTableRow({
       </td>
       <EngagementCell
         primary={engagement ? formatNum(engagement.sent) : null}
-        secondary={null}
-        empty={!isSent}
+        secondary={failedNote}
+        empty={!hasSendResult}
+        warn={Boolean(failedNote)}
       />
       <EngagementCell
         primary={engagement ? formatPct(engagement.openRate) : null}
         secondary={engagement ? `${formatNum(engagement.uniqueOpens)} unique` : null}
-        empty={!isSent}
+        empty={!hasSendResult}
       />
       <EngagementCell
         primary={engagement ? formatPct(engagement.clickRate) : null}
         secondary={engagement ? `${formatNum(engagement.uniqueClicks)} unique` : null}
-        empty={!isSent}
+        empty={!hasSendResult}
       />
       <EngagementCell
         primary={engagement ? formatPct(engagement.bounceRate) : null}
         secondary={engagement ? formatNum(engagement.bounces) : null}
-        empty={!isSent}
+        empty={!hasSendResult}
         warn={engagement ? engagement.bounceRate > 0.02 : false}
       />
       <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">

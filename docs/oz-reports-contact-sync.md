@@ -14,12 +14,20 @@ ps_sales_data       ├──────────►  (GETs /loomi/push* rou
 ps_service_data     │             app/Controllers/Loomi.php         │
 leads_individual    ┘                                               ▼
                                                               Contact + ContactEvent
+calls               ┐                                               │
+ozrep.reviews       ├──────────►  (same driver, same cron)  ──►  CallEvent / ReviewEvent
+purls (matchback)   ┘                                            MailerCampaign
+                                                                    │
                                                               IngestRun (heartbeat)
                                                                     │
                           GitHub Actions (daily) ──────────────────►│
                           contact-sync-health.yml                   ▼
                                                     GET /api/internal/contact-sync/health
 ```
+
+The lower group is the three **reporting feeds** — they ride the same driver
+and cron but are checked differently by the monitor. See "The three reporting
+feeds" and the monitoring section.
 
 Two halves, deliberately:
 
@@ -37,8 +45,35 @@ overlap, or run twice by hand.
 | Job | Schedule | Endpoints | Window |
 |---|---|---|---|
 | `leads` | hourly, :07 | `pushleads` | 2 days |
-| `nightly` | 03:30 MT | `pushcustomers`, `pushcustomersps`, `pushevents`, `pusheventsps`, `pushleads` | controller defaults — service 7d, sales 45d — plus 3d leads catch-up |
-| `sweep` | Sunday 02:00 MT | all five, `?all=1`, **one dealer per request** | full history |
+| `nightly` | 03:30 MT | `pushcustomers`, `pushcustomersps`, `pushevents`, `pusheventsps`, `pushleads`, then `pushcalls`, `pushreviews`, `pushmailer` | controller defaults — service 7d, sales 45d — plus 3d leads catch-up; calls 7d, reviews 90d, mailer self-windowed |
+| `sweep` | Sunday 02:00 MT | the five CRM feeds and `pushcalls` `?all=1` **one dealer per request**; `pushreviews` and `pushmailer` `?all=1` whole | full history |
+
+### The three reporting feeds
+
+`pushcalls`, `pushreviews` and `pushmailer` feed Call Tracking, Reputation
+history and Direct Mail ROI in Loomi Reporting. They differ from the CRM feeds
+in three ways worth knowing before editing the script:
+
+- **No `loomi_set` segment.** One table covers every mapped dealer, so their
+  routes take no `/<set>` and the driver must not loop `SETS` over them — that
+  would re-push the same window once per set. `SETLESS_ENDPOINTS` in the script
+  is the list; keep it in step with the Oz Reports `Routes.php`.
+- **Wider windows, for reasons specific to each.** Reviews default to 90 days
+  because `reply_sent` flips when a store answers a review, and reply rate is
+  the one metric the live Google Places API cannot report at all — re-pushing
+  is how that number stays true. Mailer takes no `days=` at all: the controller
+  derives its window from the in-home dates, and a campaign keeps matching for
+  45 days past the last drop. Calls behave like the CRM feeds; 7 days is a
+  daily run plus slack.
+- **Sweep differently.** `pushcalls` fans out per dealer like the CRM feeds.
+  `pushreviews` and `pushmailer` are swept whole — both are small (reviews are
+  a few thousand rows across every rooftop; mailer sends per-campaign
+  aggregates only), so chunking would add failure modes and buy nothing.
+  `pushreviews` also filters by `?place=`, not `?dealer=`, so a sweep pinned to
+  one dealer skips it rather than silently pushing every rooftop's reviews.
+
+They run **last** in the nightly plan on purpose: they are the newest of the
+endpoints, and a failure in one should not cost the night's CRM sync.
 
 Why three and not one:
 
@@ -246,9 +281,38 @@ The failure conditions are:
   real signal.
 - **`runsAllTime === 0`** — no account has *ever* received a batch, i.e. the
   cron was never installed or has never once succeeded.
+- **any reporting feed `failing`** — see below.
 
 If the `never-synced` count starts climbing past those four, that's worth a
 look — it means a newly-mapped rooftop isn't pushing.
+
+### The reporting feeds are checked per feed, not per account
+
+`calls`, `reviews` and `mailer` appear in the response under `feeds`, checked
+as whole feeds rather than per account. The account-level check is wrong for
+them: calls exist only for a dealer with a `call_tracker_id`, reviews only for
+a rooftop with a Google `place_id`, and mailer campaigns only for an account
+that has actually mailed. Flagging every account that legitimately has none
+would mean dozens of false alarms a day — the muted-monitor failure again.
+
+What can be checked without noise is the feed itself. All three are driven by
+one cron, so "has this feed reported from anywhere recently" answers the
+failure that actually happened: **the endpoints and their ingests existed and
+worked for months while nothing ever called them.** Three reports sat empty and
+this check could not see it, because it only ever looked at contacts and
+events.
+
+Two severities, and the split matters:
+
+- **`never-run` fails, for all three.** No runs at all means the feed isn't in
+  the cron. Unambiguous.
+- **`stale` fails for calls and reviews, warns for mailer.** Calls arrive daily
+  wherever a tracker exists, and reviews run a 90-day window across every
+  rooftop, so silence from either is a fault. Mail drops are episodic — a group
+  can genuinely go weeks without one — so a stale mailer feed is a warning.
+
+`REPORTING_FEEDS` in the health route holds that table; add a feed there and it
+is monitored, with its own note explaining what its silence means.
 
 By hand:
 

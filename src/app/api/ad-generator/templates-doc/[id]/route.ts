@@ -36,6 +36,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         status: row.status,
         accountKey: row.accountKey,
         sharedAccountKeys: parseSharedKeys(row.sharedAccountKeys),
+        // Reported, not filtered on: this is the one read that must still see a
+        // deleted template, because restoring it means loading it first.
+        deletedAt: row.deletedAt,
+        deletedBy: row.deletedBy,
         doc,
       },
     });
@@ -64,6 +68,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     sharedAccountKeys?: string[];
     /** Set the publish window without sending the whole doc. */
     schedule?: { start?: string | null; end?: string | null } | null;
+    /** Undo a soft delete, returning the template to the library as it was. */
+    restore?: boolean;
   };
   try {
     body = await req.json();
@@ -84,6 +90,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // Which subaccounts can use this template. Replaces the whole list, so
   // un-ticking one revokes it.
   if ('sharedAccountKeys' in body) data.sharedAccountKeys = serializeSharedKeys(body.sharedAccountKeys);
+  // Restore from the soft delete. Clears the audit pair together — leaving
+  // `deletedBy` set on a live template would make the next reader think it was
+  // still deleted.
+  if (body.restore === true) {
+    data.deletedAt = null;
+    data.deletedBy = null;
+  }
   if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
     const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
     data.doc = JSON.stringify(body.doc);
@@ -123,15 +136,49 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 }
 
+/**
+ * DELETE — soft delete. Stamps `deletedAt` instead of destroying the row.
+ *
+ * This was a hard `delete()`, and it was the only action in the Ad Generator
+ * that could permanently destroy work: a designer's template is days of layout
+ * across up to 22 sizes, and once the row was gone nothing short of a
+ * point-in-time restore of the whole database brought it back. A soft delete
+ * makes the mistake cost a click instead.
+ *
+ * `status` and `isActive` are left exactly as they were, so a restore returns
+ * the template to the shelf it came off — a published template comes back
+ * published. Every selection path filters on `deletedAt` via `LIVE_TEMPLATE`,
+ * so the template disappears from the library, the picker, the automation
+ * resolver and the taxonomy facets the moment this runs.
+ *
+ * Nothing purges these rows on a schedule. That is deliberate: a doc is a few
+ * tens of KB of JSON, and the whole point is that the work outlives the
+ * mis-click. Add a purge only alongside a UI that shows what it would remove.
+ */
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   const { error } = await requirePermission('studio.adgen.edit');
   if (error) return error;
+  const session = await getAuthSession();
 
   const { id } = await params;
   try {
-    await prisma.adTemplateDoc.delete({ where: { id } });
-    return NextResponse.json({ ok: true });
+    // Guard on `deletedAt: null` so a double-delete can't overwrite the original
+    // timestamp (and the person who did it) with a later one.
+    const { count } = await prisma.adTemplateDoc.updateMany({
+      where: { id, deletedAt: null },
+      data: {
+        deletedAt: new Date(),
+        deletedBy: session?.user?.email ?? session?.user?.id ?? null,
+      },
+    });
+    if (count === 0) {
+      // Either no such template, or it was already deleted. Both are "gone as
+      // far as you're concerned", and the caller's list refresh handles it.
+      const exists = await prisma.adTemplateDoc.findUnique({ where: { id }, select: { id: true } });
+      if (!exists) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true, softDeleted: true });
   } catch (err) {
     console.error('[api/ad-generator/templates-doc/[id]] delete failed:', err);
     return NextResponse.json({ error: 'Could not delete template' }, { status: 500 });

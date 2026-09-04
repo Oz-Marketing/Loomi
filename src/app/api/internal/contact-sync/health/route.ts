@@ -21,6 +21,10 @@ import { prisma } from '@/lib/prisma';
  *   curl -H "x-internal-job-secret: $INTERNAL_JOB_SECRET" \
  *     "https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30"
  *
+ * TWO CHECKS, DIFFERENT SHAPES — see REPORTING_FEEDS below for why the
+ * reporting feeds are checked per-FEED while the CRM feeds are checked
+ * per-ACCOUNT.
+ *
  * Query params:
  *   maxAgeHours=N    staleness threshold (default 30 — one missed nightly
  *                    run plus slack for a long full sweep)
@@ -41,7 +45,73 @@ const DEFAULT_RETENTION_DAYS = 180;
 // CSV account never gets flagged for a sync it was never part of.
 const CRM_SOURCE_PREFIX = 'oz-reports';
 
+/**
+ * The reporting feeds — calls, reviews, mailer — checked PER FEED, not per
+ * account, and deliberately so.
+ *
+ * The CRM feeds are per-account because every mapped rooftop should be
+ * producing contacts and events; silence from one is a real signal. These
+ * three are not: calls exist only for a dealer with a `call_tracker_id`,
+ * reviews only for a rooftop with a Google `place_id`, and mailer campaigns
+ * only for an account that has actually mailed. Flagging every account that
+ * legitimately has none would mean dozens of daily false alarms — which is
+ * how a monitor gets muted and stops being a monitor.
+ *
+ * What CAN be checked without noise is the feed itself: these are driven by
+ * one cron on the Oz Reports host, so "has this feed reported from anywhere
+ * recently" answers the failure that actually happened — the endpoints
+ * existed and worked for months while nothing ever called them.
+ *
+ * `neverRunIsFailure` is separate from staleness on purpose. A feed with no
+ * runs AT ALL means the cron was never wired up; that is unambiguous for all
+ * three. Going stale after having run is only unambiguous for two of them —
+ * see `staleIsFailure` on mailer.
+ */
+const REPORTING_FEEDS: {
+  kind: string;
+  label: string;
+  staleIsFailure: boolean;
+  note: string;
+}[] = [
+  {
+    kind: 'calls',
+    label: 'Call Tracking',
+    staleIsFailure: true,
+    note: 'Every dealer with a call tracker produces calls daily.',
+  },
+  {
+    kind: 'reviews',
+    label: 'Reputation history',
+    staleIsFailure: true,
+    note: 'Runs on a 90-day window across every rooftop, so it is effectively never empty.',
+  },
+  {
+    kind: 'mailer',
+    label: 'Direct Mail ROI',
+    // Warning, not failure. Mail drops are episodic — a group can genuinely
+    // go weeks without one, and the bridge skips the POST when a dealer has
+    // nothing in the window. Failing on that would cry wolf. A feed that has
+    // NEVER run is still a failure, which is the case this was added to catch.
+    staleIsFailure: false,
+    note: 'Campaigns are episodic; a quiet stretch is normal. Never-run is still a failure.',
+  },
+];
+
 type AccountStatus = 'ok' | 'stale' | 'never-synced';
+type FeedStatus = 'ok' | 'stale' | 'never-run';
+
+interface FeedHealth {
+  kind: string;
+  label: string;
+  status: FeedStatus;
+  /** Whether this feed's current status counts against `healthy`. */
+  failing: boolean;
+  lastRunAt: string | null;
+  hoursSinceLastRun: number | null;
+  accountsReporting24h: number;
+  rows24h: number;
+  note: string;
+}
 
 interface AccountHealth {
   accountKey: string;
@@ -82,7 +152,15 @@ export async function GET(req: NextRequest) {
   const since24h = new Date(now.getTime() - 24 * 3_600_000);
 
   try {
-    const [runsAllTime, runsByAccount, runsByAccountKind, recentRuns, contactsByAccount] = await Promise.all([
+    const [
+      runsAllTime,
+      runsByAccount,
+      runsByAccountKind,
+      recentRuns,
+      contactsByAccount,
+      feedLastRun,
+      feedRecent,
+    ] = await Promise.all([
       prisma.ingestRun.count(),
       prisma.ingestRun.groupBy({
         by: ['accountKey'],
@@ -107,6 +185,22 @@ export async function GET(req: NextRequest) {
         where: { source: { startsWith: CRM_SOURCE_PREFIX } },
         _count: { _all: true },
         _max: { updatedAt: true },
+      }),
+      // Reporting feeds, collapsed across accounts — "has this feed reported
+      // from anywhere", which is the question REPORTING_FEEDS explains.
+      prisma.ingestRun.groupBy({
+        by: ['kind'],
+        where: { kind: { in: REPORTING_FEEDS.map((f) => f.kind) } },
+        _max: { startedAt: true },
+      }),
+      prisma.ingestRun.groupBy({
+        by: ['kind'],
+        where: {
+          kind: { in: REPORTING_FEEDS.map((f) => f.kind) },
+          startedAt: { gte: since24h },
+        },
+        _count: { _all: true },
+        _sum: { totalRows: true },
       }),
     ]);
 
@@ -169,6 +263,36 @@ export async function GET(req: NextRequest) {
     const stale = accounts.filter((a) => a.status === 'stale');
     const neverSynced = accounts.filter((a) => a.status === 'never-synced');
 
+    const feedLastByKind = new Map(feedLastRun.map((f) => [f.kind, f._max.startedAt]));
+    const feedRecentByKind = new Map(feedRecent.map((f) => [f.kind, f]));
+
+    const feeds: FeedHealth[] = REPORTING_FEEDS.map((def) => {
+      const lastRunAt = feedLastByKind.get(def.kind) ?? null;
+      const recent = feedRecentByKind.get(def.kind);
+      const hoursSinceLastRun = lastRunAt ? hoursBetween(lastRunAt, now) : null;
+
+      const status: FeedStatus = !lastRunAt
+        ? 'never-run'
+        : hoursSinceLastRun !== null && hoursSinceLastRun > maxAgeHours
+          ? 'stale'
+          : 'ok';
+
+      return {
+        kind: def.kind,
+        label: def.label,
+        status,
+        failing: status === 'never-run' || (status === 'stale' && def.staleIsFailure),
+        lastRunAt: lastRunAt?.toISOString() ?? null,
+        hoursSinceLastRun,
+        accountsReporting24h: recent?._count._all ?? 0,
+        rows24h: recent?._sum.totalRows ?? 0,
+        note: def.note,
+      };
+    });
+
+    const feedProblems = feeds.filter((f) => f.failing);
+    const feedWarnings = feeds.filter((f) => !f.failing && f.status !== 'ok');
+
     // `never-synced` is a WARNING, not a failure. Several YAG accounts are
     // parent/holding entities with no rooftop CRM feed of their own
     // (youngAutomotiveGroup, youngCollisionCenter, youngCommercialFleet,
@@ -180,7 +304,8 @@ export async function GET(req: NextRequest) {
     // A pipeline that has NEVER run anywhere is still a failure — that's the
     // runsAllTime check, which catches "the cron was never installed" without
     // needing per-account noise.
-    const healthy = accounts.length > 0 && stale.length === 0 && runsAllTime > 0;
+    const healthy =
+      accounts.length > 0 && stale.length === 0 && runsAllTime > 0 && feedProblems.length === 0;
 
     // Self-maintaining retention. Cheap (indexed on startedAt) and keeps this
     // append-only log from needing a separate cron of its own.
@@ -202,6 +327,7 @@ export async function GET(req: NextRequest) {
       runsAllTime,
       staleCount: stale.length,
       neverSyncedCount: neverSynced.length,
+      feedProblemCount: feedProblems.length,
       totals24h: {
         runs: accounts.reduce((sum, a) => sum + a.last24h.runs, 0),
         rows: accounts.reduce((sum, a) => sum + a.last24h.rows, 0),
@@ -211,19 +337,42 @@ export async function GET(req: NextRequest) {
       },
       // problems = the failing set. warnings = accounts that have simply never
       // pushed, which is expected for feed-less parent accounts.
-      problems: stale.map((a) => ({
-        accountKey: a.accountKey,
-        dealer: a.dealer,
-        status: a.status,
-        hoursSinceLastRun: a.hoursSinceLastRun,
-        contactCount: a.contactCount,
-      })),
-      warnings: neverSynced.map((a) => ({
-        accountKey: a.accountKey,
-        dealer: a.dealer,
-        status: a.status,
-        contactCount: a.contactCount,
-      })),
+      problems: [
+        ...stale.map((a) => ({
+          scope: 'account' as const,
+          accountKey: a.accountKey,
+          dealer: a.dealer,
+          status: a.status,
+          hoursSinceLastRun: a.hoursSinceLastRun,
+          contactCount: a.contactCount,
+        })),
+        ...feedProblems.map((f) => ({
+          scope: 'feed' as const,
+          feed: f.kind,
+          label: f.label,
+          status: f.status,
+          hoursSinceLastRun: f.hoursSinceLastRun,
+          note: f.note,
+        })),
+      ],
+      warnings: [
+        ...neverSynced.map((a) => ({
+          scope: 'account' as const,
+          accountKey: a.accountKey,
+          dealer: a.dealer,
+          status: a.status,
+          contactCount: a.contactCount,
+        })),
+        ...feedWarnings.map((f) => ({
+          scope: 'feed' as const,
+          feed: f.kind,
+          label: f.label,
+          status: f.status,
+          hoursSinceLastRun: f.hoursSinceLastRun,
+          note: f.note,
+        })),
+      ],
+      feeds,
       accounts,
       pruned,
     });

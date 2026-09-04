@@ -24,7 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { canAccessAccount, forbidden, getAccountScope, getAuthSession } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
-import { canAccountUseTemplate, parseSharedKeys } from '@/lib/ad-generator/template-access';
+import { LIVE_TEMPLATE, canAccountUseTemplate, parseSharedKeys } from '@/lib/ad-generator/template-access';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { usableByAutomation } from '@/lib/ad-generator/offer-kinds';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
   try {
     const [rows, config] = await Promise.all([
       prisma.adTemplateDoc.findMany({
-        where: { status: 'published', isActive: true },
+        where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
         orderBy: { updatedAt: 'desc' },
         select: { id: true, name: true, doc: true, accountKey: true, sharedAccountKeys: true },
       }),
@@ -129,9 +129,9 @@ export async function POST(req: NextRequest) {
     if (templateId) {
       const row = await prisma.adTemplateDoc.findUnique({
         where: { id: templateId },
-        select: { id: true, status: true, isActive: true, doc: true, accountKey: true, sharedAccountKeys: true },
+        select: { id: true, status: true, isActive: true, deletedAt: true, doc: true, accountKey: true, sharedAccountKeys: true },
       });
-      if (!row || row.status !== 'published' || !row.isActive) {
+      if (!row || row.status !== 'published' || !row.isActive || row.deletedAt) {
         return NextResponse.json({ error: 'That design is not available.' }, { status: 400 });
       }
       const ancestorKeys = await getAncestorAccountKeys(accountKey).catch(() => [] as string[]);

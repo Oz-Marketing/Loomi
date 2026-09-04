@@ -1,9 +1,12 @@
 'use client';
 
-// Sent-campaign detail drawer. Slides in from the right when a sent
-// row on the campaigns list is clicked. Renders campaign-scoped KPIs
+// Sent-campaign detail drawer. Slides in from the right when a row that
+// has already gone out is clicked — cleanly sent, 'partial' (some
+// recipients errored) or 'failed'. Renders campaign-scoped KPIs
 // (sent / delivered / opens / clicks / bounces / unsubs) plus an
-// email or SMS preview alongside. Sent campaigns are read-only —
+// email or SMS preview alongside, and — for partial/failed sends — the
+// failure count and the first error the send worker recorded, which is
+// otherwise invisible in the product. Sent campaigns are read-only —
 // there's no edit affordance here.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -64,12 +67,36 @@ interface EmailBlastDetail {
   subject: string;
   previewText: string;
   htmlContent: string;
+  /** Recipients the worker hard-failed on. */
+  failedCount: number;
+  totalRecipients: number;
+  /** First recipient error the worker recorded, if any. */
+  error: string;
 }
 
 interface SmsBlastDetail {
   id: string;
   name: string;
   message: string;
+  failedCount: number;
+  totalRecipients: number;
+  error: string;
+}
+
+/**
+ * What a terminal blast status means in the header, in plain words. `verb`
+ * prefixes the timestamp line — a failed blast was never "Sent <date>".
+ */
+function describeStatus(status: string): { label: string; tone: string; verb: string } {
+  const s = (status || '').toLowerCase().trim();
+  if (s === 'partial') {
+    return { label: 'Sent with errors', tone: 'text-amber-400', verb: 'Sent' };
+  }
+  if (s === 'failed') return { label: 'Failed', tone: 'text-red-400', verb: 'Attempted' };
+  if (s === 'canceled' || s === 'cancelled') {
+    return { label: 'Canceled', tone: 'text-red-400', verb: 'Canceled' };
+  }
+  return { label: 'Sent', tone: 'text-green-400', verb: 'Sent' };
 }
 
 interface SentBlastDrawerProps {
@@ -217,7 +244,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
         }
         return res.json();
       })
-      .then((data: { campaign?: EmailBlastDetail & SmsBlastDetail }) => {
+      .then((data: { campaign?: Partial<EmailBlastDetail & SmsBlastDetail> }) => {
         if (cancelled) return;
         if (!data.campaign) {
           setPreviewError('Blast not found.');
@@ -225,17 +252,23 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
         }
         if (channel === 'sms') {
           setSmsDetail({
-            id: data.campaign.id,
-            name: data.campaign.name,
+            id: data.campaign.id || campaignId,
+            name: data.campaign.name || '',
             message: data.campaign.message || '',
+            failedCount: data.campaign.failedCount ?? 0,
+            totalRecipients: data.campaign.totalRecipients ?? 0,
+            error: data.campaign.error || '',
           });
         } else {
           setEmailDetail({
-            id: data.campaign.id,
-            name: data.campaign.name,
+            id: data.campaign.id || campaignId,
+            name: data.campaign.name || '',
             subject: data.campaign.subject || '',
             previewText: data.campaign.previewText || '',
             htmlContent: data.campaign.htmlContent || '',
+            failedCount: data.campaign.failedCount ?? 0,
+            totalRecipients: data.campaign.totalRecipients ?? 0,
+            error: data.campaign.error || '',
           });
         }
       })
@@ -265,10 +298,32 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
     return previewBlock + emailDetail.htmlContent;
   }, [emailDetail]);
 
+  // Failure summary, assembled from whichever channel's detail payload
+  // loaded. Falls back to the status alone when the detail fetch hasn't
+  // landed (or failed), so a 'partial' row never renders as a clean send.
+  const detail = channel === 'sms' ? smsDetail : emailDetail;
+  const failedCount = detail?.failedCount ?? 0;
+  const failureSummary = useMemo(() => {
+    const status = (campaign?.status || '').toLowerCase().trim();
+    const errored = status === 'partial' || status === 'failed';
+    if (!errored && failedCount === 0) return null;
+    const total = detail?.totalRecipients ?? 0;
+    const headline =
+      failedCount > 0
+        ? total > 0
+          ? `${num(failedCount)} of ${num(total)} recipients failed to send.`
+          : `${num(failedCount)} recipients failed to send.`
+        : status === 'failed'
+          ? 'This blast failed to send.'
+          : 'Some recipients failed to send.';
+    return { headline, detail: detail?.error?.trim() || null };
+  }, [campaign?.status, detail, failedCount]);
+
   if (!mounted && !open) return null;
 
   const channelLabel =
     channel === 'sms' ? 'SMS' : channel === 'multi' ? 'Email + SMS' : 'Email';
+  const statusInfo = describeStatus(campaign?.status || '');
 
   return (
     <div
@@ -278,7 +333,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label="Sent campaign details"
+      aria-label="Campaign details"
     >
       <div
         className={`glass-modal w-[920px] max-w-[96vw] h-full flex flex-col overflow-hidden transition-transform duration-300 ease-out ${
@@ -297,13 +352,13 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
               )}
               <span>{channelLabel} Blast</span>
               <span>·</span>
-              <span className="text-green-400">Sent</span>
+              <span className={statusInfo.tone}>{statusInfo.label}</span>
             </div>
             <h2 className="text-base font-semibold mt-1 truncate">
               {campaign?.name || '(Untitled campaign)'}
             </h2>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Sent {formatDateTime(campaign?.sentAt || campaign?.updatedAt)}
+              {statusInfo.verb} {formatDateTime(campaign?.sentAt || campaign?.updatedAt)}
             </p>
           </div>
           <button
@@ -318,6 +373,31 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {/* Failure banner — only for blasts that actually errored. The
+              worker stores the first recipient error on the blast row; it
+              had no surface in the UI before this. */}
+          {failureSummary && (
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+              <div className="flex items-start gap-2">
+                <ExclamationTriangleIcon className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-amber-300">
+                    {failureSummary.headline}
+                  </p>
+                  {failureSummary.detail && (
+                    <p className="text-xs text-amber-200/80 mt-1 break-words">
+                      {failureSummary.detail}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5">
+                    Suppressed and opted-out contacts are skipped, not failed — these are
+                    genuine send errors.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* KPI block */}
           <section>
             <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-3">

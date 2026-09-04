@@ -177,6 +177,12 @@ export async function getEngagementTotals(
 }
 
 /**
+ * Most campaign rows either surface can ask for at once. Mirrors the `limit`
+ * the campaigns-list endpoint passes to `listEmailBlasts` / `listSmsBlasts`.
+ */
+export const CAMPAIGN_ROW_LIMIT = 500;
+
+/**
  * Per-campaign engagement table. Returns one row per campaign in the
  * range, sorted by sent date descending.
  */
@@ -187,18 +193,40 @@ export async function getCampaignEngagement(
   const { accountKeys, start, end } = input;
 
   // Build the where clause incrementally to avoid the OR-with-undefined
-  // pattern that Prisma sometimes chokes on. Account scoping happens
-  // in JS below because accountKeys is a JSON string on the row.
+  // pattern that Prisma sometimes chokes on.
   const range = dateFilter(start, end);
-  const where = range
-    ? {
-        OR: [
-          { startedAt: range },
-          { completedAt: range },
-          { scheduledFor: range },
-        ],
-      }
-    : {};
+  const clauses: Record<string, unknown>[] = [];
+  if (range) {
+    clauses.push({
+      OR: [
+        { startedAt: range },
+        { completedAt: range },
+        { scheduledFor: range },
+      ],
+    });
+  }
+  // Account scoping runs in SQL, not (only) in JS.
+  //
+  // `accountKeys` is a JSON string column, so there is no clean `IN`. It used
+  // to be filtered in JS *after* the `take` below, which made the cap global:
+  // the query fetched the N most recent blasts ACROSS EVERY ACCOUNT and only
+  // then narrowed to this one. Once the platform had more blasts than the cap,
+  // an account's sends fell off the end and its rows silently lost their
+  // numbers — while the Reports page, querying a narrower date window, still
+  // found them. Same data, two different answers.
+  //
+  // Matching on the quoted key ('"abc"') is exact despite being a substring
+  // test: the surrounding quotes are part of the pattern, so '"abc"' cannot
+  // match inside '"xabc"'. The JS check below still runs as a belt-and-braces
+  // parse of the real array.
+  if (accountKeys && accountKeys.length > 0) {
+    clauses.push({
+      OR: accountKeys.map((key) => ({
+        accountKeys: { contains: JSON.stringify(key) },
+      })),
+    });
+  }
+  const where = clauses.length > 0 ? { AND: clauses } : {};
 
   const campaigns = await prisma.emailBlast.findMany({
     where,
@@ -211,11 +239,16 @@ export async function getCampaignEngagement(
       completedAt: true,
     },
     orderBy: { createdAt: 'desc' },
-    take: 250,
+    // Now that the account is part of the query this cap is PER ACCOUNT.
+    // Kept deliberately in step with the campaigns list's own page size
+    // (`listEmailBlasts({ limit: CAMPAIGN_ROW_LIMIT })`) so every row the list
+    // can render is a row this can supply numbers for; raising one without the
+    // other reintroduces rows that show "—" for no visible reason.
+    take: CAMPAIGN_ROW_LIMIT,
   });
 
-  // Account-key membership check in JS (accountKeys is a JSON string on
-  // the row, so a SQL-side IN doesn't work cleanly).
+  // Belt-and-braces membership check: parses the real array, so a row whose
+  // JSON somehow doesn't mean what the substring match assumed is dropped.
   const matchesAccount = (raw: string): boolean => {
     if (!accountKeys || accountKeys.length === 0) return true;
     try {

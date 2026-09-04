@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
+import { recordWarmupSends, sendingDomain } from '@/lib/sending/warmup';
 import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
@@ -2853,6 +2854,18 @@ async function executeEmailNode(
         ? { unsubscribe: { substitutionTag: UNSUBSCRIBE_TOKEN } }
         : {}),
     });
+    // Count flow sends against the domain's warm-up budget.
+    //
+    // Flows are not throttled here — a flow step is time-sensitive (a
+    // welcome email an hour late is a different email) and deferring one
+    // needs enrollment-level rescheduling this path doesn't have. But the
+    // mail is just as real to a mailbox provider, so leaving it uncounted
+    // would let a busy flow quietly blow through the ramp a blast is
+    // carefully respecting. Recording it means blasts absorb the
+    // difference, which is the right way round: they're the ones that can
+    // wait.
+    await recordWarmupSends(sendingDomain(sender.senderEmail), 1);
+
     await prisma.emailBlastRecipient.update({
       where: { id: recipient.id },
       data: {

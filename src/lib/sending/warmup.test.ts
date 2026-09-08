@@ -8,6 +8,7 @@ import {
   utcDayStart,
   type WarmupState,
 } from './warmup';
+import { estimateDaysToSend } from './warmup-estimate';
 
 function state(overrides: Partial<WarmupState> = {}): WarmupState {
   return {
@@ -145,5 +146,41 @@ describe('unlimitedAllowance', () => {
     expect(a.status).toBe('none');
     expect(a.dailyCap).toBeNull();
     expect(a.remaining).toBeNull();
+  });
+});
+
+describe('estimateDaysToSend', () => {
+  const ramp = [10, 20, 40, 80] as const;
+
+  it('is one day when the audience fits in what is left today', () => {
+    expect(estimateDaysToSend(ramp, 0, 10, 8)).toBe(1);
+    expect(estimateDaysToSend(ramp, 0, 10, 10)).toBe(1);
+  });
+
+  it('counts the days the rungs actually cover, not an average', () => {
+    // 5 left today, then 20, then 40 → 65 covers 60 on day 3.
+    expect(estimateDaysToSend(ramp, 0, 5, 60)).toBe(3);
+  });
+
+  it('clears the remainder on the first day past the ramp', () => {
+    // Last rung is day index 3; anything outstanding after it goes at once.
+    expect(estimateDaysToSend(ramp, 3, 10, 1_000_000)).toBe(2);
+  });
+
+  it('accounts for a part-spent today', () => {
+    const full = estimateDaysToSend(ramp, 0, 10, 30);
+    const partial = estimateDaysToSend(ramp, 0, 1, 30);
+    expect(partial!).toBeGreaterThanOrEqual(full!);
+  });
+
+  it('returns null for an empty audience', () => {
+    expect(estimateDaysToSend(ramp, 0, 10, 0)).toBeNull();
+  });
+
+  it('estimates a realistic send on the real schedule', () => {
+    // 8,400 recipients from day 1 with the full first rung available.
+    const days = estimateDaysToSend(WARMUP_SCHEDULE, 0, WARMUP_SCHEDULE[0]!, 8_400);
+    expect(days).toBeGreaterThan(1);
+    expect(days).toBeLessThanOrEqual(WARMUP_SCHEDULE.length + 1);
   });
 });

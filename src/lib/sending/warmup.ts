@@ -21,6 +21,10 @@
  * state is also the default state.
  */
 import { prisma } from '@/lib/prisma';
+// Re-exported so server callers have one import for the whole warm-up API,
+// while the client-side schedule notice can pull the pure arithmetic without
+// dragging Prisma into the browser bundle.
+export { estimateDaysToSend } from './warmup-estimate';
 
 /**
  * Daily send allowance by day index (0 = the first day of the ramp).

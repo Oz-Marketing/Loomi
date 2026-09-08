@@ -14,6 +14,7 @@ import {
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { WarmupNotice } from '@/components/campaigns/warmup-notice';
 import { useAccount } from '@/contexts/account-context';
 import {
   audienceSelectionFromDraft,
@@ -358,6 +359,10 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                   description="Pick a specific date and time. Both channels fire together."
                 />
               </div>
+
+              {emailRecipients.length > 0 && accountKey && (
+                <WarmupNotice accountKey={accountKey} recipientCount={emailRecipients.length} />
+              )}
 
               {sendMode === 'later' && (
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">

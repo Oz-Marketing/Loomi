@@ -18,6 +18,7 @@ import {
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { WarmupNotice } from '@/components/campaigns/warmup-notice';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import {
@@ -533,6 +534,10 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   description="Pick a specific date and time. Loomi fires it then."
                 />
               </div>
+
+              {!recipientsLoading && recipients.length > 0 && accountKey && (
+                <WarmupNotice accountKey={accountKey} recipientCount={recipients.length} />
+              )}
 
               {sendMode === 'later' && (
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">

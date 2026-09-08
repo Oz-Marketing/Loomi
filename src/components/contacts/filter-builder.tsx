@@ -8,6 +8,8 @@ import {
   FunnelIcon,
   BookmarkIcon,
 } from '@heroicons/react/24/outline';
+import { Checkbox } from '@/components/ui/checkbox';
+import { HelpTip } from '@/components/ui/help-tip';
 import type {
   FilterDefinition,
   FilterGroup,
@@ -33,6 +35,20 @@ interface FilterBuilderProps {
   onApply: (definition: FilterDefinition) => void;
   onSave: (name: string, definition: FilterDefinition) => void;
   onClose: () => void;
+  /**
+   * Surface saving as a first-class choice alongside Apply rather than as a
+   * quiet secondary link.
+   *
+   * Callers where an applied filter is a durable object in its own right (the
+   * contacts view, the lists page) leave this off: Apply is the whole point
+   * there, and the filter sticks around on screen. Callers where Apply is a
+   * one-shot — the blast builders, where the filter is consumed by a single
+   * send and then gone — turn it ON, because a user who has just spent a
+   * minute assembling conditions in a flow called "build your audience"
+   * reasonably expects that work to survive the send. It didn't: Apply
+   * produced an ad-hoc, unnamed, unsaved selection and the segment was lost.
+   */
+  offerSave?: boolean;
 }
 
 let nextId = 1;
@@ -73,12 +89,17 @@ export function FilterBuilder({
   onApply,
   onSave,
   onClose,
+  offerSave = false,
 }: FilterBuilderProps) {
   const [definition, setDefinition] = useState<FilterDefinition>(
     initialDefinition ?? createEmptyDefinition(fields),
   );
   const [showSave, setShowSave] = useState(false);
   const [saveName, setSaveName] = useState('');
+  // `offerSave` mode: the name field is always visible and a checkbox decides
+  // whether Apply also persists the segment. Defaults ON — the user opened a
+  // segment builder, so keeping the segment is the expected outcome.
+  const [saveAlso, setSaveAlso] = useState(true);
   const [mounted, setMounted] = useState(false);
 
   // Animate in on mount
@@ -185,22 +206,31 @@ export function FilterBuilder({
     });
   }
 
-  function handleApply() {
+  /** Drop empty groups; returns null when nothing is left to filter on. */
+  function cleanDefinition(): FilterDefinition | null {
     const cleaned: FilterDefinition = {
       ...definition,
       groups: definition.groups.filter((g) => g.conditions.length > 0),
     };
-    if (cleaned.groups.length === 0) return;
+    return cleaned.groups.length === 0 ? null : cleaned;
+  }
+
+  function handleApply() {
+    const cleaned = cleanDefinition();
+    if (!cleaned) return;
+    // In offerSave mode the primary button owns BOTH outcomes, so a checked
+    // box routes through onSave — which is the only path that persists.
+    if (offerSave && saveAlso && saveName.trim()) {
+      onSave(saveName.trim(), cleaned);
+      return;
+    }
     onApply(cleaned);
   }
 
   function handleSave() {
     if (!saveName.trim()) return;
-    const cleaned: FilterDefinition = {
-      ...definition,
-      groups: definition.groups.filter((g) => g.conditions.length > 0),
-    };
-    if (cleaned.groups.length === 0) return;
+    const cleaned = cleanDefinition();
+    if (!cleaned) return;
     onSave(saveName.trim(), cleaned);
     setShowSave(false);
     setSaveName('');
@@ -337,14 +367,63 @@ export function FilterBuilder({
         {/* Footer actions — pinned to bottom */}
         <div className="p-4 border-t border-[var(--sidebar-border)]">
           <div className="flex flex-col gap-2">
+            {offerSave && (
+              <div className="rounded-xl border border-[var(--sidebar-border)] p-3 flex flex-col gap-2">
+                <div className="flex items-center gap-1.5">
+                  <Checkbox
+                    size="sm"
+                    checked={saveAlso}
+                    onChange={setSaveAlso}
+                    label={
+                      <span className="text-[11px] text-[var(--sidebar-foreground)]">
+                        Save this as a reusable segment
+                      </span>
+                    }
+                  />
+                  <HelpTip title="Saved segments" iconClassName="w-3.5 h-3.5">
+                    <p>
+                      A saved segment appears under Contacts → Segments and stays
+                      available for future campaigns. It re-evaluates its filter
+                      every time it&apos;s used, so it picks up new contacts on its
+                      own.
+                    </p>
+                  </HelpTip>
+                </div>
+                {saveAlso && (
+                  <input
+                    type="text"
+                    value={saveName}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    placeholder="Segment name…"
+                    className="w-full px-3 py-2 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleApply();
+                    }}
+                  />
+                )}
+                {/* Only the LOSS case gets inline copy — the reassuring
+                    explanation lives in the HelpTip above. Unchecking is the
+                    state that silently threw the user's work away, so that
+                    consequence has to be on screen, not behind a hover. */}
+                {!saveAlso && (
+                  <p className="text-[10px] text-amber-400/90 leading-snug">
+                    This filter will be used for this campaign only and won&apos;t be saved.
+                  </p>
+                )}
+              </div>
+            )}
+
             <button
               onClick={handleApply}
-              className="w-full px-4 py-2.5 text-xs font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors"
+              disabled={offerSave && saveAlso && !saveName.trim()}
+              className="w-full px-4 py-2.5 text-xs font-medium rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Apply Filter
+              {offerSave && saveAlso ? 'Save & Apply' : 'Apply Filter'}
             </button>
 
-            {!showSave ? (
+            {/* The quiet secondary save stays for callers that don't opt into
+                the explicit save block above. */}
+            {offerSave ? null : !showSave ? (
               <button
                 onClick={() => setShowSave(true)}
                 className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 text-xs rounded-xl text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)] transition-colors"

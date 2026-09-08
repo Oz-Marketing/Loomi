@@ -3,6 +3,7 @@ import {
   effectiveIndustries,
   templateInIndustry,
   isVehicleIndustry,
+  splitTemplatesByIndustry,
   offerKindsForIndustry,
   kindInIndustry,
 } from './industry';
@@ -95,5 +96,66 @@ describe('ad-generator industry scoping', () => {
     expect(kindInIndustry({}, 'Marketing Agency')).toBe(false);
     expect(kindInIndustry({}, 'Automotive')).toBe(true);
     expect(kindInIndustry({}, null)).toBe(true);
+  });
+});
+
+describe('splitTemplatesByIndustry', () => {
+  const vehicleDoc = { industries: undefined, offerKind: 'vehicle' as const };
+  const customDoc = { industries: undefined, offerKind: 'custom' as const };
+  const legacyDoc = { industries: undefined, offerKind: undefined };
+  const autoTagged = { industries: ['Automotive'], offerKind: 'custom' as const };
+
+  it('reproduces the Oz Marketing incident: every vehicle template withheld from a non-vehicle account', () => {
+    const owned = [
+      { id: 'proto', doc: vehicleDoc },
+      { id: 'proto-copy', doc: vehicleDoc },
+      { id: 'bonneville', doc: vehicleDoc },
+      { id: 'vehicle-offer', doc: autoTagged },
+    ];
+    const { visible, hidden } = splitTemplatesByIndustry(owned, 'Marketing Agency');
+    // This is what made a full library render as "No ad templates yet".
+    expect(visible).toEqual([]);
+    expect(hidden).toHaveLength(4);
+  });
+
+  it('shows all of them to an automotive account', () => {
+    const owned = [{ id: 'a', doc: vehicleDoc }, { id: 'b', doc: autoTagged }];
+    const { visible, hidden } = splitTemplatesByIndustry(owned, 'Automotive');
+    expect(visible).toHaveLength(2);
+    expect(hidden).toEqual([]);
+  });
+
+  it('counts a legacy doc with no offerKind as vehicle, so it hides too', () => {
+    const { visible, hidden } = splitTemplatesByIndustry([{ id: 'legacy', doc: legacyDoc }], 'Dental');
+    expect(visible).toEqual([]);
+    expect(hidden).toHaveLength(1);
+  });
+
+  it('keeps a custom-kind template visible to a non-vehicle account', () => {
+    const { visible, hidden } = splitTemplatesByIndustry([{ id: 'c', doc: customDoc }], 'Marketing Agency');
+    expect(visible).toHaveLength(1);
+    expect(hidden).toEqual([]);
+  });
+
+  it('splits a mixed library, which is what the "N more hidden" note reports', () => {
+    const owned = [
+      { id: 'usable', doc: customDoc },
+      { id: 'withheld', doc: vehicleDoc },
+    ];
+    const { visible, hidden } = splitTemplatesByIndustry(owned, 'Marketing Agency');
+    expect(visible.map((t) => t.id)).toEqual(['usable']);
+    expect(hidden.map((t) => t.id)).toEqual(['withheld']);
+  });
+
+  it('admin (no industry) sees everything and hides nothing', () => {
+    const owned = [{ id: 'a', doc: vehicleDoc }, { id: 'b', doc: autoTagged }];
+    expect(splitTemplatesByIndustry(owned, null).hidden).toEqual([]);
+    expect(splitTemplatesByIndustry(owned, null).visible).toHaveLength(2);
+  });
+
+  it('drops an unreadable doc from BOTH halves — it is not "hidden by industry"', () => {
+    const { visible, hidden } = splitTemplatesByIndustry([{ id: 'broken', doc: null }], 'Marketing Agency');
+    expect(visible).toEqual([]);
+    expect(hidden).toEqual([]);
   });
 });

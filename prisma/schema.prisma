@@ -2162,6 +2162,68 @@ model EmailEvent {
 // these emails out of every campaign batch before send. Bounce + spam
 // reports auto-populate from the webhook; unsubscribe + manual entries
 // flow through other surfaces.
+/**
+ * Sending-domain warm-up ledger — one row per domain being ramped.
+ * NO ROW MEANS NO CAP. Warm-up is opt-in per domain: an established domain
+ * that already sends at volume must never be throttled just because this
+ * table exists, so absence is the "send freely" state and a row is only
+ * created when someone explicitly starts a warm-up.
+ * Keyed on the DOMAIN, not the account, because reputation is earned by the
+ * domain: several rooftops sending as @youngautomotive.com share one
+ * reputation and must therefore share one daily budget. Two accounts on
+ * separate domains warm independently.
+ * Note this tracks the domain, not the IP. On SendGrid's shared IP pools the
+ * IP's reputation isn't ours to warm; on a dedicated IP the two ramp together
+ * and this schedule is the right shape for both.
+ */
+model EmailWarmup {
+  id     String @id @default(cuid())
+  /**
+   * Lowercased sending domain, e.g. "mail.youngautomotive.com".
+   */
+  domain String @unique
+
+  /**
+   * Day 0 of the ramp. The daily cap is a function of days since this.
+   */
+  startedAt DateTime @default(now())
+  /**
+   * active | paused | completed
+   */
+  status    String   @default("active")
+
+  // ── Rolling daily counter ──
+  //
+  // `sentToday` is only meaningful for `countedOn`; a read on a later date
+  // treats it as zero rather than trusting a stale number, so a missed reset
+  // can never silently eat a day's allowance.
+  sentToday Int       @default(0)
+  /**
+   * UTC midnight of the day `sentToday` counts.
+   */
+  countedOn DateTime?
+
+  /**
+   * Manual daily cap, overriding the schedule. Set when a domain needs to be
+   * held (or pushed) somewhere the standard ramp doesn't go.
+   */
+  dailyCapOverride Int?
+  /**
+   * Freeze the ramp at this day index instead of advancing. Used to plateau a
+   * domain whose bounce or complaint rate is climbing, without losing the
+   * elapsed-days history that `startedAt` encodes.
+   */
+  heldOnDay        Int?
+
+  pausedAt     DateTime?
+  pausedReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+}
+
 model EmailSuppression {
   id         String   @id @default(cuid())
   accountKey String
@@ -3511,8 +3573,28 @@ model AdTemplateDoc {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  /// Soft delete. Deleting a template used to be a hard row delete, which threw
+  /// away work a designer could spend days on with no way back — the one
+  /// destructive action in the builder that no backup short of a point-in-time
+  /// restore could undo.
+  ///
+  /// A TIMESTAMP rather than a boolean, matching `MediaAsset.archivedAt` and
+  /// AdCreative's convention: "when" is the part anyone asks about afterwards,
+  /// and it stays orthogonal to `status` (draft/published) and `isActive`, which
+  /// answer different questions. A deleted template keeps whatever status it had
+  /// so restoring puts it back exactly as it was.
+  ///
+  /// Every SELECTION path filters on this (see `LIVE_TEMPLATE` in
+  /// lib/ad-generator/template-access.ts). Fetch-by-id deliberately does NOT, so
+  /// the row can still be read to restore it.
+  deletedAt         DateTime?
+  /// Who deleted it, for the same reason the create path records its author.
+  deletedBy         String?
+
   @@index([status, isActive])
   @@index([accountKey])
+  // The library's own read: "this account's templates that aren't deleted".
+  @@index([accountKey, deletedAt])
 }
 
 // A reusable "block": a saved cluster of builder elements (e.g. a Lease/APR

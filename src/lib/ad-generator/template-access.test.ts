@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  LIVE_TEMPLATE,
   canAccountUseTemplate,
   isGlobalTemplate,
   parseSharedKeys,
@@ -130,5 +134,54 @@ describe('serializeSharedKeys', () => {
     expect(serializeSharedKeys([])).toBeNull();
     expect(serializeSharedKeys(['', '  '])).toBeNull();
     expect(serializeSharedKeys('nope')).toBeNull();
+  });
+});
+
+describe('LIVE_TEMPLATE (soft delete)', () => {
+  it('filters to rows that have not been deleted', () => {
+    expect(LIVE_TEMPLATE).toEqual({ deletedAt: null });
+  });
+
+  /**
+   * The guard that matters. `deletedAt` only means anything if EVERY query that
+   * SELECTS templates carries the filter — the library, the automation resolver,
+   * the shadow report, the taxonomy facets. Miss one and the template looks
+   * deleted in the UI while still quietly feeding unattended generation, which
+   * is worse than not having a soft delete at all.
+   *
+   * A static read of the source rather than a runtime assertion because the call
+   * sites are spread across API routes and background jobs that a unit test
+   * can't reach. Same shape as the pg-boss `createQueue` guard: cheap, and it
+   * fails on the PR that introduces the next unfiltered `findMany`.
+   *
+   * `findUnique` is deliberately NOT covered — fetch-by-id has to be able to read
+   * a deleted row (restore, and an existing ad that still renders from it).
+   */
+  it('is carried by every findMany that selects templates', () => {
+    const root = join(__dirname, '../../..');
+    const files = execFileSync(
+      'grep',
+      ['-rl', '--include=*.ts', 'adTemplateDoc', join(root, 'src')],
+      { encoding: 'utf8' },
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const src = readFileSync(file, 'utf8');
+      // Each `.findMany({ … })` opened on an adTemplateDoc, with its options up
+      // to the matching close of the object literal.
+      const re = /adTemplateDoc\s*(?:\r?\n\s*)?\.?\s*\n?\s*\.?findMany\(\{([\s\S]*?)\n\s*\}\)/g;
+      for (const m of src.matchAll(re)) {
+        const opts = m[1];
+        if (!opts.includes('LIVE_TEMPLATE') && !opts.includes('deletedAt')) {
+          offenders.push(`${file.replace(root + '/', '')}: ${opts.trim().slice(0, 60)}…`);
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
   });
 });

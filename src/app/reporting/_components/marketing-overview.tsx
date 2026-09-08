@@ -25,11 +25,14 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
+  ArrowPathIcon,
   ArrowTrendingUpIcon,
   BanknotesIcon,
+  BuildingStorefrontIcon,
   ChartBarIcon,
   CursorArrowRaysIcon,
   EyeIcon,
+  PhoneIcon,
   StarIcon,
   TruckIcon,
   UserPlusIcon,
@@ -55,7 +58,6 @@ import {
   type DateRangeKey,
 } from '../ads/_components/shared';
 import { RankedBarChart } from './dealer-charts';
-import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import {
   fetchAllSources,
   fetchJson,
@@ -69,43 +71,15 @@ interface DealerSummaries {
   service: { roCount: number; totalRevenue: number; avgRoValue: number } | null;
   leads: { leads: number; converted: number } | null;
   budget: { planned: number; contractTotal: number | null } | null;
+  // Cohort rates, not a windowed metric — see the fetch below for why it
+  // ignores the date picker.
+  retention: { salesRate12m: number | null; svcRate12m: number | null } | null;
 }
 
 const n = (v: unknown): number => {
   const x = Number(v ?? 0);
   return Number.isFinite(x) ? x : 0;
 };
-
-/** Where each channel's own report lives, for the "open it" links. */
-const REPORT_HREF: Record<string, string> = {
-  google: '/ads/google',
-  meta: '/ads/meta',
-  stackadapt: '/ads/stackadapt',
-  email: '/ads/blasts',
-  ga4: '/websites',
-  reputation: '/reputation',
-};
-
-/**
- * Channel name as the table's first cell. Channels with their own report link
- * out — matching the arrow-on-hover affordance of `OverviewRow` below — and
- * any channel not in `REPORT_HREF` stays plain text rather than linking
- * somewhere it cannot open.
- */
-function ChannelCell({ label, sourceKey }: { label: string; sourceKey: string }) {
-  const href = REPORT_HREF[sourceKey];
-  if (!href) return <span title={label}>{label}</span>;
-  return (
-    <Link
-      href={href}
-      title={label}
-      className="group flex items-center gap-1.5 transition-colors hover:text-[var(--primary)]"
-    >
-      <span className="min-w-0 truncate">{label}</span>
-      <ArrowRightIcon className="h-3 w-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
-    </Link>
-  );
-}
 
 export function MarketingOverview({ accountKey, dealer }: { accountKey: string; dealer: string }) {
   const { theme } = useTheme();
@@ -128,7 +102,7 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
       const year = Number(to.slice(0, 4));
       const q = `accountKey=${encodeURIComponent(accountKey)}&start_date=${from}&end_date=${to}`;
 
-      const [srcs, sales, service, leads, budget] = await Promise.all([
+      const [srcs, sales, service, leads, budget, retention] = await Promise.all([
         fetchAllSources(accountKey, from, to),
         fetchJson<{ summary: DealerSummaries['sales'] }>(`/api/reporting/sales-trend?${q}`),
         fetchJson<{ summary: DealerSummaries['service'] }>(`/api/reporting/service-trend?${q}`),
@@ -137,6 +111,14 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
         ),
         fetchJson<{ planned: number; contractTotal: number | null }>(
           `/api/reporting/budget?accountKey=${encodeURIComponent(accountKey)}&year=${year}`,
+        ),
+        // Deliberately NOT passed the date range. Retention is measured over
+        // cohorts that carry their own windows — a 12-month rate means
+        // "bought last year, serviced since", which the page's date picker
+        // cannot narrow without making the number mean something else. The
+        // report itself has no date picker for the same reason.
+        fetchJson<{ summary: DealerSummaries['retention'] }>(
+          `/api/reporting/service-retention?accountKey=${encodeURIComponent(accountKey)}`,
         ),
       ]);
 
@@ -148,6 +130,7 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
         service: service?.summary ?? null,
         leads: leads?.current ?? null,
         budget: budget ? { planned: budget.planned, contractTotal: budget.contractTotal } : null,
+        retention: retention?.summary ?? null,
       });
       setLoading(false);
     })();
@@ -168,20 +151,16 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
 
   const ga4 = live.find((s) => s.key === 'ga4');
   const reputation = live.find((s) => s.key === 'reputation');
+  const calls = live.find((s) => s.key === 'call-tracking');
+  const gbp = live.find((s) => s.key === 'gbp');
   const d = dealerData;
 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">{dealer}</h1>
-            <Muted>Everything for this account in one place.</Muted>
-          </div>
-          {/* The reporting index swaps between THIS page and the roll-up
-              dashboard on `isRollup`, so without the toggle here a group has no
-              way back to its own numbers. */}
-          <AccountScopeToggle />
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">{dealer}</h1>
+          <Muted>Everything for this account in one place.</Muted>
         </div>
         <DashboardToolbar
           dateRange={rangeKey}
@@ -255,7 +234,7 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
                 <DataTable
                   head={['Channel', 'Spend', 'Impressions', 'Clicks', 'Conversions']}
                   rows={media.map((s) => [
-                    <ChannelCell key={s.key} label={s.label} sourceKey={s.key} />,
+                    s.label,
                     usd0(sourceSpend(s)),
                     num(n(s.metrics?.impressions)),
                     num(n(s.metrics?.clicks)),
@@ -293,6 +272,43 @@ export function MarketingOverview({ accountKey, dealer }: { accountKey: string; 
                       : null
                   }
                   href="/reputation"
+                />
+                <OverviewRow
+                  icon={PhoneIcon}
+                  label="Tracked calls"
+                  value={
+                    calls
+                      ? `${num(n(calls.metrics?.calls))}${
+                          calls.metrics?.answerRate != null
+                            ? ` · ${pctText(n(calls.metrics.answerRate))} answered`
+                            : ''
+                        }`
+                      : null
+                  }
+                  href="/call-tracking"
+                />
+                <OverviewRow
+                  icon={BuildingStorefrontIcon}
+                  label="Profile views"
+                  value={
+                    gbp
+                      ? `${num(n(gbp.metrics?.totalImpressions))} · ${num(n(gbp.metrics?.callClicks))} calls`
+                      : null
+                  }
+                  href="/business-profile"
+                />
+                <OverviewRow
+                  icon={ArrowPathIcon}
+                  label="Service retention"
+                  value={
+                    // Already a percentage at source (service-retention's
+                    // `rate()` multiplies by 100), as is call tracking's
+                    // answerRate. Don't scale either again.
+                    d?.retention?.salesRate12m != null
+                      ? `${pctText(d.retention.salesRate12m)} of buyers return`
+                      : null
+                  }
+                  href="/service-retention"
                 />
                 <OverviewRow
                   icon={BanknotesIcon}

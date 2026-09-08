@@ -122,9 +122,127 @@ export function autoMapHeaders(headers: readonly string[]): Record<string, Conta
 
 // ── Value coercion ──
 
-export function normaliseEmail(raw: string): string {
-  return raw.trim().toLowerCase();
+// Anything that isn't a single `local@domain.tld` is not something we can
+// send to. Deliberately strict about the delimiters so a multi-address cell
+// can never survive as one "address".
+const EMAIL_SHAPE = /^[^\s@,;|]+@[^\s@,;|]+\.[^\s@,;|]+$/;
+
+// What dealer CRMs write into the email field to mean "we don't have one".
+// These are addresses by shape, so they can't be rejected outright — a
+// contact whose only value is `none@none.com` keeps it. They are only ranked
+// BELOW a real address when one cell holds both, which is how
+// "noneyet@none.com;markpantelakis@gmail.com" ends up sendable.
+const PLACEHOLDER_DOMAINS = new Set([
+  'none.com',
+  'nonet.com',
+  'no.com',
+  'noemail.com',
+  'nomail.com',
+  'email.com',
+  'test.com',
+  'example.com',
+  'example.org',
+]);
+const PLACEHOLDER_LOCALS = new Set([
+  'none',
+  'noneyet',
+  'noemail',
+  'nomail',
+  'noreply',
+  'no-reply',
+  'email',
+  'test',
+  'na',
+  'unknown',
+  'nobody',
+  'declined',
+]);
+
+/** A shape-valid address that is really a "we have no address" marker. */
+export function isPlaceholderEmail(address: string): boolean {
+  const at = address.lastIndexOf('@');
+  if (at < 0) return false;
+  return (
+    PLACEHOLDER_DOMAINS.has(address.slice(at + 1)) ||
+    PLACEHOLDER_LOCALS.has(address.slice(0, at))
+  );
 }
+
+export interface ParsedEmailCell {
+  /** Distinct valid addresses, real ones before placeholders. */
+  addresses: string[];
+  /** Non-empty parts that were not addresses — "none", "calie", "NULL". */
+  dropped: string[];
+}
+
+/**
+ * Take apart an email cell.
+ *
+ * Dealer CRMs routinely pack every address they hold for a person into one
+ * field ("bluejenkins1@yahoo.com;donald.jenkins@gmail.com"), and some repeat
+ * the same one twice. Same delimiters as `parseTagsCell`. Empty parts (a
+ * trailing "a@b.com,") are not "dropped" — there was nothing there.
+ */
+export function parseEmailCell(raw: string): ParsedEmailCell {
+  const addresses: string[] = [];
+  const dropped: string[] = [];
+
+  for (const part of raw.split(/[,;|]/)) {
+    const token = part.trim();
+    if (!token) continue;
+    const addr = token.toLowerCase();
+    if (!EMAIL_SHAPE.test(addr)) {
+      dropped.push(token);
+    } else if (!addresses.includes(addr)) {
+      addresses.push(addr);
+    }
+  }
+
+  return {
+    addresses: [
+      ...addresses.filter((a) => !isPlaceholderEmail(a)),
+      ...addresses.filter((a) => isPlaceholderEmail(a)),
+    ],
+    dropped,
+  };
+}
+
+/**
+ * True when a cell holds an address AND text that isn't one, which usually
+ * means a delimiter landed inside a single address rather than between two:
+ * "calie,hammond@youngsubaru.com" is a mistyped `calie.hammond@…`, not a list.
+ * Taking the valid-looking half would invent `hammond@youngsubaru.com` — a
+ * different, possibly real person. There is no way to tell that apart from a
+ * genuine "NULL;real@x.com", so neither is guessed at.
+ */
+export function isAmbiguousEmailCell(cell: ParsedEmailCell): boolean {
+  return cell.dropped.length > 0 && cell.addresses.length > 0;
+}
+
+/**
+ * The one address that becomes `Contact.email`: the best address in the cell,
+ * or '' when the cell holds none or is ambiguous. `Contact.email` is both the
+ * send target and the dedup key, so it has to be a single address. Callers
+ * that want the alternates use `parseEmailCell`.
+ */
+export function normaliseEmail(raw: string): string {
+  const cell = parseEmailCell(raw);
+  if (isAmbiguousEmailCell(cell)) return '';
+  return cell.addresses[0] ?? '';
+}
+
+/**
+ * Where the addresses a packed cell held beyond the first are kept. `Contact`
+ * has one email column, so the alternates go to `customFields` rather than
+ * being thrown away — losing an address the dealer gave us is not a fix.
+ */
+export const ADDITIONAL_EMAILS_FIELD = 'additionalEmails';
+
+/**
+ * Where an ambiguous cell is parked verbatim. Nothing is discarded; a human
+ * can read it back and correct the contact.
+ */
+export const UNPARSED_EMAIL_FIELD = 'unparsedEmail';
 
 /**
  * Best-effort E.164 normalisation. Strips formatting, prepends +1
@@ -278,6 +396,8 @@ export function normaliseRow(
   };
 
   const customFields: Record<string, string> = {};
+  let extraEmails: string[] = [];
+  let unparsedEmail: string | null = null;
 
   for (const [header, rawValue] of Object.entries(row)) {
     const target = mapping[header];
@@ -294,7 +414,15 @@ export function normaliseRow(
     const field = target as ContactField;
 
     if (field === 'email') {
-      parsed.email = normaliseEmail(value) || null;
+      const cell = parseEmailCell(value);
+      if (isAmbiguousEmailCell(cell)) {
+        // Don't guess which half of "calie,hammond@x.com" was the address.
+        parsed.email = null;
+        unparsedEmail = value;
+      } else {
+        parsed.email = cell.addresses[0] ?? null;
+        extraEmails = cell.addresses.slice(1);
+      }
     } else if (field === 'phone') {
       const e164 = normalisePhone(value);
       parsed.phone = e164 || null;
@@ -314,6 +442,14 @@ export function normaliseRow(
   if (!parsed.fullName) {
     const concat = [parsed.firstName, parsed.lastName].filter(Boolean).join(' ').trim();
     parsed.fullName = concat || null;
+  }
+
+  // A column the user explicitly mapped to these keys wins over our salvage.
+  if (extraEmails.length > 0 && !(ADDITIONAL_EMAILS_FIELD in customFields)) {
+    customFields[ADDITIONAL_EMAILS_FIELD] = extraEmails.join('; ');
+  }
+  if (unparsedEmail && !(UNPARSED_EMAIL_FIELD in customFields)) {
+    customFields[UNPARSED_EMAIL_FIELD] = unparsedEmail;
   }
 
   parsed.customFields = Object.keys(customFields).length > 0 ? customFields : null;

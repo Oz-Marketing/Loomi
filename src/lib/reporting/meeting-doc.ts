@@ -38,6 +38,15 @@ export interface PlatformResult {
   /** Why it's missing — shown verbatim in "Not included". */
   note?: string;
   metrics: Record<string, number> | null;
+  /**
+   * Paid media. Set by the caller from the source registry, not inferred here.
+   *
+   * This was a denylist of two keys, which meant every source added to the
+   * fan-out silently joined the "Media performance" table — a channel that
+   * buys nothing would appear in a client deck as a row of zeros beside real
+   * spend, which reads as a campaign that ran and failed.
+   */
+  media: boolean;
 }
 
 export interface SalesSummary {
@@ -60,6 +69,11 @@ export interface BudgetSummary {
   byChannel: { label: string; amount: number }[];
 }
 
+export interface LeadsSummary {
+  leads: number;
+  converted: number;
+}
+
 export interface MeetingInput {
   dealer: string;
   startDate: string;
@@ -68,6 +82,7 @@ export interface MeetingInput {
   sales?: SalesSummary | null;
   service?: ServiceSummary | null;
   budget?: BudgetSummary | null;
+  leads?: LeadsSummary | null;
   /** Claude's written analysis, already generated. Optional. */
   analysis?: string | null;
 }
@@ -146,11 +161,14 @@ export function buildMeetingDoc(input: MeetingInput): ReportDoc {
   const live = input.platforms.filter((p) => p.status === 'ok' && p.metrics);
   const unavailable = input.platforms.filter((p) => p.status !== 'ok' || !p.metrics);
 
-  // GA4 and Reputation report traffic and ratings, not media buys — they get
-  // their own sections rather than a row of empty spend columns.
-  const mediaPlatforms = live.filter((p) => p.key !== 'ga4' && p.key !== 'reputation');
+  // Non-media sources report traffic, ratings, calls and profile activity, not
+  // media buys — each gets its own section rather than a row of empty spend
+  // columns. The flag is declared per source; see PlatformResult.media.
+  const mediaPlatforms = live.filter((p) => p.media);
   const ga4 = live.find((p) => p.key === 'ga4');
   const reputation = live.find((p) => p.key === 'reputation');
+  const calls = live.find((p) => p.key === 'call-tracking');
+  const gbp = live.find((p) => p.key === 'gbp');
 
   const mediaRows = mediaPlatforms
     .map(mediaRow)
@@ -224,6 +242,64 @@ export function buildMeetingDoc(input: MeetingInput): ReportDoc {
       rows: [
         ['Average rating', m.rating ? m.rating.toFixed(1) : '—'],
         ['Total reviews', int(n(m.reviewCount))],
+      ],
+    });
+  }
+
+  if (calls?.metrics) {
+    const m = calls.metrics;
+    sections.push({
+      title: 'Call tracking',
+      columns: [
+        { header: 'Measure', type: 'text' },
+        { header: 'Value', type: 'text' },
+      ],
+      rows: [
+        ['Tracked calls', int(n(m.calls))],
+        ['Answered / missed', `${int(n(m.answered))} / ${int(n(m.missed))}`],
+        // answerRate and avgDuration are already scaled and rounded by
+        // lib/reporting/call-tracking.ts — don't re-scale.
+        ['Answer rate', m.answerRate != null ? pct(n(m.answerRate)) : '—'],
+        [
+          'Average talk time',
+          m.avgDuration != null ? `${Math.round(n(m.avgDuration))}s` : '—',
+        ],
+      ],
+    });
+  }
+
+  if (gbp?.metrics) {
+    const m = gbp.metrics;
+    sections.push({
+      title: 'Business Profile',
+      columns: [
+        { header: 'Measure', type: 'text' },
+        { header: 'Value', type: 'integer' },
+      ],
+      rows: [
+        ['Profile views', n(m.totalImpressions)],
+        ['Website clicks', n(m.websiteClicks)],
+        ['Calls', n(m.callClicks)],
+        ['Direction requests', n(m.directionRequests)],
+      ],
+    });
+  }
+
+  if (input.leads) {
+    const l = input.leads;
+    sections.push({
+      title: 'Leads',
+      columns: [
+        { header: 'Measure', type: 'text' },
+        { header: 'Value', type: 'text' },
+      ],
+      rows: [
+        // Labelled to survive a side-by-side with Oz Dealer Tools, which
+        // counted bad and duplicate leads this number never sees — the CRM
+        // filters them before the bridge sends anything.
+        ['Leads (excluding bad & duplicate)', int(l.leads)],
+        ['Bought', int(l.converted)],
+        ['Conversion', l.leads > 0 ? pct(div(l.converted, l.leads) * 100) : '—'],
       ],
     });
   }

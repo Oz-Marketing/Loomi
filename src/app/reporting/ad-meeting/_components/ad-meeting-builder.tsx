@@ -63,7 +63,11 @@ export function AdMeetingBuilder({
       const platforms = await fetchAllSources(accountKey, from, to);
 
       const year = Number(to.slice(0, 4));
-      const [sales, service, budget] = await Promise.all([
+      // The leads route takes a month, not a range — it compares like-for-like
+      // through the same day of month. Anchored to the range's end month so a
+      // deck for July reports July's leads.
+      const period = to.slice(0, 7);
+      const [sales, service, budget, leads] = await Promise.all([
         fetchJson<{ summary: MeetingInput['sales'] }>(
           `/api/reporting/sales-trend?accountKey=${encodeURIComponent(accountKey)}&start_date=${from}&end_date=${to}`,
         ),
@@ -76,6 +80,9 @@ export function AdMeetingBuilder({
           spent: number | null;
           byChannel: { label: string; amount: number }[];
         }>(`/api/reporting/budget?accountKey=${encodeURIComponent(accountKey)}&year=${year}`),
+        fetchJson<{ current: { leads: number; converted: number } | null }>(
+          `/api/reporting/leads?accountKey=${encodeURIComponent(accountKey)}&period=${period}`,
+        ),
       ]);
 
       setDoc(
@@ -86,6 +93,7 @@ export function AdMeetingBuilder({
           platforms,
           sales: sales?.summary ?? null,
           service: service?.summary ?? null,
+          leads: leads?.current ?? null,
           budget: budget
             ? {
                 contractTotal: budget.contractTotal,

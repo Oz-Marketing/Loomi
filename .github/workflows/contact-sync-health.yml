@@ -73,6 +73,7 @@ jobs:
           stale=$(jq -r '.staleCount' /tmp/health.json)
           never=$(jq -r '.neverSyncedCount' /tmp/health.json)
           runs=$(jq -r '.runsAllTime' /tmp/health.json)
+          feedbad=$(jq -r '.feedProblemCount' /tmp/health.json)
 
           {
             echo "### CRM contact sync"
@@ -86,15 +87,26 @@ jobs:
               echo
               echo "| account | dealer | hours since last run | contacts |"
               echo "|---|---|---|---|"
-              jq -r '.problems[] | "| \(.accountKey) | \(.dealer // "—") | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
+              jq -r '.problems[] | select(.scope == "account") | "| \(.accountKey) | \(.dealer // "—") | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
               echo
             fi
+
+            # Reporting feeds are checked per-feed, not per-account — a dealer
+            # with no call tracker or no mail drop is not a fault. See
+            # REPORTING_FEEDS in the health route.
+            echo "### Reporting feeds"
+            echo
+            echo "| feed | status | hours since last run | accounts (24h) | rows (24h) |"
+            echo "|---|---|---|---|---|"
+            jq -r '.feeds[] | "| \(.label) | \(if .failing then "❌ " else (if .status == "ok" then "✅ " else "⚠️ " end) end)\(.status) | \(.hoursSinceLastRun // "never") | \(.accountsReporting24h) | \(.rows24h) |"' /tmp/health.json
+            echo
+
             if [ "${never}" != "0" ]; then
               echo "<details><summary>Never synced (${never}) — expected for feed-less parent accounts</summary>"
               echo
               echo "| account | dealer | contacts |"
               echo "|---|---|---|"
-              jq -r '.warnings[] | "| \(.accountKey) | \(.dealer // "—") | \(.contactCount) |"' /tmp/health.json
+              jq -r '.warnings[] | select(.scope == "account") | "| \(.accountKey) | \(.dealer // "—") | \(.contactCount) |"' /tmp/health.json
               echo
               echo "</details>"
             fi
@@ -112,7 +124,7 @@ jobs:
           fi
 
           if [ "${healthy}" = "true" ]; then
-            echo "All ${checked} account(s) with an active feed synced within the freshness window."
+            echo "All ${checked} account(s) with an active feed synced within the freshness window, and every reporting feed reported in."
             exit 0
           fi
 
@@ -126,5 +138,16 @@ jobs:
             exit 1
           fi
 
-          echo "::error::Contact sync is stale for ${stale} of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
+          if [ "${feedbad}" != "0" ]; then
+            jq -r '.problems[] | select(.scope == "feed") |
+              "::error::Reporting feed \"\(.label)\" is \(.status)" +
+              (if .status == "never-run"
+                 then " — it has never delivered a batch. Is it in the Oz Reports cron? See docs/oz-reports-contact-sync.md."
+                 else " — last batch \(.hoursSinceLastRun)h ago. \(.note)" end)' /tmp/health.json
+          fi
+
+          if [ "${stale}" != "0" ]; then
+            echo "::error::Contact sync is stale for ${stale} of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
+          fi
+
           exit 1

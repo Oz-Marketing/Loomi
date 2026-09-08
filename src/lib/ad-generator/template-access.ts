@@ -88,6 +88,22 @@ export function templatesForAnyAccount<T extends TemplateScopeRow>(
   );
 }
 
+/**
+ * The `where` fragment every template SELECTION must carry: a soft-deleted
+ * template is not a template anyone can list, pick, sync from or generate
+ * against.
+ *
+ * Spelled once here for the same reason the access rule above is: the filter is
+ * needed at nine call sites across the library, the automation resolver, the
+ * taxonomy facets and the playbook context, and a soft delete that one of them
+ * forgets is worse than none at all — the row looks gone in the library and
+ * still quietly feeds unattended generation.
+ *
+ * Deliberately NOT applied to fetch-by-id: restoring a template requires reading
+ * a deleted one, and the by-id GET reports `deletedAt` so the caller decides.
+ */
+export const LIVE_TEMPLATE = { deletedAt: null } as const;
+
 /** Normalise a client-supplied share list for storage. */
 export function serializeSharedKeys(keys: unknown): string | null {
   if (!Array.isArray(keys)) return null;

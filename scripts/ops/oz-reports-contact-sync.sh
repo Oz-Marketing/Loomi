@@ -19,7 +19,8 @@
 #   nightly   Daily. Sales + service customers, per-visit/per-deal events,
 #             plus a 3-day leads catch-up so leads still land if the hourly
 #             job is wedged. Uses the controller's default windows
-#             (service 7d / sales 45d).
+#             (service 7d / sales 45d). Also carries the three reporting
+#             feeds — calls, reviews, mailer — see "Reporting feeds" below.
 #   sweep     Weekly. Every endpoint with ?all=1 — full history, fanned out
 #             ONE DEALER PER REQUEST (38 rooftops of all-time history in a
 #             single request would be killed by the timeout mid-run). This is
@@ -29,6 +30,27 @@
 #             change or opt-out flip on a two-year-old purchase is invisible
 #             to them. Ingest is an idempotent merge, so this is safe.
 #             Expect hours, not minutes. Pass dealer=KEY to sweep just one.
+#
+# Reporting feeds (pushcalls / pushreviews / pushmailer):
+#
+#   These three feed Call Tracking, Reputation history and Direct Mail ROI in
+#   Loomi Reporting. They are NOT partitioned by loomi_set — one table covers
+#   every mapped dealer — so their URLs carry no /<set> segment (see
+#   SETLESS_ENDPOINTS).
+#
+#   Their windows are wider than the CRM feeds', for reasons specific to each:
+#
+#   - Reviews change after publication. `reply_sent` flips when the store
+#     answers a review, and reply rate is the one metric the live Google
+#     Places API cannot report at all — so re-pushing is how that number stays
+#     true, not housekeeping. Hence a 90-day default rather than 7.
+#   - Mailer campaigns keep matching for weeks after the drop: the service
+#     window stays open 45 days past the last in-home date, so a campaign's
+#     matched RO count is still growing long after it mailed. The controller
+#     derives its own window from the in-home dates, so there is no days= to
+#     set — it just has to run regularly.
+#   - Calls are the only one of the three that behaves like the CRM feeds, so
+#     7 days is a daily run plus slack.
 #
 # Extra query (optional 2nd arg) is appended to every request, e.g.
 #   oz-reports-contact-sync.sh nightly dry_run=1
@@ -59,6 +81,11 @@ OZ_BASE="${OZ_BASE:-https://ozreports.com}"
 SETS="${SETS:-0}"
 LEADS_DAYS="${LEADS_DAYS:-2}"
 NIGHTLY_LEADS_DAYS="${NIGHTLY_LEADS_DAYS:-3}"
+# Reporting feeds. Calls behave like the CRM feeds; reviews deliberately run
+# wide because a review's reply flag changes long after it was published.
+# pushmailer takes no days= — it derives its window from the in-home dates.
+CALLS_DAYS="${CALLS_DAYS:-7}"
+REVIEWS_DAYS="${REVIEWS_DAYS:-90}"
 # Deliberately NOT ~/logs — on cPanel that directory holds the domain access
 # logs and is under cPanel's own rotation.
 LOG_DIR="${LOG_DIR:-$HOME/loomi-sync/logs}"
@@ -86,6 +113,23 @@ usage() {
 }
 
 # ─────────────────────────────────────────────────────────────
+# Endpoints whose route carries NO /<set> segment.
+#
+# The CRM feeds are partitioned by dealer_map.loomi_set, so their routes end
+# in (:segment). The three reporting feeds are not — one table covers every
+# mapped dealer — and appending a set to them produces a 404. Keep this list
+# in step with app/Config/Routes.php on the Oz Reports host.
+# ─────────────────────────────────────────────────────────────
+SETLESS_ENDPOINTS=" pushcalls pushreviews pushmailer "
+
+endpoint_is_setless() {
+  case "$SETLESS_ENDPOINTS" in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# ─────────────────────────────────────────────────────────────
 # Plan: which endpoints, with which window, for this job
 # ─────────────────────────────────────────────────────────────
 case "$JOB" in
@@ -99,13 +143,27 @@ case "$JOB" in
       "pushevents|"
       "pusheventsps|"
       "pushleads|days=${NIGHTLY_LEADS_DAYS}"
+      # Reporting feeds. Last in the plan on purpose: they are the newest and
+      # least battle-tested of the endpoints, and a failure in one of them
+      # should not cost the night's CRM sync, which has already run by then.
+      "pushcalls|days=${CALLS_DAYS}"
+      "pushreviews|days=${REVIEWS_DAYS}"
+      "pushmailer|"
     )
     ;;
   sweep)
     # Endpoint list only — the sweep does NOT use PLAN. It fans out per dealer
     # (run_sweep) because one request covering all 38 mapped rooftops' full
     # history would never finish inside a sane timeout.
-    SWEEP_ENDPOINTS="pushcustomers pushcustomersps pushleads pushevents pusheventsps"
+    SWEEP_ENDPOINTS="pushcustomers pushcustomersps pushleads pushevents pusheventsps pushcalls"
+    # Swept whole, in one request each, rather than fanned out per dealer.
+    # Both are small enough that chunking would add failure modes without
+    # buying anything: pushreviews is a few thousand rows across every
+    # rooftop, and pushmailer sends only per-campaign aggregates — the
+    # matchback itself runs on this host and no per-recipient row crosses.
+    # pushreviews also filters by ?place=, not ?dealer=, so the per-dealer
+    # discovery below does not apply to it.
+    SWEEP_WHOLE="pushreviews pushmailer"
     PLAN=()
     CURL_MAX_TIME="$SWEEP_MAX_TIME"
     ;;
@@ -335,10 +393,20 @@ fallback_summary() {
   return 0
 }
 
-# One endpoint × one set.
+# One endpoint × one set. A set-less endpoint ignores $set entirely — see
+# SETLESS_ENDPOINTS. `label` is what every message below names, so a failure
+# on a set-less feed reads "pushcalls: ..." rather than "pushcalls/0: ...",
+# which would point at a set segment its URL never had.
 run_call() {
   local endpoint="$1" query="$2" set="$3"
-  local url="${OZ_BASE}/loomi/${endpoint}/${set}"
+  local url label
+  if endpoint_is_setless "$endpoint"; then
+    url="${OZ_BASE}/loomi/${endpoint}"
+    label="${endpoint}"
+  else
+    url="${OZ_BASE}/loomi/${endpoint}/${set}"
+    label="${endpoint}/${set}"
+  fi
   local qs="$query"
 
   if [ -n "$EXTRA_QUERY" ]; then
@@ -361,7 +429,7 @@ run_call() {
 
   if [ "$rc" -ne 0 ]; then
     HARD_FAIL=1
-    fail "${endpoint}/${set}: curl exited ${rc} after ${elapsed}s — $(curl_exit_meaning "$rc")"
+    fail "${label}: curl exited ${rc} after ${elapsed}s — $(curl_exit_meaning "$rc")"
     return
   fi
 
@@ -369,16 +437,16 @@ run_call() {
     HARD_FAIL=1
     case "$http" in
       301|302)
-        fail "${endpoint}/${set}: HTTP ${http} redirect — this host's IP is almost certainly not in app/Config/Whitelist.php (IpFilter bounces unlisted callers to /)"
+        fail "${label}: HTTP ${http} redirect — this host's IP is almost certainly not in app/Config/Whitelist.php (IpFilter bounces unlisted callers to /)"
         ;;
       401|403)
-        fail "${endpoint}/${set}: HTTP ${http} — check the Loomi ingest secret in app/Config/APIKeys.php"
+        fail "${label}: HTTP ${http} — check the Loomi ingest secret in app/Config/APIKeys.php"
         ;;
       500)
-        fail "${endpoint}/${set}: HTTP 500 — Loomi Base URL / Ingest Secret may be unset in app/Config/APIKeys.php"
+        fail "${label}: HTTP 500 — Loomi Base URL / Ingest Secret may be unset in app/Config/APIKeys.php"
         ;;
       *)
-        fail "${endpoint}/${set}: HTTP ${http} after ${elapsed}s"
+        fail "${label}: HTTP ${http} after ${elapsed}s"
         ;;
     esac
     return
@@ -392,17 +460,17 @@ run_call() {
     fallback_summary "$BODY" >> "$LOG_FILE" 2>&1
     prc=$?
   fi
-  log "  ${endpoint}/${set} done in ${elapsed}s (parser rc=${prc})"
+  log "  ${label} done in ${elapsed}s (parser rc=${prc})"
 
   case "$prc" in
     0) ;;
     2)
       PARTIAL=1
-      fail "${endpoint}/${set}: some dealer batches reported errors — see ${LOG_FILE}"
+      fail "${label}: some dealer batches reported errors — see ${LOG_FILE}"
       ;;
     *)
       HARD_FAIL=1
-      fail "${endpoint}/${set}: response was not a push summary — see ${LOG_FILE}"
+      fail "${label}: response was not a push summary — see ${LOG_FILE}"
       ;;
   esac
 }
@@ -427,7 +495,11 @@ run_call() {
 # checks for emptiness). Parsed with grep so this works with no PHP CLI.
 discover_dealers() {
   local endpoint="$1" set="$2" url http
-  url="${OZ_BASE}/loomi/${endpoint}/${set}?dry_run=1&days=1"
+  if endpoint_is_setless "$endpoint"; then
+    url="${OZ_BASE}/loomi/${endpoint}?dry_run=1&days=1"
+  else
+    url="${OZ_BASE}/loomi/${endpoint}/${set}?dry_run=1&days=1"
+  fi
 
   # shellcheck disable=SC2086 # intentional word list
   http=$(curl -sS \
@@ -440,10 +512,16 @@ discover_dealers() {
 }
 
 run_sweep() {
-  local endpoint set keys key count
+  local endpoint set keys key count label sets
 
   for endpoint in $SWEEP_ENDPOINTS; do
-    for set in $SETS; do
+    # A set-less endpoint has one URL, not one per set — walking SETS here
+    # would push the same full history two or three times over.
+    if endpoint_is_setless "$endpoint"; then sets="-"; else sets="$SETS"; fi
+
+    for set in $sets; do
+      if endpoint_is_setless "$endpoint"; then label="$endpoint"; else label="${endpoint}/${set}"; fi
+
       # An operator-pinned dealer wins — `sweep dealer=youngHonda` should sweep
       # exactly that rooftop, not rediscover all of them.
       if printf '%s' "$EXTRA_QUERY" | grep -q 'dealer='; then
@@ -453,17 +531,29 @@ run_sweep() {
 
       if ! keys="$(discover_dealers "$endpoint" "$set")" || [ -z "$keys" ]; then
         HARD_FAIL=1
-        fail "${endpoint}/${set}: dealer discovery failed — cannot chunk the sweep (check the log for the dry-run response)"
+        fail "${label}: dealer discovery failed — cannot chunk the sweep (check the log for the dry-run response)"
         continue
       fi
 
       count=$(printf '%s\n' "$keys" | wc -l | tr -d ' ')
-      log "${endpoint}/${set}: sweeping ${count} dealer(s), one request each"
+      log "${label}: sweeping ${count} dealer(s), one request each"
 
       for key in $keys; do
         run_call "$endpoint" "all=1&dealer=${key}" "$set"
       done
     done
+  done
+
+  # Feeds swept whole — see SWEEP_WHOLE for why these two aren't chunked.
+  # An operator-pinned dealer is honored where the endpoint understands it:
+  # pushmailer filters by ?dealer=, pushreviews by ?place=, so a `dealer=`
+  # sweep would silently push every rooftop's reviews. Skip it instead.
+  for endpoint in ${SWEEP_WHOLE:-}; do
+    if printf '%s' "$EXTRA_QUERY" | grep -q 'dealer=' && [ "$endpoint" = "pushreviews" ]; then
+      log "pushreviews: skipped — this sweep is pinned to one dealer and pushreviews filters by place, not dealer"
+      continue
+    fi
+    run_call "$endpoint" "all=1" "-"
   done
 }
 
@@ -509,9 +599,15 @@ else
   for entry in "${PLAN[@]}"; do
     endpoint="${entry%%|*}"
     query="${entry#*|}"
-    for set in $SETS; do
-      run_call "$endpoint" "$query" "$set"
-    done
+    if endpoint_is_setless "$endpoint"; then
+      # One URL, not one per set — see SETLESS_ENDPOINTS. Looping SETS here
+      # would re-push the same window once per set for no benefit.
+      run_call "$endpoint" "$query" "-"
+    else
+      for set in $SETS; do
+        run_call "$endpoint" "$query" "$set"
+      done
+    fi
   done
 fi
 

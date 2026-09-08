@@ -5,7 +5,7 @@ import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import { incentiveToFieldPatch } from '../incentive-apply';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
 import { brandLogoData } from '../brand-logos';
-import { templatesForAccount } from '../template-access';
+import { LIVE_TEMPLATE, templatesForAccount } from '../template-access';
 import { parseOemRule, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import { splitCoopPack, type CoopRulePack } from '../coop-rules';
@@ -112,12 +112,15 @@ async function resolveAutomationTemplate(
   templateId?: string,
 ): Promise<{ doc: TemplateDoc; id: string; name: string; how: string } | null> {
   if (templateId) {
+    // An explicitly-mapped template that has since been deleted must not keep
+    // feeding unattended generation — that is exactly the silent behaviour the
+    // soft delete exists to prevent.
     const row = await prisma.adTemplateDoc.findUnique({ where: { id: templateId } });
-    if (!row) return null;
+    if (!row || row.deletedAt) return null;
     return { doc: JSON.parse(row.doc) as TemplateDoc, id: row.id, name: row.name, how: 'explicitly selected' };
   }
   const all = await prisma.adTemplateDoc.findMany({
-    where: { status: 'published', isActive: true },
+    where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
     orderBy: { updatedAt: 'desc' },
   });
   const rows = templatesForAccount(all, { accountKey });

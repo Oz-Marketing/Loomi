@@ -40,7 +40,7 @@ export async function GET() {
 
   const [emailCats, adRows, formRows, lpRows, tagVocab] = await Promise.all([
     safe(() => prisma.template.findMany({ where: { category: { not: null } }, select: { category: true }, distinct: ['category'] }), [] as { category: string | null }[]),
-    safe(() => prisma.adTemplateDoc.findMany({ select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
+    safe(() => prisma.adTemplateDoc.findMany({ where: { deletedAt: null }, select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
     safe(() => prisma.form.findMany({ where: { isTemplate: true }, select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
     safe(() => prisma.landingPage.findMany({ where: { isTemplate: true }, select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
     safe(() => prisma.templateTag.findMany({ select: { name: true } }), [] as { name: string }[]),

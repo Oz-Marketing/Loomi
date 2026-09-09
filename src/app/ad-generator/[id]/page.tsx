@@ -98,7 +98,11 @@ export default function AdGeneratorPage() {
   const [launchOpen, setLaunchOpen] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/ad-generator/templates-doc')
+    // Scoped: unscoped, this only ever resolved templates in the shared library,
+    // so an ad built from an account-owned or shared template found no current
+    // design to compare against and the "template updated" banner never fired for
+    // exactly the templates sharing exists to serve.
+    fetch(`/api/ad-generator/templates-doc${accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : ''}`)
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
         if (cancelled) return;
@@ -117,7 +121,7 @@ export default function AdGeneratorPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountKey]);
   // Resolve against ALL templates (incl. retired) so older ads still render.
   const templates = useMemo(() => [...ALL_TEMPLATES, ...dbTemplates], [dbTemplates]);
 

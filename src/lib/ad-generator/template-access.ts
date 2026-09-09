@@ -110,3 +110,45 @@ export function serializeSharedKeys(keys: unknown): string | null {
   const clean = [...new Set(keys.filter((k): k is string => typeof k === 'string' && !!k.trim()).map((k) => k.trim()))];
   return clean.length ? JSON.stringify(clean) : null;
 }
+
+/**
+ * WHO a template is for, as one value.
+ *
+ * Publishing and sharing were two controls that each told half the truth. The
+ * library card read its scope off `accountKey` alone, so a shared-library
+ * template narrowed to three dealers still announced "All accounts" — while the
+ * rule above had already narrowed it to exactly those three. Two settings, two
+ * surfaces, and the one that was easiest to look at was the one that was wrong.
+ *
+ * So audience is derived HERE, from the same columns `canAccountUseTemplate`
+ * reads, and every surface renders this instead of re-deriving it. If the two
+ * ever disagree again it will be because someone changed this function, which is
+ * the point.
+ *
+ * Deliberately says nothing about draft/published. That is a separate axis — WHEN
+ * rather than WHO — and collapsing them would lose the distinction between "a
+ * draft meant for everyone" and "a live template meant for three dealers".
+ */
+export type TemplateAudience =
+  | { kind: 'all' }
+  | { kind: 'accounts'; keys: string[] };
+
+export function templateAudience(row: TemplateScopeRow): TemplateAudience {
+  if (isGlobalTemplate(row)) return { kind: 'all' };
+  return { kind: 'accounts', keys: templateAccessKeys(row) };
+}
+
+/**
+ * The audience as one short phrase, for a card or a chip.
+ *
+ * `nameFor` resolves an account key to its dealer name; the caller owns that map,
+ * so this stays pure and usable on either side of the wire.
+ */
+export function audienceLabel(row: TemplateScopeRow, nameFor: (key: string) => string): string {
+  const audience = templateAudience(row);
+  if (audience.kind === 'all') return 'All accounts';
+  const { keys } = audience;
+  if (keys.length === 0) return 'No accounts';
+  if (keys.length === 1) return nameFor(keys[0]);
+  return `${keys.length} accounts`;
+}

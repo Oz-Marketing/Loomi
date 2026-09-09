@@ -17,9 +17,9 @@ import { MEDIA_CATEGORIES } from '@/lib/media-categories';
 import { isMotionMime, motionKind, MOTION_ACCEPT } from '@/lib/ad-generator/motion';
 import type { RightsStatus } from '@/lib/media-rights';
 import {
-  countOutOfLicence,
+  countOutOfLicense,
   defaultApprovedOnly,
-  isOutOfLicence as assetOutOfLicence,
+  isOutOfLicense as assetOutOfLicense,
   orderPickerAssets,
 } from '@/lib/media-picker-order';
 
@@ -44,7 +44,7 @@ interface MediaFile {
   // ── Lifecycle (already served by serializeMediaAsset) ──
   /** 'draft' | 'approved' — whether this is cleared for use. */
   status?: string | null;
-  /** Derived rights position; `unknown` when no licence is recorded. */
+  /** Derived rights position; `unknown` when no license is recorded. */
   rights?: { status: RightsStatus; daysRemaining: number | null } | null;
 }
 
@@ -211,7 +211,7 @@ export function MediaPickerModal({
   );
 
   /** How many of the loaded assets are unusable as-is — drives the warning strip. */
-  const outOfLicenceCount = useMemo(() => countOutOfLicence(filtered), [filtered]);
+  const outOfLicenseCount = useMemo(() => countOutOfLicense(filtered), [filtered]);
 
   // ── Escape + mount ──
   useEffect(() => {
@@ -273,14 +273,14 @@ export function MediaPickerModal({
           </button>
         </div>
 
-        {/* Out-of-licence warning. Stated once at the top rather than only per
+        {/* Out-of-license warning. Stated once at the top rather than only per
             tile: the risk is placing one without noticing, and a badge on a
             120px thumbnail is easy to miss. */}
-        {!inBranding && outOfLicenceCount > 0 && !approvedOnly && (
+        {!inBranding && outOfLicenseCount > 0 && !approvedOnly && (
           <div className="mx-5 mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2">
             <p className="text-[11px] leading-snug text-red-400">
-              {outOfLicenceCount} asset{outOfLicenceCount === 1 ? ' is' : 's are'} past
-              their licence or campaign date and shouldn&apos;t go into live creative.
+              {outOfLicenseCount} asset{outOfLicenseCount === 1 ? ' is' : 's are'} past
+              their license or campaign date and shouldn&apos;t go into live creative.
               They&apos;re greyed out and sorted last.
             </p>
           </div>
@@ -378,7 +378,7 @@ export function MediaPickerModal({
             ))}
 
             {!inBranding && filtered.map((f) => {
-              const outOfLicence = assetOutOfLicence(f);
+              const outOfLicense = assetOutOfLicense(f);
               const expiringSoon = f.rights?.status === 'expiring_soon';
               return (
               <button
@@ -388,9 +388,9 @@ export function MediaPickerModal({
                 title={[
                   f.name,
                   f.status === 'approved' ? 'Approved' : 'Not yet approved',
-                  outOfLicence ? 'OUT OF LICENCE — do not use in live creative' : null,
+                  outOfLicense ? 'OUT OF LICENCE — do not use in live creative' : null,
                   expiringSoon && f.rights?.daysRemaining != null
-                    ? `Licence expires in ${f.rights.daysRemaining} days`
+                    ? `License expires in ${f.rights.daysRemaining} days`
                     : null,
                 ].filter(Boolean).join(' · ')}
               >
@@ -406,7 +406,7 @@ export function MediaPickerModal({
                       <img
                         src={f.thumbnailUrl}
                         alt={f.name}
-                        className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicence ? "opacity-40 grayscale" : ""}`}
+                        className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicense ? "opacity-40 grayscale" : ""}`}
                         loading="lazy"
                       />
                     ) : (
@@ -420,7 +420,7 @@ export function MediaPickerModal({
                       alt={f.name}
                       // Desaturated rather than hidden: still selectable, but it
                       // can't be mistaken for cleared creative at a glance.
-                      className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicence ? 'opacity-40 grayscale' : ''}`}
+                      className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicense ? 'opacity-40 grayscale' : ''}`}
                       loading="lazy"
                     />
                   ) : (
@@ -433,12 +433,12 @@ export function MediaPickerModal({
                       <PlayIcon className="h-2 w-2" /> Video
                     </span>
                   )}
-                  {outOfLicence && (
+                  {outOfLicense && (
                     <span className="absolute left-1 top-1 rounded bg-red-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
                       Expired
                     </span>
                   )}
-                  {!outOfLicence && expiringSoon && (
+                  {!outOfLicense && expiringSoon && (
                     <span className="absolute left-1 top-1 rounded bg-amber-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
                       {f.rights?.daysRemaining}d
                     </span>

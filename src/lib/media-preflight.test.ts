@@ -22,7 +22,7 @@ describe('runPreflight', () => {
     expect(result.canApprove).toBe(true);
   });
 
-  it('blocks an asset whose licence has lapsed', () => {
+  it('blocks an asset whose license has lapsed', () => {
     const result = runPreflight({ ...clean, licenseExpiresAt: inDays(-5) }, NOW);
     expect(result.canApprove).toBe(false);
     expect(result.findings[0]).toMatchObject({
@@ -33,7 +33,7 @@ describe('runPreflight', () => {
   });
 
   it('names the campaign date when that is what governed', () => {
-    // Licence fine, offer over — the message has to say which, or the reviewer
+    // License fine, offer over — the message has to say which, or the reviewer
     // goes looking in the wrong field.
     const result = runPreflight(
       { ...clean, licenseExpiresAt: inDays(300), expiresAt: inDays(-1) },
@@ -43,15 +43,15 @@ describe('runPreflight', () => {
     expect(result.findings[0].message).toContain('campaign');
   });
 
-  it('warns rather than blocks when a licence is merely close', () => {
-    // Refusing here would make the last month of every licence unusable.
+  it('warns rather than blocks when a license is merely close', () => {
+    // Refusing here would make the last month of every license unusable.
     const result = runPreflight({ ...clean, licenseExpiresAt: inDays(10) }, NOW);
     expect(result.canApprove).toBe(true);
     expect(result.findings[0]).toMatchObject({ severity: 'warn', code: 'rights_expiring' });
     expect(result.findings[0].message).toContain('10 days');
   });
 
-  it('blocks when derivatives exist against a licence that forbids them', () => {
+  it('blocks when derivatives exist against a license that forbids them', () => {
     // The renditions ARE the breach — approving the master would bless it.
     const result = runPreflight(
       { ...clean, derivativesPermitted: false, renditionCount: 3 },
@@ -61,7 +61,7 @@ describe('runPreflight', () => {
     expect(result.findings.find((f) => f.code === 'derivatives_forbidden')).toBeTruthy();
   });
 
-  it('does not block a forbidding licence with no derivatives yet', () => {
+  it('does not block a forbidding license with no derivatives yet', () => {
     const result = runPreflight({ ...clean, derivativesPermitted: false, renditionCount: 0 }, NOW);
     expect(result.canApprove).toBe(true);
   });
@@ -80,7 +80,7 @@ describe('runPreflight', () => {
       .not.toContain('oem_scope_missing');
   });
 
-  it('asks third-party material for a rights holder and licence, but not Oz-created', () => {
+  it('asks third-party material for a rights holder and license, but not Oz-created', () => {
     expect(codes({ ...clean, assetSource: 'stock' })).toEqual(
       ['rights_holder_missing', 'rights_unrecorded', 'usage_scope_missing'].sort(),
     );

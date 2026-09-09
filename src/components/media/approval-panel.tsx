@@ -118,7 +118,7 @@ export function ApprovalPanel({
               approved assets.
             </p>
             <p className="mt-2">
-              Checks run automatically. Blocking issues (a lapsed licence) refuse
+              Checks run automatically. Blocking issues (a lapsed license) refuse
               the approval; warnings are recorded and can be approved past.
             </p>
           </HelpTip>

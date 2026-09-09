@@ -47,7 +47,7 @@ export async function GET(
  * Body: { action: 'approve' | 'revoke', note?: string, acknowledgeWarnings?: boolean }
  *
  * `approve` clears the asset for use. Pre-flight runs here and a BLOCK refuses —
- * approving an out-of-licence asset would assert something false, and no amount
+ * approving an out-of-license asset would assert something false, and no amount
  * of reviewer intent makes it true. Warnings don't refuse; they're recorded on
  * the approval so the gap stays visible afterwards.
  *

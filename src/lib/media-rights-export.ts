@@ -5,7 +5,7 @@ import { assetCategoryLabel, assetSourceLabel, parseListColumn } from '@/lib/med
 /**
  * Rights export — the surviving half of the spreadsheet idea.
  *
- * The round-trip (export, edit, re-import) was rejected: OEM licence terms are
+ * The round-trip (export, edit, re-import) was rejected: OEM license terms are
  * uniform per programme, so a per-row editor solves variation this problem
  * doesn't have, and bulk edit does the same job without a parser. What survives
  * is the READ: handing someone a sheet of what's licensed, to whom, through
@@ -27,7 +27,7 @@ function escapeCsvCell(value: unknown): string {
 
 /**
  * Columns, in the order a reviewer reads them: what it is, whose it is, what the
- * licence says, and — last, because it's the answer everything else supports —
+ * license says, and — last, because it's the answer everything else supports —
  * whether it's still usable.
  */
 export const RIGHTS_EXPORT_HEADERS = [
@@ -37,10 +37,10 @@ export const RIGHTS_EXPORT_HEADERS = [
   'Asset type',
   'Source',
   'Rights holder',
-  'Licence type',
+  'License type',
   'Agreement ref',
-  'Licence starts',
-  'Licence expires',
+  'License starts',
+  'License expires',
   'Campaign ends',
   'Usage scope',
   'Territory',
@@ -59,7 +59,7 @@ function day(d: Date | null): string {
 /**
  * Tri-state booleans read as words, not `true`/`false`/blank.
  *
- * Blank and "no" mean very different things for a licence — "we never recorded
+ * Blank and "no" mean very different things for a license — "we never recorded
  * whether derivatives are allowed" is a gap to chase, "derivatives are not
  * allowed" is a constraint to honour — and a spreadsheet blank hides that.
  */

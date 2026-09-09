@@ -2438,7 +2438,7 @@ model MediaAsset {
   /// JSON string[] of vehicle model names.
   vehicleModel  String?
   /// Who owns the rights, e.g. "Audi of America". Free text in Phase 1; Phase 3
-  /// adds the structured licence window this is the human-readable half of.
+  /// adds the structured license window this is the human-readable half of.
   rightsHolder  String?
   /// Derivative lineage: a crop/resize/duplicate points at the master it came
   /// from, so "which assets derive from this?" is answerable. No FK relation —
@@ -2457,11 +2457,11 @@ model MediaAsset {
   //
   // The most commonly under-implemented DAM capability, and the one that
   // actually bites an automotive agency: OEM photography is licensed for a
-  // window, and creative that outlives its licence is a real exposure. All
-  // nullable — an asset with no licence recorded is "unknown", which reads
+  // window, and creative that outlives its license is a real exposure. All
+  // nullable — an asset with no license recorded is "unknown", which reads
   // differently from "unlimited" and must not be treated as either.
   //
-  // `rightsHolder` above is the licence HOLDER; these describe the licence.
+  // `rightsHolder` above is the license HOLDER; these describe the license.
 
   /// lib/media-rights.ts LICENSE_TYPES — OEM-licensed, stock, talent release…
   licenseType           String?
@@ -2482,7 +2482,7 @@ model MediaAsset {
   /// A missing talent release and a confirmed absent one carry different risk.
   exclusive             Boolean?
   talentReleaseOnFile   Boolean?
-  /// Whether the licence permits derivative works (resize, crop, composite).
+  /// Whether the license permits derivative works (resize, crop, composite).
   /// The one rights field automated generation must respect: compositing an
   /// asset that forbids derivatives is a breach nobody would catch by eye.
   derivativesPermitted  Boolean?
@@ -2499,7 +2499,7 @@ model MediaAsset {
   expiredAt          DateTime?
   /// Why it expired — "license" | "effective" | "manual". §3 of the design note
   /// requires the trigger source to be auditable; without it nobody can tell a
-  /// lapsed licence from an ended campaign after the fact.
+  /// lapsed license from an ended campaign after the fact.
   expirationReason   String?
   /// Last advance warning sent, so the daily sweep doesn't re-notify. Null once
   /// the dates move, which is what makes a renewal re-arm the warnings.
@@ -2510,7 +2510,7 @@ model MediaAsset {
   // Four states, and only two of them live here: `draft` and `approved`. The
   // other two are the timestamps above — `expiredAt` and `archivedAt` — kept
   // separate on purpose. An asset can be approved AND expired (cleared for use,
-  // licence since lapsed), or approved AND archived. Collapsing them into one
+  // license since lapsed), or approved AND archived. Collapsing them into one
   // enum would lose which of the three was true, exactly as folding archive into
   // AdCreative.status would have.
   //
@@ -2693,7 +2693,7 @@ model MediaCollectionItem {
 
 // One run of the media rights expiration sweep — its heartbeat.
 //
-// Written on EVERY run, including a run that found nothing, because "no licences
+// Written on EVERY run, including a run that found nothing, because "no licenses
 // expired today" and "the sweep stopped running three weeks ago" are
 // indistinguishable without a row. That is the same reason expire-ads.ts records
 // an AdAutomationRun, and the reason this exists at all: the sweep shipped
@@ -2736,7 +2736,7 @@ model MediaSweepRun {
 // A SEPARATE table rather than child MediaAssets, even though `parentAssetId`
 // exists and would have fit. Renditions are outputs, not library items: eight
 // sizes per master would multiply the grid by nine, distort every facet count,
-// and invite someone to tag or licence a derivative independently of the master
+// and invite someone to tag or license a derivative independently of the master
 // it came from. They belong TO an asset, so they hang off it.
 //
 // The master is always the source of truth. Renditions are disposable — delete
@@ -3588,9 +3588,9 @@ model AdTemplateDoc {
   /// Every SELECTION path filters on this (see `LIVE_TEMPLATE` in
   /// lib/ad-generator/template-access.ts). Fetch-by-id deliberately does NOT, so
   /// the row can still be read to restore it.
-  deletedAt         DateTime?
+  deletedAt DateTime?
   /// Who deleted it, for the same reason the create path records its author.
-  deletedBy         String?
+  deletedBy String?
 
   @@index([status, isActive])
   @@index([accountKey])

@@ -23,7 +23,7 @@ describe('governingExpiry', () => {
     });
   });
 
-  it('resolves a tie to the licence — the legal constraint, not the operational one', () => {
+  it('resolves a tie to the license — the legal constraint, not the operational one', () => {
     const d = inDays(30);
     expect(governingExpiry({ licenseExpiresAt: d, expiresAt: d }).reason).toBe('license');
   });
@@ -37,7 +37,7 @@ describe('governingExpiry', () => {
 
 describe('assessRights', () => {
   it('reports unknown when nothing is recorded — not active', () => {
-    // The distinction this phase exists for: no licence on file is an open
+    // The distinction this phase exists for: no license on file is an open
     // question, not a clearance.
     const a = assessRights({}, NOW);
     expect(a.status).toBe('unknown');
@@ -65,8 +65,8 @@ describe('assessRights', () => {
     expect(a.daysRemaining).toBe(3);
   });
 
-  it('lets a manual expiry win over a licence that still runs', () => {
-    // Someone pulled it deliberately; a live licence doesn't undo that.
+  it('lets a manual expiry win over a license that still runs', () => {
+    // Someone pulled it deliberately; a live license doesn't undo that.
     const a = assessRights(
       { licenseExpiresAt: inDays(90), expiredAt: inDays(-1), expirationReason: 'manual' },
       NOW,
@@ -133,7 +133,7 @@ describe('dueWarning', () => {
 });
 
 describe('vocabulary guards and daysUntil', () => {
-  it('rejects unknown licence types', () => {
+  it('rejects unknown license types', () => {
     expect(isLicenseType('oem-licensed')).toBe(true);
     expect(isLicenseType('OEM-licensed')).toBe(false);
     expect(isLicenseType('perpetual')).toBe(false);

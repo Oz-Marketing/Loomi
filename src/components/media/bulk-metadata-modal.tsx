@@ -12,7 +12,7 @@ import {
  * Apply metadata to many assets at once.
  *
  * Replaces the spreadsheet round-trip that enterprise DAMs offer for this. A
- * spreadsheet earns its keep when values differ per row, and OEM licence terms
+ * spreadsheet earns its keep when values differ per row, and OEM license terms
  * don't — they're uniform per programme — so this is the same job with no file
  * format, parser or partial-import failure to maintain.
  *

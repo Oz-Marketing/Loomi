@@ -13,7 +13,7 @@ import { rightsExportCsv, rightsExportFilename } from '@/lib/media-rights-export
  *   ids          export exactly these assets (the current selection)
  *   accountKey   'all' | a key | omitted for admin-level
  *   oem          a brand, or 'none' for brand-agnostic
- *   datedOnly    only assets that carry a licence or campaign date
+ *   datedOnly    only assets that carry a license or campaign date
  *
  * POST rather than GET because a selection can be hundreds of ids, which is
  * more than a query string should carry.

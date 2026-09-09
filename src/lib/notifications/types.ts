@@ -257,21 +257,21 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
   },
   {
     type: 'asset_rights_expiring',
-    label: 'Asset licence expiring',
+    label: 'Asset license expiring',
     description:
-      'A media asset\u2019s licence or effective date is approaching (30 days out, then 7). Time to renew or plan a replacement.',
+      'A media asset\u2019s license or effective date is approaching (30 days out, then 7). Time to renew or plan a replacement.',
     category: 'Asset Library',
-    // Digest: a licence 30 days out is a planning item, not an interruption.
+    // Digest: a license 30 days out is a planning item, not an interruption.
     channel: 'digest',
     defaultEnabled: true,
   },
   {
     type: 'asset_rights_expired',
-    label: 'Asset out of licence',
+    label: 'Asset out of license',
     description:
-      'A media asset has passed its licence or effective date. Creative still using it should be replaced.',
+      'A media asset has passed its license or effective date. Creative still using it should be replaced.',
     category: 'Asset Library',
-    // Immediate: an asset in live creative past its licence is active exposure.
+    // Immediate: an asset in live creative past its license is active exposure.
     channel: 'immediate',
     defaultEnabled: true,
   },

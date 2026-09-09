@@ -314,10 +314,10 @@ function AssetOriginBadge({ f }: { f: MediaFile }) {
 }
 
 /**
- * Licence countdown, bottom-left of the thumbnail.
+ * License countdown, bottom-left of the thumbnail.
  *
  * Only appears when there's something to act on — expiring, expired or lapsed.
- * An asset that's fine, or that has no licence recorded, gets nothing: badging
+ * An asset that's fine, or that has no license recorded, gets nothing: badging
  * "unknown" would put a warning on most of a library mid-migration, and a
  * warning on everything is a warning on nothing.
  */
@@ -334,8 +334,8 @@ function RightsBadge({ f }: { f: MediaFile }) {
       }`}
       title={
         past
-          ? 'Out of licence — replace before reusing this asset'
-          : `Licence or campaign ends in ${f.rights.daysRemaining} day(s)`
+          ? 'Out of license — replace before reusing this asset'
+          : `License or campaign ends in ${f.rights.daysRemaining} day(s)`
       }
     >
       <ExclamationTriangleIcon className="h-3 w-3" />
@@ -824,7 +824,7 @@ export default function MediaPage() {
 
   /**
    * The rights & activity monitor, over the library rather than beside it.
-   * Admin-only and off by default: it answers "is the licence sweep still
+   * Admin-only and off by default: it answers "is the license sweep still
    * running, and what is about to expire", which is a question you go looking
    * for rather than one the library should answer unprompted.
    */
@@ -2117,13 +2117,13 @@ export default function MediaPage() {
       </div>
 
       {/* ── Rights & Activity ──
-          The fleet-wide licence sweep: what it found and whether it is still
+          The fleet-wide license sweep: what it found and whether it is still
           running. This used to be a tab of the agency-scope "All Accounts"
           view, which no longer exists — but it is a compliance monitor, not a
           browsing mode, and its readings are the same wherever you open it. So
           it stays here as an admin-only panel over whichever library you're in.
           A stale sweep has to be visible to SOMEBODY, and burying it in a
-          retired scope is how an expired licence goes unnoticed. */}
+          retired scope is how an expired license goes unnoticed. */}
       {canManageSharedAssets && showRights && <RightsActivityPanel />}
 
       {/* ── The library itself ── */}

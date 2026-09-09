@@ -42,7 +42,7 @@ export function isAssetCategory(value: unknown): value is AssetCategory {
 // ── Source (where it came from) ──
 //
 // Drives the card badge and, later, the rights defaults: an OEM-supplied asset
-// carries the manufacturer's licence terms, an Oz-created one does not.
+// carries the manufacturer's license terms, an Oz-created one does not.
 
 export const ASSET_SOURCES = [
   { value: 'oem-supplied', label: 'OEM-supplied' },

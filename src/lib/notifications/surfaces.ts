@@ -37,3 +37,77 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
   // wherever the user happens to be when they decide they've had enough.
   'Product Updates': 'both',
 };
+
+/**
+ * How a category presents itself in the bell panel.
+ *
+ * WHY THIS IS DATA AND NOT INLINE IN THE PANEL. The panel is one reader; the
+ * settings tab groups by the same categories and should wear the same colours.
+ * A second copy in the component is how the two drift until an "Ad Generator"
+ * row is blue in one place and amber in the other.
+ *
+ * `kind` is the distinction Connor asked for: PRODUCT news is about Loomi
+ * itself and applies to everyone, TOOL output is a specific surface telling you
+ * something happened in your account. They read differently, so they should
+ * look different — product news is deliberately neutral, tools wear a colour.
+ */
+export interface NotificationCategoryStyle {
+  /** Chip label. The full name is too long for a 360px panel. */
+  short: string;
+  /** Icon key — the panel maps this to a component; this file stays React-free. */
+  icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'book' | 'sparkles';
+  /** Icon-tile foreground and background classes. */
+  accent: string;
+  tint: string;
+  kind: 'product' | 'tool';
+}
+
+export const NOTIFICATION_CATEGORY_STYLE: Record<
+  NotificationCategory,
+  NotificationCategoryStyle
+> = {
+  'Ad Generator': {
+    short: 'Ad Gen',
+    icon: 'megaphone',
+    accent: 'text-sky-500 dark:text-sky-400',
+    tint: 'bg-sky-500/12',
+    kind: 'tool',
+  },
+  'Meta Ads Planner': {
+    short: 'Pacing',
+    icon: 'chart',
+    accent: 'text-violet-500 dark:text-violet-400',
+    tint: 'bg-violet-500/12',
+    kind: 'tool',
+  },
+  Projects: {
+    short: 'Projects',
+    icon: 'clipboard',
+    accent: 'text-emerald-500 dark:text-emerald-400',
+    tint: 'bg-emerald-500/12',
+    kind: 'tool',
+  },
+  'Asset Library': {
+    short: 'Assets',
+    icon: 'photo',
+    accent: 'text-amber-500 dark:text-amber-400',
+    tint: 'bg-amber-500/12',
+    kind: 'tool',
+  },
+  Playbooks: {
+    short: 'Playbooks',
+    icon: 'book',
+    accent: 'text-rose-500 dark:text-rose-400',
+    tint: 'bg-rose-500/12',
+    kind: 'tool',
+  },
+  'Product Updates': {
+    // Neutral on purpose — this is Loomi talking about itself, not your account
+    // telling you something needs a decision.
+    short: "What's new",
+    icon: 'sparkles',
+    accent: 'text-[var(--muted-foreground)]',
+    tint: 'bg-[var(--muted)]',
+    kind: 'product',
+  },
+};

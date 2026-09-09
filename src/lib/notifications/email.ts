@@ -154,16 +154,24 @@ function getAppBaseUrl(): string {
 }
 
 /** Send a single immediate notification email. */
+/**
+ * Returns TRUE only when a message actually went to the transport.
+ *
+ * It used to return void and no-op quietly with SMTP unconfigured, so callers
+ * stamped `Notification.emailedAt` regardless — the row then claimed an email
+ * had been sent when none had. That is the one field anyone auditing delivery
+ * would trust.
+ */
 export async function sendImmediateNotificationEmail(input: {
   to: string;
   recipientName: string;
   item: NotificationEmailItem;
-}): Promise<void> {
+}): Promise<boolean> {
   const setup = getTransporter();
   if (!setup) {
     // eslint-disable-next-line no-console
     console.warn('[notifications] SMTP not configured — skipping email');
-    return;
+    return false;
   }
 
   const baseUrl = getAppBaseUrl();
@@ -192,20 +200,22 @@ export async function sendImmediateNotificationEmail(input: {
     html,
     text,
   });
+  return true;
 }
 
-/** Send a digest email summarising multiple notifications. */
+/** Send a digest email summarising multiple notifications. Same contract as
+ *  `sendImmediateNotificationEmail`: true only when something was actually sent. */
 export async function sendDigestNotificationEmail(input: {
   to: string;
   recipientName: string;
   items: NotificationEmailItem[];
-}): Promise<void> {
-  if (input.items.length === 0) return;
+}): Promise<boolean> {
+  if (input.items.length === 0) return false;
   const setup = getTransporter();
   if (!setup) {
     // eslint-disable-next-line no-console
     console.warn('[notifications] SMTP not configured — skipping digest email');
-    return;
+    return false;
   }
 
   const baseUrl = getAppBaseUrl();
@@ -240,4 +250,5 @@ export async function sendDigestNotificationEmail(input: {
     html,
     text,
   });
+  return true;
 }

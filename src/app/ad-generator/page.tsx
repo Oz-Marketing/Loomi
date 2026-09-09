@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { BoltIcon, EnvelopeIcon, MegaphoneIcon, SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
@@ -148,6 +148,19 @@ export default function AdGeneratorListPage() {
   // old bookmark, a notification written before the move) is sent there rather
   // than shown a surface built for a different job. They keep
   // `studio.adgen.edit`: opening a design from the campaign still works.
+  /**
+   * `?focus=<creativeId>` — set by a notification link.
+   *
+   * Being dropped on a list and left to scroll is the complaint this answers.
+   * The ring is cleared after a few seconds: it marks WHERE to look on arrival,
+   * and a permanent highlight would read as a selection.
+   */
+  const searchParams = useSearchParams();
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    setFocusId(searchParams.get('focus'));
+  }, [searchParams]);
   const isClient = userRole === 'client';
   useEffect(() => {
     if (isClient) router.replace('/campaign-builder');
@@ -667,6 +680,16 @@ export default function AdGeneratorListPage() {
   const folderOpen = (f: OfferFolder) =>
     closedFolders[f.key] === undefined ? f.waiting > 0 || !f.title : !closedFolders[f.key];
 
+  // Scroll to the focused card once the list has rendered it. Keyed off
+  // `shown` rather than the raw fetch: the ref only exists after filtering has
+  // decided the card is on screen.
+  useEffect(() => {
+    if (!focusId || !focusRef.current) return;
+    focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = setTimeout(() => setFocusId(null), 4000);
+    return () => clearTimeout(t);
+  }, [focusId, shown]);
+
   /** Which offer's designs are open for comparison. */
   const [compareKey, setCompareKey] = useState<string | null>(null);
   const compareGroup = useMemo(
@@ -970,9 +993,17 @@ export default function AdGeneratorListPage() {
               // Render the thumbnail from the ad's own snapshot when present, so it
               // matches the editor/export even if the master template later changed.
               const template = c.doc ? adTemplateFromDoc(c.id, c.doc) : templates.find((t) => t.id === c.templateId);
+              // The card a notification pointed at. `focus=<id>` matches either
+              // the offer GROUP's lead or any design inside it, because the
+              // notification names a creative and the grid shows one card per
+              // offer — landing on "the ad you were told about" has to work even
+              // when that ad is a sibling the row folded away.
+              const isFocused =
+                !!focusId && (c.id === focusId || group.variants.some((v) => v.id === focusId));
               return (
                 <div
                   key={c.id}
+                  ref={isFocused ? focusRef : undefined}
                   role="button"
                   tabIndex={0}
                   // With a selection open the card toggles instead of navigating —
@@ -988,7 +1019,9 @@ export default function AdGeneratorListPage() {
                   className={`glass-card group relative cursor-pointer overflow-hidden rounded-2xl border text-left transition-colors ${
                     selected.has(c.id)
                       ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]'
-                      : 'border-[var(--border)] hover:border-[var(--primary)]'
+                      : isFocused
+                        ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/60'
+                        : 'border-[var(--border)] hover:border-[var(--primary)]'
                   }`}
                 >
                   {/* Hidden until hover or selection, so an unselected grid stays

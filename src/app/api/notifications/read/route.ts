@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
-import { markAllRead, markRead } from '@/lib/notifications/service';
+import { markAllRead, markRead, markUnread } from '@/lib/notifications/service';
 
 interface ReadBody {
   ids?: string[];
   all?: boolean;
+  /** Reverse it — put these back in the unread pile. */
+  unread?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -24,6 +26,8 @@ export async function POST(req: NextRequest) {
   if (ids.length === 0) {
     return NextResponse.json({ error: 'ids[] or all=true required' }, { status: 400 });
   }
-  const updated = await markRead(session!.user.id, ids);
+  const updated = body.unread
+    ? await markUnread(session!.user.id, ids)
+    : await markRead(session!.user.id, ids);
   return NextResponse.json({ updated });
 }

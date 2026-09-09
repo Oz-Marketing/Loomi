@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { BoltIcon, ClockIcon, BellSlashIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
-import { NOTIFICATION_CATEGORY_SURFACE, type NotificationCategory } from '@/lib/notifications/surfaces';
+import {
+  NOTIFICATION_CATEGORY_STYLE,
+  NOTIFICATION_CATEGORY_SURFACE,
+  type NotificationCategory,
+} from '@/lib/notifications/surfaces';
+import { SECTOR_ICONS } from '@/components/icons/sector-icons';
 
 interface PreferenceItem {
   type: string;
@@ -28,6 +33,42 @@ type Channel = 'enabled' | 'emailEnabled';
 function categorySurface(category: string): 'studio' | 'app' | 'both' {
   return NOTIFICATION_CATEGORY_SURFACE[category as NotificationCategory] ?? 'app';
 }
+
+/**
+ * Which sector a category belongs to, for the every-sector view.
+ *
+ * Deliberately NOT `categorySurface`. That answers "which host shows the
+ * toggle" — Projects and the ad pacer both live on the App host and would
+ * collapse into one heading. A person reading a list of everything Loomi can
+ * send them thinks in sectors, so this groups the way the bell panel filters.
+ */
+function categorySector(category: string): SectorKey {
+  return NOTIFICATION_CATEGORY_STYLE[category as NotificationCategory]?.sector ?? 'shared';
+}
+
+type SectorKey = 'studio' | 'projects' | 'reporting' | 'shared';
+
+/**
+ * The every-sector view's tabs, in rail order, wearing the product's own sector
+ * marks rather than generic glyphs.
+ *
+ * Three tabs, not one long page with headings. Stacked, the sectors ran to a
+ * few screens of scrolling and the sector you actually came for was somewhere
+ * in the middle; a strip puts each sector one click away and matches how the
+ * rest of the app splits a settings screen.
+ *
+ * `shared` is not a tab. Product Updates is the only category no sector owns,
+ * and it is reachable from every surface — a fourth tab called "Everywhere"
+ * would hide it behind a click from all three places it belongs. It renders
+ * under each tab instead, and because it is ONE preference, toggling it
+ * anywhere changes it everywhere.
+ */
+const SECTOR_TABS: { key: Exclude<SectorKey, 'shared'>; label: string; Icon: typeof SECTOR_ICONS.studio }[] = [
+  { key: 'studio', label: 'Studio', Icon: SECTOR_ICONS.studio },
+  { key: 'reporting', label: 'Reporting', Icon: SECTOR_ICONS.reporting },
+  // SECTOR_ICONS keys the Projects mark by its host, `app`.
+  { key: 'projects', label: 'Projects', Icon: SECTOR_ICONS.app },
+];
 
 function ToggleSwitch({
   checked,
@@ -59,11 +100,23 @@ function ToggleSwitch({
   );
 }
 
-export function NotificationsTab() {
+/**
+ * `sector` — only the current sector's categories, which is what someone in
+ * Studio settings wants to see. `all` — every category Loomi has, grouped by
+ * sector, with one master switch over the lot.
+ *
+ * The every-sector view is what Agency Settings renders. Notification
+ * preferences are per-USER and cross-sector, so answering "turn everything
+ * off while I'm on leave" through the sector tabs meant visiting Studio
+ * settings, then Projects settings, and still missing whatever lives on a
+ * surface you rarely open.
+ */
+export function NotificationsTab({ scope = 'sector' }: { scope?: 'sector' | 'all' } = {}) {
   const [items, setItems] = useState<PreferenceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [activeCat, setActiveCat] = useState<string | null>(null);
+  const [activeSector, setActiveSector] = useState<Exclude<SectorKey, 'shared'>>('studio');
 
   const surface = useCurrentSurface();
   // Reporting is part of the App umbrella; treat it as 'app' for notifications.
@@ -134,12 +187,13 @@ export function NotificationsTab() {
   // had enough. Every OTHER category is owned by one sector and shows only
   // there, which is what makes this list the current sector's.
   const surfaceItems = useMemo(() => {
+    if (scope === 'all') return items;
     if (effSurface === null) return [];
     return items.filter((i) => {
       const s = categorySurface(i.category);
       return s === 'both' || s === effSurface;
     });
-  }, [items, effSurface]);
+  }, [items, effSurface, scope]);
 
   // Group the surface's items by category — each becomes a section.
   const byCategory = useMemo(() => {
@@ -150,6 +204,23 @@ export function NotificationsTab() {
   }, [surfaceItems]);
   const categories = Object.keys(byCategory);
 
+  // The every-sector view's outline: one entry per tab, carrying that sector's
+  // categories plus the sector-less ones. Tabs with nothing in them are kept
+  // rather than dropped — a Reporting tab that vanishes reads as a bug, where
+  // an empty one honestly says Reporting raises no notifications yet.
+  const sectorTabs = useMemo(
+    () =>
+      SECTOR_TABS.map((tab) => ({
+        ...tab,
+        cats: categories.filter((cat) => {
+          const owner = categorySector(cat);
+          return owner === tab.key || owner === 'shared';
+        }),
+      })),
+    [categories],
+  );
+  const activeSectorCats = sectorTabs.find((t) => t.key === activeSector)?.cats ?? [];
+
   // Keep the active tab valid as data loads / surface resolves.
   useEffect(() => {
     if (categories.length > 0 && (activeCat === null || !categories.includes(activeCat))) {
@@ -158,8 +229,8 @@ export function NotificationsTab() {
   }, [categories, activeCat]);
 
 
-  // Surface unknown (pre-hydration) or still fetching → loading.
-  if (loading || effSurface === null) {
+  // Every-sector view needs no surface, so it must not wait on hydration.
+  if (loading || (scope === 'sector' && effSurface === null)) {
     return <p className="text-sm text-[var(--muted-foreground)]">Loading preferences…</p>;
   }
 
@@ -169,7 +240,9 @@ export function NotificationsTab() {
         <BellSlashIcon className="mb-3 h-8 w-8 text-[var(--muted-foreground)]" />
         <p className="text-sm font-medium text-[var(--foreground)]">No notification settings here</p>
         <p className="mt-1 max-w-sm text-xs text-[var(--muted-foreground)]">
-          {effSurface === 'studio'
+          {scope === 'all'
+            ? 'No notification types are registered yet.'
+            : effSurface === 'studio'
             ? 'Studio doesn’t have configurable notifications yet. Project and Ad-Pacer alerts live in the Projects app.'
             : 'No notification types are registered for your account yet.'}
         </p>
@@ -177,20 +250,10 @@ export function NotificationsTab() {
     );
   }
 
-  return (
-    <div>
-      <p className="mb-4 text-xs text-[var(--muted-foreground)]">
-        Choose how you receive each alert. <strong className="font-semibold">In-app</strong> shows
-        it in the bell panel; <strong className="font-semibold">Email</strong> also sends it to your
-        inbox. The two are independent — you can keep an alert in the panel without the email.
-      </p>
+  const allOn = surfaceItems.filter((i) => i.enabled).length;
+  const allEmailed = surfaceItems.filter((i) => i.emailEnabled).length;
 
-      {/* One section per category, no tab strip.
-          The strip made you click through three collapsed lists to answer "am I
-          getting emailed about this", and on a sector with two categories it was
-          two tabs over four rows. Sections show everything at once. */}
-      <div className="max-w-3xl space-y-8">
-        {categories.map((cat) => {
+  const renderCategory = (cat: string) => {
           const catItems = byCategory[cat];
           const on = catItems.filter((i) => i.enabled).length;
           const emailed = catItems.filter((i) => i.emailEnabled).length;
@@ -285,7 +348,96 @@ export function NotificationsTab() {
               </div>
             </section>
           );
-        })}
+  };
+
+  return (
+    <div>
+      <p className="mb-4 text-xs text-[var(--muted-foreground)]">
+        Choose how you receive each alert. <strong className="font-semibold">In-app</strong> shows
+        it in the bell panel; <strong className="font-semibold">Email</strong> also sends it to your
+        inbox. The two are independent — you can keep an alert in the panel without the email.
+      </p>
+
+      {/* The master switch, and the reason this view exists at all.
+          Per-sector tabs can only answer "what does Studio send me". "Turn
+          everything off while I'm on leave" needed three visits and still
+          missed whatever lives on a surface you rarely open. */}
+      {scope === 'all' && (
+        <div className="mb-8 max-w-3xl rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[var(--foreground)]">All notifications</p>
+              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                Applies to every category below, in every sector.{' '}
+                <span className="tabular-nums">
+                  {allOn} of {surfaceItems.length} in-app · {allEmailed} by email
+                </span>
+              </p>
+            </div>
+            <div className="flex flex-shrink-0 items-center gap-4">
+              {(
+                [
+                  { channel: 'enabled', label: 'In-app', count: allOn },
+                  { channel: 'emailEnabled', label: 'Email', count: allEmailed },
+                ] as Array<{ channel: Channel; label: string; count: number }>
+              ).map(({ channel, label, count }) => (
+                <label key={channel} className="flex flex-col items-center gap-1">
+                  <span className="text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+                    {label}
+                  </span>
+                  <ToggleSwitch
+                    // Lit only when EVERY category is on. A partial state shown
+                    // as "on" would make one tap look like it changed nothing.
+                    checked={count === surfaceItems.length && surfaceItems.length > 0}
+                    onChange={(next) => setAll(channel, next, surfaceItems)}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* One section per category, no tab strip.
+          The strip made you click through three collapsed lists to answer "am I
+          getting emailed about this", and on a sector with two categories it was
+          two tabs over four rows. Sections show everything at once. */}
+      {scope === 'all' && (
+        <div className="mb-6 flex max-w-3xl items-center gap-1 overflow-x-auto border-b border-[var(--border)]">
+          {sectorTabs.map(({ key, label, Icon, cats }) => {
+            const isActive = key === activeSector;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveSector(key)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-4 py-2.5 text-xs font-medium transition-colors ${
+                  isActive
+                    ? 'border-[var(--primary)] text-[var(--foreground)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+                <span className="tabular-nums opacity-60">{cats.length}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="max-w-3xl space-y-8">
+        {scope === 'all'
+          ? activeSectorCats.length > 0
+            ? activeSectorCats.map(renderCategory)
+            : (
+              <p className="rounded-xl border border-dashed border-[var(--border)] px-4 py-10 text-center text-xs text-[var(--muted-foreground)]">
+                {SECTOR_TABS.find((t) => t.key === activeSector)?.label} doesn’t raise any
+                notifications yet.
+              </p>
+            )
+          : categories.map(renderCategory)}
       </div>
 
       <p className="mt-6 text-[11px] text-[var(--muted-foreground)]">

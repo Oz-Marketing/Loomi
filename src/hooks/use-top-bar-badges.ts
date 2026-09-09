@@ -37,18 +37,31 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { hasUnseenChangelog } from '@/lib/changelog';
 import {
+  clampWatermark,
   isAuthDenied,
+  readSeenWatermark,
   readUnreadCount,
   shouldPoll,
+  visibleBadgeCount,
+  writeSeenWatermark,
 } from '@/lib/notifications/badge-policy';
 
 const POLL_MS = 60_000;
 
 export interface TopBarBadges {
-  /** Unread notification count. 0 while unauthenticated. */
+  /**
+   * What the bell should show. Not the raw unread count: it is 0 once the
+   * panel has been opened and closed, until something newer arrives.
+   */
   unreadNotifications: number;
   /** Set directly by the notifications panel, which knows better than a poll. */
   setUnreadNotifications: (n: number) => void;
+  /**
+   * The panel was closed. Everything currently unread counts as seen, so the
+   * badge goes dark and stays dark until the count climbs past this point.
+   * Read state is untouched — the rows are still unread inside the panel.
+   */
+  dismissNotificationBadge: () => void;
   /** Re-check now — after opening the panel, or marking things read. */
   refreshNotifications: () => void;
   /** Whether the changelog has an entry newer than the last one seen. */
@@ -62,7 +75,10 @@ export function useTopBarBadges(): TopBarBadges {
   const { status } = useSession();
   const authed = status === 'authenticated';
 
-  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
+  // The unread count as of the last time the panel was closed. See
+  // `visibleBadgeCount` for why the badge needs this and not just the count.
+  const [seenWatermark, setSeenWatermark] = useState(0);
   const [hasUnseenChangelogEntry, setHasUnseenChangelogEntry] = useState(false);
 
   // Set when the server says we are not allowed to ask. Survives re-renders and
@@ -75,6 +91,9 @@ export function useTopBarBadges(): TopBarBadges {
   // only so unmount can cancel whatever is still in flight.
   const inFlightRef = useRef<Set<AbortController>>(new Set());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The current unread count, readable without making `dismissBadge` depend on
+  // a state value that changes every poll.
+  const unreadRef = useRef(0);
 
   const fetchJson = useCallback(async (url: string): Promise<unknown | null> => {
     if (deniedRef.current) return null;
@@ -97,11 +116,33 @@ export function useTopBarBadges(): TopBarBadges {
     }
   }, []);
 
+  // Restore the dismissal across reloads. Read in an effect rather than a lazy
+  // initializer so the server and the first client render agree.
+  useEffect(() => {
+    setSeenWatermark(readSeenWatermark());
+  }, []);
+
+  const applyUnread = useCallback((n: number) => {
+    unreadRef.current = n;
+    setUnreadCount(n);
+    setSeenWatermark((w) => {
+      const next = clampWatermark(n, w);
+      if (next !== w) writeSeenWatermark(next);
+      return next;
+    });
+  }, []);
+
+  const dismissBadge = useCallback(() => {
+    const n = unreadRef.current;
+    setSeenWatermark(n);
+    writeSeenWatermark(n);
+  }, []);
+
   const refreshNotifications = useCallback(async () => {
     if (!authed) return;
     const data = await fetchJson('/api/notifications?unreadOnly=1&limit=1');
-    if (data) setUnreadNotifications(readUnreadCount(data));
-  }, [authed, fetchJson]);
+    if (data) applyUnread(readUnreadCount(data));
+  }, [applyUnread, authed, fetchJson]);
 
   const refreshChangelog = useCallback(async () => {
     if (!authed) return;
@@ -120,7 +161,9 @@ export function useTopBarBadges(): TopBarBadges {
   // Notifications poll, paused while the tab is hidden.
   useEffect(() => {
     if (!authed) {
-      setUnreadNotifications(0);
+      unreadRef.current = 0;
+      setUnreadCount(0);
+      setSeenWatermark(0);
       return;
     }
     // A fresh sign-in is a fresh chance; clear any previous denial.
@@ -163,8 +206,9 @@ export function useTopBarBadges(): TopBarBadges {
   }, [authed, refreshNotifications]);
 
   return {
-    unreadNotifications,
-    setUnreadNotifications,
+    unreadNotifications: visibleBadgeCount(unreadCount, seenWatermark),
+    setUnreadNotifications: applyUnread,
+    dismissNotificationBadge: dismissBadge,
     refreshNotifications: () => void refreshNotifications(),
     hasUnseenChangelogEntry,
     setHasUnseenChangelogEntry,

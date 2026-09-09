@@ -134,6 +134,7 @@ export function SettingsPanel({
     'contact-field-blueprints': () => <CustomFieldBlueprintsTab />,
     'client-reports': () => <ClientReportsTab />,
     notifications: () => <NotificationsTab />,
+    'all-notifications': () => <NotificationsTab scope="all" />,
     // `soon` entries: the rail renders these disabled and never links to them,
     // but a deep link or an old bookmark still has to land somewhere honest.
     'reporting-notifications': () => (
@@ -183,6 +184,7 @@ export const SETTINGS_PANEL_KEYS: SettingsTabKey[] = [
   'contact-field-blueprints',
   'client-reports',
   'notifications',
+  'all-notifications',
   'reporting-notifications',
   'reporting-alerts',
   'appearance',

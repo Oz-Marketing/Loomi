@@ -69,7 +69,7 @@ export function TopUtilityBar() {
   const {
     unreadNotifications,
     setUnreadNotifications,
-    refreshNotifications: checkUnreadNotifications,
+    dismissNotificationBadge,
     hasUnseenChangelogEntry: hasUnread,
     setHasUnseenChangelogEntry: setHasUnread,
     refreshChangelog: checkUnread,
@@ -183,7 +183,9 @@ export function TopUtilityBar() {
           </UtilityIconButton>
           {unreadNotifications > 0 && (
             <span
-              className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold leading-none px-1 rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] pointer-events-none"
+              // Red, not the app primary: a count on a bell is an alert, and the
+              // primary is the colour of every ordinary affordance in the UI.
+              className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold leading-none px-1 rounded-full bg-red-500 text-white pointer-events-none"
               aria-hidden
             >
               {unreadNotifications > 9 ? '9+' : unreadNotifications}
@@ -322,8 +324,17 @@ export function TopUtilityBar() {
         <NotificationsPanel
           onClose={() => {
             setShowNotifications(false);
-            checkUnreadNotifications();
+            // Closing the panel CLEARS the badge, even with items still unread.
+            //
+            // The badge answers "is there something you have not seen", not "how
+            // many are unread" — you just looked at the list, so the answer is
+            // no. Leaving it lit after a deliberate look is how a badge becomes
+            // wallpaper. Read state itself is untouched: the rows stay unread in
+            // the panel, and the next genuinely new notification lights it again.
+            dismissNotificationBadge();
           }}
+          // While the panel is OPEN the count still tracks the list, so marking
+          // a row read updates the bell behind it.
           onChange={(unread) => setUnreadNotifications(unread)}
         />
       )}

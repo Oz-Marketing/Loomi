@@ -88,7 +88,12 @@ export const NOTIFICATION_CATEGORY_STYLE: Record<
     accent: 'text-violet-500 dark:text-violet-400',
     tint: 'bg-violet-500/12',
     kind: 'tool',
-    sector: 'reporting',
+    // PROJECTS, not Reporting. The chart icon and the word "Planner" make this
+    // look like a reporting surface, but every notification in the category is
+    // pacing — account pace, budget burn, ad went dark, flight ending — which
+    // is paced media, and paced media is Projects. It also matches
+    // NOTIFICATION_CATEGORY_SURFACE, which already puts it on the App host.
+    sector: 'projects',
   },
   Projects: {
     icon: 'clipboard',

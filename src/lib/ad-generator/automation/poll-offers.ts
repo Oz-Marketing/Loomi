@@ -296,6 +296,31 @@ export function modelsWithNewOffers(scopes: Pick<ScopeReport, 'model' | 'newFing
   return [...new Set(scopes.filter((s) => s.newFingerprints.length > 0).map((s) => s.model))];
 }
 
+/** Distinct manufacturers that gained at least one offer in this sweep. */
+export function makesWithNewOffers(scopes: Pick<ScopeReport, 'make' | 'newFingerprints'>[]): string[] {
+  return [...new Set(scopes.filter((s) => s.newFingerprints.length > 0).map((s) => s.make))];
+}
+
+/**
+ * Put the manufacturer in the title, not the body.
+ *
+ * "40 new manufacturer offers published" made you open the notification and
+ * read a model list to work out whose book turned over — and models are the
+ * worst possible clue, because Colorado and Equinox only say "Chevrolet" to
+ * someone who already knows. The make is the first thing a reviewer needs and
+ * it belongs in the line they see in the bell.
+ *
+ * A group account can poll several makes in one sweep, so this handles more
+ * than one; past two the makes go after the count rather than in front of it,
+ * because "40 new Honda, Chevrolet, Ford offers published" does not parse.
+ */
+export function offersLandedTitle(makes: string[], count: number): string {
+  const noun = `offer${count === 1 ? '' : 's'}`;
+  if (makes.length === 1) return `${count} new ${makes[0]} ${noun} published`;
+  if (makes.length === 0) return `${count} new manufacturer ${noun} published`;
+  return `${count} new ${noun} published — ${summariseModels(makes, 3)}`;
+}
+
 /**
  * Name what turned over, readably.
  *
@@ -343,6 +368,7 @@ async function notifyOffersLanded(
   const models = modelsWithNewOffers(result.scopes);
   if (models.length === 0) return;
   const vehicles = summariseModels(models);
+  const makes = makesWithNewOffers(result.scopes);
 
   let recipients: string[] = [];
   try {
@@ -353,7 +379,7 @@ async function notifyOffersLanded(
   if (recipients.length === 0) return;
 
   const n = result.offersNew;
-  const title = `${n} new manufacturer offer${n === 1 ? '' : 's'} published`;
+  const title = offersLandedTitle(makes, n);
   const body = `New offers landed for ${vehicles}. Ads build on the next run; nothing publishes until a person approves it.`;
 
   for (const userId of recipients) {
@@ -365,7 +391,7 @@ async function notifyOffersLanded(
         title,
         body,
         link: OFFERS_LINK,
-        meta: { accountKey: config.accountKey, runId: result.runId, offersNew: n, models },
+        meta: { accountKey: config.accountKey, runId: result.runId, offersNew: n, makes, models },
         // One per poll run. A cycle can land across several scopes in the same
         // sweep, and that is one piece of news, not six.
         dedupeKey: `adgen-offers:${config.accountKey}:${result.runId ?? new Date().toISOString().slice(0, 10)}`,

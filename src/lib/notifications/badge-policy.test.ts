@@ -6,10 +6,12 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  clampWatermark,
   isAuthDenied,
   pollDecision,
   readUnreadCount,
   shouldPoll,
+  visibleBadgeCount,
 } from './badge-policy';
 
 const base = { authed: true, denied: false, hidden: false };
@@ -79,5 +81,45 @@ describe('readUnreadCount', () => {
       expect(n, JSON.stringify(bad)).toBeGreaterThanOrEqual(0);
     }
     expect(readUnreadCount({ unreadCount: 2.7 })).toBe(2);
+  });
+});
+
+describe('visibleBadgeCount', () => {
+  it('shows the count when nothing has been seen yet', () => {
+    expect(visibleBadgeCount(5, 0)).toBe(5);
+  });
+
+  it('goes dark once the panel has been opened and closed on those items', () => {
+    // The rows are still unread — the user just read the list without
+    // clicking each one. The bell must not keep nagging about them.
+    expect(visibleBadgeCount(5, 5)).toBe(0);
+  });
+
+  it('lights again only for what arrived after the dismissal', () => {
+    expect(visibleBadgeCount(6, 5)).toBe(6);
+  });
+
+  it('never renders a badge for zero or nonsense', () => {
+    expect(visibleBadgeCount(0, 0)).toBe(0);
+    expect(visibleBadgeCount(NaN, 0)).toBe(0);
+    expect(visibleBadgeCount(-2, 0)).toBe(0);
+  });
+});
+
+describe('clampWatermark', () => {
+  it('follows the count down as items are read', () => {
+    // Dismissed at 5, three of them then marked read. If the watermark stayed
+    // at 5, three genuinely new notifications would arrive invisible.
+    expect(clampWatermark(2, 5)).toBe(2);
+    expect(visibleBadgeCount(5, clampWatermark(2, 5))).toBe(5);
+  });
+
+  it('does not rise on its own — only a dismissal raises it', () => {
+    expect(clampWatermark(9, 3)).toBe(3);
+  });
+
+  it('bottoms out at zero', () => {
+    expect(clampWatermark(0, 4)).toBe(0);
+    expect(clampWatermark(-1, 4)).toBe(0);
   });
 });

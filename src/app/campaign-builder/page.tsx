@@ -1,10 +1,10 @@
-import { AdminOnly } from '@/components/route-guard';
+import { CampaignViewers } from '@/components/route-guard';
 import { CampaignList } from '@/components/campaigns/builder/CampaignList';
 
 export default function CampaignBuilderPage() {
   return (
-    <AdminOnly>
+    <CampaignViewers>
       <CampaignList />
-    </AdminOnly>
+    </CampaignViewers>
   );
 }

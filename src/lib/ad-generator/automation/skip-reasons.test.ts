@@ -38,7 +38,10 @@ describe('skipReasonLabel', () => {
 
 describe('skipReasonFix', () => {
   it('points at where to fix a known reason', () => {
-    expect(skipReasonFix('no_template')).toContain('Settings');
+    // Names a destination, not just a diagnosis. Under the offer fan-out that
+    // destination is Templates rather than Settings — there is no per-account
+    // template mapping to correct any more, so publishing one is the fix.
+    expect(skipReasonFix('no_template')).toContain('Templates');
   });
 
   it('offers nothing rather than guessing for an unknown reason', () => {

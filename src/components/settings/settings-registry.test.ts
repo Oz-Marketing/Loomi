@@ -93,9 +93,16 @@ describe('settings registry', () => {
       'teams',
       'agents',
     ]);
-    // Notifications is sector-owned now (its categories ARE a sector's);
-    // Appearance stays because it follows the USER across all three surfaces.
-    expect(groups[1].items.map((i) => i.key)).toEqual(['industries', 'appearance']);
+    // The sector-scoped `notifications` tab is sector-owned now (its
+    // categories ARE a sector's) and so is absent. `all-notifications` is the
+    // every-sector view of the same per-user preferences, which is fleet-wide
+    // by nature; Appearance is here for the same reason — both follow the USER
+    // across all three surfaces rather than belonging to one.
+    expect(groups[1].items.map((i) => i.key)).toEqual([
+      'industries',
+      'all-notifications',
+      'appearance',
+    ]);
   });
 
   it('points rail hrefs at the browser-facing /settings path', () => {

@@ -43,6 +43,7 @@ export type SettingsTabKey =
   | 'integrations'
   | 'client-reports'
   | 'notifications'
+  | 'all-notifications'
   | 'reporting-notifications'
   | 'reporting-alerts'
   | 'appearance';
@@ -485,6 +486,25 @@ const SETTINGS_REGISTRY: SettingsEntry[] = [
     visible: (s) => s.surface === 'reporting' && s.hasAdminAccess,
     rail: 'sector',
     soon: true,
+  },
+  // The every-sector view of the same preferences, for the Agency Settings
+  // modal. NOT a duplicate of `notifications` above: that one is deliberately
+  // filtered to the sector whose settings you are in, which is right when you
+  // are tuning Studio and useless when the question is "turn everything off
+  // while I'm on leave". Notification preferences are per-user and span every
+  // sector, so the fleet-wide tier is where the whole list belongs.
+  //
+  // Sits next to Appearance, the other personal setting that follows the user
+  // across all three surfaces rather than belonging to one.
+  {
+    key: 'all-notifications',
+    label: 'Notifications',
+    titleLabel: 'Notification Settings',
+    description:
+      'Every notification Loomi can send you, across all sectors, and whether it arrives in-app, by email, or both.',
+    group: 'configure',
+    icon: BellIcon,
+    visible: () => true,
   },
   {
     key: 'appearance',

@@ -10,6 +10,7 @@ import {
   ChatBubbleLeftRightIcon,
   RectangleStackIcon,
   DocumentTextIcon,
+  MegaphoneIcon,
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 import type { CampaignAssetKind, CampaignStatus } from '@/lib/campaigns/types';
@@ -23,6 +24,10 @@ export const CHANNEL_META: Record<
   landingPage: { label: 'Landing page', plural: 'Landing pages', Icon: RectangleStackIcon, tone: 'bg-violet-500/10 text-violet-400' },
   form: { label: 'Form', plural: 'Forms', Icon: DocumentTextIcon, tone: 'bg-cyan-500/10 text-cyan-400' },
   flow: { label: 'Flow', plural: 'Flows', Icon: FlowIcon as React.ComponentType<{ className?: string }>, tone: 'bg-amber-500/10 text-amber-400' },
+  // Not a channel the builder plans — ads arrive from an OEM offer run, which
+  // creates the container itself. Indigo to match the Ad Generator's accent, so
+  // the kind reads as the same thing in both places.
+  ad: { label: 'Ad', plural: 'Ads', Icon: MegaphoneIcon, tone: 'bg-indigo-500/10 text-indigo-400' },
 };
 
 const CAMPAIGN_STATUS_TONE: Record<CampaignStatus, string> = {
@@ -86,5 +91,7 @@ export function assetEditorPath(
       return href(`/websites/forms/${id}`);
     case 'flow':
       return href(`/flows/${id}`);
+    case 'ad':
+      return href(`/ad-generator/${id}`);
   }
 }

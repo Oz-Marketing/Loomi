@@ -121,12 +121,12 @@ describe('buildAssetMetadata', () => {
 });
 
 describe('buildAssetMetadata — rights', () => {
-  it('accepts a known licence type and rejects an unknown one', () => {
+  it('accepts a known license type and rejects an unknown one', () => {
     expect(buildAssetMetadata({ licenseType: 'oem-licensed' })).toEqual({
       data: { licenseType: 'oem-licensed' },
     });
     expect(buildAssetMetadata({ licenseType: 'perpetual' })).toEqual({
-      error: 'Unknown licence type: perpetual',
+      error: 'Unknown license type: perpetual',
     });
   });
 
@@ -165,7 +165,7 @@ describe('buildAssetMetadata — rights', () => {
   });
 
   it('re-arms expiry when a governing date moves', () => {
-    // The renewal case: extending a licence must clear the sweep's verdict, or
+    // The renewal case: extending a license must clear the sweep's verdict, or
     // a relicensed asset stays flagged expired forever.
     const result = buildAssetMetadata({ licenseExpiresAt: '2027-01-01T00:00:00.000Z' });
     expect(result).toEqual({
@@ -178,7 +178,7 @@ describe('buildAssetMetadata — rights', () => {
     });
   });
 
-  it('does not re-arm when only the licence START moves', () => {
+  it('does not re-arm when only the license START moves', () => {
     // The start date can't expire anything, so touching it must not resurrect
     // an asset the sweep correctly retired.
     const result = buildAssetMetadata({ licenseStartsAt: '2026-01-01T00:00:00.000Z' });
@@ -191,7 +191,7 @@ describe('buildAssetMetadata — rights', () => {
 describe('upload accepts everything the batch form collects', () => {
   it('validates the full rights set the way PATCH does', () => {
     // Regression: the upload modal rendered fifteen fields and forwarded six,
-    // so a licence set once for a bulk import was silently discarded. The API
+    // so a license set once for a bulk import was silently discarded. The API
     // side has to accept the whole set for the form fix to mean anything.
     const result = buildAssetMetadata({
       oem: 'Audi',

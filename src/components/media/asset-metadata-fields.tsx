@@ -314,7 +314,7 @@ export function AssetMetadataFields({
             <HelpTip title="Source">
               <p>Where this asset came from. Drives the badge on the asset card.</p>
               <p className="mt-2">
-                OEM-supplied assets usually carry the manufacturer&apos;s licence terms
+                OEM-supplied assets usually carry the manufacturer&apos;s license terms
                 — record the rights holder alongside it.
               </p>
             </HelpTip>
@@ -334,7 +334,7 @@ export function AssetMetadataFields({
             <HelpTip title="Rights holder">
               <p>
                 Who owns the rights, e.g. &ldquo;Audi of America&rdquo;. Free text —
-                licence windows and expiry tracking come later.
+                license windows and expiry tracking come later.
               </p>
             </HelpTip>
           </label>
@@ -398,8 +398,8 @@ export function AssetMetadataFields({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className={FIELD_LABEL}>
-              Licence type
-              <HelpTip title="Licence type">
+              License type
+              <HelpTip title="License type">
                 <p>
                   How this asset is licensed. Leave unset if you genuinely
                   don&apos;t know — that reads as an open question, which is more
@@ -438,7 +438,7 @@ export function AssetMetadataFields({
           </div>
 
           <div>
-            <label className={FIELD_LABEL}>Licence starts</label>
+            <label className={FIELD_LABEL}>License starts</label>
             <DatePicker
               mode="single"
               value={value.licenseStartsAt || null}
@@ -451,11 +451,11 @@ export function AssetMetadataFields({
 
           <div>
             <label className={FIELD_LABEL}>
-              Licence expires
-              <HelpTip title="Licence expiry">
+              License expires
+              <HelpTip title="License expiry">
                 <p>
                   When the right to use this asset ends. A daily sweep warns 30
-                  days out, again at 7, and marks it out of licence when it passes.
+                  days out, again at 7, and marks it out of license when it passes.
                 </p>
               </HelpTip>
             </label>
@@ -476,7 +476,7 @@ export function AssetMetadataFields({
             <HelpTip title="Campaign end">
               <p>
                 When the offer or campaign this asset supports finishes. Separate
-                from the licence: an asset routinely outlives the deal it
+                from the license: an asset routinely outlives the deal it
                 advertised, and the reverse.
               </p>
               <p className="mt-2">Whichever date comes first is the one that retires it.</p>
@@ -497,7 +497,7 @@ export function AssetMetadataFields({
             <label className={FIELD_LABEL}>
               Usage
               <HelpTip title="Usage scope">
-                <p>Which channels the licence covers.</p>
+                <p>Which channels the license covers.</p>
               </HelpTip>
             </label>
             <MultiSelect
@@ -537,7 +537,7 @@ export function AssetMetadataFields({
               Derivatives allowed
               <HelpTip title="Derivative works">
                 <p>
-                  Whether the licence permits resizing, cropping or compositing
+                  Whether the license permits resizing, cropping or compositing
                   this asset.
                 </p>
                 <p className="mt-2">

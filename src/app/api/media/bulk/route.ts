@@ -14,7 +14,7 @@ import { buildAssetMetadata, canAccessAsset } from '@/lib/services/media';
  *
  * The obvious alternative was export-to-Excel and re-import, which is what
  * enterprise DAMs offer. But a spreadsheet's advantage is per-ROW variation, and
- * the problem here doesn't have any: OEM licence terms are uniform per
+ * the problem here doesn't have any: OEM license terms are uniform per
  * programme ("Audi MY25 DAG, licensed through Aug 2027" covers all seventeen
  * files). Exporting forty rows to paste identical values down four columns is a
  * worse form, with a file format, a parser and partial-import failures attached.
@@ -25,7 +25,7 @@ import { buildAssetMetadata, canAccessAsset } from '@/lib/services/media';
  * ── Blank means "leave alone", never "clear" ──
  *
  * Only fields present in the body are written. Mass-clearing is a footgun with
- * almost no legitimate use — losing licence dates across two hundred assets
+ * almost no legitimate use — losing license dates across two hundred assets
  * because a field was left empty is not a mistake worth enabling — so clearing
  * stays a single-asset operation.
  */

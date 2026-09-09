@@ -174,7 +174,7 @@ export function RightsActivityPanel() {
               type="button"
               onClick={() => exportCsv(true)}
               disabled={exporting}
-              title="Only assets that carry a licence or campaign date"
+              title="Only assets that carry a license or campaign date"
               className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
             >
               <ArrowDownTrayIcon className="h-3.5 w-3.5" />
@@ -184,7 +184,7 @@ export function RightsActivityPanel() {
               type="button"
               onClick={() => exportCsv(false)}
               disabled={exporting}
-              title="Every asset, including those with no licence recorded"
+              title="Every asset, including those with no license recorded"
               className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
             >
               All
@@ -209,7 +209,7 @@ export function RightsActivityPanel() {
             {attention.length === 0
               ? 'nothing expiring or expired'
               : `${attention.length} asset${attention.length === 1 ? '' : 's'}${
-                  urgent.length > 0 ? ` · ${urgent.length} approved and out of licence` : ''
+                  urgent.length > 0 ? ` · ${urgent.length} approved and out of license` : ''
                 }`}
           </span>
         </div>

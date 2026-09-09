@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { subjectFromSession } from './require';
 import {
   ROLE_PERMISSIONS,
   PERMISSIONS,
@@ -91,11 +92,25 @@ describe('registry integrity', () => {
 });
 
 describe('client tier is confined to reporting', () => {
-  it('allows only the reporting sector', () => {
-    expect(assignableSectorsForTier('client')).toEqual(['reporting']);
-    expect(canTierHoldSector('client', 'studio')).toBe(false);
+  it('allows reporting, plus studio for the one offer role', () => {
+    // Studio was added 2026-09-03 so a dealer can review the OEM offers built
+    // for them. The sector gate is NOT the bound — see the role test below.
+    expect(assignableSectorsForTier('client')).toEqual(['studio', 'reporting']);
     expect(canTierHoldSector('client', 'projects')).toBe(false);
     expect(canTierHoldSector('client', 'agency')).toBe(false);
+  });
+
+  it('admits exactly one studio role, never the rest of the sector', () => {
+    // THE bound. Opening the sector above is only safe while this holds: every
+    // other Studio role confers campaigns, templates and assets, which is the
+    // whole sector under another name.
+    expect(canTierHoldRole('client', 'studio', 'client')).toBe(true);
+    for (const role of ['lead', 'producer', 'designer', 'viewer']) {
+      expect(
+        canTierHoldRole('client', 'studio', role),
+        `client must never hold studio.${role}`,
+      ).toBe(false);
+    }
   });
 
   it('lets staff into every sector', () => {
@@ -255,10 +270,37 @@ describe('enforcement flip: access delta per legacy role', () => {
   // decision; gaining it by accident is a security incident, and it nearly
   // happened — `agency.admin` used to carry `agency.users.manage`, which is
   // elevated-only today.
+  /**
+   * What each role is ALLOWED to gain. Empty for everyone but `client`.
+   *
+   * Deliberately an allow-list rather than a relaxed assertion: the point of
+   * this test is that a widening has to be typed out by a person who meant it.
+   * A change that grants a client one more permission than the three below
+   * still fails, which is the property worth keeping.
+   */
+  const ALLOWED_GAIN: Record<UserRole, Permission[]> = {
+    developer: [],
+    super_admin: [],
+    admin: [],
+    // Connor's call, 2026-09-03: a dealer reviews the OEM offers built for them
+    // and may adjust an offer, and reaches nothing else in Studio. `generate`
+    // and `launch` are absent on purpose — runs come from the nightly job, and
+    // launching commits real ad spend.
+    // Campaigns view added 2026-09-04: the client's home moved from the Ad
+    // Generator list to Campaigns, because that is where a run's ads and its
+    // offer email are one thing. View only, and automation-only by query.
+    client: [
+      'studio.access',
+      'studio.adgen.edit',
+      'studio.adgen.view',
+      'studio.campaigns.view',
+    ],
+  };
+
   it.each<UserRole>(['developer', 'super_admin', 'admin', 'client'])(
-    'never widens what a %s can do',
+    'never widens what a %s can do beyond what was signed off',
     (role) => {
-      expect(delta(role).gained).toEqual([]);
+      expect(delta(role).gained).toEqual(ALLOWED_GAIN[role].slice().sort());
     },
   );
 
@@ -291,8 +333,8 @@ describe('legacy backfill', () => {
     expect(legacyTierFor('client')).toBe('client');
   });
 
-  it('backfills a client into reporting only', () => {
-    expect(legacySectorRolesFor('client')).toEqual(['reporting.client']);
+  it('backfills a client into reporting plus offer review', () => {
+    expect(legacySectorRolesFor('client')).toEqual(['reporting.client', 'studio.client']);
   });
 
   // Every backfilled role must be legal for the tier it lands on, or Phase 1
@@ -361,5 +403,30 @@ describe('review regressions', () => {
     });
     expect(can(s, 'blast.send', 'youngHonda')).toBe(false);
     expect(can(s, 'blast.send', 'smithToyota')).toBe(true);
+  });
+});
+
+describe('subjectFromSession — empty stored roles', () => {
+  it('falls back to the legacy mapping when the session carries an EMPTY list', () => {
+    // A session minted before the Phase 1 backfill serialises `sectorRoles: []`.
+    // Read literally that is "assigned nothing", which denies a signed-in admin
+    // everything the registry gates — and the registry-direct gates
+    // (`adGeneratorAllowed`, `campaignAccessFor`) have no legacy path to save
+    // them. Empty must mean absent.
+    const empty = subjectFromSession({
+      user: { role: 'admin', accountKeys: [], sectorRoles: [] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    const absent = subjectFromSession({
+      user: { role: 'admin', accountKeys: [] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    expect(empty.sectorRoles).toEqual(absent.sectorRoles);
+    expect(empty.sectorRoles.length).toBeGreaterThan(0);
+  });
+
+  it('still lets STORED roles win when there are any', () => {
+    const subject = subjectFromSession({
+      user: { role: 'client', accountKeys: [], sectorRoles: ['studio.client'] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    expect(subject.sectorRoles).toEqual(['studio.client']);
   });
 });

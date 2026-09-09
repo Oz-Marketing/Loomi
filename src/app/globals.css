@@ -43,6 +43,12 @@
   --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.07);
   --primary: #6366f1;
+  /* A block inserted from the Custom blocks palette, in the email editor.
+     Green so it reads as "this is a saved lockup" against the primary indigo
+     every other block uses — the two states have to be distinguishable at a
+     glance on a canvas of stacked sections. Same value in both themes: it sits
+     on the designer's own white artboard, not on the app chrome. */
+  --adgen-custom-block: #10b981;
   --primary-foreground: #ffffff;
   --muted: rgba(255, 255, 255, 0.05);
   --muted-foreground: #a1a1aa;
@@ -155,6 +161,12 @@
   --input: rgba(0, 0, 0, 0.05);
   /* One primary app-wide: match dark mode's indigo (was #3b82f6 blue). */
   --primary: #6366f1;
+  /* A block inserted from the Custom blocks palette, in the email editor.
+     Green so it reads as "this is a saved lockup" against the primary indigo
+     every other block uses — the two states have to be distinguishable at a
+     glance on a canvas of stacked sections. Same value in both themes: it sits
+     on the designer's own white artboard, not on the app chrome. */
+  --adgen-custom-block: #10b981;
   --primary-foreground: #ffffff;
   --muted: rgba(0, 0, 0, 0.04);
   --muted-foreground: #71717a;
@@ -1264,6 +1276,32 @@ body {
 }
 
 /* ── Dropdown popover — opaque frosted glass ── */
+/* A menu opened from inside the notifications panel.
+   `glass-dropdown` is rgba(14,14,22,.97) in dark — darker than the frosted
+   panel it opens over, so the two edges vanished into each other. This lifts
+   the surface instead: a menu that sits ON something should read lighter than
+   it, not heavier. Opaque on purpose — a translucent menu over a list of text
+   is unreadable whatever the tint. */
+.panel-menu {
+  background: #ffffff;
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+[data-theme="dark"] .panel-menu {
+  background: #2a2a35;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .panel-menu {
+    background: #2a2a35;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+}
+
 .glass-dropdown {
   backdrop-filter: blur(40px) saturate(200%);
   border: 1px solid var(--border);

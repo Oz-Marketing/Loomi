@@ -15,7 +15,7 @@ import { parseListColumn } from '@/lib/media-metadata';
  *
  * Two severities, and the distinction is the whole design:
  *
- *  • BLOCK — approving would assert something false. An asset whose licence has
+ *  • BLOCK — approving would assert something false. An asset whose license has
  *    lapsed cannot be "cleared for use", regardless of who clicks the button.
  *  • WARN — the asset is usable but under-described. A reviewer may approve
  *    anyway; the warning is recorded on the approval so the gap is visible later.
@@ -83,11 +83,11 @@ export function runPreflight(asset: PreflightInput, now: Date): MediaPreflight {
       message:
         rights.reason === 'effective'
           ? 'The campaign or offer this asset supports has ended.'
-          : 'The licence for this asset has expired.',
+          : 'The license for this asset has expired.',
     });
   } else if (rights.status === 'expiring_soon') {
     // Not a block: approving something with three weeks left is legitimate, and
-    // refusing would make the last month of every licence unusable.
+    // refusing would make the last month of every license unusable.
     findings.push({
       severity: 'warn',
       code: 'rights_expiring',
@@ -95,14 +95,14 @@ export function runPreflight(asset: PreflightInput, now: Date): MediaPreflight {
       message: `Expires in ${rights.daysRemaining} day${rights.daysRemaining === 1 ? '' : 's'} — plan a replacement.`,
     });
   } else if (rights.status === 'unknown' && THIRD_PARTY_SOURCES.has(asset.assetSource ?? '')) {
-    // Third-party material with no licence window recorded. A warning rather
+    // Third-party material with no license window recorded. A warning rather
     // than a block, because most of a migrating library is in this state and
     // blocking would make approval impossible before a full rights audit.
     findings.push({
       severity: 'warn',
       code: 'rights_unrecorded',
       field: 'licenseExpiresAt',
-      message: 'No licence window recorded for third-party material.',
+      message: 'No license window recorded for third-party material.',
     });
   }
 
@@ -115,15 +115,15 @@ export function runPreflight(asset: PreflightInput, now: Date): MediaPreflight {
     });
   }
 
-  // Derivatives already exist for an asset whose licence forbids them. This IS a
+  // Derivatives already exist for an asset whose license forbids them. This IS a
   // block: the renditions are the breach, and approving the master would bless
-  // it. The fix is to delete them or correct the licence, not to wave it through.
+  // it. The fix is to delete them or correct the license, not to wave it through.
   if (asset.derivativesPermitted === false && (asset.renditionCount ?? 0) > 0) {
     findings.push({
       severity: 'block',
       code: 'derivatives_forbidden',
       field: 'derivativesPermitted',
-      message: `Licence forbids derivative works, but ${asset.renditionCount} generated size(s) exist.`,
+      message: `License forbids derivative works, but ${asset.renditionCount} generated size(s) exist.`,
     });
   }
 

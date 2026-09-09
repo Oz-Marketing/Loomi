@@ -26,6 +26,7 @@ export interface ScopeForm {
   windowMode: string;
   templateId: string;
   sizeIds: string[];
+  fanOutTemplateIds: string[];
   maxAds: string;
   minStock: string;
   mode: string;
@@ -59,6 +60,7 @@ export const BLANK_FORM: ScopeForm = {
   windowMode: 'next_month',
   templateId: '',
   sizeIds: [],
+  fanOutTemplateIds: [],
   maxAds: '10',
   minStock: '0',
   mode: 'draft',
@@ -80,6 +82,7 @@ function formFromReport(rep: ShadowReport): ScopeForm {
     windowMode: rep.runWindow?.mode ?? 'next_month',
     templateId: rep.scope?.templateMap?.all ?? '',
     sizeIds: rep.scope?.sizeIds ?? [],
+    fanOutTemplateIds: rep.scope?.fanOutTemplateIds ?? [],
     maxAds: String(rep.scope?.maxAdsPerRun ?? 10),
     minStock: String(rep.scope?.minStock ?? 0),
     mode: rep.scope?.mode ?? 'draft',
@@ -107,6 +110,7 @@ export function toPayload(f: ScopeForm) {
     runWindowMode: f.windowMode,
     templateMap: f.templateId ? { all: f.templateId } : {},
     sizeIds: f.sizeIds,
+    fanOutTemplateIds: f.fanOutTemplateIds,
     maxAdsPerRun: Number(f.maxAds) || 10,
     minStock: Number(f.minStock) || 0,
     mode: f.mode,
@@ -123,7 +127,13 @@ export function toPayload(f: ScopeForm) {
 /** Order-insensitive on sizeIds, so re-picking the same sizes isn't "dirty". */
 // sizeIds is a SET (order meaningless); offerPriority is a LIST whose order is
 // the setting itself, so it is deliberately not sorted here.
-const formKey = (f: ScopeForm) => JSON.stringify({ ...f, sizeIds: [...f.sizeIds].sort() });
+const formKey = (f: ScopeForm) =>
+  JSON.stringify({
+    ...f,
+    sizeIds: [...f.sizeIds].sort(),
+    // Also a SET: re-picking the same designs in another order isn't a change.
+    fanOutTemplateIds: [...f.fanOutTemplateIds].sort(),
+  });
 
 export interface Automation {
   report: ShadowReport | null;

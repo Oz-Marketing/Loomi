@@ -83,7 +83,7 @@ const ADGEN_GUIDELINES_QUEUE = 'loomi.adgen.guidelines';
 // score every rooftop against yesterday's state and manufacture drift that
 // isn't there.
 const PLAYBOOKS_SWEEP_QUEUE = 'loomi.playbooks.sweep';
-// Media asset rights: retire assets past their licence/effective date and warn
+// Media asset rights: retire assets past their license/effective date and warn
 // ahead of the ones approaching it. Independent of the ad chain — it governs the
 // source material, not the ads built from it — so it runs on its own slot.
 const MEDIA_RIGHTS_QUEUE = 'loomi.media.rights-sweep';

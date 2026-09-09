@@ -130,8 +130,19 @@ export function subjectFromSession(session: {
   // `undefined` means the token predates this field — fall back to the legacy
   // mapping so a deploy doesn't lock anyone out mid-session. An EMPTY ARRAY is
   // a real answer: every sector role was revoked, and the user gets nothing.
-  const sectorRoles = (session.user.sectorRoles ??
-    legacySectorRolesFor(role)) as SectorRoleRef[];
+  // EMPTY counts as absent, not as "this user has been assigned nothing".
+  //
+  // `??` alone let an empty array through, and an empty array means zero
+  // permissions from the registry. That is wrong twice over: a user with no
+  // stored rows is exactly who the legacy mapping exists for, and — the way it
+  // actually bites — a SESSION minted before the Phase 1 backfill carries
+  // `sectorRoles: []` until the person signs in again. Any gate that asks the
+  // registry directly (`adGeneratorAllowed`, `campaignAccessFor`) then denies a
+  // signed-in admin on a stale token, which reads as the feature being broken.
+  const stored = session.user.sectorRoles;
+  const sectorRoles = (stored && stored.length > 0
+    ? stored
+    : legacySectorRolesFor(role)) as SectorRoleRef[];
 
   const legacyUnrestricted =
     role === 'developer' || role === 'super_admin' || role === 'admin';

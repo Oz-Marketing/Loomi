@@ -152,7 +152,7 @@ describe('rightsStatus facet', () => {
 
   it('labels the status for the rail', () => {
     expect(mediaFacetValueLabel('rightsStatus', 'lapsed')).toBe('Lapsed');
-    expect(mediaFacetValueLabel('rightsStatus', 'unknown')).toBe('No licence recorded');
+    expect(mediaFacetValueLabel('rightsStatus', 'unknown')).toBe('No license recorded');
   });
 
   it('filters on it', () => {

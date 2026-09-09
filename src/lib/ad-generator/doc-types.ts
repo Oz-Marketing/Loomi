@@ -664,6 +664,20 @@ export interface TemplateDoc {
    *  library: hidden before `start`, hidden after `end`. Stored in the doc JSON
    *  (no separate column). */
   schedule?: { start?: string | null; end?: string | null };
+  /**
+   * For a DUAL template (one carrying `o2_*` fields), whether both offers belong
+   * to the same model or to two different ones.
+   *
+   * Persisted because unattended generation has to know, and it previously could
+   * not: the editor held this as component state, so nothing outside a live
+   * editing session could tell the two kinds apart. Automation fills `same` and
+   * refuses `two` — a two-model ad needs to pick two VEHICLES, which the
+   * per-vehicle generate loop cannot express.
+   *
+   * Absent on every doc written before this existed. Treated as `same`, which is
+   * the editor's own default and by far the common case.
+   */
+  dualVehicleMode?: 'same' | 'two';
   sizes: AdSize[];
   /** Form fields the user fills — reuses FieldSpec (copy / maxLength /
    *  visibleWhen all carry straight over from the code-template work). */

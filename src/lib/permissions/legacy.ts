@@ -94,6 +94,9 @@ export const LEGACY_GUARD: Record<Permission, LegacyBucket> = {
   'studio.templates.edit': 'management',
   'studio.templates.publish': 'management',
   'studio.adgen.view': 'management',
+  // Staff-only in the legacy world too, so this denies a client while Studio
+  // enforcement is still off and keeps denying them after it flips.
+  'studio.adgen.create': 'management',
   'studio.adgen.edit': 'management',
   'studio.adgen.generate': 'management',
   'studio.adgen.launch': 'management',
@@ -200,8 +203,20 @@ export function legacySectorRolesFor(role: UserRole): SectorRoleRef[] {
       // side effect of the backfill.
       return ['agency.admin', 'studio.lead', 'reporting.admin', 'projects.admin'];
     case 'client':
-      // Reporting only — the invariant, not a default.
-      return ['reporting.client'];
+      // Reporting, plus review of the OEM offers built for them — and nothing
+      // else. Connor's call, 2026-09-03, replacing the older "Reporting only"
+      // invariant.
+      //
+      // `studio.client` is not a Studio seat: it carries `studio.adgen.view` and
+      // `.edit` and stops there, so a dealer can take the manufacturer's offer as
+      // generated or adjust it, and can reach nothing else in the sector. It
+      // deliberately withholds `generate` (runs come from the nightly job) and
+      // `launch` (that commits real ad spend).
+      //
+      // This WIDENS the client role, which `registry.test.ts` exists to catch.
+      // The test names the added permissions explicitly rather than being
+      // relaxed — see 'never widens what a client can do' there.
+      return ['reporting.client', 'studio.client'];
   }
 }
 

@@ -428,7 +428,7 @@ export function buildAssetMetadata(
   if ('licenseType' in input) {
     const raw = input.licenseType;
     if (raw === null || raw === '') data.licenseType = null;
-    else if (!isLicenseType(raw)) return { error: `Unknown licence type: ${String(raw)}` };
+    else if (!isLicenseType(raw)) return { error: `Unknown license type: ${String(raw)}` };
     else data.licenseType = raw;
   }
 
@@ -462,7 +462,7 @@ export function buildAssetMetadata(
 
   // Date fields, and the re-arm rule. Moving either governing date invalidates
   // whatever the sweep concluded last time — the classic renewal bug is an asset
-  // that stays flagged expired after its licence was extended.
+  // that stays flagged expired after its license was extended.
   let datesMoved = false;
   for (const key of ['licenseStartsAt', 'licenseExpiresAt', 'expiresAt'] as const) {
     if (!(key in input)) continue;

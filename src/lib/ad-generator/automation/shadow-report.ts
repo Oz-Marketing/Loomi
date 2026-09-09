@@ -292,6 +292,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     | (AutomationConfigRow & {
         templateMap: string | null;
         sizeIds: string | null;
+        fanOutTemplateIds: string | null;
         maxAdsPerRun: number;
         minStock: number;
         mode: string;
@@ -319,6 +320,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         rollingDays: true,
         templateMap: true,
         sizeIds: true,
+        fanOutTemplateIds: true,
         maxAdsPerRun: true,
         minStock: true,
         mode: true,
@@ -672,6 +674,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       const detached = detachedSteps(
         {
           adTemplateId: templateIdFor(config?.templateMap ?? null),
+          fanOutTemplateIds: jsonArray(config?.fanOutTemplateIds ?? null),
           sizeIds: jsonArray(config?.sizeIds ?? null),
           emailTemplateSlug: config?.emailTemplateId ?? '',
           emailMaxOffers: config?.emailMaxOffers ?? 6,

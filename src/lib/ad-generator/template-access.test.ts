@@ -11,6 +11,8 @@ import {
   templateAccessKeys,
   templatesForAccount,
   templatesForAnyAccount,
+  templateAudience,
+  audienceLabel,
 } from './template-access';
 
 const global = { accountKey: null, sharedAccountKeys: null };
@@ -183,5 +185,45 @@ describe('LIVE_TEMPLATE (soft delete)', () => {
     }
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe('templateAudience', () => {
+  const name = (k: string) => ({ 'young-subaru': 'Young Subaru', 'young-chev': 'Young Chevrolet', 'young-kia': 'Young Kia' })[k] ?? k;
+
+  it('is everyone only for an unowned, unshared template', () => {
+    expect(templateAudience(global)).toEqual({ kind: 'all' });
+    expect(audienceLabel(global, name)).toBe('All accounts');
+  });
+
+  it('narrows a shared-library template to exactly who it was shared with', () => {
+    // The bug this exists to prevent: the card used to read `accountKey` alone
+    // and call this one "All accounts" while the access rule allowed one dealer.
+    expect(templateAudience(globalButShared)).toEqual({ kind: 'accounts', keys: ['young-chev'] });
+    expect(audienceLabel(globalButShared, name)).toBe('Young Chevrolet');
+  });
+
+  it('names the owner when a template is its account\'s alone', () => {
+    expect(templateAudience(owned)).toEqual({ kind: 'accounts', keys: ['young-subaru'] });
+    expect(audienceLabel(owned, name)).toBe('Young Subaru');
+  });
+
+  it('counts owner plus shared together', () => {
+    const a = templateAudience(shared);
+    expect(a.kind).toBe('accounts');
+    expect(a.kind === 'accounts' && a.keys.sort()).toEqual(['young-chev', 'young-kia', 'young-subaru']);
+    expect(audienceLabel(shared, name)).toBe('3 accounts');
+  });
+
+  it('agrees with canAccountUseTemplate on every row', () => {
+    // The whole point of deriving audience here: the label and the gate cannot
+    // drift, because a disagreement fails this test.
+    for (const row of [global, owned, shared, globalButShared]) {
+      const a = templateAudience(row);
+      for (const key of ['young-subaru', 'young-chev', 'young-kia', 'stranger']) {
+        const allowed = canAccountUseTemplate(row, { accountKey: key });
+        expect(allowed).toBe(a.kind === 'all' || a.keys.includes(key));
+      }
+    }
   });
 });

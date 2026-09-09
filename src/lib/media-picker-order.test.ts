@@ -1,15 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
-  countOutOfLicence,
+  countOutOfLicense,
   defaultApprovedOnly,
-  isOutOfLicence,
+  isOutOfLicense,
   orderPickerAssets,
   pickerRank,
   type PickableAsset,
 } from './media-picker-order';
 
 /**
- * This is the code standing between a lapsed licence and a live ad, so it gets
+ * This is the code standing between a lapsed license and a live ad, so it gets
  * tested rather than eyeballed.
  */
 
@@ -25,16 +25,16 @@ const lapsedApproved = asset('lapsed.jpg', 'approved', { status: 'expired', days
 const expiringApproved = asset('soon.jpg', 'approved', { status: 'expiring_soon', daysRemaining: 11 });
 const legacy = asset('legacy.jpg', null);
 
-describe('isOutOfLicence', () => {
+describe('isOutOfLicense', () => {
   it('covers both past-date states', () => {
-    expect(isOutOfLicence(lapsedApproved)).toBe(true);
-    expect(isOutOfLicence(asset('x', 'approved', { status: 'lapsed', daysRemaining: -40 }))).toBe(true);
+    expect(isOutOfLicense(lapsedApproved)).toBe(true);
+    expect(isOutOfLicense(asset('x', 'approved', { status: 'lapsed', daysRemaining: -40 }))).toBe(true);
   });
 
-  it('does not flag an asset that is merely close, or one with no licence recorded', () => {
-    expect(isOutOfLicence(expiringApproved)).toBe(false);
-    expect(isOutOfLicence(approved)).toBe(false);
-    expect(isOutOfLicence(asset('x', 'approved', { status: 'unknown', daysRemaining: null }))).toBe(false);
+  it('does not flag an asset that is merely close, or one with no license recorded', () => {
+    expect(isOutOfLicense(expiringApproved)).toBe(false);
+    expect(isOutOfLicense(approved)).toBe(false);
+    expect(isOutOfLicense(asset('x', 'approved', { status: 'unknown', daysRemaining: null }))).toBe(false);
   });
 });
 
@@ -51,7 +51,7 @@ describe('pickerRank', () => {
 });
 
 describe('orderPickerAssets', () => {
-  it('sorts approved → draft → out of licence', () => {
+  it('sorts approved → draft → out of license', () => {
     const out = orderPickerAssets(
       [lapsedApproved, draft, approved],
       { approvedOnly: false },
@@ -76,9 +76,9 @@ describe('orderPickerAssets', () => {
     expect(out.map((a) => a.name)).toEqual(['legacy.jpg']);
   });
 
-  it('still surfaces an out-of-licence asset under approvedOnly — it IS approved', () => {
+  it('still surfaces an out-of-license asset under approvedOnly — it IS approved', () => {
     // Deliberate: approvedOnly filters on approval, not rights. It's sorted last
-    // and badged, and the warning strip is what speaks to the licence.
+    // and badged, and the warning strip is what speaks to the license.
     const out = orderPickerAssets([lapsedApproved], { approvedOnly: true });
     expect(out).toHaveLength(1);
   });
@@ -107,10 +107,10 @@ describe('orderPickerAssets', () => {
   });
 });
 
-describe('countOutOfLicence', () => {
+describe('countOutOfLicense', () => {
   it('counts only the past-date ones', () => {
-    expect(countOutOfLicence([lapsedApproved, expiringApproved, approved, draft])).toBe(1);
-    expect(countOutOfLicence([])).toBe(0);
+    expect(countOutOfLicense([lapsedApproved, expiringApproved, approved, draft])).toBe(1);
+    expect(countOutOfLicense([])).toBe(0);
   });
 });
 

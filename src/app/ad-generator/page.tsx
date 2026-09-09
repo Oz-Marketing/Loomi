@@ -12,10 +12,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, EnvelopeIcon, MegaphoneIcon, SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { openSupportModal } from '@/lib/ui-events';
@@ -31,7 +31,7 @@ import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-temp
 import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
 import { DEFAULT_OFFER_KIND } from '@/lib/ad-generator/offer-kinds';
-import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
+import { OfferKindBadge, OfferKindLabel } from '@/components/ad-generator/offer-kind-badge';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
 import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
@@ -52,6 +52,18 @@ import {
 } from '@/lib/ad-generator/ad-facets';
 import { AdFilterPanel } from '@/components/ad-generator/ad-filter-panel';
 import { GenerateOffersModal, type GenerateCandidate } from '@/components/ad-generator/generate-offers-modal';
+import { VariantCompareModal } from '@/components/ad-generator/variant-compare-modal';
+import { groupVariants, type VariantGroup } from '@/lib/ad-generator/variant-groups';
+import {
+  AD_STAGE,
+  countByStage,
+  isWaitingOnSomeone,
+  stageOf,
+  stageOfEmail,
+  tallyStages,
+  type AdStage,
+} from '@/lib/ad-generator/ad-lifecycle';
+import { Collapse } from '@/components/ui/collapse';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdTemplate, AdData } from '@/lib/ad-generator/types';
 
@@ -68,6 +80,18 @@ type Creative = {
   expiresAt?: string | null;
   /** Auto-generated only: why the generator held it as a draft. */
   reviewNotes?: string | null;
+  /** Shared by every design built from the same vehicle + offer. */
+  offerGroupKey?: string | null;
+  /** The design the generator ranked first within its group. */
+  recommended?: boolean;
+  /** When a person chose this design out of its group. */
+  selectedAt?: string | null;
+  /** Live in a published launch. */
+  running?: boolean;
+  /** The generate run this came from — shared with that run's offer email. */
+  campaignId?: string | null;
+  /** A person changed the offer values; the numbers are no longer the OEM's. */
+  offerEditedAt?: string | null;
   /** Whether this ad still follows its source template's design. */
   templateSync?: 'synced' | 'detached';
   /** Design hash of the template revision this ad's doc came from. */
@@ -76,6 +100,35 @@ type Creative = {
   docEditedAt?: string | null;
   doc?: TemplateDoc | null;
   data: AdData;
+};
+
+/** An offer email the same generate run produced. Clients only — staff read a
+ *  run in Campaigns, which a client cannot reach. */
+type GeneratedEmail = {
+  id: string;
+  subject: string;
+  status: string;
+  scheduledFor: string | null;
+  updatedAt: string;
+  campaignId: string | null;
+};
+
+/** One row of the CLIENT list: an offer with its designs, or the run's email. */
+type ClientItem =
+  | { kind: 'offer'; key: string; stage: AdStage; group: VariantGroup<FacetedCreative> }
+  | { kind: 'email'; key: string; stage: AdStage; email: GeneratedEmail };
+
+/**
+ * One campaign's whole output — its ads AND its offer email — as a single
+ * folder. `title` is null for the trailing block of items belonging to no run.
+ */
+type OfferFolder = {
+  key: string;
+  title: string | null;
+  items: ClientItem[];
+  counts: Record<AdStage, number>;
+  /** How many of `items` are waiting on a person. Drives order and default open. */
+  waiting: number;
 };
 
 /** Manual / automated split for the list. */
@@ -89,6 +142,29 @@ export default function AdGeneratorListPage() {
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
   const { confirm } = useLoomiDialog();
   const router = useRouter();
+
+  // This list is staff tooling. A dealer reads their offers on Campaigns, where
+  // the run's ads and its email are one thing — so a client who lands here (an
+  // old bookmark, a notification written before the move) is sent there rather
+  // than shown a surface built for a different job. They keep
+  // `studio.adgen.edit`: opening a design from the campaign still works.
+  /**
+   * `?focus=<creativeId>` — set by a notification link.
+   *
+   * Being dropped on a list and left to scroll is the complaint this answers.
+   * The ring is cleared after a few seconds: it marks WHERE to look on arrival,
+   * and a permanent highlight would read as a selection.
+   */
+  const searchParams = useSearchParams();
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const focusRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    setFocusId(searchParams.get('focus'));
+  }, [searchParams]);
+  const isClient = userRole === 'client';
+  useEffect(() => {
+    if (isClient) router.replace('/campaign-builder');
+  }, [isClient, router]);
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
   /** templateId → its CURRENT design, and that design's hash (see the fetch below). */
   const [templateDocs, setTemplateDocs] = useState<Record<string, TemplateDoc>>({});
@@ -443,8 +519,296 @@ export default function AdGeneratorListPage() {
     [preFacet, facetSel],
   );
 
-  /** Ids currently visible — what "select all" means, and what a bulk action hits. */
-  const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
+  /**
+   * The grid renders one card per OFFER, not per ad.
+   *
+   * With the fan-out a single offer produces a design per published template, so
+   * an ungrouped grid shows eight near-identical cards where the dealer has one
+   * decision to make. Grouping preserves the filtered order — it only merges rows
+   * that were already the same thing — and a hand-built ad is a group of one that
+   * renders exactly as it always did.
+   */
+  const allGroups = useMemo(() => groupVariants(visible), [visible]);
+
+  /**
+   * Which stage the list is showing.
+   *
+   * `waiting` is the default and the point of the whole control: after the
+   * fan-out most of an account's list is machine-made, and opening the page to a
+   * wall of ads that are already live buries the handful actually asking for a
+   * decision. Landing on "waiting on you" makes the outstanding work the first
+   * thing on screen; `all` is one click away and everything else is a drill-in.
+   */
+  /**
+   * Stages to show. Empty = all of them, which is the resting state: the page's
+   * job is to lay the work out in order, not to make you choose a view before
+   * you can see anything. Narrowing lives in Filters, beside every other way of
+   * shortening the list.
+   */
+  const [stageSel, setStageSel] = useState<AdStage[]>([]);
+
+  /**
+   * The offer emails the same runs produced. CLIENT ONLY — a run's email lives
+   * in Campaigns for staff, and `studio.client` cannot reach Campaigns, so
+   * without this the client sees half of what was made for them.
+   */
+  const [genEmails, setGenEmails] = useState<GeneratedEmail[]>([]);
+  useEffect(() => {
+    if (!accountKey || isManager) {
+      setGenEmails([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/generated-emails?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { emails: [] }))
+      .then((d: { emails?: GeneratedEmail[] }) => {
+        if (!cancelled) setGenEmails(d.emails ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setGenEmails([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, isManager, creatives]);
+
+  /**
+   * Groups the stage filter admits. Empty selection = all of them.
+   *
+   * STAFF see this as one flat grid — they want the whole working list, and
+   * banding it splits that over a distinction they are not making. The CLIENT
+   * view below re-uses the same filtered set but lays it out by stage, because
+   * "what needs me this month" is the only question a dealer opens this to ask.
+   */
+  const shown = useMemo(
+    () => (stageSel.length ? allGroups.filter((g) => stageSel.includes(stageOf(g))) : allGroups),
+    [allGroups, stageSel],
+  );
+
+  const stageCounts = useMemo(() => countByStage(allGroups), [allGroups]);
+
+  // ── the client layout ────────────────────────────────────────────────────
+  //
+  // Everything below is used only when `!isManager`. Staff render `shown` as a
+  // flat grid and never build any of it.
+
+  /** Ads and the run's email as one list, each placed in a stage. */
+  const clientItems = useMemo<ClientItem[]>(() => {
+    const ads: ClientItem[] = shown.map((group) => ({
+      kind: 'offer',
+      key: group.key,
+      stage: stageOf(group),
+      group,
+    }));
+    const mails: ClientItem[] = genEmails.map((email) => ({
+      kind: 'email',
+      key: `email:${email.id}`,
+      stage: stageOfEmail(email.status, email.scheduledFor),
+      email,
+    }));
+    return [...mails, ...ads];
+  }, [shown, genEmails]);
+
+  /**
+   * One folder per run, and the run is the OUTER container.
+   *
+   * The earlier shape had it the other way round — stage bands on the outside,
+   * a run frame inside each — and that splits a set across up to three places:
+   * the email sits in "Waiting on you" while the ads it shipped with sit in
+   * "Approved". But the email and the ads ARE one thing. They advertise the same
+   * offers, carry the same disclaimer, and `generateOfferEmail` already stamps
+   * one `Campaign` across both. A layout that pulls them apart by stage is
+   * describing our workflow rather than the dealer's campaign.
+   *
+   * So stage moves inside: it orders the folders, orders the items within one,
+   * and is summarized on the header. Nothing about "what needs me" is lost —
+   * anything waiting sorts first at both levels, and the count above the list
+   * still leads with it.
+   *
+   * Items belonging to no run stay loose in a final untitled block, so the page
+   * doesn't invent a folder of one around every hand-built ad.
+   */
+  const clientFolders = useMemo<OfferFolder[]>(() => {
+    const order: string[] = [];
+    const byRun = new Map<string, ClientItem[]>();
+    for (const i of clientItems) {
+      const cid = i.kind === 'offer' ? i.group.lead.campaignId : i.email.campaignId;
+      const key = cid ? `run:${cid}` : 'loose';
+      const cur = byRun.get(key);
+      if (cur) cur.push(i);
+      else {
+        byRun.set(key, [i]);
+        order.push(key);
+      }
+    }
+
+    const folders = order.map((key) => {
+      const list = byRun.get(key)!;
+      const email = list.find((i) => i.kind === 'email');
+      // Waiting first inside the folder, then the settled work, so opening one
+      // puts the decision at the top left.
+      const items = [...list].sort(
+        (a, b) => Number(isWaitingOnSomeone(b.stage)) - Number(isWaitingOnSomeone(a.stage)),
+      );
+      return {
+        key,
+        // Named by its email when it has one — that subject IS the run's name,
+        // since the Campaign container was created from it.
+        title: key === 'loose' ? null : email?.kind === 'email' ? email.email.subject : 'Generated offers',
+        items,
+        counts: tallyStages(list.map((i) => i.stage)),
+        waiting: list.filter((i) => isWaitingOnSomeone(i.stage)).length,
+      };
+    });
+
+    // Anything needing a decision rises; the loose block always sinks, because
+    // it is a remainder rather than a campaign.
+    return folders.sort((a, b) => {
+      if (!a.title !== !b.title) return a.title ? -1 : 1;
+      return b.waiting - a.waiting;
+    });
+  }, [clientItems]);
+
+  /**
+   * Folders the client has collapsed by hand.
+   *
+   * Stored as the exceptions rather than as the open set, so a folder arriving
+   * from a NEW run opens on its own — a set nobody has seen yet should never
+   * land closed. Default: open when anything inside is waiting on them.
+   */
+  const [closedFolders, setClosedFolders] = useState<Record<string, boolean>>({});
+  const folderOpen = (f: OfferFolder) =>
+    closedFolders[f.key] === undefined ? f.waiting > 0 || !f.title : !closedFolders[f.key];
+
+  // Scroll to the focused card once the list has rendered it. Keyed off
+  // `shown` rather than the raw fetch: the ref only exists after filtering has
+  // decided the card is on screen.
+  useEffect(() => {
+    if (!focusId || !focusRef.current) return;
+    focusRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const t = setTimeout(() => setFocusId(null), 4000);
+    return () => clearTimeout(t);
+  }, [focusId, shown]);
+
+  /** Which offer's designs are open for comparison. */
+  const [compareKey, setCompareKey] = useState<string | null>(null);
+  const compareGroup = useMemo(
+    () => allGroups.find((g) => g.key === compareKey) ?? null,
+    [allGroups, compareKey],
+  );
+  /**
+   * The group's FULL membership, archived siblings included.
+   *
+   * Once a design is picked its siblings are archived and drop out of the list
+   * query, so `compareGroup` alone would show a comparison of one — with no way
+   * to see what was passed over or to undo. Fetched on open, by group key.
+   */
+  const [groupFull, setGroupFull] = useState<Creative[] | null>(null);
+
+  useEffect(() => {
+    const key = compareGroup?.lead.offerGroupKey;
+    if (!compareKey || !accountKey || !key) {
+      setGroupFull(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(
+      `/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}&group=${encodeURIComponent(key)}`,
+    )
+      .then((r) => (r.ok ? r.json() : { creatives: [] }))
+      .then((d: { creatives?: Creative[] }) => {
+        if (!cancelled) setGroupFull(d.creatives ?? null);
+      })
+      .catch(() => {
+        // Fall back to what the list already has rather than showing nothing.
+        if (!cancelled) setGroupFull(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [compareKey, compareGroup, accountKey, creatives]);
+
+  /** What the compare modal shows: the full group when we have it, else the
+   *  visible slice. Ordered the same way the list orders variants. */
+  const compareVariants = useMemo(() => {
+    const rows = groupFull?.length ? groupFull : (compareGroup?.variants ?? []);
+    return [...rows].sort((a, b) => {
+      const pick = (v: Creative) => (v.selectedAt ? 0 : 1);
+      if (pick(a) !== pick(b)) return pick(a) - pick(b);
+      const rec = (v: Creative) => (v.recommended ? 0 : 1);
+      if (rec(a) !== rec(b)) return rec(a) - rec(b);
+      return a.id.localeCompare(b.id);
+    });
+  }, [groupFull, compareGroup]);
+  /** The variant mid-pick, so only its own button shows the wait. */
+  const [pickBusy, setPickBusy] = useState<string | null>(null);
+
+  /**
+   * Choose one design out of a group, or undo that choice.
+   *
+   * The server does the real work — mark the pick, archive the siblings, render
+   * the sizes generation deferred. What matters here is REPORTING it honestly: a
+   * render failure still leaves the pick standing, and saying only "design
+   * chosen" would let someone believe a full size set exists when it doesn't.
+   */
+  async function pickVariant(id: string, undo = false) {
+    if (!accountKey) return;
+    setPickBusy(id);
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${encodeURIComponent(id)}/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ undo }),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        archived?: number;
+        restored?: number;
+        rendered?: number;
+        renderError?: string;
+        renderSkipped?: string;
+      };
+      if (!res.ok) throw new Error(json.error || 'Could not update this design');
+
+      if (undo) {
+        toast.success(json.restored ? `Choice undone — ${json.restored} design(s) restored` : 'Choice undone');
+      } else if (json.renderError) {
+        // Loud on purpose. Generation only proved the square renders; this is
+        // where a design that breaks at another size finally shows itself.
+        toast.error(`Design chosen, but its other sizes failed to render: ${json.renderError}`, {
+          duration: 12000,
+        });
+      } else if (json.renderSkipped) {
+        toast.warning(`Design chosen. ${json.renderSkipped}`);
+      } else {
+        toast.success(
+          `Design chosen — ${json.rendered ?? 0} size(s) rendered` +
+            (json.archived ? `, ${json.archived} archived` : ''),
+        );
+      }
+
+      const list = await fetch(`/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}`)
+        .then((r) => (r.ok ? r.json() : { creatives: [] }))
+        .catch(() => ({ creatives: [] }));
+      setCreatives(list.creatives ?? []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update this design');
+    } finally {
+      setPickBusy(null);
+    }
+  }
+
+  /**
+   * Ids currently visible — what "select all" means, and what a bulk action hits.
+   *
+   * The LEAD of each group, not every variant: you can only act on what you can
+   * see, and a bulk archive that silently swept up seven designs hidden behind a
+   * card would be the opposite of what the count on screen promised.
+   */
+  const visibleIds = useMemo(
+    () => shown.map((g) => g.lead.id),
+    [shown],
+  );
   const selectedVisible = useMemo(
     () => visibleIds.filter((id) => selected.has(id)),
     [visibleIds, selected],
@@ -606,6 +970,201 @@ export default function AdGeneratorListPage() {
     }
   }
 
+  /** One item of a client's campaign folder — an ad, or the run's offer email. */
+  function renderClientItem(item: ClientItem) {
+    return item.kind === 'email' ? (
+      <GeneratedEmailCard key={item.key} email={item.email} stage={item.stage} />
+    ) : (
+      renderOfferCard(item.group)
+    );
+  }
+
+  /**
+   * One offer card. Extracted because the grid is laid out TWO ways — a flat
+   * list for staff, campaign folders for a client — and the card is identical in
+   * both. Duplicating it would guarantee the two drift apart.
+   */
+  function renderOfferCard(group: VariantGroup<FacetedCreative>) {
+              const stage = stageOf(group);
+
+              // One card per OFFER. `lead` is the chosen design, else the
+              // recommended one, else the newest — see variant-groups.
+              const c = group.selected ?? group.lead;
+              // Render the thumbnail from the ad's own snapshot when present, so it
+              // matches the editor/export even if the master template later changed.
+              const template = c.doc ? adTemplateFromDoc(c.id, c.doc) : templates.find((t) => t.id === c.templateId);
+              // The card a notification pointed at. `focus=<id>` matches either
+              // the offer GROUP's lead or any design inside it, because the
+              // notification names a creative and the grid shows one card per
+              // offer — landing on "the ad you were told about" has to work even
+              // when that ad is a sibling the row folded away.
+              const isFocused =
+                !!focusId && (c.id === focusId || group.variants.some((v) => v.id === focusId));
+              return (
+                <div
+                  key={c.id}
+                  ref={isFocused ? focusRef : undefined}
+                  role="button"
+                  tabIndex={0}
+                  // With a selection open the card toggles instead of navigating —
+                  // clicking through to the editor mid-selection is never what you
+                  // meant, and it loses the selection on the way.
+                  onClick={() => (selected.size > 0 ? toggleSelect(c.id) : router.push(`/ad-generator/${c.id}`))}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') return;
+                    e.preventDefault();
+                    if (selected.size > 0) toggleSelect(c.id);
+                    else router.push(`/ad-generator/${c.id}`);
+                  }}
+                  className={`glass-card group relative cursor-pointer overflow-hidden rounded-2xl border text-left transition-colors ${
+                    selected.has(c.id)
+                      ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]'
+                      : isFocused
+                        ? 'border-[var(--primary)] ring-2 ring-[var(--primary)]/60'
+                        : 'border-[var(--border)] hover:border-[var(--primary)]'
+                  }`}
+                >
+                  {/* Hidden until hover or selection, so an unselected grid stays
+                      clean but the affordance is one movement away. */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelect(c.id);
+                    }}
+                    aria-label={selected.has(c.id) ? `Deselect ${c.name}` : `Select ${c.name}`}
+                    aria-pressed={selected.has(c.id)}
+                    className={`absolute left-2.5 top-2.5 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-opacity ${
+                      selected.has(c.id)
+                        ? 'border-[var(--primary)] bg-[var(--primary)] opacity-100'
+                        : 'border-[var(--border)] bg-[var(--background)]/90 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                    }`}
+                  >
+                    {selected.has(c.id) && (
+                      <svg viewBox="0 0 12 12" className="h-3 w-3 text-white" fill="none">
+                        <path
+                          d="M2.5 6.5l2.5 2.5 4.5-5"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </button>
+                  <div className="relative">
+                    <AdPreviewThumb template={template} data={c.data} branding={branding} />
+                    {/* The whole reason this card is a group. Without a visible
+                        count the dealer never learns the other designs exist and
+                        reads the one on screen as the only thing on offer. */}
+                    {(group.isChoice || c.selectedAt) && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCompareKey(group.key);
+                        }}
+                        className="absolute bottom-2 right-2 z-10 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card-strong)]/95 px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] shadow-lg backdrop-blur transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                      >
+                        <Squares2X2Icon className="h-3.5 w-3.5" />
+                        {/* After a pick the siblings are archived and gone from
+                            this list, so the count here would read "1 design".
+                            Say what the button DOES instead; the modal re-fetches
+                            the full group, archived designs included. */}
+                        {c.selectedAt ? 'Change design' : `Compare ${group.variants.length} designs`}
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-start justify-between gap-2 p-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-[var(--foreground)]">{c.name}</div>
+                      <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+                        {/* ONE pill. This row had grown to five — status, offer
+                            kind, stage, Auto, Edited — and at 9px uppercase they
+                            read as a wall rather than as five separate facts.
+                            Stage is the only one that changes what you DO next, so
+                            it keeps the pill; the rest moved to the muted line
+                            below, where they are still there to be read but do not
+                            compete with it.
+
+                            Status went entirely: `draft` is what "Needs approval"
+                            and "Needs a pick" already mean, so it was the same
+                            answer twice. */}
+                        <StageChip stage={stage} count={group.variants.length} />
+                        <span className="truncate">{template?.name ?? c.templateId}</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[10px] text-[var(--muted-foreground)]">
+                        {/* The facts that used to be pills. Same information, said
+                            quietly — you read this line when you want detail, not
+                            while scanning the grid for what needs doing. */}
+                        <OfferKindLabel doc={c.doc} />
+                        {c.docEditedAt && (
+                          <span title={`Edited on ${new Date(c.docEditedAt).toLocaleDateString()} — this ad keeps its own design, so template updates skip it`}>
+                            · Design edited
+                          </span>
+                        )}
+                        {/* Not the same thing as a design edit, and the more
+                            consequential of the two: these numbers are no longer
+                            the manufacturer's. Amber rather than muted, because it
+                            is the one detail on this line with a compliance edge. */}
+                        {c.offerEditedAt && (
+                          <span
+                            className="text-amber-700 dark:text-amber-400"
+                            title={`Offer values changed by hand on ${new Date(c.offerEditedAt).toLocaleDateString()} — this ad no longer states the manufacturer's published terms`}
+                          >
+                            · Offer edited
+                          </span>
+                        )}
+                        <span>· Updated {new Date(c.updatedAt).toLocaleDateString()}</span>
+                        {/* Auto-generated ads are pinned to an offer that expires, so
+                            the useful date is when it stops being runnable — a
+                            human-built ad has no such deadline. */}
+                        {c.autoGenerated && c.expiresAt && (
+                          <span>· offer ends {new Date(c.expiresAt).toLocaleDateString()}</span>
+                        )}
+                      </div>
+                      {/* The template has moved on since this ad was built. Offered
+                          rather than applied: a design change has to be someone's
+                          decision, and for a customized ad it costs them their edit. */}
+                      {isBehindTemplate(
+                        { doc: c.doc, templateDocHash: c.templateDocHash, templateSync: c.templateSync, autoGenerated: c.autoGenerated },
+                        templateHashes[c.templateId] ?? null,
+                      ) && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void syncFromTemplate(c.id, !!c.docEditedAt);
+                          }}
+                          disabled={syncing === c.id}
+                          // Amber here too, so the "your ad is behind its template"
+                          // affordance is one colour everywhere it appears — and so it
+                          // stands out from a card that is otherwise all brand colour.
+                          className="mt-1.5 flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400"
+                        >
+                          <ArrowPathIcon className={`h-3 w-3 ${syncing === c.id ? 'animate-spin' : ''}`} />
+                          {syncing === c.id
+                            ? 'Updating…'
+                            : c.docEditedAt
+                              ? 'Template changed · reset to it'
+                              : 'Template updated · apply'}
+                        </button>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(c.id);
+                      }}
+                      title="Delete"
+                      className="flex-shrink-0 rounded-md p-1.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+  }
+
   return (
     // Managers render inside the app shell's padded card; clients render bare,
     // so give them the same centered, padded content column the editor uses.
@@ -693,9 +1252,12 @@ export default function AdGeneratorListPage() {
             </div>
             )}
 
-            {/* New ad. Managers get a split menu (template library or a
-                from-scratch build); clients get a single button that opens the
-                template picker — they never touch the builder. */}
+            {/* New ad — staff only, and gone entirely for a client.
+                Originating an ad is `studio.adgen.create`, which `studio.client`
+                does not hold: dealers are handed pre-built OEM offers and may
+                adjust them, and an ad started from scratch has no manufacturer
+                program behind it and no co-op provenance. The API enforces it;
+                this just stops offering a button that would 403. */}
             {isManager ? (
             <div className="relative" ref={newRef}>
               <button
@@ -784,17 +1346,7 @@ export default function AdGeneratorListPage() {
                 </div>
               )}
             </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setPickerOpen(true)}
-                disabled={!accountKey}
-                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <PlusIcon className="w-4 h-4" />
-                New ad
-              </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>
@@ -808,7 +1360,16 @@ export default function AdGeneratorListPage() {
             leading={
               <div className="flex items-center gap-3">
                 <span className="text-sm text-[var(--muted-foreground)]">
-                  {visible.length} {visible.length === 1 ? 'ad' : 'ads'}
+                  {/* Counts CARDS, and names the extra designs folded behind
+                      them. "5 ads" above a grid of 3 cards is a discrepancy the
+                      reader has to explain to themselves. */}
+                  {shown.length} {shown.length === 1 ? 'item' : 'items'}
+                  {stageCounts.needs_pick + stageCounts.needs_approval > 0 && (
+                    <span className="text-amber-700 dark:text-amber-400">
+                      {' '}
+                      · {stageCounts.needs_pick + stageCounts.needs_approval} waiting on you
+                    </span>
+                  )}
                 </span>
                 {visible.length > 0 && (
                   <button
@@ -836,6 +1397,9 @@ export default function AdGeneratorListPage() {
                 onSourceChange={setSourceFilter}
                 offerWindow={offerWindow}
                 onOfferWindowChange={setOfferWindow}
+                stages={stageSel}
+                onStagesChange={setStageSel}
+                stageCounts={stageCounts}
                 options={facetOptions}
                 visibleFacets={visibleFacets}
                 selection={facetSel}
@@ -897,157 +1461,81 @@ export default function AdGeneratorListPage() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-          {visible.map((c) => {
-            // Render the thumbnail from the ad's own snapshot when present, so it
-            // matches the editor/export even if the master template later changed.
-            const template = c.doc ? adTemplateFromDoc(c.id, c.doc) : templates.find((t) => t.id === c.templateId);
-            return (
-              <div
-                key={c.id}
-                role="button"
-                tabIndex={0}
-                // With a selection open the card toggles instead of navigating —
-                // clicking through to the editor mid-selection is never what you
-                // meant, and it loses the selection on the way.
-                onClick={() => (selected.size > 0 ? toggleSelect(c.id) : router.push(`/ad-generator/${c.id}`))}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter' && e.key !== ' ') return;
-                  e.preventDefault();
-                  if (selected.size > 0) toggleSelect(c.id);
-                  else router.push(`/ad-generator/${c.id}`);
-                }}
-                className={`glass-card group relative cursor-pointer overflow-hidden rounded-2xl border text-left transition-colors ${
-                  selected.has(c.id)
-                    ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]'
-                    : 'border-[var(--border)] hover:border-[var(--primary)]'
-                }`}
-              >
-                {/* Hidden until hover or selection, so an unselected grid stays
-                    clean but the affordance is one movement away. */}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleSelect(c.id);
-                  }}
-                  aria-label={selected.has(c.id) ? `Deselect ${c.name}` : `Select ${c.name}`}
-                  aria-pressed={selected.has(c.id)}
-                  className={`absolute left-2.5 top-2.5 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-opacity ${
-                    selected.has(c.id)
-                      ? 'border-[var(--primary)] bg-[var(--primary)] opacity-100'
-                      : 'border-[var(--border)] bg-[var(--background)]/90 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+        // TWO LAYOUTS, one card.
+        //
+        // Staff get a flat grid: they want the whole working list, and banding it
+        // splits that over a distinction they are not making.
+        //
+        // A client gets one folder per campaign, because the ads and the offer
+        // email are a set — same offers, same disclaimer, one Campaign row. They
+        // read this instead of Campaigns, which is closed to them, so the set has
+        // to hold together here or it holds together nowhere.
+        isManager ? (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {shown.map((group) => renderOfferCard(group))}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {clientFolders.map((folder) => {
+              const open = folderOpen(folder);
+              // The loose remainder is not a campaign, so it gets no folder
+              // chrome and no toggle — just its cards.
+              if (!folder.title) {
+                return (
+                  <div key={folder.key} className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+                    {folder.items.map((item) => renderClientItem(item))}
+                  </div>
+                );
+              }
+              return (
+                <section
+                  key={folder.key}
+                  className={`overflow-hidden rounded-2xl border transition-colors ${
+                    folder.waiting > 0
+                      ? 'border-[var(--primary)]/40 bg-[var(--primary)]/[0.04]'
+                      : 'border-[var(--border)] bg-[var(--muted)]/25'
                   }`}
                 >
-                  {selected.has(c.id) && (
-                    <svg viewBox="0 0 12 12" className="h-3 w-3 text-white" fill="none">
-                      <path
-                        d="M2.5 6.5l2.5 2.5 4.5-5"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  )}
-                </button>
-                <AdPreviewThumb template={template} data={c.data} branding={branding} />
-                <div className="flex items-start justify-between gap-2 p-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-[var(--foreground)]">{c.name}</div>
-                    <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
-                      <span
-                        className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                          c.status === 'ready' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                        }`}
-                      >
-                        {c.status}
-                      </span>
-                      {/* What KIND of ad this is. Sits next to the status because
-                          it's the other thing you scan a grid for — and because
-                          the neighbouring "Custom" chip is a template-SYNC state,
-                          not an offer type, and used to be the only thing here
-                          that looked like an answer to "what kind of ad is this". */}
-                      <OfferKindBadge doc={c.doc} />
-                      {c.autoGenerated && (
-                        <span
-                          title="Built by the nightly offer job, not by hand"
-                          className="flex items-center gap-0.5 rounded bg-[var(--primary)]/12 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--primary)]"
-                        >
-                          <BoltIcon className="h-2.5 w-2.5" />
-                          Auto
-                        </span>
-                      )}
-                      {/* Customized = this ad owns its design and template edits
-                          skip it. Worth stating on the card, because it's the
-                          reason a template fix didn't show up here. */}
-                      {c.docEditedAt && (
-                        <span
-                          title={`Edited on ${new Date(c.docEditedAt).toLocaleDateString()} — this ad keeps its own design, so template updates skip it`}
-                          className="flex items-center gap-0.5 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]"
-                        >
-                          <PencilSquareIcon className="h-2.5 w-2.5" />
-                          {/* Was "Custom", which read like an answer to "what kind
-                              of ad is this" while actually meaning "this ad keeps
-                              its own design". Now that Custom is an offer KIND,
-                              the two were unusable side by side. "Edited" is what
-                              the chip's own tooltip has always said. */}
-                          Edited
-                        </span>
-                      )}
-                      <span className="truncate">{template?.name ?? c.templateId}</span>
-                    </div>
-                    <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
-                      Updated {new Date(c.updatedAt).toLocaleDateString()}
-                      {/* Auto-generated ads are pinned to an offer that expires, so
-                          the useful date is when it stops being runnable — a
-                          human-built ad has no such deadline. */}
-                      {c.autoGenerated && c.expiresAt && (
-                        <> · offer ends {new Date(c.expiresAt).toLocaleDateString()}</>
-                      )}
-                    </div>
-                    {/* The template has moved on since this ad was built. Offered
-                        rather than applied: a design change has to be someone's
-                        decision, and for a customized ad it costs them their edit. */}
-                    {isBehindTemplate(
-                      { doc: c.doc, templateDocHash: c.templateDocHash, templateSync: c.templateSync, autoGenerated: c.autoGenerated },
-                      templateHashes[c.templateId] ?? null,
-                    ) && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void syncFromTemplate(c.id, !!c.docEditedAt);
-                        }}
-                        disabled={syncing === c.id}
-                        // Amber here too, so the "your ad is behind its template"
-                        // affordance is one colour everywhere it appears — and so it
-                        // stands out from a card that is otherwise all brand colour.
-                        className="mt-1.5 flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400"
-                      >
-                        <ArrowPathIcon className={`h-3 w-3 ${syncing === c.id ? 'animate-spin' : ''}`} />
-                        {syncing === c.id
-                          ? 'Updating…'
-                          : c.docEditedAt
-                            ? 'Template changed · reset to it'
-                            : 'Template updated · apply'}
-                      </button>
-                    )}
-                  </div>
                   <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      remove(c.id);
-                    }}
-                    title="Delete"
-                    className="flex-shrink-0 rounded-md p-1.5 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
+                    type="button"
+                    onClick={() =>
+                      setClosedFolders((prev) => ({ ...prev, [folder.key]: open }))
+                    }
+                    aria-expanded={open}
+                    className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-[var(--muted)]/40"
                   >
-                    <TrashIcon className="h-4 w-4" />
+                    <ChevronDownIcon
+                      className={`h-4 w-4 shrink-0 text-[var(--muted-foreground)] transition-transform duration-200 ${
+                        open ? '' : '-rotate-90'
+                      }`}
+                    />
+                    <SparklesIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-[var(--foreground)]">
+                        {folder.title}
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                        {folder.items.length} {folder.items.length === 1 ? 'piece' : 'pieces'} in this campaign
+                        {folder.counts.running > 0 && ` · ${folder.counts.running} running`}
+                        {folder.counts.approved > 0 && ` · ${folder.counts.approved} approved`}
+                      </div>
+                    </div>
+                    {folder.waiting > 0 && (
+                      <span className="shrink-0 rounded-full bg-[var(--primary)]/15 px-2.5 py-1 text-[11px] font-semibold text-[var(--primary)]">
+                        {folder.waiting} waiting on you
+                      </span>
+                    )}
                   </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                  <Collapse open={open} mountClosed={false}>
+                    <div className="grid grid-cols-1 gap-5 px-4 pb-4 md:grid-cols-2 xl:grid-cols-3">
+                      {folder.items.map((item) => renderClientItem(item))}
+                    </div>
+                  </Collapse>
+                </section>
+              );
+            })}
+          </div>
+        )
       )}
 
       {pickerOpen && typeof document !== 'undefined' && createPortal(
@@ -1234,6 +1722,19 @@ export default function AdGeneratorListPage() {
           onGenerate={(scope) => void generateFromOffers(scope)}
         />
       )}
+
+      <VariantCompareModal
+        open={!!compareGroup}
+        offerName={compareGroup?.name ?? ''}
+        variants={compareVariants}
+        templates={templates}
+        branding={branding}
+        busyId={pickBusy}
+        onPick={(id) => void pickVariant(id)}
+        onUndo={(id) => void pickVariant(id, true)}
+        onOpenEditor={(id) => router.push(`/ad-generator/${id}`)}
+        onClose={() => !pickBusy && setCompareKey(null)}
+      />
     </div>
   );
 }
@@ -1394,3 +1895,71 @@ function ScratchSetupModal({
   );
 }
 
+/**
+ * The offer email a run produced, shown beside the ads it shipped with.
+ *
+ * CLIENT-ONLY, and read-only. Staff read a run in Campaigns, which has a real
+ * Emails tab and an editor behind it; `studio.client` cannot reach Campaigns or
+ * Emails & SMS, so for a dealer this card IS the whole of what they see of the
+ * email. It deliberately doesn't link anywhere: sending a client to a 403 is
+ * worse than showing them a card that plainly does nothing but inform.
+ *
+ * Visually distinct from an ad card on purpose — an envelope and no thumbnail,
+ * because inventing a fake ad preview for an email would be worse than none.
+ */
+function GeneratedEmailCard({ email, stage }: { email: GeneratedEmail; stage: AdStage }) {
+  return (
+    <div className="glass-card flex flex-col gap-3 rounded-2xl border border-[var(--border)] p-4">
+      <div className="flex items-center gap-2">
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+          <EnvelopeIcon className="h-4 w-4" />
+        </span>
+        <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+          Offer email
+        </span>
+        <StageChip stage={stage} count={1} />
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-sm font-semibold text-[var(--foreground)]" title={email.subject}>
+          {email.subject}
+        </div>
+        <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+          {email.scheduledFor
+            ? `Scheduled for ${new Date(email.scheduledFor).toLocaleDateString()}`
+            : 'Not scheduled yet'}
+          {' · '}
+          Updated {new Date(email.updatedAt).toLocaleDateString()}
+        </div>
+      </div>
+      <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+        Your team sends this — it goes out with the offers above.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Where this offer stands, as one chip.
+ *
+ * Colour carries the same split the filter tabs do: amber = waiting on a person,
+ * emerald = settled. That is the distinction someone scanning the grid is
+ * actually making, so it should survive being seen out of the corner of an eye.
+ */
+function StageChip({ stage, count }: { stage: AdStage; count: number }) {
+  const meta = AD_STAGE[stage];
+  const tone =
+    stage === 'running'
+      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+      : stage === 'approved'
+        ? 'bg-[var(--primary)]/12 text-[var(--primary)]'
+        : 'bg-amber-500/15 text-amber-700 dark:text-amber-400';
+  return (
+    <span
+      title={stage === 'needs_pick' ? `${count} designs were built for this offer — ${meta.hint}` : meta.hint}
+      className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${tone}`}
+    >
+      {stage === 'running' && <CheckCircleIcon className="h-2.5 w-2.5" />}
+      {meta.label}
+    </span>
+  );
+}

@@ -4,7 +4,7 @@ import type { RightsStatus } from '@/lib/media-rights';
  * How the media picker orders and filters what it offers.
  *
  * Extracted from the modal so it can be tested: this is the code standing
- * between a lapsed licence and a live ad, and "I clicked around and it looked
+ * between a lapsed license and a live ad, and "I clicked around and it looked
  * right" is not the standard that deserves.
  *
  * The rule is respect approval WITHOUT hiding things. An asset that silently
@@ -20,20 +20,20 @@ export interface PickableAsset {
   rights?: { status: RightsStatus; daysRemaining: number | null } | null;
 }
 
-/** Past its licence or campaign date — the case that costs money in live creative. */
-export function isOutOfLicence(asset: PickableAsset): boolean {
+/** Past its license or campaign date — the case that costs money in live creative. */
+export function isOutOfLicense(asset: PickableAsset): boolean {
   return asset.rights?.status === 'expired' || asset.rights?.status === 'lapsed';
 }
 
 /**
- * Sort rank: cleared work first, then drafts, then anything out of licence.
+ * Sort rank: cleared work first, then drafts, then anything out of license.
  *
- * Out-of-licence outranks draft status deliberately — an approved asset whose
- * licence has since lapsed is MORE dangerous than an honest draft, because the
+ * Out-of-license outranks draft status deliberately — an approved asset whose
+ * license has since lapsed is MORE dangerous than an honest draft, because the
  * approval badge would otherwise vouch for it.
  */
 export function pickerRank(asset: PickableAsset): number {
-  if (isOutOfLicence(asset)) return 2;
+  if (isOutOfLicense(asset)) return 2;
   return asset.status === 'approved' ? 0 : 1;
 }
 
@@ -63,8 +63,8 @@ export function orderPickerAssets<T extends PickableAsset>(
   return [...kept].sort((a, b) => pickerRank(a) - pickerRank(b));
 }
 
-export function countOutOfLicence(assets: PickableAsset[]): number {
-  return assets.filter(isOutOfLicence).length;
+export function countOutOfLicense(assets: PickableAsset[]): number {
+  return assets.filter(isOutOfLicense).length;
 }
 
 /**

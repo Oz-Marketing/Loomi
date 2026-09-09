@@ -2,6 +2,18 @@
 
 import * as React from 'react';
 import { useEditor, findBlock } from './EditorContext';
+import {
+  BIND_PROP,
+  BRAND_ACCENT_PROP,
+  OFFER_BINDINGS,
+  REPEAT_PROP,
+  blockPath,
+  hasOfferBinding,
+  isOfferScope,
+} from '@/lib/ad-generator/automation/offer-bindings';
+import { TokenTextArea, type ContentSource } from '@/components/token-textarea';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import type { Block } from '../types';
 import { componentSchemas, type PropSchema } from '@/lib/component-schemas';
 import {
   ChevronLeftIcon,
@@ -94,10 +106,30 @@ export function BlockProperties() {
   // If the active tab has no props, fall back to the first visible tab
   const effectiveTab = propsByTab.has(activeTab) ? activeTab : visibleTabs[0]?.key || 'content';
   const propsForTab = propsByTab.get(effectiveTab) || [];
+  const firstTab = visibleTabs[0]?.key ?? 'content';
 
   const handleChange = (key: string, value: unknown) => {
     updateBlockProps(selectedBlock.id, { [key]: value });
   };
+
+  /**
+   * Whether offer data is in scope for the selected block.
+   *
+   * Only inside a repeating container: that subtree is what a run walks and
+   * fills, so it is the only place an `{{offer.x}}` token can resolve. The
+   * masthead of an OEM email is as offer-less as a newsletter.
+   *
+   * The second arm is the escape hatch — a block that ALREADY carries a
+   * binding keeps the panel wherever it sits, because hiding a control does
+   * not unset it and a binding you cannot see is one you cannot remove.
+   */
+  const offerScope =
+    isOfferScope(blockPath(template.blocks, selectedBlock.id)) || hasOfferBinding(selectedBlock);
+
+  /** Containers can be marked as the thing a run repeats. Leaves cannot. */
+  const isContainer = selectedBlock.type === 'section' || selectedBlock.type === 'columns';
+  const repeats = typeof selectedBlock.props[REPEAT_PROP] === 'string'
+    && selectedBlock.props[REPEAT_PROP] !== '';
 
   const handleSpacingChange = (
     prefix: 'padding' | 'margin',
@@ -163,7 +195,7 @@ export function BlockProperties() {
             the Content tab. Anchored against the button so the variants
             popover sits underneath it inline with the property list. */}
         {effectiveTab === 'content' && AI_TEXT_BLOCK_TYPES.has(selectedBlock.type) && (
-          <div className="px-4 pt-4 pb-1">
+          <div className="px-4 pb-5 pt-4">
             <button
               ref={aiAnchorRef}
               type="button"
@@ -223,6 +255,24 @@ export function BlockProperties() {
               }}
             />
           </div>
+        )}
+
+        {/* The repeat switch lives on the CONTAINER, and the bindings live on
+            the leaves inside it — which is the same split the run uses: repeat
+            the card, fill its parts.
+            On the container's FIRST tab rather than the Content one, because a
+            Section has no content props and so has no Content tab — pinning it
+            there rendered it nowhere. First tab also puts it above the styling,
+            which is right: it changes what the section IS, not how it looks. */}
+        {isContainer && effectiveTab === firstTab && (
+          <RepeatControl
+            on={repeats}
+            onChange={(next) => handleChange(REPEAT_PROP, next ? 'offer' : undefined)}
+          />
+        )}
+
+        {effectiveTab === 'content' && offerScope && (
+          <OfferBindingControl block={selectedBlock} onChange={handleChange} />
         )}
 
         <PropertyList
@@ -320,7 +370,7 @@ function PropertyList({ props, block, schema, onChange, onSpacingChange, onCorne
       {Array.from(grouped.entries()).map(([groupName, groupProps]) => (
         <div key={groupName}>
           <PropertyGroupHeader name={prettyGroupName(groupName)} />
-          <div className="px-4 py-3 space-y-3">
+          <div className="px-4 pb-5 pt-3 space-y-3">
             {groupProps.map((prop) => (
               <PropertyField
                 key={prop.key}
@@ -336,7 +386,7 @@ function PropertyList({ props, block, schema, onChange, onSpacingChange, onCorne
       {hasCornerGroup && cornerInThisTab && (
         <div>
           <PropertyGroupHeader name="Border Radius" />
-          <div className="px-4 py-3">
+          <div className="px-4 pb-5 pt-3">
             <CornerBox
               values={{
                 tl: Number(block.props.borderRadiusTopLeft ?? block.props.borderRadius) || 0,
@@ -353,7 +403,7 @@ function PropertyList({ props, block, schema, onChange, onSpacingChange, onCorne
       {spacingInTab.map((prefix) => (
         <div key={prefix}>
           <PropertyGroupHeader name={prefix === 'padding' ? 'Padding' : 'Margin'} />
-          <div className="px-4 py-3">
+          <div className="px-4 pb-5 pt-3">
             <SpacingBox
               values={{
                 top: Number(block.props[`${prefix}Top`]) || 0,
@@ -685,3 +735,130 @@ function ImageProp({
     </>
   );
 }
+
+
+/**
+ * Marks a container as the one a generate run repeats.
+ *
+ * Settable HERE and not only in the save-as-block dialog, because a designer
+ * building a new card starts with an empty Section — and until it is marked,
+ * the blocks inside it get no offer bindings, which is exactly when they need
+ * them. Same underlying flag either way.
+ *
+ * The label names the thing; the helper says what happens. It deliberately
+ * does not spell out how many copies or when the run fires — that is the
+ * campaign's business, changes without this control changing, and reads as
+ * trivia to a designer who only wants to know what the switch does.
+ */
+function RepeatControl({ on, onChange }: { on: boolean; onChange: (next: boolean) => void }) {
+  return (
+    <div>
+      <PropertyGroupHeader name="Dynamic content" />
+      <div className="px-4 pb-5 pt-3">
+        <label className="flex cursor-pointer items-start gap-2">
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => onChange(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 accent-[var(--primary)]"
+          />
+          <span className="min-w-0">
+            <span className="block text-xs font-medium text-[var(--foreground)]">
+              Repeats for each OEM offer
+            </span>
+            <span className="mt-0.5 block text-[11px] leading-snug text-[var(--muted-foreground)]">
+              Blocks inside can be bound to offer data, and this section is drawn once
+              for every offer.
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pointing a block at OEM offer data — the same two shapes the AD builder uses,
+ * deliberately, so binding feels identical on both sides.
+ *
+ *  • IMAGES get a "Shows" dropdown. A picture is one value, so it binds whole.
+ *  • TEXT gets `{{offer.x}}` tokens inline, through the SAME `TokenTextArea`
+ *    the ad inspector uses. A line can mix copy and data — "Lease a
+ *    {{offer.name}} for {{offer.main}}" — which is what an offer card needs and
+ *    what a whole-field dropdown cannot express.
+ */
+function OfferBindingControl({
+  block,
+  onChange,
+}: {
+  block: Block;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const isImage = block.type === 'image' || block.type === 'logo';
+  const isText = block.type === 'text' || block.type === 'heading';
+  if (!isImage && !isText) return null;
+
+  if (isImage) {
+    const options: ContentSource[] = [
+      { value: '', label: 'Not bound — use the image I picked' },
+      ...OFFER_BINDINGS.filter((o) => o.kind === 'image').map((o) => ({
+        value: o.value,
+        label: o.label,
+        group: 'OEM offer',
+      })),
+    ];
+    const current = typeof block.props[BIND_PROP] === 'string' ? (block.props[BIND_PROP] as string) : '';
+    return (
+      <div>
+        <PropertyGroupHeader name="Offer data" />
+        <div className="px-4 pb-5 pt-3">
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Shows</label>
+          <SearchableSelect
+            value={current}
+            onChange={(v) => onChange(BIND_PROP, v || undefined)}
+            options={options}
+            className="w-full"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const text = typeof block.props.text === 'string' ? block.props.text : '';
+  return (
+    <div>
+      <PropertyGroupHeader name="Offer data" />
+      <div className="px-4 pb-5 pt-3">
+        <TokenTextArea
+          value={text}
+          onChange={(v) => onChange('text', v)}
+          options={OFFER_TOKEN_SOURCES}
+          placeholder="Type text — add {{variables}} with the icon →"
+          scopeNote="Filled from each offer when a run generates."
+        />
+        {/* A block is authored once and used by every account, so a colour
+            picked here is that colour for all of them. This hands the line back
+            to each dealer's own accent — what the built-in card always did. */}
+        <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[11px] text-[var(--muted-foreground)]">
+          <input
+            type="checkbox"
+            checked={block.props[BRAND_ACCENT_PROP] === true}
+            onChange={(e) => onChange(BRAND_ACCENT_PROP, e.target.checked || undefined)}
+            className="mt-0.5 accent-[var(--primary)]"
+          />
+          <span>
+            Use the dealer&rsquo;s brand color
+            <span className="mt-0.5 block text-[10px] leading-snug">
+              Overrides the color above with each account&rsquo;s own, so one card suits them all.
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+/** The offer fields, in the `ContentSource` shape `TokenTextArea` expects. */
+const OFFER_TOKEN_SOURCES: ContentSource[] = OFFER_BINDINGS.filter((o) => o.kind === 'text').map(
+  (o) => ({ value: o.value, label: o.label, group: 'OEM offer' }),
+);

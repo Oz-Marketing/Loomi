@@ -298,6 +298,22 @@ export const SOCIAL_SCHEMA: BlockSchema = {
   ],
 };
 
+export const OFFERS_SCHEMA: BlockSchema = {
+  type: 'offers',
+  label: 'OEM Offers',
+  icon: 'tag',
+  description: 'Where the month’s manufacturer offers are inserted when a run generates.',
+  defaults: { placeholderLabel: 'This month’s offers appear here' },
+  // One prop, and it only changes the placeholder. Everything a recipient sees
+  // — cards, images, figures, disclosures — is built by the run from the live
+  // offers, so there is nothing here for a designer to style. Layout of the
+  // cards lives in `offer-email-doc.ts` alongside the ad plate's own vocabulary,
+  // which is what keeps the email and the ad looking like one set.
+  props: [
+    { key: 'placeholderLabel', label: 'Placeholder text', type: 'text', group: 'content' },
+  ],
+};
+
 export const BLOCK_SCHEMAS: Record<BlockType, BlockSchema> = {
   section: SECTION_SCHEMA,
   columns: COLUMNS_SCHEMA,
@@ -309,10 +325,12 @@ export const BLOCK_SCHEMAS: Record<BlockType, BlockSchema> = {
   divider: DIVIDER_SCHEMA,
   logo: LOGO_SCHEMA,
   social: SOCIAL_SCHEMA,
+  offers: OFFERS_SCHEMA,
 };
 
 export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   LOGO_SCHEMA,
+  OFFERS_SCHEMA,
   HEADING_SCHEMA,
   TEXT_SCHEMA,
   IMAGE_SCHEMA,

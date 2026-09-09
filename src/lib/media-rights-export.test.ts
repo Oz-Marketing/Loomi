@@ -53,7 +53,7 @@ describe('rightsExportCsv', () => {
     expect(csv).not.toContain('T00:00:00');
   });
 
-  it('reports a lapsed licence with a negative days-remaining', () => {
+  it('reports a lapsed license with a negative days-remaining', () => {
     const csv = rightsExportCsv([asset({ licenseExpiresAt: inDays(-9) })], NOW);
     const line = rows(csv)[1];
     expect(line).toContain('Expired');

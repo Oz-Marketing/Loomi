@@ -18,8 +18,18 @@ import { createHash } from 'crypto';
 
 /** The bundle a creative playbook defines. */
 export interface CreativeDefinition {
-  /** `AdTemplateDoc.id` the ads render from. */
+  /** `AdTemplateDoc.id` the run RECOMMENDS — the design a row leads with. */
   adTemplateId: string;
+  /**
+   * Every `AdTemplateDoc.id` the fan-out may build. Empty = no constraint, i.e.
+   * every published template in scope for the account.
+   *
+   * Separate from `adTemplateId` because they answer different questions: that
+   * one picks the design a dealer sees first, this one bounds the set they
+   * choose among. `effectiveFanOut` unions the two, so a playbook can never
+   * recommend a design it does not permit.
+   */
+  fanOutTemplateIds: string[];
   /** Which of that template's sizes to render. Empty = all of them. */
   sizeIds: string[];
   /** `Template.slug` of the v2 email shell. Empty = compose from the brand kit. */
@@ -29,10 +39,16 @@ export interface CreativeDefinition {
 }
 
 /** Which parts of the bundle an account has diverged from. */
-export type CreativeStep = 'adTemplate' | 'sizes' | 'emailTemplate' | 'emailMaxOffers';
+export type CreativeStep =
+  | 'adTemplate'
+  | 'fanOut'
+  | 'sizes'
+  | 'emailTemplate'
+  | 'emailMaxOffers';
 
 export const CREATIVE_STEPS: CreativeStep[] = [
   'adTemplate',
+  'fanOut',
   'sizes',
   'emailTemplate',
   'emailMaxOffers',
@@ -40,7 +56,8 @@ export const CREATIVE_STEPS: CreativeStep[] = [
 
 /** Human labels, shared by the settings UI and the audit so they agree. */
 export const STEP_LABEL: Record<CreativeStep, string> = {
-  adTemplate: 'Ad template',
+  adTemplate: 'Recommended design',
+  fanOut: 'Designs built',
   sizes: 'Sizes',
   emailTemplate: 'Email template',
   emailMaxOffers: 'Max offers',
@@ -48,6 +65,7 @@ export const STEP_LABEL: Record<CreativeStep, string> = {
 
 const EMPTY: CreativeDefinition = {
   adTemplateId: '',
+  fanOutTemplateIds: [],
   sizeIds: [],
   emailTemplateSlug: '',
   emailMaxOffers: 6,
@@ -72,6 +90,9 @@ export function parseDefinition(raw: string | null | undefined): CreativeDefinit
   const max = Number(obj.emailMaxOffers);
   return {
     adTemplateId: typeof obj.adTemplateId === 'string' ? obj.adTemplateId : '',
+    fanOutTemplateIds: Array.isArray(obj.fanOutTemplateIds)
+      ? obj.fanOutTemplateIds.filter((s) => typeof s === 'string')
+      : [],
     sizeIds: Array.isArray(obj.sizeIds) ? obj.sizeIds.filter((s) => typeof s === 'string') : [],
     emailTemplateSlug: typeof obj.emailTemplateSlug === 'string' ? obj.emailTemplateSlug : '',
     // 0 would mean "feature no offers", which reads as a limit but produces an
@@ -90,6 +111,7 @@ export function parseDefinition(raw: string | null | undefined): CreativeDefinit
 export function definitionHash(def: CreativeDefinition): string {
   const canonical = JSON.stringify({
     adTemplateId: def.adTemplateId,
+    fanOutTemplateIds: [...def.fanOutTemplateIds].sort(),
     sizeIds: [...def.sizeIds].sort(),
     emailTemplateSlug: def.emailTemplateSlug,
     emailMaxOffers: def.emailMaxOffers,
@@ -129,6 +151,7 @@ export function resolveVersionBump(input: {
 /** The subset of an account's config a creative playbook presets. */
 export interface ConfigCreative {
   adTemplateId: string;
+  fanOutTemplateIds: string[];
   sizeIds: string[];
   emailTemplateSlug: string;
   emailMaxOffers: number;
@@ -138,7 +161,8 @@ export interface ConfigCreative {
 // the source makes the whole FILE binary to grep, so nothing in it can be
 // found by search. `meta-ads-pacer.ts` has the same trap.
 const SIZE_JOIN = '\u0000';
-const sameSizes = (a: string[], b: string[]) =>
+/** Order-insensitive set equality, used for both id lists. */
+const sameIds = (a: string[], b: string[]) =>
   a.length === b.length &&
   [...a].sort().join(SIZE_JOIN) === [...b].sort().join(SIZE_JOIN);
 
@@ -154,7 +178,8 @@ export function detachedSteps(
 ): CreativeStep[] {
   const out: CreativeStep[] = [];
   if (config.adTemplateId !== def.adTemplateId) out.push('adTemplate');
-  if (!sameSizes(config.sizeIds, def.sizeIds)) out.push('sizes');
+  if (!sameIds(config.fanOutTemplateIds, def.fanOutTemplateIds)) out.push('fanOut');
+  if (!sameIds(config.sizeIds, def.sizeIds)) out.push('sizes');
   if (config.emailTemplateSlug !== def.emailTemplateSlug) out.push('emailTemplate');
   if (config.emailMaxOffers !== def.emailMaxOffers) out.push('emailMaxOffers');
   return out;
@@ -174,6 +199,7 @@ export function isFullySynced(config: ConfigCreative, def: CreativeDefinition): 
 export function applyDefinition(def: CreativeDefinition): ConfigCreative {
   return {
     adTemplateId: def.adTemplateId,
+    fanOutTemplateIds: [...def.fanOutTemplateIds],
     sizeIds: [...def.sizeIds],
     emailTemplateSlug: def.emailTemplateSlug,
     emailMaxOffers: def.emailMaxOffers,
@@ -197,6 +223,8 @@ export function resetStep(
       // against a different design is meaningless — clear it rather than carry
       // it across and render nothing.
       return { ...config, adTemplateId: def.adTemplateId, sizeIds: [...def.sizeIds] };
+    case 'fanOut':
+      return { ...config, fanOutTemplateIds: [...def.fanOutTemplateIds] };
     case 'sizes':
       return { ...config, sizeIds: [...def.sizeIds] };
     case 'emailTemplate':
@@ -204,4 +232,23 @@ export function resetStep(
     case 'emailMaxOffers':
       return { ...config, emailMaxOffers: def.emailMaxOffers };
   }
+}
+
+/**
+ * The designs a run may actually build, from a config's own columns.
+ *
+ * Unions the recommended design into the permitted set: a config that names a
+ * lead outside its own fan-out list would recommend a design the run then
+ * refuses to build, and the dealer's row would lead with nothing. Empty result
+ * means UNCONSTRAINED — every published template in scope — which is what an
+ * account following no playbook has always done.
+ */
+export function effectiveFanOut(config: {
+  adTemplateId?: string | null;
+  fanOutTemplateIds?: string[] | null;
+}): string[] {
+  const set = (config.fanOutTemplateIds ?? []).filter(Boolean);
+  if (set.length === 0) return [];
+  const lead = (config.adTemplateId ?? '').trim();
+  return lead && !set.includes(lead) ? [...set, lead] : [...set];
 }

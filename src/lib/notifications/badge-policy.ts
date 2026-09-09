@@ -64,3 +64,70 @@ export function readUnreadCount(data: unknown): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return 0;
   return Math.floor(raw);
 }
+
+/**
+ * The badge answers "is there something you have not looked at yet", not "how
+ * many rows are unread". Those come apart the moment someone opens the panel,
+ * reads the list, and closes it without clicking each row: they have seen
+ * everything, so the bell must go dark, but the rows are still legitimately
+ * unread and must stay that way in the panel.
+ *
+ * The bridge is a watermark — the unread count at the moment the panel was
+ * closed. Anything at or below it has been seen; anything above it is new.
+ *
+ * Without it, closing the panel would clear the badge for at most sixty
+ * seconds: the next poll returns the same unread count and lights it again,
+ * which is exactly the behaviour that teaches people to ignore the bell.
+ */
+export function visibleBadgeCount(unread: number, seenWatermark: number): number {
+  if (!Number.isFinite(unread) || unread <= 0) return 0;
+  return unread > seenWatermark ? unread : 0;
+}
+
+/**
+ * The watermark must fall as well as rise, or it goes stale in the one
+ * direction that matters. Dismiss at 5, then mark three of those read: 2
+ * unread. Three genuinely new notifications arrive — back to 5, still not
+ * above a watermark of 5, badge stays dark and the new ones are invisible.
+ *
+ * Clamping to the current unread count on every refresh keeps the watermark
+ * meaning "the number you had already seen", which can only ever be as large
+ * as the number that exists.
+ */
+export function clampWatermark(unread: number, seenWatermark: number): number {
+  if (!Number.isFinite(unread) || unread < 0) return 0;
+  return Math.min(seenWatermark, Math.floor(unread));
+}
+
+/**
+ * The watermark outlives the page.
+ *
+ * Holding it in component state alone means a reload re-lights a badge the
+ * user deliberately dismissed thirty seconds ago, which reads as the dismissal
+ * not having worked. localStorage is the same place the changelog dot keeps
+ * its "last seen" mark, for the same reason and with the same caveat: it is
+ * per-browser, so dismissing on a laptop leaves the phone lit. That is the
+ * correct trade — "seen" is a fact about a person at a screen, and the
+ * alternative is a write to the server on every panel close.
+ */
+const WATERMARK_KEY = 'loomi.notifications.seenWatermark';
+
+export function readSeenWatermark(): number {
+  try {
+    const raw = window.localStorage.getItem(WATERMARK_KEY);
+    const n = raw === null ? 0 : Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    // Private mode, disabled storage, or no window. A forgotten watermark just
+    // shows the badge again — never a reason to break the top bar.
+    return 0;
+  }
+}
+
+export function writeSeenWatermark(n: number): void {
+  try {
+    window.localStorage.setItem(WATERMARK_KEY, String(Math.max(0, Math.floor(n))));
+  } catch {
+    /* see readSeenWatermark */
+  }
+}

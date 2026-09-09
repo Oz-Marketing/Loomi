@@ -14,6 +14,7 @@ import { SpacerBlock } from './Spacer';
 import { DividerBlock } from './Divider';
 import { LogoBlock } from './Logo';
 import { SocialBlock } from './Social';
+import { OffersBlock } from './Offers';
 
 export const BLOCK_COMPONENTS = {
   section: SectionBlock,
@@ -26,6 +27,7 @@ export const BLOCK_COMPONENTS = {
   divider: DividerBlock,
   logo: LogoBlock,
   social: SocialBlock,
+  offers: OffersBlock,
 } as const satisfies Record<BlockType, React.ComponentType<any>>;
 
 export {
@@ -39,4 +41,5 @@ export {
   DividerBlock,
   LogoBlock,
   SocialBlock,
+  OffersBlock,
 };

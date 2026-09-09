@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 /**
  * The heartbeat is what these cover.
  *
- * The sweep shipped without one, which meant "no licences expired today" and
+ * The sweep shipped without one, which meant "no licenses expired today" and
  * "this job died three weeks ago" produced identical evidence: nothing. Every
  * test here is about a row existing, because that absence is the failure mode.
  */

@@ -8,7 +8,6 @@ import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { SurfaceShell } from '@/components/surface-shell';
-import { useAccount } from '@/contexts/account-context';
 import {
   BUILDER_STEPS,
   builderBlastId,
@@ -180,8 +179,6 @@ function CampaignBuilderProgress({
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { userRole } = useAccount();
-  const isClientRole = userRole === 'client';
   const normalizedPath = stripSubaccountPrefix(pathname);
   const isFullScreen =
     normalizedPath.startsWith('/preview')
@@ -247,12 +244,18 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1">{children}</div>;
   }
 
-  // Clients get a chrome-less experience — no sidebar, no top utility bar. Their
-  // whole product is the Ad Generator page (which carries its own account logo),
-  // so we render the page bare on its own background.
-  if (isClientRole) {
-    return <div className="flex-1 min-w-0">{children}</div>;
-  }
+  // Clients used to get a chrome-less page — no sidebar, no top utility bar —
+  // because their whole product was the Ad Generator list, which draws its OWN
+  // account logo and help button. Their product is now Campaigns, an ordinary
+  // app-shell page that draws no chrome of its own, so the bare branch left them
+  // with no logo, no nav, no account context and no way to sign out.
+  //
+  // They take the standard shell instead. Both halves of it are already
+  // client-aware: `Sidebar` gives them a single Campaigns entry with no account
+  // switcher and no surface switch, and `TopUtilityBar` hides the role badge
+  // while `AgencySettingsButton` returns null below the admin tier. Help moves
+  // from the Ad Generator's own button to the "?" in the top bar, which opens
+  // the same help desk.
 
   if (isFlowBuilder || isMediaLibrary || isDocs) {
     // Own their full canvas edge-to-edge — no shell padding, no sidebar.
@@ -269,12 +272,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (isCampaignBuilder) {
     const step = builderStep(normalizedPath);
     const channel = builderChannel(normalizedPath);
-    const title =
-      channel === 'multi'
-        ? 'Create a Multi-Channel Campaign'
-        : channel === 'sms'
-          ? 'Create a Text Campaign'
-          : 'Create an Email Campaign';
     return (
       <div className="flex-1 flex flex-col min-h-screen">
         <header className="flex-shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-6 h-16 border-b border-[var(--border)] bg-[var(--card)]/80 backdrop-blur-md">
@@ -297,9 +294,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
               <ArrowLeftIcon className="w-4 h-4" />
             </button>
             <AppLogo className="h-7 w-auto" />
-            <span className="hidden sm:inline text-sm font-semibold text-[var(--foreground)] truncate">
-              {title}
-            </span>
           </div>
           <CampaignBuilderProgress current={step} channel={channel} path={pathname} />
           <div />

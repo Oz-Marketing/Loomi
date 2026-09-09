@@ -14,7 +14,7 @@ import {
  *
  *  • RETIRE — an asset whose governing date has passed gets `expiredAt` and the
  *    reason stamped on it. This is the auditable half: after the fact, someone
- *    has to be able to tell a lapsed licence from an ended campaign.
+ *    has to be able to tell a lapsed license from an ended campaign.
  *
  *  • WARN — 30 days out, then 7. One notification per band, not per day, or it
  *    becomes noise people filter and the warning stops working.
@@ -217,7 +217,7 @@ async function recordRun(
  * Who hears about it.
  *
  * OEM- and globally-scoped assets have no account rep, so they go to admins —
- * they're also the ones that matter most, because a lapsed OEM licence affects
+ * they're also the ones that matter most, because a lapsed OEM license affects
  * every rooftop carrying the brand at once.
  */
 async function recipientsFor(accountKey: string | null): Promise<string[]> {
@@ -266,14 +266,14 @@ async function notifyRightsEvents(result: MediaExpirationResult): Promise<void> 
 
     for (const userId of recipients) {
       // Expiry is the louder event and gets its own notification: an asset that
-      // has gone out of licence is a different conversation from one that will.
+      // has gone out of license is a different conversation from one that will.
       if (items.expired.length > 0) {
         try {
           await createNotification({
             userId,
             type: 'asset_rights_expired',
             severity: 'warning',
-            title: `${items.expired.length} asset(s) out of licence`,
+            title: `${items.expired.length} asset(s) out of license`,
             body: `${describe(items.expired)}. Rights or effective date has passed — replace before reuse.`,
             link: '/media',
             meta: { accountKey: key, expired: items.expired.length },
@@ -292,7 +292,7 @@ async function notifyRightsEvents(result: MediaExpirationResult): Promise<void> 
             userId,
             type: 'asset_rights_expiring',
             severity: 'info',
-            title: `${items.warned.length} asset licence(s) expiring`,
+            title: `${items.warned.length} asset license(s) expiring`,
             body: `${describe(items.warned)}. Soonest in ${soonest} day${soonest === 1 ? '' : 's'}.`,
             link: '/media',
             meta: { accountKey: key, warned: items.warned.length },

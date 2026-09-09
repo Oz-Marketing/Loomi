@@ -136,7 +136,11 @@ export function AgencySettingsModal({ onClose }: { onClose: () => void }) {
                 {activeTab?.titleLabel ?? 'Agency Settings'}
               </h2>
               <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-                Platform configuration, shared by every account.
+                {/* The tab's own description, not one blanket line. "Shared by
+                    every account" is true of Industries and Teams and flatly
+                    false of Notifications and Appearance, which are personal
+                    and follow the user across every surface. */}
+                {activeTab?.description ?? 'Platform configuration, shared by every account.'}
               </p>
             </div>
             <div className="flex items-center gap-2">

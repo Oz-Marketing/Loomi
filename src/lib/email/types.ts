@@ -17,7 +17,9 @@ export type BlockType =
   | 'spacer'
   | 'divider'
   | 'logo'
-  | 'social';
+  | 'social'
+  /** OEM offer slot — replaced by the generate run. See components/Offers. */
+  | 'offers';
 
 export interface Block {
   id: string;

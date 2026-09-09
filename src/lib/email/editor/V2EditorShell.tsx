@@ -14,15 +14,16 @@ import {
   DragOverlay,
 } from '@dnd-kit/core';
 import { EditorProvider, useEditor, findBlock, findParentOf, findTopLevelAncestor } from './EditorContext';
+import { CustomBlocksProvider } from './CustomBlocksContext';
 import { Canvas } from './Canvas';
-import { ComponentPalette } from './ComponentPalette';
+import { ComponentPalette, type CustomBlockSummary } from './ComponentPalette';
 import { BlockProperties } from './BlockProperties';
 import { EmailSettings } from './EmailSettings';
 import { OutlinePanel } from './OutlinePanel';
 import { FormattingToolbar } from './FormattingToolbar';
 import { ActionBar, type PreviewWidth } from './ActionBar';
 import { Squares2X2Icon, Cog6ToothIcon } from '@heroicons/react/24/outline';
-import type { BlockType, EmailTemplate } from '../types';
+import type { Block, BlockType, EmailTemplate } from '../types';
 import type { PreviewContact } from '@/lib/preview-variables';
 
 const SIDEBAR_MIN_WIDTH = 320;
@@ -86,8 +87,67 @@ function DndShell(props: V2EditorShellProps) {
     selectBlock,
     deleteBlock,
     duplicateBlock,
+    insertBlocks,
+    accountKey,
   } = useEditor();
   const [activeDragId, setActiveDragId] = React.useState<string | null>(null);
+
+  // ── saved reusable blocks ──
+  //
+  // Fetched once here rather than in the palette, because BOTH the list and the
+  // drop handler need them: the palette renders the names, the handler needs the
+  // subtree to insert. `subtrees` is a ref, not state — the drop handler reads
+  // it during an event, and a re-render between fetch and drop would otherwise
+  // be the difference between a block landing and nothing happening.
+  const [customBlocks, setCustomBlocks] = React.useState<CustomBlockSummary[]>([]);
+  const customBlocksRef = React.useRef<Map<string, Block[]>>(new Map());
+  const loadCustomBlocks = React.useCallback(() => {
+    const qs = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
+    fetch(`/api/email-blocks${qs}`)
+      .then((r) => (r.ok ? r.json() : { blocks: [] }))
+      .then((j) => {
+        const rows: Array<CustomBlockSummary & { doc?: string }> = Array.isArray(j.blocks) ? j.blocks : [];
+        const map = new Map<string, Block[]>();
+        for (const row of rows) {
+          try {
+                const parsed = JSON.parse(row.doc ?? '{}') as { blocks?: Block[] };
+            if (Array.isArray(parsed.blocks) && parsed.blocks.length) {
+              // Stamp the repeat onto the ROOT block of the inserted copy. The
+              // template stores the block's content inline (copy-on-insert), so
+              // without this the document has no way to say "this subtree is the
+              // per-offer card" and the run would fall back to the built-in one.
+              // Stamp the ROOT of the inserted copy with where it came from:
+              // the name so the editor can label it, and the repeat so the run
+              // can find it. The template stores block content inline, so
+              // without these the document has no memory of either.
+              const roots = parsed.blocks.map((b, i) =>
+                i === 0
+                  ? {
+                      ...b,
+                      props: {
+                        ...b.props,
+                        customBlockName: row.name,
+                        ...(row.repeatOver ? { repeatOver: row.repeatOver } : {}),
+                      },
+                    }
+                  : b,
+              );
+              map.set(row.id, roots);
+            }
+          } catch {
+            // A block whose payload won't parse is simply not offered — better
+            // than a chip that drops nothing.
+          }
+        }
+        customBlocksRef.current = map;
+        setCustomBlocks(rows.filter((r) => map.has(r.id)));
+      })
+      .catch(() => {
+        customBlocksRef.current = new Map();
+        setCustomBlocks([]);
+      });
+  }, [accountKey]);
+  React.useEffect(() => loadCustomBlocks(), [loadCustomBlocks]);
 
   // Resizable sidebar — mirrors the HTML editor's split-pane resize behavior.
   const [sidebarWidth, setSidebarWidth] = React.useState(SIDEBAR_DEFAULT_WIDTH);
@@ -220,10 +280,28 @@ function DndShell(props: V2EditorShellProps) {
 
     const isPaletteChip = activeId.startsWith('palette:');
     const chipType = isPaletteChip ? (activeId.slice('palette:'.length) as BlockType) : null;
+    // A saved reusable block, dragged from the Custom blocks section. Its
+    // subtree was fetched when the palette rendered, so dropping it is
+    // synchronous like any other chip.
+    const customId = activeId.startsWith('custom:') ? activeId.slice('custom:'.length) : null;
+    const customBlocks = customId ? customBlocksRef.current.get(customId) : null;
+    const isChip = !!chipType || !!customBlocks;
+
+    /**
+     * Place whatever is being dragged FROM the palette at `position`.
+     *
+     * One function so the seven drop targets below don't each have to know the
+     * difference between a built-in chip and a saved block — a branch repeated
+     * seven times is a branch that will be added to six of them next time.
+     */
+    const placeChip = (position: { parentId: string | null; afterId: string | null }) => {
+      if (chipType) insertBlock(chipType, position);
+      else if (customBlocks) insertBlocks(customBlocks, position);
+    };
 
     // Empty top-level canvas
     if (overIdRaw === 'canvas-empty') {
-      if (chipType) insertBlock(chipType, { parentId: null, afterId: null });
+      if (isChip) placeChip({ parentId: null, afterId: null });
       return;
     }
 
@@ -233,8 +311,8 @@ function DndShell(props: V2EditorShellProps) {
     // position; the indicator's location and the drop location agree by
     // construction.
     if (overIdRaw === 'gap:start') {
-      if (chipType) {
-        insertBlock(chipType, { parentId: null, afterId: null });
+      if (isChip) {
+        placeChip({ parentId: null, afterId: null });
       } else {
         moveBlock(activeId, { parentId: null, afterId: null });
       }
@@ -242,8 +320,8 @@ function DndShell(props: V2EditorShellProps) {
     }
     if (overIdRaw.startsWith('gap:after:')) {
       const afterId = overIdRaw.slice('gap:after:'.length);
-      if (chipType) {
-        insertBlock(chipType, { parentId: null, afterId });
+      if (isChip) {
+        placeChip({ parentId: null, afterId });
       } else {
         moveBlock(activeId, { parentId: null, afterId });
       }
@@ -253,8 +331,8 @@ function DndShell(props: V2EditorShellProps) {
     // Empty section
     if (overIdRaw.startsWith('section-empty:')) {
       const sectionId = overIdRaw.slice('section-empty:'.length);
-      if (chipType) {
-        insertBlock(chipType, { parentId: sectionId, afterId: null });
+      if (isChip) {
+        placeChip({ parentId: sectionId, afterId: null });
       } else {
         moveBlock(activeId, { parentId: sectionId, afterId: null });
       }
@@ -266,14 +344,18 @@ function DndShell(props: V2EditorShellProps) {
     const overParent = findParentOf(template.blocks, overIdRaw);
 
     // Palette-chip drop on a real block
-    if (chipType) {
+    if (isChip) {
       // Containers (Section / Grid) always drop at TOP LEVEL — never nest them
       // inside another section or grid. Place near the dropped-on block by
       // walking up to its top-level ancestor and inserting after it.
-      const isContainer = chipType === 'section' || chipType === 'columns';
+      //
+      // A saved custom block counts as a container: it is a lockup of several
+      // blocks, usually wrapped in a section, and nesting one inside another
+      // section is how a card ends up inside a card.
+      const isContainer = chipType === 'section' || chipType === 'columns' || !!customBlocks;
       if (isContainer) {
         const topLevelAncestor = findTopLevelAncestor(template.blocks, overIdRaw);
-        insertBlock(chipType, {
+        placeChip({
           parentId: null,
           afterId: topLevelAncestor?.id ?? null,
         });
@@ -283,14 +365,14 @@ function DndShell(props: V2EditorShellProps) {
       // Non-container chips: dropping onto a section appends to its children
       if (overBlock.type === 'section') {
         const lastChild = overBlock.children?.[overBlock.children.length - 1];
-        insertBlock(chipType, {
+        placeChip({
           parentId: overBlock.id,
           afterId: lastChild?.id ?? null,
         });
         return;
       }
       // Otherwise insert after the over block, in its container
-      insertBlock(chipType, {
+      placeChip({
         parentId: overParent?.id ?? null,
         afterId: overIdRaw,
       });
@@ -317,72 +399,74 @@ function DndShell(props: V2EditorShellProps) {
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={collisionDetection}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <div className="flex w-full h-full min-h-0 gap-4">
-        {/* Left sidebar: Palette OR Properties */}
-        <SidebarContent width={sidebarWidth} />
+    <CustomBlocksProvider refresh={loadCustomBlocks}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <div className="flex w-full h-full min-h-0 gap-4">
+          {/* Left sidebar: Palette OR Properties */}
+          <SidebarContent width={sidebarWidth} customBlocks={customBlocks} />
 
-        {/* Resize handle between sidebar and canvas */}
-        <div
-          role="separator"
-          aria-label="Resize sidebar and canvas panes"
-          aria-orientation="vertical"
-          aria-valuenow={sidebarWidth}
-          aria-valuemin={SIDEBAR_MIN_WIDTH}
-          aria-valuemax={SIDEBAR_MAX_WIDTH}
-          tabIndex={0}
-          onMouseDown={handleResizerMouseDown}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowLeft') {
-              e.preventDefault();
-              adjustSidebarWidth(-SIDEBAR_STEP_PX);
-            } else if (e.key === 'ArrowRight') {
-              e.preventDefault();
-              adjustSidebarWidth(SIDEBAR_STEP_PX);
-            }
-          }}
-          className={`group flex-shrink-0 self-stretch w-2 -mx-1 rounded cursor-col-resize transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)] ${
-            isResizingSidebar ? 'bg-[var(--primary)]/15' : 'hover:bg-[var(--muted)]'
-          }`}
-          title="Drag to resize sidebar"
-        >
-          <span
-            className={`mx-auto block h-full w-[2px] rounded-full transition-colors ${
-              isResizingSidebar
-                ? 'bg-[var(--primary)]'
-                : 'bg-[var(--border)] group-hover:bg-[var(--primary)]'
+          {/* Resize handle between sidebar and canvas */}
+          <div
+            role="separator"
+            aria-label="Resize sidebar and canvas panes"
+            aria-orientation="vertical"
+            aria-valuenow={sidebarWidth}
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            tabIndex={0}
+            onMouseDown={handleResizerMouseDown}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                adjustSidebarWidth(-SIDEBAR_STEP_PX);
+              } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                adjustSidebarWidth(SIDEBAR_STEP_PX);
+              }
+            }}
+            className={`group flex-shrink-0 self-stretch w-2 -mx-1 rounded cursor-col-resize transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)] ${
+              isResizingSidebar ? 'bg-[var(--primary)]/15' : 'hover:bg-[var(--muted)]'
             }`}
-          />
+            title="Drag to resize sidebar"
+          >
+            <span
+              className={`mx-auto block h-full w-[2px] rounded-full transition-colors ${
+                isResizingSidebar
+                  ? 'bg-[var(--primary)]'
+                  : 'bg-[var(--border)] group-hover:bg-[var(--primary)]'
+              }`}
+            />
+          </div>
+
+          {/* Canvas area — action bar + canvas */}
+          <CanvasArea {...props} />
         </div>
 
-        {/* Canvas area — action bar + canvas */}
-        <CanvasArea {...props} />
-      </div>
+        {/* Cancel hint — only shown while a drag is in flight. Reminds
+            reps that releasing outside the email body (or hitting Esc)
+            aborts the drop cleanly. */}
+        {activeDragId && (
+          <div
+            aria-live="polite"
+            className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-full bg-[var(--foreground)]/85 text-[var(--background)] text-[11px] font-medium shadow-lg pointer-events-none"
+          >
+            Drop outside the email or press <kbd className="font-mono">Esc</kbd> to cancel
+          </div>
+        )}
 
-      {/* Cancel hint — only shown while a drag is in flight. Reminds
-          reps that releasing outside the email body (or hitting Esc)
-          aborts the drop cleanly. */}
-      {activeDragId && (
-        <div
-          aria-live="polite"
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-full bg-[var(--foreground)]/85 text-[var(--background)] text-[11px] font-medium shadow-lg pointer-events-none"
-        >
-          Drop outside the email or press <kbd className="font-mono">Esc</kbd> to cancel
-        </div>
-      )}
-
-      <DragOverlay>
-        {activeDragId && activeDragId.startsWith('palette:') ? (
-          <DragChipPreview type={activeDragId.slice('palette:'.length)} />
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+        <DragOverlay>
+          {activeDragId && activeDragId.startsWith('palette:') ? (
+            <DragChipPreview type={activeDragId.slice('palette:'.length)} />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+    </CustomBlocksProvider>
   );
 }
 
@@ -432,7 +516,7 @@ function CanvasArea(props: V2EditorShellProps) {
 
 type PaletteTab = 'components' | 'settings';
 
-function SidebarContent({ width }: { width: number }) {
+function SidebarContent({ width, customBlocks }: { width: number; customBlocks: CustomBlockSummary[] }) {
   const { selectedId } = useEditor();
   const [paletteTab, setPaletteTab] = React.useState<PaletteTab>('components');
 
@@ -461,7 +545,7 @@ function SidebarContent({ width }: { width: number }) {
                 label="Settings"
               />
             </div>
-            {paletteTab === 'components' ? <ComponentPalette /> : <EmailSettings />}
+            {paletteTab === 'components' ? <ComponentPalette customBlocks={customBlocks} /> : <EmailSettings />}
           </div>
         )}
       </div>

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { useEditor } from './EditorContext';
 import { ComponentIcon } from '@/components/icon-map';
 import { componentSchemas } from '@/lib/component-schemas';
+import { CUSTOM_BLOCK_NAME_PROP } from '@/lib/ad-generator/automation/offer-bindings';
 import type { Block } from '../types';
 import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
 
@@ -98,6 +99,10 @@ function BlockRow({ block, depth, selectedId, onSelect }: BlockRowProps) {
   const [expanded, setExpanded] = React.useState(true);
 
   const schema = componentSchemas[block.type];
+  const customName =
+    typeof block.props?.[CUSTOM_BLOCK_NAME_PROP] === 'string'
+      ? (block.props[CUSTOM_BLOCK_NAME_PROP] as string).trim()
+      : '';
   const label = getBlockLabel(block);
 
   const indent = 8 + depth * 14;
@@ -141,11 +146,22 @@ function BlockRow({ block, depth, selectedId, onSelect }: BlockRowProps) {
         ) : (
           <span className="w-4 flex-shrink-0" />
         )}
-        <span className="flex-shrink-0 inline-flex items-center text-[var(--muted-foreground)]">
-          <ComponentIcon name={schema?.icon || ''} className="w-3.5 h-3.5" />
+        {/* Custom blocks name themselves and wear the green, so the outline
+            reads the same way the canvas does. */}
+        <span
+          className="flex-shrink-0 inline-flex items-center"
+          style={{ color: customName ? 'var(--adgen-custom-block)' : 'var(--muted-foreground)' }}
+        >
+          <ComponentIcon
+            name={customName ? 'GridIcon' : schema?.icon || ''}
+            className="w-3.5 h-3.5"
+          />
         </span>
-        <span className="text-xs font-semibold capitalize text-[var(--foreground)] flex-shrink-0">
-          {schema?.label || block.type}
+        <span
+          className={`text-xs font-semibold flex-shrink-0 ${customName ? '' : 'capitalize'}`}
+          style={{ color: customName ? 'var(--adgen-custom-block)' : 'var(--foreground)' }}
+        >
+          {customName || schema?.label || block.type}
         </span>
         {label && (
           <span className="text-xs text-[var(--muted-foreground)] truncate min-w-0">

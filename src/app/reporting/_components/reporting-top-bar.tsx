@@ -82,6 +82,7 @@ export function ReportingTopBar({
   // this was three copies of the same ungated 60s interval.
   const {
     unreadNotifications,
+    dismissNotificationBadge,
     refreshNotifications: checkUnreadNotifications,
     hasUnseenChangelogEntry: hasChangelogUnread,
     setHasUnseenChangelogEntry: setHasChangelogUnread,
@@ -139,7 +140,9 @@ export function ReportingTopBar({
             <span
               /* 9px is deliberate and exempt from the type scale: the count
                  sits inside a 14px dot, and anything larger overflows it. */
-              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[9px] font-bold leading-none text-[var(--primary-foreground)]"
+              // Red, not the app primary: a count on a bell is an alert, and the
+              // primary is the colour of every ordinary affordance in the UI.
+              className="pointer-events-none absolute -right-0.5 -top-0.5 flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white"
               aria-hidden
             >
               {unreadNotifications > 9 ? '9+' : unreadNotifications}
@@ -267,7 +270,14 @@ export function ReportingTopBar({
 
       {showNotifications && (
         <NotificationsPanel
-          onClose={() => setShowNotifications(false)}
+          onClose={() => {
+            setShowNotifications(false);
+            // Closing the panel clears the badge even with rows still unread:
+            // you just looked at the list, so "something you have not seen" is
+            // now false. Read state is untouched — the rows stay unread in the
+            // panel, and the next genuinely new notification lights it again.
+            dismissNotificationBadge();
+          }}
           onChange={() => checkUnreadNotifications()}
         />
       )}

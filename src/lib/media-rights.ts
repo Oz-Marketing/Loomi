@@ -6,7 +6,7 @@
  * never disagree about what "expiring soon" means.
  *
  * The central rule is §3's: an asset expires on whichever comes FIRST of its
- * licence end and its effective (offer/campaign) end, and which one fired has to
+ * license end and its effective (offer/campaign) end, and which one fired has to
  * be recorded. Those two dates answer different questions — "may we still use
  * this image" versus "is the deal it advertises still live" — and an asset
  * routinely outlives one but not the other.
@@ -76,7 +76,7 @@ export function daysUntil(date: Date, now: Date): number {
 /**
  * `unknown` is a first-class state, not a synonym for `active`.
  *
- * An asset with no licence recorded is exactly the thing this phase exists to
+ * An asset with no license recorded is exactly the thing this phase exists to
  * surface: on a library mid-migration it is most of them, and showing it as
  * "active" would quietly assert a clearance nobody has checked.
  */
@@ -114,12 +114,12 @@ function toDate(v: Date | string | null | undefined): Date | null {
 }
 
 /**
- * The governing expiry: whichever of the licence and effective dates comes
+ * The governing expiry: whichever of the license and effective dates comes
  * first, with the reason that produced it.
  *
  * A tie resolves to `license`, deliberately — if both end the same day, the
- * licence is the constraint worth reporting, because an ended campaign is an
- * operational fact while a lapsed licence is a legal one.
+ * license is the constraint worth reporting, because an ended campaign is an
+ * operational fact while a lapsed license is a legal one.
  */
 export function governingExpiry(input: RightsInput): { date: Date | null; reason: ExpirationReason | null } {
   const license = toDate(input.licenseExpiresAt);
@@ -139,7 +139,7 @@ export function governingExpiry(input: RightsInput): { date: Date | null; reason
  * Assess an asset's rights position at `now`.
  *
  * A manual expiry wins over the dates: someone pulled it deliberately, and a
- * licence that happens to run another month doesn't undo that.
+ * license that happens to run another month doesn't undo that.
  */
 export function assessRights(input: RightsInput, now: Date): RightsAssessment {
   const { date, reason } = governingExpiry(input);
@@ -178,7 +178,7 @@ export function assessRights(input: RightsInput, now: Date): RightsAssessment {
 }
 
 export const RIGHTS_STATUS_LABELS: Record<RightsStatus, string> = {
-  unknown: 'No licence recorded',
+  unknown: 'No license recorded',
   active: 'Licensed',
   expiring_soon: 'Expiring soon',
   expired: 'Expired',

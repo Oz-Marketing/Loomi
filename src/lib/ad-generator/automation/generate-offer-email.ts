@@ -1,20 +1,22 @@
 import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/prisma';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
-import type { EmailTemplate } from '@/lib/email/types';
-import { isV2Template } from '@/lib/email/types';
 import { renderEmailTemplate } from '@/lib/email/render';
 import { createDraftEmailBlast, updateEmailBlastDraft } from '@/lib/services/email-blasts';
-import { createCampaignEmailTemplate } from '@/lib/services/campaigns';
+import { upsertCampaignEmailTemplate } from '@/lib/services/campaigns';
 import type { AdData } from '../types';
+import { assembleOffer } from '../offer-text';
 import type { GeneratedAd } from './generate-ads';
 import {
-  buildOfferEmail,
-  offerBlocks,
-  spliceOffers,
   type OfferEmailInput,
   type OfferEmailVehicle,
 } from './offer-email-doc';
+import {
+  buildDocForShell,
+  resolveEmailShellSlug,
+  reusableTemplateSlug,
+  type OfferEmailMetadata,
+} from './offer-email-shell';
 
 /**
  * Phase 4b — the companion offer email.
@@ -215,7 +217,12 @@ export async function generateOfferEmail(
   // OEM prose lives on the snapshot, not the creative — the fingerprint
   // deliberately excludes it (the feed rewords the same programme between
   // refreshes), so it is looked up rather than derived.
-  const fingerprints = generated.map((g) => g.offerFingerprint).filter(Boolean);
+  // The BARE fingerprints, not `offerFingerprint` — that is a composite
+  // (`vehicle-slug:print`) and the snapshot table is keyed on the bare hash, so
+  // matching on it found nothing and every email shipped without the OEM prose
+  // this lookup exists to recover. Falls back to the composite for a caller that
+  // predates `offerPrints`, which matches nothing but cannot throw.
+  const fingerprints = generated.flatMap((g) => g.offerPrints ?? [g.offerFingerprint]).filter(Boolean);
   const snapshots = await prisma.oemOfferSnapshot.findMany({
     where: { accountKey: config.accountKey, fingerprint: { in: fingerprints } },
     select: { fingerprint: true, payload: true },
@@ -228,16 +235,43 @@ export async function generateOfferEmail(
     }
   }
 
-  const candidates = generated.map((g) => {
+  // ── one row per OFFER, not per design ──
+  //
+  // The offer fan-out builds a design per template for the same offer, and every
+  // sibling carries the same `offerFingerprint` by construction — that shared key
+  // is what groups them in the UI. Mapping straight over `generated` would put
+  // the same vehicle and payment into the email once per design, so the
+  // recommended sibling stands for the group. Falls back to the first row when
+  // resolution recommended nothing, which is a real state (see planVariants).
+  const oneAdPerOffer = new Map<string, GeneratedAd>();
+  for (const g of generated) {
+    const seen = oneAdPerOffer.get(g.offerFingerprint);
+    if (!seen || (g.recommended && !seen.recommended)) oneAdPerOffer.set(g.offerFingerprint, g);
+  }
+
+  const candidates = [...oneAdPerOffer.values()].map((g) => {
     const data = dataById.get(g.creativeId) ?? {};
-    const inc = incentiveByFingerprint.get(g.offerFingerprint) ?? null;
+    // First of the ad's prints that resolves — a dual ad leads with slot 1, whose
+    // program is the one the email headline describes.
+    const inc =
+      (g.offerPrints ?? []).map((p) => incentiveByFingerprint.get(p)).find(Boolean) ?? null;
     const { headline, subhead } = offerHeadline(data);
+    // The PLATE's own three-part offer, from the same `assembleOffer` the
+    // creative renders through. `offerHeadline` above still supplies the prose
+    // form for the subject and preview text — a sentence wants "3.9% APR for 60
+    // months", a card wants the figure and its label stacked — but the figures
+    // on screen now come from one formatter, so the email and the ad cannot
+    // round or abbreviate differently.
+    const block = assembleOffer(data);
     const vehicle: OfferEmailVehicle = {
       name: (data.vehicleName ?? '').trim() || g.vehicle,
       imageUrl: (data.vehicleImageUrl ?? '').trim() || null,
       offerType: (data.offerType ?? '').trim(),
       headline,
       subhead,
+      offerLabel: block?.label || undefined,
+      offerMain: block?.main || undefined,
+      offerTerms: block?.terms || undefined,
       programName: inc?.programName?.trim() || null,
       description: inc?.description?.trim() || null,
       offerDetails: inc?.offerDetails?.trim() || null,
@@ -275,22 +309,21 @@ export async function generateOfferEmail(
     vehicles: ranked,
   };
 
-  // ── document: shell template if one is configured, else standalone ──
-  let doc: EmailTemplate;
-  if (config.emailTemplateId) {
-    const shellRow = await prisma.template.findUnique({
-      where: { slug: config.emailTemplateId },
-      select: { content: true },
-    });
-    if (!shellRow || !isV2Template(shellRow.content)) {
-      return { ...base, reason: 'shell_template_missing' };
-    }
-    const shell = safeJson<EmailTemplate>(shellRow.content);
-    const spliced = shell ? spliceOffers(shell, offerBlocks(input)) : null;
-    if (!spliced) return { ...base, reason: 'shell_template_no_placeholder' };
-    doc = spliced;
-  } else {
-    doc = buildOfferEmail(input);
+  // ── document: the account's shell, which a playbook presets ──
+  //
+  // ONE shell per run, not one per plate. The fan-out builds a design per
+  // template, but a dealer's list gets a single send carrying every offer — so
+  // the email does not correspond to any one plate and cannot follow the
+  // dealer's design choice. The shell comes from `AdAutomationConfig`, which the
+  // creative playbook presets alongside the plates it names. Null composes a
+  // standalone document from the account's branding.
+  const shellSlug = resolveEmailShellSlug(config.emailTemplateId);
+  const doc = await buildDocForShell(input, shellSlug);
+  if (!doc) {
+    return {
+      ...base,
+      reason: shellSlug ? 'shell_template_no_placeholder' : 'shell_template_missing',
+    };
   }
 
   const subject = `${account.dealer} — current offers`;
@@ -343,7 +376,26 @@ export async function generateOfferEmail(
     };
   }
 
-  const templateSlug = await createCampaignEmailTemplate({
+  // Reuse the template row this draft already owns. A run that refreshes an
+  // existing draft (unchanged offers, new numbers) must not leave a second
+  // "Offers" template behind every time it fires.
+  let priorSlug: string | null = null;
+  if (existing) {
+    const prior = await prisma.emailBlast
+      .findUnique({ where: { id: existing.id }, select: { metadata: true } })
+      .catch(() => null);
+    try {
+      priorSlug = prior?.metadata
+        ? ((JSON.parse(prior.metadata) as { templateSlug?: string }).templateSlug ?? null)
+        : null;
+    } catch {
+      priorSlug = null;
+    }
+  }
+  // Same shell guard as `restyleOfferEmail`: the generated body must never be
+  // written over the shell it was built from.
+  const reuseSlug = reusableTemplateSlug(priorSlug, shellSlug);
+  const templateSlug = await upsertCampaignEmailTemplate(reuseSlug, {
     accountKey: config.accountKey,
     title: subject,
     content: JSON.stringify(doc),
@@ -389,7 +441,15 @@ export async function generateOfferEmail(
     sourceType: 'template-library',
     sourceAudienceId,
     sourceFilter,
-    metadata: JSON.stringify({ templateSlug, runId: opts.runId ?? null, offers: ranked.length }),
+    // `offerInput` is what makes a later design pick able to re-splice this
+    // email through a different shell without re-deriving the offers.
+    metadata: JSON.stringify({
+      templateSlug,
+      runId: opts.runId ?? null,
+      offers: ranked.length,
+      offerInput: input,
+      shellSlug,
+    } satisfies OfferEmailMetadata),
   });
   await prisma.emailBlast.update({ where: { id: blastId }, data: { campaignId } });
 

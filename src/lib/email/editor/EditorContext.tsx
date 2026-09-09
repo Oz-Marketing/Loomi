@@ -35,6 +35,10 @@ interface EditorActions {
   moveBlockDown: (id: string) => void;
   deleteBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
+  /** The selected block and its children, for "Save as custom block". */
+  getBlockSubtree: (id: string) => Block | null;
+  /** Drop a saved custom block's subtree in, with fresh ids. */
+  insertBlocks: (blocks: Block[], position: BlockPosition) => void;
 }
 
 type EditorContextValue = EditorState & EditorActions;
@@ -184,6 +188,38 @@ export function EditorProvider({ template, onChange, accountKey = null, children
     [update],
   );
 
+  const getBlockSubtree = React.useCallback(
+    (id: string) => findBlock(template.blocks, id) ?? null,
+    [template.blocks],
+  );
+
+  /**
+   * Insert a saved custom block.
+   *
+   * Ids are regenerated via `deepCloneBlock` — the same path `duplicateBlock`
+   * takes — because a saved block carries the ids it had when it was saved, and
+   * inserting it twice (or into the template it came from) would otherwise put
+   * duplicate ids in one document. Selection, drag and delete all key off id,
+   * so a collision makes the second copy un-editable.
+   */
+  const insertBlocks = React.useCallback(
+    (incoming: Block[], position: BlockPosition) => {
+      if (incoming.length === 0) return;
+      const copies = incoming.map((b) => deepCloneBlock(b));
+      update((t) => {
+        let next = t.blocks;
+        let after = position.afterId;
+        for (const copy of copies) {
+          next = insertAtPosition(next, copy, { ...position, afterId: after });
+          after = copy.id;
+        }
+        return { ...t, blocks: next };
+      });
+      setSelectedId(copies[0].id);
+    },
+    [update],
+  );
+
   const value: EditorContextValue = {
     template,
     selectedId,
@@ -200,6 +236,8 @@ export function EditorProvider({ template, onChange, accountKey = null, children
     moveBlockDown,
     deleteBlock,
     duplicateBlock,
+    getBlockSubtree,
+    insertBlocks,
   };
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

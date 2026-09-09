@@ -147,16 +147,20 @@ async function notifyOfEntries(
 
     if (!prefs.email || !user.email) continue;
     try {
-      await sendImmediateNotificationEmail({
+      // Only a real send counts — the helper no-ops when SMTP is unconfigured,
+      // and both `emailedAt` and this tally would otherwise overstate delivery.
+      const sent = await sendImmediateNotificationEmail({
         to: user.email,
         recipientName: user.name,
         item: { title, body: body || null, link: '/changelog', severity: 'info' },
       });
-      await prisma.notification.update({
-        where: { id: notification.id },
-        data: { emailedAt: new Date() },
-      });
-      emailed += 1;
+      if (sent) {
+        await prisma.notification.update({
+          where: { id: notification.id },
+          data: { emailedAt: new Date() },
+        });
+        emailed += 1;
+      }
     } catch (err) {
       // A bad address shouldn't abort the rest of the fan-out.
       // eslint-disable-next-line no-console

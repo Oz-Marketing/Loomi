@@ -7,6 +7,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
+import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { designHash, resolveSyncState } from '@/lib/ad-generator/template-sync';
@@ -29,12 +30,17 @@ type Row = {
   expiresAt: Date | null;
   reviewNotes: string | null;
   archivedAt: Date | null;
+  offerGroupKey: string | null;
+  recommended: boolean;
+  selectedAt: Date | null;
+  campaignId: string | null;
+  offerEditedAt: Date | null;
   templateSync: string | null;
   templateDocHash: string | null;
   docEditedAt: Date | null;
 };
 
-function shape(r: Row) {
+function shape(r: Row, running = false) {
   let data: Record<string, string> = {};
   try {
     data = JSON.parse(r.data) ?? {};
@@ -67,6 +73,33 @@ function shape(r: Row) {
     archivedAt: r.archivedAt,
     /** Why the generator held it back, when it did. */
     reviewNotes: r.reviewNotes,
+    // ── offer fan-out ──
+    // Shared by every design built from the same vehicle + offer, which is what
+    // lets the list fold them into one row the dealer chooses within. Null on
+    // hand-built ads and on anything generated before the fan-out; those group
+    // alone and render exactly as they always did.
+    offerGroupKey: r.offerGroupKey,
+    /** The design the generator ranked first within its group. */
+    recommended: r.recommended,
+    /** When a person chose this design. Independent of `status`. */
+    selectedAt: r.selectedAt,
+    /**
+     * The run this ad came from. `generateOfferEmail` creates one `Campaign` per
+     * run and stamps it onto every ad AND the offer email, so this is what lets
+     * the list show a run's output together instead of as unrelated cards.
+     */
+    campaignId: r.campaignId,
+    /**
+     * A person changed the offer values after generation, so the numbers are no
+     * longer the manufacturer's. The data-side twin of `docEditedAt`.
+     */
+    offerEditedAt: r.offerEditedAt,
+    /**
+     * In a launch that actually published. The one piece of an ad's state that
+     * lives outside `AdCreative` — `AdLaunch.creativeIds` is a JSON array rather
+     * than a relation, so it can't be joined and is resolved per request.
+     */
+    running,
     // Template link. `templateSync` is resolved (never null) so the client never
     // has to repeat the auto-vs-hand-built default; the hash lets the list say
     // "this ad is behind its template" by comparing against the template docs it
@@ -93,11 +126,41 @@ export async function GET(req: NextRequest) {
     // Archived ads are hidden unless asked for, the same way every other Loomi
     // list treats them — `?archived=1` is what the Archived status filter sends.
     const archived = req.nextUrl.searchParams.get('archived') === '1';
+    // One variant group, archived siblings INCLUDED. Once a design is picked its
+    // siblings are archived and vanish from the normal list, which would leave
+    // the choice unreviewable and un-undoable — the compare view asks for the
+    // group by key so it can still show what was passed over.
+    const group = (req.nextUrl.searchParams.get('group') || '').trim();
     const rows = (await prisma.adCreative.findMany({
-      where: { accountKey, archivedAt: archived ? { not: null } : null },
+      where: group
+        ? { accountKey, offerGroupKey: group }
+        : { accountKey, archivedAt: archived ? { not: null } : null },
       orderBy: { updatedAt: 'desc' },
     })) as Row[];
-    return NextResponse.json({ creatives: rows.map(shape) });
+    // Which of these are live. One query for the account's published launches,
+    // then a set — `creativeIds` is a JSON string[], so there is nothing to join
+    // against and doing this per row would be N queries for one boolean.
+    const live = new Set<string>();
+    try {
+      const launches = await prisma.adLaunch.findMany({
+        where: { accountKey, status: 'published' },
+        select: { creativeIds: true },
+      });
+      for (const l of launches) {
+        try {
+          const ids = JSON.parse(l.creativeIds);
+          if (Array.isArray(ids)) for (const id of ids) if (typeof id === 'string') live.add(id);
+        } catch {
+          // A malformed row means we can't say this ad is live. Treating it as
+          // not-live understates, which is the safe direction: the worst case is
+          // an ad shown as needing attention when it doesn't.
+        }
+      }
+    } catch (err) {
+      console.warn('[api/ad-generator/creatives] launch lookup failed:', err);
+    }
+
+    return NextResponse.json({ creatives: rows.map((r) => shape(r, live.has(r.id))) });
   } catch (err) {
     console.warn('[api/ad-generator/creatives] falling back to []:', err);
     return NextResponse.json({ creatives: [] });
@@ -115,6 +178,13 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+  // Originating an ad is staff work. A client holds `studio.adgen.edit` so they
+  // can adjust the offer on an ad the run built for them, but an ad created from
+  // scratch has no manufacturer program behind it and no co-op provenance —
+  // which is the opposite of handing dealers pre-built OEM offers.
+  const { error: createDenied } = await requirePermission('studio.adgen.create');
+  if (createDenied) return createDenied;
+
   const accountKey = (body.accountKey ?? '').trim();
   const name = (body.name ?? '').trim() || 'Untitled ad';
   const templateId = (body.templateId ?? '').trim();

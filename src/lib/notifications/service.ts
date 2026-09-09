@@ -87,7 +87,10 @@ export async function createNotification(input: CreateNotificationInput) {
     });
     if (user?.email) {
       try {
-        await sendImmediateNotificationEmail({
+        // Stamp `emailedAt` only on a REAL send. The helper no-ops when SMTP is
+        // unconfigured, and stamping regardless made the row claim a delivery
+        // that never happened — the one field an audit would trust.
+        const sent = await sendImmediateNotificationEmail({
           to: user.email,
           recipientName: user.name,
           item: {
@@ -97,10 +100,12 @@ export async function createNotification(input: CreateNotificationInput) {
             severity: input.severity ?? 'info',
           },
         });
-        await prisma.notification.update({
-          where: { id: notification.id },
-          data: { emailedAt: new Date() },
-        });
+        if (sent) {
+          await prisma.notification.update({
+            where: { id: notification.id },
+            data: { emailedAt: new Date() },
+          });
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[notifications] failed to send immediate email', err);
@@ -134,6 +139,35 @@ export async function markRead(userId: string, ids: string[]) {
   const result = await prisma.notification.updateMany({
     where: { userId, id: { in: ids }, readAt: null },
     data: { readAt: new Date() },
+  });
+  return result.count;
+}
+
+/**
+ * Remove notifications the user has dismissed.
+ *
+ * Scoped to `userId` in the WHERE, not checked beforehand: a delete that filters
+ * on the owner cannot be tricked into removing someone else's row by a guessed
+ * id, and there is no window between the check and the write.
+ */
+export async function deleteNotifications(userId: string, ids: string[]) {
+  if (ids.length === 0) return 0;
+  const result = await prisma.notification.deleteMany({ where: { userId, id: { in: ids } } });
+  return result.count;
+}
+
+/**
+ * Put one back in the unread pile.
+ *
+ * The counterpart to `markRead`, for the case a bell exists to serve: you opened
+ * something, realised it needs action you cannot take right now, and want it to
+ * keep asking. Without it, clicking a notification is irreversible.
+ */
+export async function markUnread(userId: string, ids: string[]) {
+  if (ids.length === 0) return 0;
+  const result = await prisma.notification.updateMany({
+    where: { userId, id: { in: ids }, readAt: { not: null } },
+    data: { readAt: null },
   });
   return result.count;
 }

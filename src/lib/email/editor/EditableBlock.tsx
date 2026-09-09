@@ -4,11 +4,15 @@ import * as React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useEditor } from './EditorContext';
+import { SaveBlockModal } from './SaveBlockModal';
+import { useRefreshCustomBlocks } from './CustomBlocksContext';
+import { CUSTOM_BLOCK_NAME_PROP } from '@/lib/ad-generator/automation/offer-bindings';
 import type { Block } from '../types';
 import {
   Bars3Icon,
   TrashIcon,
   DocumentDuplicateIcon,
+  Squares2X2Icon,
   ChevronUpIcon,
   ChevronDownIcon,
 } from '@heroicons/react/24/outline';
@@ -31,9 +35,29 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     setHovered,
     deleteBlock,
     duplicateBlock,
+    accountKey,
     moveBlockUp,
     moveBlockDown,
   } = useEditor();
+  const refreshCustomBlocks = useRefreshCustomBlocks();
+  const [savingBlock, setSavingBlock] = React.useState(false);
+
+  /**
+   * A subtree inserted from the Custom blocks palette.
+   *
+   * It is an ordinary section once inserted — copy-on-insert is deliberate, so a
+   * designer can adapt it here without touching the saved original — which left
+   * nothing on screen to say "this came from a block". The name and a green
+   * treatment give it back an identity, so a card is recognisable among the
+   * plain sections around it.
+   */
+  const customName =
+    typeof block.props[CUSTOM_BLOCK_NAME_PROP] === 'string'
+      ? (block.props[CUSTOM_BLOCK_NAME_PROP] as string).trim()
+      : '';
+  const isCustom = customName.length > 0;
+  const accent = isCustom ? 'var(--adgen-custom-block)' : 'var(--primary)';
+  const label = customName || block.type;
 
   const {
     attributes,
@@ -62,12 +86,20 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     cursor: 'grab',
     opacity: isDragging ? 0.4 : 1,
     // Outline (not inset boxShadow) so the selection ring sits on top of section/grid backgrounds.
+    //
+    // A custom block keeps a faint green outline AT REST. Hover-and-select
+    // chrome answers "what am I touching"; it cannot answer "which of these
+    // eight sections is the offer card", which is the question a designer
+    // opening someone else's template actually has. Held at 55% so a marker
+    // that is always on stays a marker and not a border in the design.
     outline: isSelected
-      ? '2px solid var(--primary)'
+      ? `2px solid ${accent}`
       : showHover
-        ? '1px solid var(--primary)'
-        : 'none',
-    outlineOffset: isSelected || showHover ? '-2px' : 0,
+        ? `1px solid ${accent}`
+        : isCustom
+          ? `1px solid color-mix(in srgb, ${accent} 55%, transparent)`
+          : 'none',
+    outlineOffset: isSelected || showHover || isCustom ? '-2px' : 0,
   };
 
   return (
@@ -85,14 +117,27 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
       {...attributes}
       {...listeners}
     >
+      {/* Resting tag on a custom block — the outline says "something here is
+          special", the name says which block it is. Suppressed while hovered or
+          selected, where the fuller label and the toolbar take over. */}
+      {isCustom && !showHover && !isSelected && (
+        <div
+          aria-hidden="true"
+          className="absolute -top-[18px] left-0 px-1.5 py-[2px] rounded-t text-[9px] font-semibold uppercase tracking-wider text-white opacity-60 pointer-events-none z-[8]"
+          style={{ fontFamily: 'inherit', background: accent }}
+        >
+          {label}
+        </div>
+      )}
+
       {/* Hover label (subtle when not selected) */}
       {showHover && (
         <div
           aria-hidden="true"
-          className="absolute -top-[26px] left-0 px-2.5 py-1 rounded-t-md text-[11px] font-semibold uppercase tracking-wider text-[var(--primary-foreground)] bg-[var(--primary)] opacity-70 pointer-events-none z-[9]"
-          style={{ fontFamily: 'inherit' }}
+          className="absolute -top-[26px] left-0 px-2.5 py-1 rounded-t-md text-[11px] font-semibold uppercase tracking-wider text-white opacity-70 pointer-events-none z-[9]"
+          style={{ fontFamily: 'inherit', background: accent }}
         >
-          {block.type}
+          {label}
         </div>
       )}
 
@@ -101,16 +146,19 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
         <div
           role="toolbar"
           aria-label="Block actions"
-          className="absolute -top-[36px] right-0 flex items-center gap-1 px-2 py-1.5 rounded-t-md bg-[var(--primary)] text-[var(--primary-foreground)] z-10 shadow-md"
-          style={{ fontFamily: 'inherit', fontSize: 13 }}
+          className="absolute -top-[36px] right-0 flex items-center gap-1 px-2 py-1.5 rounded-t-md text-white z-10 shadow-md"
+          style={{ fontFamily: 'inherit', fontSize: 13, background: accent }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           // dnd-kit's PointerSensor listens for pointerdown — stopping it here keeps
           // toolbar buttons clickable instead of being hijacked into a drag.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <span className="px-2 text-xs font-semibold capitalize tracking-wide">
-            {block.type}
+          <span
+            className={`px-2 text-xs font-semibold tracking-wide ${isCustom ? '' : 'capitalize'}`}
+            title={isCustom ? 'Inserted from a custom block' : undefined}
+          >
+            {label}
           </span>
           <span className="w-px h-4 bg-white/25 mx-0.5" />
           <ToolbarBtn title="Drag to reorder (or drag the block itself)" aria-label="Drag indicator" cursor="grab">
@@ -125,10 +173,41 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
           <ToolbarBtn title="Duplicate" onClick={() => duplicateBlock(block.id)} aria-label="Duplicate">
             <DocumentDuplicateIcon className="w-4 h-4" />
           </ToolbarBtn>
+          {/* CONTAINERS ONLY. A saved block is a LOCKUP — a card with a
+              picture, a figure and its legal line — and saving a bare text
+              block produces a one-line entry that clutters the palette without
+              being reusable. Wrapping the card in a Section is how you build one
+              anyway: the stock OEM offer card is a section. Same rule the ad
+              builder follows, where a block is a saved cluster rather than a
+              single element. */}
+          {CONTAINER_TYPES.has(block.type) && (
+            <ToolbarBtn
+              title="Save as custom block"
+              onClick={() => setSavingBlock(true)}
+              aria-label="Save as custom block"
+            >
+              <Squares2X2Icon className="w-4 h-4" />
+            </ToolbarBtn>
+          )}
           <ToolbarBtn title="Delete" onClick={() => deleteBlock(block.id)} aria-label="Delete">
             <TrashIcon className="w-4 h-4" />
           </ToolbarBtn>
         </div>
+      )}
+
+      {savingBlock && (
+        <SaveBlockModal
+          block={block}
+          accountKey={accountKey}
+          onSaved={() => {
+            setSavingBlock(false);
+            // Pull the palette's list again so the block you just saved is
+            // there to drag. Without this the save succeeded and the panel
+            // still showed the list it fetched when the editor opened.
+            refreshCustomBlocks();
+          }}
+          onCancel={() => setSavingBlock(false)}
+        />
       )}
 
       {/* Block content */}
@@ -168,3 +247,6 @@ const ToolbarBtn = React.forwardRef<HTMLButtonElement, ToolbarBtnProps>(
     );
   },
 );
+
+/** Block types a custom block can be saved from. */
+const CONTAINER_TYPES = new Set(['section', 'columns']);

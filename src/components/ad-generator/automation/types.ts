@@ -76,6 +76,8 @@ export interface ShadowScope {
   templateMap: Record<string, string>;
   /** Size ids to render; empty = every size the template defines. */
   sizeIds: string[];
+  /** Designs the fan-out may build; empty = every published template in scope. */
+  fanOutTemplateIds: string[];
   radius: number;
   maxAdsPerRun: number;
   minStock: number;
@@ -95,10 +97,19 @@ export interface ShadowScope {
 }
 
 /** Which parts of a playbook a sub-account has diverged from. */
-export type CreativeStep = 'adTemplate' | 'sizes' | 'emailTemplate' | 'emailMaxOffers';
+// Mirrors `src/lib/playbooks/creative.ts` — the server module is pure and this
+// is its client-side shape. Keep the two in step; a field added there and
+// missed here silently drops out of the Config tab's override badges.
+export type CreativeStep =
+  | 'adTemplate'
+  | 'fanOut'
+  | 'sizes'
+  | 'emailTemplate'
+  | 'emailMaxOffers';
 
 export interface CreativeDefinition {
   adTemplateId: string;
+  fanOutTemplateIds: string[];
   sizeIds: string[];
   emailTemplateSlug: string;
   emailMaxOffers: number;

@@ -168,7 +168,7 @@ const PACK: CoopRulePack = {
       pattern: 'no money down|\\$0 down|zero down',
       severity: 'error',
       description:
-        'A price offer must not state or imply "no money down" unless there is genuinely zero cash due, excluding taxes, title and licence.',
+        'A price offer must not state or imply "no money down" unless there is genuinely zero cash due, excluding taxes, title and license.',
       citation: cite('6d', 42),
     },
     {

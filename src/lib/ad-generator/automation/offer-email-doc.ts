@@ -144,17 +144,23 @@ export function dedupeProse(parts: Array<string | null | undefined>, alreadyShow
     .filter((p) => p.length > 0);
 
   // Longest first so a superset is considered before the fragment it contains.
-  const byLength = [...cleaned].sort((a, b) => b.length - a.length);
-  const kept: string[] = [];
-  for (const part of byLength) {
-    const n = norm(part);
+  // Indices, not values: two feed fields are routinely BYTE-IDENTICAL (Chevrolet
+  // returns the same sentence for `description` and `offerDetails`), and a
+  // final `kept.includes(value)` filter matches both copies — putting the
+  // duplicate straight back after the loop had correctly dropped it.
+  const order = cleaned.map((_, i) => i).sort((a, b) => cleaned[b].length - cleaned[a].length);
+  const keptIdx = new Set<number>();
+  const keptText: string[] = [];
+  for (const i of order) {
+    const n = norm(cleaned[i]);
     if (shown && shown.includes(n)) continue;
-    if (kept.some((k) => norm(k).includes(n))) continue;
-    kept.push(part);
+    if (keptText.some((k) => norm(k).includes(n))) continue;
+    keptIdx.add(i);
+    keptText.push(cleaned[i]);
   }
   // Restore the caller's order — the dedupe decides WHAT survives, not the
   // sequence the reader sees.
-  return cleaned.filter((c) => kept.includes(c));
+  return cleaned.filter((_, i) => keptIdx.has(i));
 }
 
 export function offerSection(v: OfferEmailVehicle, accentColor: string): Block {

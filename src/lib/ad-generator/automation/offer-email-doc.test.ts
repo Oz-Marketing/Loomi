@@ -318,6 +318,18 @@ describe('dedupeProse', () => {
     expect(dedupeProse([null, undefined, '  ', 'Real.'])).toEqual(['Real.']);
   });
 
+  it('drops a BYTE-IDENTICAL duplicate', () => {
+    // Chevrolet returns the same sentence for `description` and `offerDetails`.
+    // Containment alone dropped it inside the loop, then a value-matching filter
+    // put it back — the short line rendered twice in a real send.
+    const same = 'For Well-Qualified Buyers 0% APR for 60 months';
+    expect(dedupeProse([same, same])).toEqual([same]);
+  });
+
+  it('drops a duplicate that differs only in whitespace or case', () => {
+    expect(dedupeProse(['Same  Line', 'same line'])).toHaveLength(1);
+  });
+
   it('keeps genuinely different prose', () => {
     expect(dedupeProse(['Lease terms.', 'Eligibility rules.'])).toHaveLength(2);
   });

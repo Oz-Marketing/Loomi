@@ -14,6 +14,7 @@ import {
   DragOverlay,
 } from '@dnd-kit/core';
 import { EditorProvider, useEditor, findBlock, findParentOf, findTopLevelAncestor } from './EditorContext';
+import { CustomBlocksProvider } from './CustomBlocksContext';
 import { Canvas } from './Canvas';
 import { ComponentPalette, type CustomBlockSummary } from './ComponentPalette';
 import { BlockProperties } from './BlockProperties';
@@ -398,72 +399,74 @@ function DndShell(props: V2EditorShellProps) {
   };
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={collisionDetection}
-      onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
-    >
-      <div className="flex w-full h-full min-h-0 gap-4">
-        {/* Left sidebar: Palette OR Properties */}
-        <SidebarContent width={sidebarWidth} customBlocks={customBlocks} />
+    <CustomBlocksProvider refresh={loadCustomBlocks}>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={collisionDetection}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
+      >
+        <div className="flex w-full h-full min-h-0 gap-4">
+          {/* Left sidebar: Palette OR Properties */}
+          <SidebarContent width={sidebarWidth} customBlocks={customBlocks} />
 
-        {/* Resize handle between sidebar and canvas */}
-        <div
-          role="separator"
-          aria-label="Resize sidebar and canvas panes"
-          aria-orientation="vertical"
-          aria-valuenow={sidebarWidth}
-          aria-valuemin={SIDEBAR_MIN_WIDTH}
-          aria-valuemax={SIDEBAR_MAX_WIDTH}
-          tabIndex={0}
-          onMouseDown={handleResizerMouseDown}
-          onKeyDown={(e) => {
-            if (e.key === 'ArrowLeft') {
-              e.preventDefault();
-              adjustSidebarWidth(-SIDEBAR_STEP_PX);
-            } else if (e.key === 'ArrowRight') {
-              e.preventDefault();
-              adjustSidebarWidth(SIDEBAR_STEP_PX);
-            }
-          }}
-          className={`group flex-shrink-0 self-stretch w-2 -mx-1 rounded cursor-col-resize transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)] ${
-            isResizingSidebar ? 'bg-[var(--primary)]/15' : 'hover:bg-[var(--muted)]'
-          }`}
-          title="Drag to resize sidebar"
-        >
-          <span
-            className={`mx-auto block h-full w-[2px] rounded-full transition-colors ${
-              isResizingSidebar
-                ? 'bg-[var(--primary)]'
-                : 'bg-[var(--border)] group-hover:bg-[var(--primary)]'
+          {/* Resize handle between sidebar and canvas */}
+          <div
+            role="separator"
+            aria-label="Resize sidebar and canvas panes"
+            aria-orientation="vertical"
+            aria-valuenow={sidebarWidth}
+            aria-valuemin={SIDEBAR_MIN_WIDTH}
+            aria-valuemax={SIDEBAR_MAX_WIDTH}
+            tabIndex={0}
+            onMouseDown={handleResizerMouseDown}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                adjustSidebarWidth(-SIDEBAR_STEP_PX);
+              } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                adjustSidebarWidth(SIDEBAR_STEP_PX);
+              }
+            }}
+            className={`group flex-shrink-0 self-stretch w-2 -mx-1 rounded cursor-col-resize transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--primary)] ${
+              isResizingSidebar ? 'bg-[var(--primary)]/15' : 'hover:bg-[var(--muted)]'
             }`}
-          />
+            title="Drag to resize sidebar"
+          >
+            <span
+              className={`mx-auto block h-full w-[2px] rounded-full transition-colors ${
+                isResizingSidebar
+                  ? 'bg-[var(--primary)]'
+                  : 'bg-[var(--border)] group-hover:bg-[var(--primary)]'
+              }`}
+            />
+          </div>
+
+          {/* Canvas area — action bar + canvas */}
+          <CanvasArea {...props} />
         </div>
 
-        {/* Canvas area — action bar + canvas */}
-        <CanvasArea {...props} />
-      </div>
+        {/* Cancel hint — only shown while a drag is in flight. Reminds
+            reps that releasing outside the email body (or hitting Esc)
+            aborts the drop cleanly. */}
+        {activeDragId && (
+          <div
+            aria-live="polite"
+            className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-full bg-[var(--foreground)]/85 text-[var(--background)] text-[11px] font-medium shadow-lg pointer-events-none"
+          >
+            Drop outside the email or press <kbd className="font-mono">Esc</kbd> to cancel
+          </div>
+        )}
 
-      {/* Cancel hint — only shown while a drag is in flight. Reminds
-          reps that releasing outside the email body (or hitting Esc)
-          aborts the drop cleanly. */}
-      {activeDragId && (
-        <div
-          aria-live="polite"
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-full bg-[var(--foreground)]/85 text-[var(--background)] text-[11px] font-medium shadow-lg pointer-events-none"
-        >
-          Drop outside the email or press <kbd className="font-mono">Esc</kbd> to cancel
-        </div>
-      )}
-
-      <DragOverlay>
-        {activeDragId && activeDragId.startsWith('palette:') ? (
-          <DragChipPreview type={activeDragId.slice('palette:'.length)} />
-        ) : null}
-      </DragOverlay>
-    </DndContext>
+        <DragOverlay>
+          {activeDragId && activeDragId.startsWith('palette:') ? (
+            <DragChipPreview type={activeDragId.slice('palette:'.length)} />
+          ) : null}
+        </DragOverlay>
+      </DndContext>
+    </CustomBlocksProvider>
   );
 }
 

@@ -5,6 +5,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useEditor } from './EditorContext';
 import { SaveBlockModal } from './SaveBlockModal';
+import { useRefreshCustomBlocks } from './CustomBlocksContext';
 import { CUSTOM_BLOCK_NAME_PROP } from '@/lib/ad-generator/automation/offer-bindings';
 import type { Block } from '../types';
 import {
@@ -38,6 +39,7 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     moveBlockUp,
     moveBlockDown,
   } = useEditor();
+  const refreshCustomBlocks = useRefreshCustomBlocks();
   const [savingBlock, setSavingBlock] = React.useState(false);
 
   /**
@@ -84,12 +86,20 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     cursor: 'grab',
     opacity: isDragging ? 0.4 : 1,
     // Outline (not inset boxShadow) so the selection ring sits on top of section/grid backgrounds.
+    //
+    // A custom block keeps a faint green outline AT REST. Hover-and-select
+    // chrome answers "what am I touching"; it cannot answer "which of these
+    // eight sections is the offer card", which is the question a designer
+    // opening someone else's template actually has. Held at 55% so a marker
+    // that is always on stays a marker and not a border in the design.
     outline: isSelected
       ? `2px solid ${accent}`
       : showHover
         ? `1px solid ${accent}`
-        : 'none',
-    outlineOffset: isSelected || showHover ? '-2px' : 0,
+        : isCustom
+          ? `1px solid color-mix(in srgb, ${accent} 55%, transparent)`
+          : 'none',
+    outlineOffset: isSelected || showHover || isCustom ? '-2px' : 0,
   };
 
   return (
@@ -107,6 +117,19 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
       {...attributes}
       {...listeners}
     >
+      {/* Resting tag on a custom block — the outline says "something here is
+          special", the name says which block it is. Suppressed while hovered or
+          selected, where the fuller label and the toolbar take over. */}
+      {isCustom && !showHover && !isSelected && (
+        <div
+          aria-hidden="true"
+          className="absolute -top-[18px] left-0 px-1.5 py-[2px] rounded-t text-[9px] font-semibold uppercase tracking-wider text-white opacity-60 pointer-events-none z-[8]"
+          style={{ fontFamily: 'inherit', background: accent }}
+        >
+          {label}
+        </div>
+      )}
+
       {/* Hover label (subtle when not selected) */}
       {showHover && (
         <div
@@ -176,7 +199,13 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
         <SaveBlockModal
           block={block}
           accountKey={accountKey}
-          onSaved={() => setSavingBlock(false)}
+          onSaved={() => {
+            setSavingBlock(false);
+            // Pull the palette's list again so the block you just saved is
+            // there to drag. Without this the save succeeded and the panel
+            // still showed the list it fetched when the editor opened.
+            refreshCustomBlocks();
+          }}
           onCancel={() => setSavingBlock(false)}
         />
       )}

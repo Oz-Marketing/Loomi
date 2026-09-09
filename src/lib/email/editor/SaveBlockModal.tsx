@@ -135,10 +135,13 @@ export function SaveBlockModal({
             className="mt-0.5 accent-[var(--primary)]"
           />
           <span className="min-w-0">
-            <span className="block text-xs font-medium text-[var(--foreground)]">Repeat for each OEM offer</span>
+            {/* Same words as the Section panel's switch, because it is the
+                same flag — two labels for one setting is how a designer ends
+                up believing there are two. */}
+            <span className="block text-xs font-medium text-[var(--foreground)]">Repeats for each OEM offer</span>
             <span className="mt-0.5 block text-[11px] leading-snug text-[var(--muted-foreground)]">
-              A generate run renders one copy per offer it found — three offers this month, seven the
-              next. Leave off for a static block.
+              Blocks inside can be bound to offer data, and the block is drawn once for every offer.
+              Leave off for a static block.
             </span>
           </span>
         </label>

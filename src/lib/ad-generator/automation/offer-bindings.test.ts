@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { Block } from '@/lib/email/types';
-import { bindBlock, bindingOf, expandPerOffer, fillTokens, repeatsPerOffer } from './offer-bindings';
+import {
+  bindBlock,
+  bindingOf,
+  blockPath,
+  expandPerOffer,
+  fillTokens,
+  hasOfferBinding,
+  isOfferScope,
+  repeatsPerOffer,
+} from './offer-bindings';
 import type { OfferEmailVehicle } from './offer-email-doc';
 
 function vehicle(over: Partial<OfferEmailVehicle> = {}): OfferEmailVehicle {
@@ -143,5 +152,85 @@ describe('expandPerOffer', () => {
     // anything that walks the document afterwards.
     const out = expandPerOffer(card(), [vehicle()]);
     expect(repeatsPerOffer(out[0])).toBe(false);
+  });
+});
+
+// ── Which blocks may bind to offer data ──────────────────────────────────
+//
+// The editor asks this to decide whether to show the "Offer data" panel. It is
+// deliberately NOT "is this an offer template": a token in the masthead of an
+// OEM email is as unfillable as one in a newsletter, because the run only
+// walks the repeating card.
+
+const b = (id: string, props: Record<string, unknown> = {}, children?: Block[]): Block =>
+  ({ id, type: 'section', props, ...(children ? { children } : {}) }) as Block;
+
+const tree: Block[] = [
+  b('masthead', {}, [b('logo'), b('title', { text: 'This month’s offers' })]),
+  b('card', { repeatOver: 'offer' }, [
+    b('photo', { bindTo: 'offer.image' }),
+    b('inner', {}, [b('price', { text: '{{offer.main}}' })]),
+  ]),
+  b('footer', {}, [b('legal', { text: 'See dealer.' })]),
+];
+
+describe('blockPath', () => {
+  it('returns the chain from the root down to the block', () => {
+    expect(blockPath(tree, 'price').map((x) => x.id)).toEqual(['card', 'inner', 'price']);
+  });
+
+  it('is empty for an id that is not in the tree', () => {
+    expect(blockPath(tree, 'nope')).toEqual([]);
+  });
+});
+
+describe('isOfferScope', () => {
+  it('is true anywhere inside the repeating card, however deep', () => {
+    expect(isOfferScope(blockPath(tree, 'price'))).toBe(true);
+    expect(isOfferScope(blockPath(tree, 'photo'))).toBe(true);
+  });
+
+  it('includes the repeating container itself', () => {
+    // An image bound whole can BE the block the run repeats.
+    expect(isOfferScope(blockPath(tree, 'card'))).toBe(true);
+  });
+
+  it('is false in the masthead and footer of the very same template', () => {
+    expect(isOfferScope(blockPath(tree, 'title'))).toBe(false);
+    expect(isOfferScope(blockPath(tree, 'legal'))).toBe(false);
+  });
+
+  it('is false for a block that is not in the tree at all', () => {
+    expect(isOfferScope([])).toBe(false);
+  });
+
+  it('ignores an empty repeat, which is how the switch turns off', () => {
+    expect(isOfferScope([b('x', { repeatOver: '' })])).toBe(false);
+  });
+});
+
+describe('hasOfferBinding', () => {
+  it('sees an image pointed at an offer field', () => {
+    expect(hasOfferBinding({ props: { bindTo: 'offer.image' } })).toBe(true);
+  });
+
+  it('sees a token anywhere in the text, not only alone', () => {
+    expect(hasOfferBinding({ props: { text: 'Lease a {{offer.name}} today' } })).toBe(true);
+    expect(hasOfferBinding({ props: { text: '{{ offer.main }}' } })).toBe(true);
+  });
+
+  it('is false for ordinary copy and other variables', () => {
+    expect(hasOfferBinding({ props: { text: 'Hi {{contact.first_name}}' } })).toBe(false);
+    expect(hasOfferBinding({ props: {} })).toBe(false);
+    expect(hasOfferBinding({ props: { bindTo: '  ' } })).toBe(false);
+  });
+
+  it('is why a stranded binding stays visible', () => {
+    // Drag a bound text block OUT of the card and the scope test says no — but
+    // the binding is still on the block. The panel has to keep showing it, or
+    // there is no way to clear it.
+    const stranded = b('stray', { text: '{{offer.main}}' });
+    expect(isOfferScope(blockPath([stranded], 'stray'))).toBe(false);
+    expect(hasOfferBinding(stranded)).toBe(true);
   });
 });

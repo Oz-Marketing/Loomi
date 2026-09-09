@@ -198,3 +198,53 @@ export function expandPerOffer(
   }
   return out;
 }
+
+/**
+ * Whether a block sits inside a container the run repeats — and therefore
+ * whether offer data is in scope for it at all.
+ *
+ * This is the question the editor's "Offer data" panel needs, and it is NOT
+ * "is this an offer template". A `{{offer.main}}` in the masthead of an OEM
+ * email is just as unfillable as one in a newsletter: the run walks the
+ * repeating card and substitutes per offer, and nothing outside that subtree
+ * ever has an offer in hand. Offering the control there invites a token that
+ * silently renders as nothing.
+ *
+ * The container itself counts, not just its descendants — an image bound whole
+ * can BE the repeating block.
+ *
+ * `path` is the chain from the tree root down to the block, inclusive.
+ */
+export function isOfferScope(path: Pick<Block, 'props'>[]): boolean {
+  return path.some((b) => typeof b.props?.[REPEAT_PROP] === 'string' && b.props[REPEAT_PROP] !== '');
+}
+
+/**
+ * The chain of blocks from the tree root down to `id`, inclusive, or [] when
+ * the id is not in the tree.
+ */
+export function blockPath(blocks: Block[], id: string): Block[] {
+  for (const b of blocks) {
+    if (b.id === id) return [b];
+    const inner = b.children ? blockPath(b.children, id) : [];
+    if (inner.length) return [b, ...inner];
+  }
+  return [];
+}
+
+/**
+ * Whether a block already carries a binding — an image pointed at an offer
+ * field, or text holding an `{{offer.x}}` token.
+ *
+ * The editor shows the Offer data panel for these even OUTSIDE a repeating
+ * container. Hiding a control does not unset what it controls, and a binding
+ * you cannot see is a binding you cannot remove — this is the escape hatch for
+ * anything bound before the scope rule existed, or stranded by moving a block
+ * out of the card.
+ */
+export function hasOfferBinding(block: Pick<Block, 'props'>): boolean {
+  const bind = block.props?.[BIND_PROP];
+  if (typeof bind === 'string' && bind.trim()) return true;
+  const text = block.props?.text;
+  return typeof text === 'string' && /\{\{\s*offer\./.test(text);
+}

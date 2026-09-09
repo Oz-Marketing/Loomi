@@ -23,6 +23,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import {
+  isLikelyDeliverableEmail,
   isLikelyDialablePhone,
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
@@ -41,14 +42,16 @@ export interface ResolvedRecipients {
   truncated: boolean;
 }
 
-// Kept byte-identical to the predicate the schedule pages applied
-// client-side, so moving resolution to the server changes WHICH contacts
-// are considered (the whole roster, not the newest 5,000) without also
-// changing what counts as a deliverable address.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-
+// Deliberately the SAME predicate the sender uses, not a lookalike.
+//
+// This was a bare syntax regex, copied from the old client-side check. That
+// made the on-screen "sendable recipients" count a promise the send could not
+// keep: an address on a placeholder or mistyped domain counted here, then
+// bounced; a suppressed address counted here, then was skipped. Both inflated
+// the number a user schedules against. Sharing isLikelyDeliverableEmail means
+// the count and the send agree by construction.
 function isValidEmail(value: string): boolean {
-  return EMAIL_RE.test(value.trim());
+  return isLikelyDeliverableEmail(value);
 }
 
 // The SMS steps gate on isLikelyDialablePhone(normalizePhoneNumber(…)),
@@ -70,6 +73,23 @@ export async function resolveRecipients(
   // Nothing matched — return early rather than issuing an `IN ()` query.
   if (ids.length === 0) return { recipients: [], total: 0, truncated: false };
 
+  // Suppressed addresses are dropped from the COUNT, not just from the send.
+  // The sender already skips them, so including them here only ever produced a
+  // number larger than what would go out — and on an account with thousands of
+  // opt-outs that gap is the difference between a plausible audience and a
+  // fictional one. Loaded once for the whole account rather than per chunk.
+  const suppressed =
+    opts.channel === 'sms'
+      ? new Set<string>()
+      : new Set(
+          (
+            await prisma.emailSuppression.findMany({
+              where: { accountKey },
+              select: { email: true },
+            })
+          ).map((s) => s.email.trim().toLowerCase()),
+        );
+
   const deliverable: RecipientRow[] = [];
   // Chunked so a large audience doesn't build one enormous IN clause.
   const CHUNK = 1000;
@@ -81,6 +101,7 @@ export async function resolveRecipients(
     for (const row of rows) {
       const contact = serializeContact(row);
       if (!isDeliverable(contact, opts.channel)) continue;
+      if (suppressed.has(contact.email.trim().toLowerCase())) continue;
       deliverable.push({
         contactId: contact.id,
         accountKey,

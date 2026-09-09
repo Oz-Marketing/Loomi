@@ -81,10 +81,11 @@ import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/a
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { audienceLabel } from '@/lib/ad-generator/template-access';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
-import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
+import { AccountAccessModal } from '@/components/ad-generator/account-access-picker';
 import { ProofSheetModal } from '@/components/ad-generator/proof-sheet-view';
 import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
@@ -640,9 +641,25 @@ function bestSnap(edges: number[], targets: number[], threshold: number): { off:
 
 /** What actually gets persisted — the dirty check + autosave compare against this.
  *  In ad mode the ad's field DATA rides along (editing a `{{field}}` box on the
- *  artboard writes there), so a data-only change still marks dirty + autosaves. */
-function serializeDoc(doc: TemplateDoc, name: string, status: string, adData?: AdData | null): string {
-  return JSON.stringify({ status, doc: { ...doc, name: name.trim() }, data: adData ?? null });
+ *  artboard writes there), so a data-only change still marks dirty + autosaves.
+ *
+ *  The AUDIENCE is in here for the same reason `status` is: they are one setting
+ *  ("who can use this, and is it live"), and leaving the share list out would let
+ *  an autosave persist a new status while the audience it was chosen with stayed
+ *  behind — the half-applied state the merged control exists to rule out. */
+function serializeDoc(
+  doc: TemplateDoc,
+  name: string,
+  status: string,
+  adData?: AdData | null,
+  sharedAccountKeys: string[] = [],
+): string {
+  return JSON.stringify({
+    status,
+    shared: [...sharedAccountKeys].sort(),
+    doc: { ...doc, name: name.trim() },
+    data: adData ?? null,
+  });
 }
 
 function rid(): string {
@@ -3221,7 +3238,7 @@ export default function AdBuilderPage() {
     }
     setSaving(true);
     try {
-      const payload = { name, doc: { ...doc, name }, status, accountKey: scopeAccount };
+      const payload = { name, doc: { ...doc, name }, status, accountKey: scopeAccount, sharedAccountKeys };
       const useId = templateId && !asNew;
       // Ask what this save would do to existing ads BEFORE writing it — the
       // classification compares the stored design against the incoming one, so
@@ -3235,7 +3252,7 @@ export default function AdBuilderPage() {
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
       const json = (await res.json()) as { template?: { id: string } };
       if (json.template?.id) setTemplateId(json.template.id);
-      savedRef.current = serializeDoc(doc, name, status);
+      savedRef.current = serializeDoc(doc, name, status, null, sharedAccountKeys);
       setSaveStatus('saved');
       toast.success(status === 'published' ? 'Saved & published' : 'Saved as draft');
       // The template is saved either way; the prompt is only about whether ads
@@ -3311,7 +3328,7 @@ export default function AdBuilderPage() {
     setSharedAccountKeys(t.sharedAccountKeys ?? []);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
-    savedRef.current = serializeDoc(loaded, t.name, st);
+    savedRef.current = serializeDoc(loaded, t.name, st, null, t.sharedAccountKeys ?? []);
     setSaveStatus('saved');
   }
 
@@ -4233,7 +4250,7 @@ export default function AdBuilderPage() {
   // ad in ad mode). New/unsaved templates require an explicit Save first.
   useEffect(() => {
     if (!templateId && !adId) return;
-    const snapshot = serializeDoc(doc, templateName, status, adData);
+    const snapshot = serializeDoc(doc, templateName, status, adData, sharedAccountKeys);
     if (snapshot === savedRef.current) return; // nothing changed since last persist
     const handle = window.setTimeout(async () => {
       setSaveStatus('saving');
@@ -4241,7 +4258,7 @@ export default function AdBuilderPage() {
         const url = adId ? `/api/ad-generator/creatives/${adId}` : `/api/ad-generator/templates-doc/${templateId}`;
         const body = adId
           ? { name: templateName.trim() || 'Untitled ad', doc: { ...doc, name: templateName.trim() }, ...(adData ? { data: adData } : {}) }
-          : { name: templateName.trim(), status, doc: { ...doc, name: templateName.trim() } };
+          : { name: templateName.trim(), status, sharedAccountKeys, doc: { ...doc, name: templateName.trim() } };
         const res = await fetch(url, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -4258,7 +4275,7 @@ export default function AdBuilderPage() {
       }
     }, 1200);
     return () => window.clearTimeout(handle);
-  }, [doc, templateName, status, templateId, adId, adData]);
+  }, [doc, templateName, status, sharedAccountKeys, templateId, adId, adData]);
 
   // Element adders. A "Button" is a styled text element (no separate type); a
   // background is just an Image set to Fill — so no Logo / Background adders.
@@ -4325,7 +4342,15 @@ export default function AdBuilderPage() {
             const mode: 'draft' | 'live' | 'scheduled' = status !== 'published' ? 'draft' : scheduled ? 'scheduled' : 'live';
             const range: DateRange = { start: sched?.start ?? null, end: sched?.end ?? null };
             const dot = mode === 'draft' ? 'bg-[var(--muted-foreground)]' : mode === 'scheduled' ? 'bg-amber-500' : 'bg-emerald-500';
-            const labelText = mode === 'draft' ? 'Draft' : mode === 'scheduled' ? 'Scheduled' : 'Live';
+            // The chip states the AUDIENCE, not just the status. "Live" on its own
+            // was the whole confusion: it read as "live for everyone" whether the
+            // template was shared with three dealers or none.
+            const audience = audienceLabel(
+              { accountKey: scopeAccount, sharedAccountKeys },
+              (k) => accounts[k]?.dealer ?? k,
+            );
+            const labelText =
+              mode === 'draft' ? 'Draft' : `${mode === 'scheduled' ? 'Scheduled' : 'Live'} · ${audience}`;
             const Opt = ({ id, title, desc }: { id: 'draft' | 'live' | 'scheduled'; title: string; desc: string }) => (
               <button
                 type="button"
@@ -4363,6 +4388,9 @@ export default function AdBuilderPage() {
                 </button>
                 {publishOpen && (
                   <div className="absolute right-0 top-full z-[80] mt-1.5 w-64 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-2xl backdrop-blur-2xl">
+                    <div className="px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                      Status
+                    </div>
                     <Opt id="draft" title="Draft" desc="Hidden from the template library." />
                     <Opt id="live" title="Publish — live now" desc="Available indefinitely." />
                     <Opt id="scheduled" title="Publish — scheduled" desc="Available only during the window below." />
@@ -4378,6 +4406,48 @@ export default function AdBuilderPage() {
                         <p className="mt-1.5 text-[10px] leading-snug text-[var(--muted-foreground)]">Leave the end open to run until you unpublish.</p>
                       </div>
                     )}
+
+                    {/* WHO, in the same popover as WHETHER. Sharing used to live in
+                        a separate modal with no stated link to publishing, so a
+                        template could be "published" and shared with three
+                        accounts and look like two different answers at once. */}
+                    <div className="mt-1.5 border-t border-[var(--border)] pt-1.5">
+                      <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                        Who can use it
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSharedAccountKeys([])}
+                        className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--muted)] ${!sharedAccountKeys.length ? 'bg-[var(--muted)]' : ''}`}
+                      >
+                        <span className={`mt-0.5 h-2 w-2 flex-shrink-0 rounded-full ${!sharedAccountKeys.length ? 'bg-[var(--primary)]' : 'border border-[var(--muted-foreground)]/50'}`} />
+                        <span className="min-w-0">
+                          <span className="block text-xs font-medium text-[var(--foreground)]">
+                            {scopeAccount ? `${accounts[scopeAccount]?.dealer ?? scopeAccount} only` : 'All accounts'}
+                          </span>
+                          <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">
+                            {scopeAccount ? 'Its own account, and any group beneath it.' : 'Every account the industry filter allows.'}
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeployOpen(true)}
+                        className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--muted)] ${sharedAccountKeys.length ? 'bg-[var(--muted)]' : ''}`}
+                      >
+                        <span className={`mt-0.5 h-2 w-2 flex-shrink-0 rounded-full ${sharedAccountKeys.length ? 'bg-[var(--primary)]' : 'border border-[var(--muted-foreground)]/50'}`} />
+                        <span className="min-w-0">
+                          <span className="block text-xs font-medium text-[var(--foreground)]">
+                            {scopeAccount ? 'Plus specific accounts…' : 'Specific accounts…'}
+                          </span>
+                          <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">
+                            {sharedAccountKeys.length
+                              ? `${sharedAccountKeys.length} added — tap to change.`
+                              : 'Pick who gets it.'}
+                          </span>
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5825,14 +5895,16 @@ export default function AdBuilderPage() {
         />
       )}
 
-      {deployOpen && templateId && (
-        <ShareTemplateModal
-          templateId={templateId}
-          name={templateName}
+      {/* No `templateId` guard: the audience is local state now, saved with the
+          template, so it can be chosen before the first save like every other
+          setting in here. */}
+      {deployOpen && (
+        <AccountAccessModal
+          name={templateName || 'this template'}
           ownerKey={scopeAccount}
-          sharedWith={sharedAccountKeys}
+          selected={sharedAccountKeys}
+          onChange={setSharedAccountKeys}
           onClose={() => setDeployOpen(false)}
-          onSaved={setSharedAccountKeys}
         />
       )}
       {proofOpen && templateId && (

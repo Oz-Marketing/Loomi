@@ -19,16 +19,12 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   RocketLaunchIcon,
-  CalendarDaysIcon,
-  CheckCircleIcon,
   CheckBadgeIcon,
-  ArrowUturnLeftIcon,
   ChartBarIcon,
 } from '@heroicons/react/24/outline';
 import { templateReportHref } from '@/app/reporting/ads/_components/reports-config';
 import type { TemplateUsage } from '@/app/api/ad-generator/templates-doc/usage/route';
-import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
-import { ScheduleTemplateModal } from '@/components/ad-generator/schedule-template-modal';
+import { AvailabilityModal } from '@/components/ad-generator/availability-modal';
 import { CoopApprovalModal } from '@/components/ad-generator/coop-approval-modal';
 import { approvalLabel, type ApprovalStatus } from '@/lib/ad-generator/coop-approval';
 import { useAccount } from '@/contexts/account-context';
@@ -42,6 +38,7 @@ import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/a
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
 import { offerKindsForIndustry, splitTemplatesByIndustry } from '@/lib/ad-generator/industry';
+import { audienceLabel, isGlobalTemplate } from '@/lib/ad-generator/template-access';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 type DocTemplate = {
@@ -58,6 +55,13 @@ type DocTemplate = {
   createdByEmail: string | null;
   createdByImage: string | null;
   doc: TemplateDoc | null;
+  /**
+   * Shared WITH the active account rather than owned by it. Usable and viewable
+   * here, but not editable: every account with access uses this one template, so
+   * an edit made from a recipient's library would silently rewrite it for the
+   * owner and every other recipient.
+   */
+  sharedIn?: boolean;
   /** Co-op sign-off standing — what lets ads from this template run unattended. */
   coopApproval?: ApprovalStatus;
 };
@@ -114,9 +118,10 @@ export function AdTemplatesTab({
   // non-vehicle industry, and a doc with no `offerKind` counts as vehicle, so a
   // full library can render as an empty shelf with nothing on screen saying why.
   const { templates, hiddenByIndustry } = useMemo(() => {
-    const owned = (data?.templates ?? [])
-      .filter((t) => t.doc)
-      .filter((t) => (accountKey ? t.accountKey === accountKey : true));
+    // No owner-only cut here any more: inside an account the API returns what it
+    // owns AND what has been shared with it, each marked, so a share is visible
+    // from the side that received it.
+    const owned = (data?.templates ?? []).filter((t) => t.doc);
     // The industry/kind pair, split rather than filtered — see
     // `splitTemplatesByIndustry`. A vehicle-offer template asks a marketing
     // agency for a lease term and a VIN, so it is withheld the same way an
@@ -173,8 +178,7 @@ export function AdTemplatesTab({
   useEffect(() => setPreviewSizeIdx(0), [preview?.id]);
   const [renameFor, setRenameFor] = useState<DocTemplate | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const [shareFor, setShareFor] = useState<DocTemplate | null>(null);
-  const [scheduleFor, setScheduleFor] = useState<DocTemplate | null>(null);
+  const [availabilityFor, setAvailabilityFor] = useState<DocTemplate | null>(null);
   const [approveFor, setApproveFor] = useState<DocTemplate | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -219,11 +223,6 @@ export function AdTemplatesTab({
     } catch (err) {
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
-  };
-  const setPublished = (t: DocTemplate, published: boolean) => {
-    void patchTemplate(t.id, { status: published ? 'published' : 'draft' }).then(
-      () => toast.success(published ? 'Published' : 'Moved to draft'),
-    );
   };
   const newTemplate = () => setNewOpen(true);
 
@@ -373,21 +372,51 @@ export function AdTemplatesTab({
   }
 
   /**
-   * "Share" — grant sub-accounts access to THIS template.
+   * "Availability" — live-or-draft, who can use it, and when, in one place.
    *
-   * Replaces "Copy to Subaccounts", which cloned the doc per account: the copies
-   * diverged, an edit to the master reached none of them, and access could never be
-   * revoked. Available on a draft too — you can decide who gets it before it goes
-   * live, and the share only takes effect once it's published.
+   * These were three menu entries (Publish / Move to draft, Share, Schedule…) that
+   * each set part of the same thing. Publishing announced a template to everyone,
+   * sharing quietly narrowed it to a few accounts, and nothing on screen said the
+   * two were the same question — so a template could be published "to all
+   * accounts" and shared with three, and look like both at once.
    */
-  const shareAction = (t: DocTemplate): TemplateCardAction => ({
-    key: 'share',
-    label: t.sharedAccountKeys.length ? `Share (${t.sharedAccountKeys.length})` : 'Share',
+  const availabilityAction = (t: DocTemplate): TemplateCardAction => ({
+    key: 'availability',
+    label: `Availability — ${t.status === 'published' ? audienceLabel(t, (k) => scopeName(k) ?? k) : 'Draft'}`,
     icon: RocketLaunchIcon,
-    run: () => setShareFor(t),
+    run: () => setAvailabilityFor(t),
   });
 
-  const actionsFor = (t: DocTemplate): TemplateCardAction[] => [
+  /**
+   * A template shared INTO this account: usable, but not the account's to change.
+   * Everyone with access shares the one row, so editing, renaming, re-scoping or
+   * deleting it from here would reach the owner and every other recipient. Copy
+   * stays — that is the supported way to make a version of your own.
+   */
+  const sharedInActionsFor = (t: DocTemplate): TemplateCardAction[] => [
+    { key: 'view', label: 'View', icon: EyeIcon, run: () => setPreview(t) },
+    { key: 'clone', label: 'Copy to this account', icon: DocumentDuplicateIcon, run: () => void clone(t) },
+    {
+      key: 'proof',
+      label: 'Proof sheet',
+      icon: TableCellsIcon,
+      run: () =>
+        router.push(
+          `/ad-generator/proof/${t.id}${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`,
+        ),
+    },
+    {
+      key: 'analytics',
+      label: 'Analytics',
+      icon: ChartBarIcon,
+      run: () => router.push(templateReportHref(t.id, accountKey)),
+    },
+    ...(accountKey
+      ? [{ key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) } as TemplateCardAction]
+      : []),
+  ];
+
+  const actionsFor = (t: DocTemplate): TemplateCardAction[] => t.sharedIn ? sharedInActionsFor(t) : [
     { key: 'view', label: 'View', icon: EyeIcon, run: () => setPreview(t) },
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
@@ -404,10 +433,8 @@ export function AdTemplatesTab({
           `/ad-generator/proof/${t.id}${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`,
         ),
     },
-    // Directly below Copy: who can use this one template.
-    shareAction(t),
-    // The publish WINDOW, without a trip through the builder.
-    { key: 'schedule', label: 'Schedule…', icon: CalendarDaysIcon, run: () => setScheduleFor(t) },
+    // Directly below Copy: whether it's live, who can use it, and when.
+    availabilityAction(t),
     // Co-op sign-off. Deliberately alongside the other template-level actions
     // rather than buried in the builder: approval is granted for the PLATE, and
     // it's the difference between ads that run and ads that queue as drafts.
@@ -429,9 +456,6 @@ export function AdTemplatesTab({
     ...(accountKey
       ? [{ key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) } as TemplateCardAction]
       : []),
-    t.status === 'published'
-      ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => setPublished(t, false) }
-      : { key: 'publish', label: 'Publish', icon: CheckCircleIcon, run: () => setPublished(t, true) },
     { key: 'delete', label: 'Delete', icon: TrashIcon, run: () => void remove(t), danger: true },
   ];
 
@@ -504,14 +528,21 @@ export function AdTemplatesTab({
                     preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
                     name={t.name}
                     status={t.status === 'published' ? 'published' : 'draft'}
-                    scope={
-                      { label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }
-                    }
+                    /* Derived from the SAME rule the generator enforces, not
+                       from `accountKey` alone — a shared-library template
+                       narrowed to three dealers used to read "All accounts"
+                       here while the picker showed it to exactly those three. */
+                    scope={{
+                      label: audienceLabel(t, (k) => scopeName(k) ?? k),
+                      kind: isGlobalTemplate(t) ? 'global' : 'account',
+                    }}
                     category={t.category}
                     tags={t.tags ?? []}
                     taxonomy={taxonomy}
                     author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
-                    editable
+                    /* Category/tag edits write to the shared row, so they are
+                       the owner's to make. */
+                    editable={!t.sharedIn}
                     usage={(() => {
                       const u = usageById.get(t.id);
                       // Undefined while the counts are still loading (no bar);
@@ -526,14 +557,24 @@ export function AdTemplatesTab({
                             be changed after creation — so it belongs on the card
                             rather than only inside the builder. */}
                         <OfferKindBadge doc={t.doc} />
-                        {/* Sharing is invisible otherwise — you'd have to open the
-                            modal on every card to find out who has a template. */}
-                        {t.sharedAccountKeys.length > 0 && (
+                        {/* Who, by name. The scope line above already gives the
+                            audience; this is the roll-call behind a count. */}
+                        {t.sharedAccountKeys.length > 1 && (
                           <span
                             title={t.sharedAccountKeys.map((k) => scopeName(k) ?? k).join(', ')}
                             className="inline-block rounded bg-[var(--primary)]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--primary)]"
                           >
-                            +{t.sharedAccountKeys.length} shared
+                            {t.sharedAccountKeys.length} shared
+                          </span>
+                        )}
+                        {/* Not this account's template — it belongs to whoever
+                            owns it, and edits here would reach them. */}
+                        {t.sharedIn && (
+                          <span
+                            title={`Shared from ${scopeName(t.accountKey) ?? 'the shared library'} — copy it to make a version you can edit`}
+                            className="inline-block rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]"
+                          >
+                            shared with you
                           </span>
                         )}
                         {badge && (
@@ -562,7 +603,7 @@ export function AdTemplatesTab({
                     actions={actionsFor(t)}
                     // In a subaccount, clicking a card opens the detail modal
                     // (preview + Use / Edit); at the admin level it opens the editor.
-                    onClick={() => (accountKey ? setPreview(t) : edit(t.id))}
+                    onClick={() => (accountKey || t.sharedIn ? setPreview(t) : edit(t.id))}
                     onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
                     onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
                   />
@@ -648,36 +689,29 @@ export function AdTemplatesTab({
         document.body,
       )}
 
-      {/* Who can use this template (one template, revocable access) */}
-      {shareFor && (
-        <ShareTemplateModal
-          templateId={shareFor.id}
-          name={shareFor.name}
-          ownerKey={shareFor.accountKey}
-          sharedWith={shareFor.sharedAccountKeys}
-          onClose={() => setShareFor(null)}
+      {/* Live-or-draft, who can use it, and when — one setting, one save. */}
+      {availabilityFor && (
+        <AvailabilityModal
+          templateId={availabilityFor.id}
+          name={availabilityFor.name}
+          ownerKey={availabilityFor.accountKey}
+          ownerName={scopeName(availabilityFor.accountKey)}
+          initial={{
+            status: availabilityFor.status,
+            sharedAccountKeys: availabilityFor.sharedAccountKeys,
+            schedule: availabilityFor.doc?.schedule ?? null,
+          }}
+          onClose={() => setAvailabilityFor(null)}
           onSaved={() => void mutate()}
         />
       )}
 
-      {/* When it's offered in the library */}
       {approveFor && (
         <CoopApprovalModal
           templateId={approveFor.id}
           templateName={approveFor.name}
           defaultMake={approveFor.doc?.make ?? null}
           onClose={() => setApproveFor(null)}
-          onSaved={() => void mutate()}
-        />
-      )}
-
-      {scheduleFor && (
-        <ScheduleTemplateModal
-          templateId={scheduleFor.id}
-          name={scheduleFor.name}
-          status={scheduleFor.status}
-          schedule={scheduleFor.doc?.schedule ?? null}
-          onClose={() => setScheduleFor(null)}
           onSaved={() => void mutate()}
         />
       )}

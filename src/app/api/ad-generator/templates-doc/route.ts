@@ -23,6 +23,8 @@ import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import {
   LIVE_TEMPLATE,
+  canAccountUseTemplate,
+  isGlobalTemplate,
   parseSharedKeys,
   serializeSharedKeys,
   templatesForAccount,
@@ -138,15 +140,32 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get('all') === '1') {
     const { error } = await requirePermission('studio.adgen.view');
     if (error) return error;
-    // ?accountKey=<key> → the group-authoring view: only that account's own
-    // templates (access-gated). Otherwise the whole library.
+    // ?accountKey=<key> → that account's library: what it OWNS plus what has been
+    // shared with it. Otherwise the whole library.
+    //
+    // Shared-in rows used to be excluded (`where: { accountKey: ownerKey }`), which
+    // made a share unverifiable from the only place you would look for it: you
+    // could grant three dealers access and each of their libraries stayed empty,
+    // so sharing read as having done nothing at all. They come back marked
+    // `sharedIn` so the UI can offer them without offering to edit them — the
+    // template belongs to whoever owns it, and an edit reaches every recipient.
     const ownerKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
     try {
-      const rows = (await prisma.adTemplateDoc.findMany({
-        where: { ...LIVE_TEMPLATE, ...(ownerKey ? { accountKey: ownerKey } : {}) },
+      const all = (await prisma.adTemplateDoc.findMany({
+        where: LIVE_TEMPLATE,
         orderBy: { updatedAt: 'desc' },
       })) as Row[];
-      return NextResponse.json({ templates: await withApprovals(rows.map(shape)) });
+      if (!ownerKey) return NextResponse.json({ templates: await withApprovals(all.map(shape)) });
+      // Same rule as every other read — a global template is not "in" one
+      // account's library, so only explicitly granted rows count here.
+      const inherited = await ancestorsForAccounts([ownerKey]);
+      const mine = all.filter(
+        (r) =>
+          !isGlobalTemplate(r)
+          && canAccountUseTemplate(r, { accountKey: ownerKey, ancestorKeys: inherited }),
+      );
+      const shaped = mine.map((r) => ({ ...shape(r), sharedIn: r.accountKey !== ownerKey }));
+      return NextResponse.json({ templates: await withApprovals(shaped) });
     } catch (err) {
       console.warn('[api/ad-generator/templates-doc] all → []:', err);
       return NextResponse.json({ templates: [] });

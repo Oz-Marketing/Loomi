@@ -385,6 +385,15 @@ export const componentSchemas: Record<string, ComponentSchema> = {
     ],
   },
 
+  offers: {
+    name: 'offers',
+    label: 'OEM Offers',
+    icon: 'CarIcon',
+    props: [
+      { key: 'placeholderLabel', label: 'Placeholder text', type: 'text', group: 'content' },
+    ],
+  },
+
   social: {
     name: 'social',
     label: 'Social Links',

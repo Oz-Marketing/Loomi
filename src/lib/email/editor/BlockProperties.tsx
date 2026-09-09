@@ -2,6 +2,10 @@
 
 import * as React from 'react';
 import { useEditor, findBlock } from './EditorContext';
+import { BIND_PROP, BRAND_ACCENT_PROP, OFFER_BINDINGS } from '@/lib/ad-generator/automation/offer-bindings';
+import { TokenTextArea, type ContentSource } from '@/components/token-textarea';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import type { Block } from '../types';
 import { componentSchemas, type PropSchema } from '@/lib/component-schemas';
 import {
   ChevronLeftIcon,
@@ -223,6 +227,10 @@ export function BlockProperties() {
               }}
             />
           </div>
+        )}
+
+        {effectiveTab === 'content' && (
+          <OfferBindingControl block={selectedBlock} onChange={handleChange} />
         )}
 
         <PropertyList
@@ -685,3 +693,90 @@ function ImageProp({
     </>
   );
 }
+
+
+/**
+ * Pointing a block at OEM offer data — the same two shapes the AD builder uses,
+ * deliberately, so binding feels identical on both sides.
+ *
+ *  • IMAGES get a "Shows" dropdown. A picture is one value, so it binds whole.
+ *  • TEXT gets `{{offer.x}}` tokens inline, through the SAME `TokenTextArea`
+ *    the ad inspector uses. A line can mix copy and data — "Lease a
+ *    {{offer.name}} for {{offer.main}}" — which is what an offer card needs and
+ *    what a whole-field dropdown cannot express.
+ */
+function OfferBindingControl({
+  block,
+  onChange,
+}: {
+  block: Block;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const isImage = block.type === 'image' || block.type === 'logo';
+  const isText = block.type === 'text' || block.type === 'heading';
+  if (!isImage && !isText) return null;
+
+  if (isImage) {
+    const options: ContentSource[] = [
+      { value: '', label: 'Not bound — use the image I picked' },
+      ...OFFER_BINDINGS.filter((o) => o.kind === 'image').map((o) => ({
+        value: o.value,
+        label: o.label,
+        group: 'OEM offer',
+      })),
+    ];
+    const current = typeof block.props[BIND_PROP] === 'string' ? (block.props[BIND_PROP] as string) : '';
+    return (
+      <div>
+        <PropertyGroupHeader name="Offer data" />
+        <div className="px-4 py-3">
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Shows</label>
+          <SearchableSelect
+            value={current}
+            onChange={(v) => onChange(BIND_PROP, v || undefined)}
+            options={options}
+            className="w-full"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const text = typeof block.props.text === 'string' ? block.props.text : '';
+  return (
+    <div>
+      <PropertyGroupHeader name="Offer data" />
+      <div className="px-4 py-3">
+        <TokenTextArea
+          value={text}
+          onChange={(v) => onChange('text', v)}
+          options={OFFER_TOKEN_SOURCES}
+          placeholder="Type text — add {{variables}} with the icon →"
+          scopeNote="Filled from each offer when a run generates."
+        />
+        {/* A block is authored once and used by every rooftop, so a colour
+            picked here is that colour for all of them. This hands the line back
+            to each dealer's own accent — what the built-in card always did. */}
+        <label className="mt-2.5 flex cursor-pointer items-start gap-2 text-[11px] text-[var(--muted-foreground)]">
+          <input
+            type="checkbox"
+            checked={block.props[BRAND_ACCENT_PROP] === true}
+            onChange={(e) => onChange(BRAND_ACCENT_PROP, e.target.checked || undefined)}
+            className="mt-0.5 accent-[var(--primary)]"
+          />
+          <span>
+            Use the dealer&rsquo;s brand color
+            <span className="mt-0.5 block text-[10px] leading-snug">
+              Overrides the color above with each account&rsquo;s own, so one card suits every rooftop.
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+  );
+}
+
+/** The offer fields, in the `ContentSource` shape `TokenTextArea` expects. */
+const OFFER_TOKEN_SOURCES: ContentSource[] = OFFER_BINDINGS.filter((o) => o.kind === 'text').map(
+  (o) => ({ value: o.value, label: o.label, group: 'OEM offer' }),
+);

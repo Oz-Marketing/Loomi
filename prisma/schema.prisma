@@ -2032,6 +2032,7 @@ model Campaign {
   landingPages LandingPage[]
   forms        Form[]
   flows        LoomiFlow[]
+  adCreatives  AdCreative[]
 
   @@index([accountKey, status])
   @@index([createdAt])
@@ -3520,6 +3521,52 @@ model AdTemplateDoc {
 // it. `doc` is a lightweight JSON payload (elements + normalized boxes + the
 // fields those bindings need), NOT a full TemplateDoc. Scoped like templates:
 // null accountKey = global, set = only that subaccount sees it.
+/// A saved cluster of email blocks a designer can reuse — the email side of
+/// `AdBlock`, and the reason the OEM offer card no longer has to live in code.
+///
+/// WHY IT MIRRORS AdBlock RATHER THAN AccountSnippet. Snippets are
+/// account-scoped and referenced BY ID, so editing one changes every landing
+/// page using it. A creative block is the opposite: a designer inserts it and
+/// then adapts it for this send, exactly as they do with an ad lockup. So the
+/// content is COPIED on insert, and the scoping is the multi-account shape ad
+/// blocks already use — global, or assigned to named accounts.
+model EmailBlock {
+  id          String  @id @default(cuid())
+  name        String
+  description String? @db.Text
+
+  /// JSON: { version, blocks: Block[] } — a v2 email subtree. Block ids are
+  /// regenerated on insert, so the same block can appear twice in one template.
+  doc String @db.Text
+
+  /// What the run repeats this block over, or null for a static block.
+  ///
+  /// `offer` makes it the OEM offer card: authored ONCE and rendered once per
+  /// offer the month actually produced. The count is unknowable at design time —
+  /// a manufacturer publishes a different number of programs every month — which
+  /// is exactly why it is a repeat rather than a fixed layout.
+  repeatOver String?
+
+  isActive Boolean @default(true)
+
+  /// Scoping, same model as `AdBlock`: null/[] = global, otherwise the accounts
+  /// it is offered to.
+  accountKeys String? @db.Text
+
+  category String?
+  tags     String? @db.Text
+
+  createdBy      String?
+  createdByName  String?
+  createdByEmail String?
+  createdByImage String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([repeatOver])
+}
+
 model AdBlock {
   id             String   @id @default(cuid())
   name           String
@@ -3590,7 +3637,7 @@ model AdSizePreset {
 // reserved for the future Campaign-channel tie-in (not wired yet). Additive,
 // queried resiliently.
 model AdCreative {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   accountKey    String
   name          String
   templateId    String // code template id or AdTemplateDoc id (the source)
@@ -3598,15 +3645,26 @@ model AdCreative {
   // renders from THIS, so later edits to the master template don't change it —
   // each ad is an independent, subaccount-owned copy. Null for older ads /
   // code-render templates, which fall back to resolving templateId live.
-  doc           String?  @db.Text
-  data          String   @db.Text // JSON of the filled AdData
-  status        String   @default("draft") // draft | ready
-  thumbnailUrl  String?  @db.Text
-  campaignId    String? // reserved — future Campaign channel link
+  doc           String?   @db.Text
+  data          String    @db.Text // JSON of the filled AdData
+  status        String    @default("draft") // draft | ready
+  thumbnailUrl  String?   @db.Text
+  // The generate run this ad belongs to. `generateOfferEmail` creates one
+  // Campaign per run and stamps it onto every ad AND the run's offer email, so
+  // this is what lets a run's whole output be read as one unit.
+  //
+  // Was a bare scalar commented "reserved" long after generation started writing
+  // to it, which left the link one-way: ads pointed at a campaign, the campaign
+  // could not see them, and Prisma had nothing to include — so a run showed up
+  // as an email and no ads. A deleted campaign also stranded the id here rather
+  // than clearing it. SetNull matches every other asset: losing the container
+  // must never delete the work.
+  campaignId    String?
+  campaign      Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   createdById   String?
   createdByName String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   // ── Phase 3: autonomous generation provenance ──
   // Set on ads produced by the automation rather than by a person. A reviewer
@@ -3630,6 +3688,25 @@ model AdCreative {
   // Preflight/co-op findings that did NOT block (warnings), so the reviewer sees
   // what was flagged rather than having to re-run preflight to find out.
   reviewNotes        String?   @db.Text
+
+  // ── Offer fan-out (docs/ad-generator-offer-fanout.md) ──
+  //
+  // Every design generated from the SAME vehicle and the same offer(s) shares
+  // this key. It is what turns a flat list of ads into "one row per offer, N
+  // designs to choose from", and what lets picking one design archive the rest.
+  // Excludes the template on purpose — it names the group a template belongs to.
+  // Null on every hand-built ad and on everything generated before the fan-out.
+  offerGroupKey String?
+  // The one design in the group that `resolveAutomationTemplate` would have
+  // chosen back when resolution picked a single winner. A ranking now, not a
+  // gate: it decides which variant leads the row, never which ones exist.
+  recommended   Boolean   @default(false)
+  // When a person chose this design out of its group. Distinct from `status`,
+  // which stays draft/ready: an ad can be picked and still be a draft awaiting
+  // co-op sign-off, and it can be `ready` without anyone having chosen it over
+  // its siblings. Picking is also what triggers rendering the remaining sizes —
+  // generation only ever renders the square preview.
+  selectedAt    DateTime?
 
   // Soft delete. Deliberately a TIMESTAMP rather than a `status` value: status
   // carries draft/ready, and folding archive into it would lose which of the two
@@ -3671,6 +3748,16 @@ model AdCreative {
   // divergence was deliberate, so "Customized" can be shown with a date rather
   // than as a bare state, and so a reset can say what it is discarding.
   docEditedAt     DateTime?
+  // A person changed the OFFER VALUES after generation — the payment, the term,
+  // the expiration. The data-side twin of `docEditedAt`, and the only record
+  // that an ad is no longer stating the manufacturer's published numbers.
+  // (`_oemApplied` in `data` looks like it answers this; it is written once at
+  // generation and read by nothing.)
+  //
+  // An EVENT, not derived state: edit a payment and change it back, and a
+  // comparison against the OEM snapshot says "unedited" while the honest answer
+  // for compliance is that a person has been in here.
+  offerEditedAt   DateTime?
 
   // One draft per (sub-account, template, offer). Null fingerprints are exempt
   // in Postgres — hand-built ads all have null here and never collide.
@@ -3678,6 +3765,12 @@ model AdCreative {
   @@index([accountKey, updatedAt])
   @@index([accountKey, autoGenerated, status])
   @@index([accountKey, archivedAt])
+  // Reading a whole variant group at once: the list groups by it, and picking a
+  // design archives its siblings through it. Both are per-account.
+  @@index([accountKey, offerGroupKey])
+  // "Which ads belong to this run" — Postgres creates no index for a FK on its
+  // own, and this is the query the campaign view is built on.
+  @@index([campaignId])
   @@index([runId])
   // "Which ads use this template?" — the impact query behind the sync prompt,
   // which is the one lookup here that isn't account-scoped.
@@ -4159,12 +4252,29 @@ model AdAutomationConfig {
   // ── selection policy ──
   // JSON string[] of offer types, best first. Types omitted are ineligible.
   offerTypePriority String @default("[\"lease\",\"apr\",\"cash\"]")
+  // RETIRED by the offer fan-out; read by nothing. Kept as a column so `db push`
+  // doesn't rewrite existing rows, and because a dealer who tuned it deserves
+  // better than the value silently vanishing. Superseded by maxVehiclesPerRun.
   maxAdsPerRun      Int    @default(10)
+  // The run cap, counted in VEHICLES. Ads is the wrong unit once one vehicle
+  // produces a design per template per offer type: a limit of 10 ads finishes the
+  // first vehicle, abandons the second halfway and drops the rest — and a vehicle
+  // showing 3 of its 6 designs reads to a dealer as "that's all there is". A
+  // vehicle is now taken whole or not at all, and vehicles are taken in on-lot
+  // stock order so the cap drops the thinnest inventory rather than the end of
+  // the alphabet.
+  maxVehiclesPerRun Int    @default(25)
   // How the run window is derived — the month-boundary fix. At month end an OEM's
-  // current programmes expire within days, so "does this offer have N days left"
+  // current programs expire within days, so "does this offer have N days left"
   // is the wrong question and yielded zero ads in testing; "is it valid when the
   // ad RUNS" is the right one. current_month | next_month | rolling
-  runWindowMode     String @default("next_month")
+  //
+  // Defaults to current_month on MEASURED evidence: against production on
+  // 2026-09-02, 1,194 of 1,266 live offers were eligible for a current-month
+  // window and only 73 for next month. The old next_month default rejected ~94%
+  // of live offers for most of every month, silently — zero eligible offers is
+  // indistinguishable from zero offers in a run log.
+  runWindowMode     String @default("current_month")
   rollingDays       Int    @default(30)
   // Reject an offer whose stock is below this. 0 = don't consider stock at all
   // (the Phase 1 default — inventory is observed, not enforced, until Phase 3).
@@ -4178,6 +4288,23 @@ model AdAutomationConfig {
   /// default. A rooftop running only Meta feed placements shouldn't pay to render
   /// and store a story crop it never posts.
   sizeIds String?
+
+  /// The ad designs the fan-out is allowed to build, as a JSON string[] of
+  /// `AdTemplateDoc.id`.
+  ///
+  /// Null or empty = every published template in scope for the account, which is
+  /// what the fan-out did when it shipped and stays the default for a rooftop
+  /// following no playbook. Non-empty CONSTRAINS the run to exactly these.
+  ///
+  /// Why constrain at all: `templateMap` only decides which design is
+  /// RECOMMENDED, so without this any plate a designer publishes joins every
+  /// account's run the next night — including one built for a different brand.
+  /// A playbook that cannot say "these are the Chevrolet plates" isn't
+  /// describing how a Chevrolet store is run.
+  ///
+  /// Preset by a creative playbook, like `templateMap` and `sizeIds`. This
+  /// column stays what generation actually reads.
+  fanOutTemplateIds String?
 
   templateMap String? @db.Text
 
@@ -4196,11 +4323,17 @@ model AdAutomationConfig {
   /// Generate an ad for EVERY qualifying offer type on a vehicle (a lease ad
   /// AND an APR ad), rather than only the best one.
   ///
-  /// Off by default deliberately. On a 12-model lot, expansion produces ~30 ads
-  /// against a `maxAdsPerRun` default of 10 — the cap would silently truncate to
-  /// an arbitrary subset, which is worse than a smaller set somebody chose.
-  /// Costs no extra MarketCheck calls either way: the offers are already on file.
-  expandOfferTypes Boolean @default(false)
+  /// NOW ON BY DEFAULT. It shipped off for one reason: on a 12-model lot
+  /// expansion produced ~30 ads against a `maxAdsPerRun` of 10, and an ad-counted
+  /// cap would truncate to an arbitrary subset. `maxVehiclesPerRun` removed that
+  /// objection — the cap falls on a vehicle boundary now, so expansion can never
+  /// produce a half-finished vehicle — and the fan-out UI leads each row with the
+  /// recommended offer, so the extra types cost the dealer nothing to look at.
+  ///
+  /// `false` still means something useful: recommended offer only, a lean mode
+  /// for an account that wants fewer drafts. Costs no extra MarketCheck calls
+  /// either way — the offers are already on file.
+  expandOfferTypes Boolean @default(true)
 
   // ── output ──
   mode          String  @default("draft") // draft | ready

@@ -12,6 +12,6 @@ import { StudioHome } from '@/components/studio-home';
 
 export default async function DashboardPage() {
   const session = await getAuthSession();
-  if (session?.user?.role === 'client') redirect('/ad-generator');
+  if (session?.user?.role === 'client') redirect('/campaign-builder');
   return <StudioHome />;
 }

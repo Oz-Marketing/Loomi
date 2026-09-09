@@ -19,7 +19,23 @@ export type CampaignStatus =
   | 'partial'
   | 'archived';
 
-export type CampaignSource = 'ai' | 'manual';
+/**
+ * Who created the container.
+ *
+ * `automation` is written by the OEM offer run (`generateOfferEmail`) and was
+ * missing here for as long as that code has existed — `toDetail` casts the
+ * column with `as CampaignSource`, so the type never objected and every run
+ * displayed as "Manual" through a two-way `source === 'ai' ? 'AI' : 'Manual'`
+ * check. Naming the third value is what makes those checks answerable.
+ */
+export type CampaignSource = 'ai' | 'manual' | 'automation';
+
+/** Label for each source, so the two places that show it cannot disagree. */
+export const CAMPAIGN_SOURCE_LABEL: Record<CampaignSource, string> = {
+  ai: 'AI',
+  manual: 'Manual',
+  automation: 'Automated',
+};
 
 // ── Channels ──
 export type CampaignChannel = 'email' | 'sms' | 'landingPage' | 'form' | 'flow';
@@ -129,7 +145,16 @@ export interface CampaignPlan {
 }
 
 // ── Asset summaries (overview / list) ──
-export type CampaignAssetKind = CampaignChannel;
+/**
+ * What a campaign can CONTAIN — a superset of what the builder can generate.
+ *
+ * `ad` is deliberately not a `CampaignChannel`: channels are what the AI planner
+ * knows how to produce, and it does not plan ads. Ad creatives arrive in a
+ * campaign the other way round — the OEM offer run creates the container and
+ * puts its designs and its offer email in it — so they belong here and nowhere
+ * near `PHASE_1_CHANNELS`.
+ */
+export type CampaignAssetKind = CampaignChannel | 'ad';
 
 export interface CampaignAssetSummary {
   kind: CampaignAssetKind;
@@ -146,6 +171,10 @@ export interface CampaignAssetSummary {
   lpHtml?: string | null;
   /** Form: field summary for an inline preview. */
   formFields?: Array<{ label: string; type: string; required: boolean }> | null;
+  /** Ad: the square preview the generator rendered. */
+  adThumbnailUrl?: string | null;
+  /** Ad: whether a person has chosen this design out of its offer group. */
+  adSelected?: boolean;
 }
 
 export interface CampaignAssetCounts {
@@ -154,6 +183,8 @@ export interface CampaignAssetCounts {
   landingPage: number;
   form: number;
   flow: number;
+  /** Ad designs from an OEM offer run. See CampaignAssetKind. */
+  ad: number;
   total: number;
 }
 

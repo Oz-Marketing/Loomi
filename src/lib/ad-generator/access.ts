@@ -1,17 +1,37 @@
 import { getAuthSession } from '@/lib/api-auth';
-import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
+import { can } from '@/lib/permissions/registry';
+import { subjectFromSession } from '@/lib/permissions/require';
 
 /**
  * Server-side gate for the Ad Generator (page route + APIs).
  *
- * The tool is now public: any signed-in user may reach it. Individual write
- * routes still enforce their own role checks (e.g. `requireRole` for creating
- * templates / disclaimer rules), and account-scoped data is filtered per the
- * caller's account access — so "public" here just means "authenticated".
- * Unauthenticated requests get a 404. Reads the session, so this is server-only.
+ * WHAT THIS REPLACES. The gate used to be `AD_GENERATOR_ENABLED || signed in`,
+ * which bypassed the permission registry entirely — so a client reached the page
+ * while `studio.adgen.view` said `management`, and the two disagreed about who
+ * was entitled to it. That access was accidental, not designed: it worked only
+ * because the list page never happens to call one of the routes that DOES check
+ * the capability. The env flag also meant enabling the tool for an environment
+ * enabled it for everyone in it.
+ *
+ * WHY IT ASKS THE REGISTRY DIRECTLY, ahead of the sector rollout.
+ * `requirePermission` routes through `isEnforced()`, and Studio enforcement is
+ * still behind `PERMISSIONS_ENFORCE_STUDIO`. Until that flips, the LEGACY bucket
+ * is authoritative — and the legacy buckets are coarse
+ * (developer/elevated/management/authenticated), so they cannot express the
+ * entitlement this gate now has to enforce: a client who may see their OEM
+ * offers and nothing else in Studio. `management` locks them out and
+ * `authenticated` is the accidental state this replaces.
+ *
+ * So the registry decides here, deliberately, for this one gate. Every other
+ * Studio route keeps its `requirePermission` call and flips with the sector.
+ * When `PERMISSIONS_ENFORCE_STUDIO` goes on, this becomes redundant rather than
+ * wrong — the two agree by construction, since both read `studio.adgen.view`.
+ *
+ * Returns false rather than throwing, because callers 404 on it: an
+ * unauthorized visitor should not learn the route exists.
  */
 export async function adGeneratorAllowed(): Promise<boolean> {
-  if (AD_GENERATOR_ENABLED) return true;
   const session = await getAuthSession();
-  return Boolean(session?.user);
+  if (!session?.user) return false;
+  return can(subjectFromSession(session), 'studio.adgen.view');
 }

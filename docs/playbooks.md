@@ -386,6 +386,54 @@ one account would render nothing everywhere else.
 content change bumps `version`. Renaming a playbook, or re-saving it untouched,
 must not mark every rooftop as behind.
 
+### Constrain, not just rank (2026-09-08)
+
+The offer fan-out changed what `adTemplateId` meant and this doc did not catch
+up for three weeks. Since the fan-out shipped, `generate-ads` builds **every**
+published in-scope template against each offer and the dealer picks; the old
+resolution chain — and therefore the playbook's `adTemplateId` — only decides
+which design is marked RECOMMENDED.
+
+That made a creative playbook decorative for the question it exists to answer.
+Any plate a designer published joined every account's run the following night,
+including one built for another brand, and the playbook could not say otherwise.
+
+`CreativeDefinition` therefore gained **`fanOutTemplateIds: string[]`**, preset
+onto the new `AdAutomationConfig.fanOutTemplateIds` column like every other
+step. Empty means unconstrained — every published template in scope, which is
+what a rooftop following no playbook has always done and stays the default.
+
+- `adTemplateId` = the design a row LEADS with.
+- `fanOutTemplateIds` = the designs the run may BUILD.
+- `effectiveFanOut()` unions the two, so a playbook can never recommend a design
+  it does not permit — a config whose lead sits outside its own set would lead
+  the dealer's row with nothing.
+- New step `fanOut` ("Designs built") joins `CREATIVE_STEPS`, so it gets the same
+  override badge, per-step undo, and hash contribution as the rest. Order is
+  normalized before hashing: re-picking the same designs in another order must
+  not mark every rooftop as behind.
+
+### The pairing that should not have existed (removed 2026-09-08)
+
+`AdTemplateDoc.emailTemplateSlug` was added on 2026-09-03 as a per-DESIGN email
+shell, and removed five days later. It duplicated
+`CreativeDefinition.emailTemplateSlug` and — worse — was resolved at generation
+time, which meant `AdAutomationConfig.emailTemplateId` no longer described what
+a run actually used. That is precisely the invariant §4b rests on, so playbook
+drift detection was comparing a column the generator had stopped reading.
+
+One shell per run, from the config, preset by the playbook. The companion email
+carries every offer in the run, so it does not correspond to any single plate
+and cannot follow the dealer's design choice; `restyleOfferEmail`, which existed
+to re-splice it on a pick, went with it.
+
+### Authoring the shell (2026-09-08)
+
+The `{{offers}}` marker is now a real **OEM Offers block** in the email builder's
+palette, not a magic string a designer had to know to type. `isOffersSlot()`
+accepts both forms — shells authored before the block still work, and the live
+playbook points at one — so nothing needs migrating.
+
 ### Traps found building it
 
 - **`save_config` is a full replace.** Every field the form holds must reach

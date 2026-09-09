@@ -88,6 +88,17 @@ const smsAssetSelect = { id: true, name: true, message: true, status: true, meta
 const lpAssetSelect = { id: true, name: true, status: true, schema: true } as const;
 const formAssetSelect = { id: true, name: true, status: true, schema: true } as const;
 const flowAssetSelect = { id: true, name: true, status: true, metadata: true } as const;
+// Ads carry no `metadata`, so there is no plan key to read — they are not planned
+// by the AI builder, they arrive from an OEM offer run. `thumbnailUrl` stands in
+// for the inline preview the other kinds get from their own content.
+const adAssetSelect = {
+  id: true,
+  name: true,
+  status: true,
+  thumbnailUrl: true,
+  archivedAt: true,
+  selectedAt: true,
+} as const;
 
 const campaignWithAssetsInclude = {
   emailBlasts: { select: emailAssetSelect },
@@ -95,6 +106,10 @@ const campaignWithAssetsInclude = {
   landingPages: { select: lpAssetSelect },
   forms: { select: formAssetSelect },
   flows: { select: flowAssetSelect },
+  // Ads from an OEM offer run. Archived ones are filtered in `collectAssets`
+  // rather than here: a run that produced six designs and had five archived on
+  // the pick should read as one ad, not six.
+  adCreatives: { select: adAssetSelect },
 } as const;
 
 function planKeyFromMetadata(metadata: string | null | undefined): string | null {
@@ -164,11 +179,25 @@ function collectAssets(row: NonNullable<CampaignWithAssets>): CampaignAssetSumma
       planKey: planKeyFromMetadata(fl.metadata),
     });
   }
+  for (const ad of row.adCreatives) {
+    // Archived designs are the ones a pick put away — the offer fan-out builds a
+    // design per template and archives the losers. Counting them would report a
+    // run that produced one usable ad as having produced six.
+    if (ad.archivedAt) continue;
+    assets.push({
+      kind: 'ad',
+      id: ad.id,
+      name: ad.name,
+      status: ad.status,
+      adThumbnailUrl: ad.thumbnailUrl,
+      adSelected: !!ad.selectedAt,
+    });
+  }
   return assets;
 }
 
 function countAssets(assets: CampaignAssetSummary[]): CampaignAssetCounts {
-  const counts: CampaignAssetCounts = { email: 0, sms: 0, landingPage: 0, form: 0, flow: 0, total: assets.length };
+  const counts: CampaignAssetCounts = { email: 0, sms: 0, landingPage: 0, form: 0, flow: 0, ad: 0, total: assets.length };
   for (const a of assets) counts[a.kind] += 1;
   return counts;
 }
@@ -234,6 +263,16 @@ export async function listCampaigns(options?: {
   accountKeys?: string[] | null;
   includeArchived?: boolean;
   limit?: number;
+  /**
+   * Restrict to machine-generated OEM runs.
+   *
+   * Set for the CLIENT tier, whose entitlement is the offers built for them and
+   * nothing else. It is enforced here rather than in the list component because
+   * a UI filter is not an entitlement — the route would still hand a dealer
+   * every manual blast, flow and landing page on their account if they asked it
+   * directly.
+   */
+  automationOnly?: boolean;
 }): Promise<CampaignSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 50));
   const scope = options?.accountKeys;
@@ -241,6 +280,7 @@ export async function listCampaigns(options?: {
   if (!options?.includeArchived) where.archivedAt = null;
   // scope `null` (developer/super_admin) or `[]` (unrestricted admin) = no filter.
   if (scope && scope.length > 0) where.accountKey = { in: scope };
+  if (options?.automationOnly) where.source = 'automation';
 
   const rows = await prisma.campaign.findMany({
     where,
@@ -354,6 +394,12 @@ export async function deleteCampaign(id: string): Promise<void> {
  * Pass v2 JSON content for a visually-editable email, or HTML for a code-mode
  * one. Used by both the AI generator and the manual wizard.
  */
+/**
+ * `Template.type` for a body a campaign generated, as opposed to one a designer
+ * authored. Excluded from library listings by `buildWhere`.
+ */
+export const CAMPAIGN_TEMPLATE_TYPE = 'campaign';
+
 export async function createCampaignEmailTemplate(input: {
   accountKey: string;
   title: string;
@@ -382,7 +428,13 @@ export async function createCampaignEmailTemplate(input: {
       await templateService.createTemplate({
         slug,
         title: input.title,
-        type: 'design',
+        // NOT 'design'. A generated body is per-campaign scratch that backs the
+        // blast editor (that step keys off `metadata.templateSlug`) and is
+        // deleted with the campaign — it is not a library artifact. Typing it
+        // apart keeps it out of the Templates page AND out of the shell pickers
+        // in `preview-offer-email` and `shadow-report`, which list account-owned
+        // `design` rows as candidates a run could splice offers into.
+        type: CAMPAIGN_TEMPLATE_TYPE,
         content: input.content,
         preheader: input.previewText || undefined,
         createdByUserId: input.createdByUserId,
@@ -399,6 +451,66 @@ export async function createCampaignEmailTemplate(input: {
     }
   }
   throw new Error('Could not allocate a unique template slug');
+}
+
+/**
+ * Write the generated offer-email body to a template, REUSING the row when one
+ * already exists.
+ *
+ * `createCampaignEmailTemplate` above always mints a fresh slug
+ * (`acct-offers`, `-2`, `-3`, …) because it was written for the AI builder,
+ * where each generated email genuinely is a new asset. The OEM offer email is
+ * the opposite: ONE recurring send whose body is rebuilt every month, and again
+ * whenever a dealer picks a different design. Minting a row per rebuild filled
+ * the Templates page with near-identical "Offers" entries — 12 a year per
+ * account before anyone touches a design, and one more per pick.
+ *
+ * So the caller records the slug it got and hands it back; we update in place.
+ * `snapshot: false` — the body is machine-generated and regenerated on a
+ * schedule, so a version per rebuild is churn, not history. Falls through to a
+ * create when the recorded row has been deleted.
+ */
+export async function upsertCampaignEmailTemplate(
+  existingSlug: string | null | undefined,
+  input: {
+    accountKey: string;
+    title: string;
+    content: string;
+    previewText?: string;
+    createdByUserId?: string;
+  },
+): Promise<string> {
+  if (existingSlug) {
+    const prior = await prisma.template
+      .findUnique({ where: { slug: existingSlug }, select: { accountKey: true, published: true } })
+      .catch(() => null);
+
+    // NEVER overwrite a shared library template. A generated body and the SHELL
+    // it was built from are different things, and a caller that confuses them
+    // writes the rendered email over the shell — destroying its `{{offers}}`
+    // marker and breaking every future run with `shell_template_no_placeholder`.
+    // That is not hypothetical: it happened the first time this reuse existed.
+    // Generated rows are account-scoped and unpublished; a library shell is
+    // account-less or published, so the shapes separate cleanly.
+    const isLibraryTemplate = prior !== null && (prior.accountKey === null || prior.published);
+
+    if (prior && !isLibraryTemplate) {
+      try {
+        // Title is deliberately NOT passed: `updateTemplate` re-derives the slug
+        // from a changed title, which would defeat the reuse this exists for.
+        await templateService.updateTemplate(
+          existingSlug,
+          { content: input.content, preheader: input.previewText || undefined },
+          false,
+          input.createdByUserId,
+        );
+        return existingSlug;
+      } catch {
+        // Deleted mid-flight. Fall through and make a new one.
+      }
+    }
+  }
+  return createCampaignEmailTemplate(input);
 }
 
 export async function linkAssetToCampaign(

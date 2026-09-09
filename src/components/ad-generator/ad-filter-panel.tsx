@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDownIcon, FunnelIcon } from '@heroicons/react/24/outline';
 import { FacetSection, FacetSegmented } from '@/components/filters/facet-section';
 import type { StatusFilterValue } from '@/components/status-filter';
+import { AD_STAGE, type AdStage } from '@/lib/ad-generator/ad-lifecycle';
 import {
   FACET_KEYS,
   FACET_LABELS,
@@ -35,6 +36,19 @@ export interface AdFilterPanelProps {
   offerWindow: OfferWindow;
   onOfferWindowChange: (next: OfferWindow) => void;
 
+  /**
+   * Which lifecycle stages to show. Empty = all of them.
+   *
+   * A multi-select rather than the segmented controls above, because the stages
+   * are not alternatives — "show me everything still waiting on me" is two of
+   * them at once, and that is the common ask.
+   */
+  stages: AdStage[];
+  onStagesChange: (next: AdStage[]) => void;
+  /** Per-stage totals, so a stage that can't narrow anything reads as empty
+   *  rather than looking broken when it returns nothing. */
+  stageCounts: Record<AdStage, number>;
+
   options: Record<FacetKey, FacetOption[]>;
   /**
    * Which facet sections exist at all — decided from the account's WHOLE ad
@@ -57,6 +71,9 @@ export function AdFilterPanel({
   onSourceChange,
   offerWindow,
   onOfferWindowChange,
+  stages,
+  onStagesChange,
+  stageCounts,
   options,
   visibleFacets,
   selection,
@@ -87,7 +104,8 @@ export function AdFilterPanel({
     countSelected(selection) +
     (status !== 'all' ? 1 : 0) +
     (source !== 'all' ? 1 : 0) +
-    (offerWindow !== 'all' ? 1 : 0);
+    (offerWindow !== 'all' ? 1 : 0) +
+    (stages.length ? 1 : 0);
 
   function clearAll() {
     onSelectionChange({});
@@ -148,6 +166,21 @@ export function AdFilterPanel({
               ]}
             />
           )}
+
+          {/* Stage lives here, next to every other way of shortening the list,
+              rather than as tabs above the grid — the grid is already split into
+              these bands, so a tab strip repeating them would say the same thing
+              twice and fight the sections for authority. */}
+          <FacetSection
+            label="Stage"
+            options={(Object.keys(AD_STAGE) as AdStage[]).map((k) => ({
+              value: k,
+              label: AD_STAGE[k].label,
+              count: stageCounts[k],
+            }))}
+            selected={stages}
+            onChange={(next) => onStagesChange(next as AdStage[])}
+          />
 
           <FacetSegmented
             label="Offer window"

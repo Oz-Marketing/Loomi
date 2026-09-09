@@ -38,6 +38,7 @@ import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav'
 import { SectorBrand } from '@/components/sector-brand';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
+import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -106,17 +107,25 @@ const adGeneratorNav: NavItem = {
 // up from the library rather than a separate tool. Global, like Ad Generator —
 // it spans every account rather than scoping to the active one.
 //
-// Parked: still half-built, so the rail shows it greyed with a "Soon" pill
-// instead of a working link. Nothing is removed — the server gate
-// (`playbooksAllowed`) is untouched, so /playbooks still opens by URL for a
-// developer (or wherever `ENABLE_PLAYBOOKS` is set), which is how it gets
-// finished. Drop `comingSoon` to hand it back to everyone.
+// Unparked 2026-09-08. It was greyed with a "Soon" pill from 2026-09-02 while
+// the creative slice was half-built; that slice is what the OEM offer set now
+// runs on — a playbook names the ad plates, their sizes and the email shell,
+// and applying one presets `AdAutomationConfig`.
+//
+// The pill now tracks the SAME flag the server gate reads, rather than being a
+// hardcoded `true`. While parked those two deliberately disagreed, which meant
+// turning the feature on took two edits in two files and the nav could sit
+// stale. One flag: `NEXT_PUBLIC_ENABLE_PLAYBOOKS`.
+//
+// DEPLOY NOTE: that is a `NEXT_PUBLIC_*` var, so it is inlined by `next build`
+// on the runner. Setting it in the droplet's shared `.env.local` does nothing
+// and reports no error — it goes in the build step's `env:`.
 const playbooksNav: NavItem = {
   href: '/playbooks',
   label: 'Playbooks',
   icon: BookOpenIcon,
   absolute: true,
-  comingSoon: true,
+  comingSoon: !PLAYBOOKS_ENABLED,
 };
 // Media library — re-added below Ad Generator.
 const mediaNav: NavItem = { href: '/media', label: 'Assets', icon: PhotoIcon };
@@ -192,11 +201,14 @@ const subaccountAdminNavItems: NavEntry[] = adminNavItems;
  *     deep-link into /subaccount/<primarySlug>. Shown only once a primary is
  *     designated (Settings → Organization → Primary sub-account).
  */
-// Client users: while the platform is still being rolled out to accounts, a
-// client's entire experience is the Ad Generator — they fill in a designer-built
-// template's offer + vehicle and export. Everything else stays hidden until
-// those surfaces are opened up to clients.
-const subaccountClientNavItems: NavEntry[] = [adGeneratorNav];
+// Client users: a dealer's Studio experience is Campaigns, and only the OEM
+// runs inside it (`listCampaigns({ automationOnly })`). A generate run produces
+// the ads AND the offer email from one set of manufacturer offers, and the
+// campaign is the only place those sit together — reading them anywhere else
+// shows half of what was made. The Ad Generator list is staff tooling and is
+// no longer in a client's nav; they still reach the ad EDITOR by opening a
+// design from the campaign, which is what `studio.adgen.edit` is for.
+const subaccountClientNavItems: NavEntry[] = [campaignBuilderNav];
 
 /** True if the current path matches any of a group's (or grandchild's) leaves. */
 function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string): boolean {

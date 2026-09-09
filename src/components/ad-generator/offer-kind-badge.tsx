@@ -44,3 +44,16 @@ export function OfferKindBadge({ doc }: { doc?: Pick<TemplateDoc, 'offerKind'> |
     </span>
   );
 }
+
+/**
+ * The same fact as plain text, for a card that already carries a pill.
+ *
+ * The ad grid's chip row grew to five badges and stopped reading as five facts —
+ * at 9px uppercase they merge into a wall. Stage is the one that changes what
+ * you do next, so it kept the pill and the kind moved down to the muted line.
+ * Same word, same tooltip, no competition for the eye.
+ */
+export function OfferKindLabel({ doc }: { doc?: Pick<TemplateDoc, 'offerKind'> | null }) {
+  const kind = offerKindForDoc(doc ?? {});
+  return <span title={kind.description}>{kind.shortLabel}</span>;
+}

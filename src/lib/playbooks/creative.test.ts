@@ -9,10 +9,12 @@ import {
   resolveVersionBump,
   type CreativeDefinition,
   type ConfigCreative,
+  effectiveFanOut,
 } from './creative';
 
 const DEF: CreativeDefinition = {
   adTemplateId: 'tpl_offer',
+  fanOutTemplateIds: [],
   sizeIds: ['sq', 'story'],
   emailTemplateSlug: 'chevy-offers',
   emailMaxOffers: 6,
@@ -20,6 +22,7 @@ const DEF: CreativeDefinition = {
 
 const synced: ConfigCreative = {
   adTemplateId: 'tpl_offer',
+  fanOutTemplateIds: [],
   sizeIds: ['sq', 'story'],
   emailTemplateSlug: 'chevy-offers',
   emailMaxOffers: 6,
@@ -33,6 +36,7 @@ describe('parseDefinition', () => {
     }
     expect(parseDefinition('not json')).toEqual({
       adTemplateId: '',
+      fanOutTemplateIds: [],
       sizeIds: [],
       emailTemplateSlug: '',
       emailMaxOffers: 6,
@@ -95,6 +99,7 @@ describe('resetStep', () => {
   it('restores one step and leaves deliberate overrides alone', () => {
     const drifted: ConfigCreative = {
       adTemplateId: 'tpl_offer',
+      fanOutTemplateIds: [],
       sizeIds: ['sq'],
       emailTemplateSlug: 'custom',
       emailMaxOffers: 6,
@@ -111,6 +116,7 @@ describe('resetStep', () => {
     const drifted: ConfigCreative = { ...synced, adTemplateId: 'other', sizeIds: ['wide'] };
     expect(resetStep(drifted, DEF, 'adTemplate')).toMatchObject({
       adTemplateId: 'tpl_offer',
+      fanOutTemplateIds: [],
       sizeIds: ['sq', 'story'],
     });
   });
@@ -118,6 +124,7 @@ describe('resetStep', () => {
   it('leaves the config fully synced once every step is reset', () => {
     let config: ConfigCreative = {
       adTemplateId: 'x',
+      fanOutTemplateIds: [],
       sizeIds: ['a'],
       emailTemplateSlug: 'y',
       emailMaxOffers: 1,
@@ -242,5 +249,66 @@ describe('resolveVersionBump', () => {
     });
     expect(reverted.version).toBe(3);
     expect(reverted.hash).toBe(at(DEF));
+  });
+});
+
+describe('effectiveFanOut', () => {
+  it('is empty — unconstrained — when the playbook names no set', () => {
+    // The default for a rooftop following no playbook, and what the fan-out did
+    // when it shipped: every published template in scope.
+    expect(effectiveFanOut({ adTemplateId: 'tpl_offer', fanOutTemplateIds: [] })).toEqual([]);
+    expect(effectiveFanOut({})).toEqual([]);
+  });
+
+  it('returns exactly the named set', () => {
+    expect(
+      effectiveFanOut({ adTemplateId: 'a', fanOutTemplateIds: ['a', 'b'] }).sort(),
+    ).toEqual(['a', 'b']);
+  });
+
+  it('unions the recommended design in when it was left out', () => {
+    // A config whose lead sits outside its own set would recommend a design the
+    // run then refuses to build, and the dealer's row would lead with nothing.
+    expect(effectiveFanOut({ adTemplateId: 'lead', fanOutTemplateIds: ['b'] }).sort()).toEqual([
+      'b',
+      'lead',
+    ]);
+  });
+
+  it('does not invent a constraint from a lead alone', () => {
+    // Naming a recommended design must not silently narrow the run to it.
+    expect(effectiveFanOut({ adTemplateId: 'lead', fanOutTemplateIds: [] })).toEqual([]);
+  });
+});
+
+describe('detachedSteps — fan-out', () => {
+  it('flags a rooftop that changed which designs are built', () => {
+    const def = { ...DEF, fanOutTemplateIds: ['a', 'b'] };
+    const config = { ...synced, fanOutTemplateIds: ['a'] };
+    expect(detachedSteps(config, def)).toContain('fanOut');
+  });
+
+  it('is order-insensitive', () => {
+    const def = { ...DEF, fanOutTemplateIds: ['a', 'b'] };
+    const config = { ...synced, fanOutTemplateIds: ['b', 'a'] };
+    expect(detachedSteps(config, def)).not.toContain('fanOut');
+  });
+
+  it('resets back to the playbook', () => {
+    const def = { ...DEF, fanOutTemplateIds: ['a', 'b'] };
+    const config = { ...synced, fanOutTemplateIds: ['zzz'] };
+    expect(resetStep(config, def, 'fanOut').fanOutTemplateIds.sort()).toEqual(['a', 'b']);
+  });
+
+  it('changes the hash, so rooftops read as behind', () => {
+    const a = definitionHash({ ...DEF, fanOutTemplateIds: ['a'] });
+    const b = definitionHash({ ...DEF, fanOutTemplateIds: ['a', 'b'] });
+    expect(a).not.toBe(b);
+  });
+
+  it('does not change the hash on reorder', () => {
+    const a = definitionHash({ ...DEF, fanOutTemplateIds: ['a', 'b'] });
+    const b = definitionHash({ ...DEF, fanOutTemplateIds: ['b', 'a'] });
+    expect(a).toBe(b);
   });
 });

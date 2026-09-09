@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount, getAuthSession } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
+import { campaignAccessFor } from '@/lib/campaigns/access';
 import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
 
 /**
@@ -11,13 +12,21 @@ import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
  * is for the manual step-by-step wizard.
  */
 export async function GET(req: NextRequest) {
-  const { session, error } = await requirePermission('studio.campaigns.view');
-  if (error) return error;
+  // Deliberately NOT `requirePermission` — see `campaignAccessFor`. Studio
+  // enforcement is off, so that helper would fall back to the `management`
+  // legacy bucket and 403 the clients this page now exists for.
+  const session = await getAuthSession();
+  const access = campaignAccessFor(session);
+  if (!access.allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const scope = getAccountScope(session!);
   const includeArchived = new URL(req.url).searchParams.get('archived') === '1';
 
-  const campaigns = await listCampaigns({ accountKeys: scope, includeArchived });
+  const campaigns = await listCampaigns({
+    accountKeys: scope,
+    includeArchived,
+    automationOnly: access.automationOnly,
+  });
   return NextResponse.json({ campaigns });
 }
 

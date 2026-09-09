@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
     /** offerType (or `all`) → AdTemplateDoc id. */
     templateMap?: Record<string, string>;
     sizeIds?: string[];
+    fanOutTemplateIds?: string[];
     maxAdsPerRun?: number;
     minStock?: number;
     radius?: number;
@@ -176,6 +177,12 @@ export async function POST(req: NextRequest) {
           sizeIds:
             Array.isArray(body.sizeIds) && body.sizeIds.length
               ? JSON.stringify(body.sizeIds.filter((x) => typeof x === 'string' && x.trim()))
+              : null,
+          // Same null-when-empty rule as sizeIds: an empty list means "no
+          // constraint", not "build nothing".
+          fanOutTemplateIds:
+            Array.isArray(body.fanOutTemplateIds) && body.fanOutTemplateIds.length
+              ? JSON.stringify(body.fanOutTemplateIds.filter((x) => typeof x === 'string' && x.trim()))
               : null,
           maxAdsPerRun: clamp(body.maxAdsPerRun, 1, 100, 10),
           minStock: clamp(body.minStock, 0, 500, 0),

@@ -4,11 +4,13 @@ import * as React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useEditor } from './EditorContext';
+import { SaveBlockModal } from './SaveBlockModal';
 import type { Block } from '../types';
 import {
   Bars3Icon,
   TrashIcon,
   DocumentDuplicateIcon,
+  Squares2X2Icon,
   ChevronUpIcon,
   ChevronDownIcon,
 } from '@heroicons/react/24/outline';
@@ -31,9 +33,11 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     setHovered,
     deleteBlock,
     duplicateBlock,
+    accountKey,
     moveBlockUp,
     moveBlockDown,
   } = useEditor();
+  const [savingBlock, setSavingBlock] = React.useState(false);
 
   const {
     attributes,
@@ -125,10 +129,35 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
           <ToolbarBtn title="Duplicate" onClick={() => duplicateBlock(block.id)} aria-label="Duplicate">
             <DocumentDuplicateIcon className="w-4 h-4" />
           </ToolbarBtn>
+          {/* CONTAINERS ONLY. A saved block is a LOCKUP — a card with a
+              picture, a figure and its legal line — and saving a bare text
+              block produces a one-line entry that clutters the palette without
+              being reusable. Wrapping the card in a Section is how you build one
+              anyway: the stock OEM offer card is a section. Same rule the ad
+              builder follows, where a block is a saved cluster rather than a
+              single element. */}
+          {CONTAINER_TYPES.has(block.type) && (
+            <ToolbarBtn
+              title="Save as custom block"
+              onClick={() => setSavingBlock(true)}
+              aria-label="Save as custom block"
+            >
+              <Squares2X2Icon className="w-4 h-4" />
+            </ToolbarBtn>
+          )}
           <ToolbarBtn title="Delete" onClick={() => deleteBlock(block.id)} aria-label="Delete">
             <TrashIcon className="w-4 h-4" />
           </ToolbarBtn>
         </div>
+      )}
+
+      {savingBlock && (
+        <SaveBlockModal
+          block={block}
+          accountKey={accountKey}
+          onSaved={() => setSavingBlock(false)}
+          onCancel={() => setSavingBlock(false)}
+        />
       )}
 
       {/* Block content */}
@@ -168,3 +197,6 @@ const ToolbarBtn = React.forwardRef<HTMLButtonElement, ToolbarBtnProps>(
     );
   },
 );
+
+/** Block types a custom block can be saved from. */
+const CONTAINER_TYPES = new Set(['section', 'columns']);

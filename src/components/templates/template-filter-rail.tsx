@@ -144,11 +144,16 @@ export function TemplateFilterRail({
         </Section>
       )}
 
+      {/* "Scope", not "Subaccount": the buckets are the shared library versus
+          one account's own designs, and CLAUDE.md's naming rule says account.
+          The globe bucket is the Loomi-wide library — templates every account
+          inherits — so "Shared library" names what it is, where "All accounts"
+          read like a scope selector rather than an ownership bucket. */}
       {showAccounts && (
-        <Section title="Subaccount">
+        <Section title="Scope">
           {facets.accounts.map((a) => {
             const isGlobal = a.value === GLOBAL_SCOPE;
-            const label = isGlobal ? 'All accounts' : accountLabels?.[a.value] ?? a.value;
+            const label = isGlobal ? 'Shared library' : accountLabels?.[a.value] ?? a.value;
             const Icon = isGlobal ? GlobeAltIcon : BuildingStorefrontIcon;
             return (
               <Row key={a.value} active={filters.accountKey === a.value} onClick={() => setAccount(a.value)} count={a.count}>

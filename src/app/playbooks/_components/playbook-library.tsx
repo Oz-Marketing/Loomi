@@ -235,6 +235,20 @@ function PlaybookCard({
       {!open && (
         <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
           {adTemplate?.name ?? 'No ad template'} ·{' '}
+          {/* How many designs the run BUILDS is the thing a creative playbook
+              decides, so it belongs on the collapsed card. Without it the
+              summary reads identically whether the playbook constrains the
+              fan-out to two plates or lets every published one through. */}
+          {(() => {
+            const built = new Set([
+              ...def.fanOutTemplateIds,
+              ...(def.adTemplateId ? [def.adTemplateId] : []),
+            ]).size;
+            return def.fanOutTemplateIds.length === 0
+              ? 'all published designs'
+              : `${built} design${built === 1 ? '' : 's'}`;
+          })()}{' '}
+          ·{' '}
           {emailTemplate?.title ?? (def.emailTemplateSlug ? def.emailTemplateSlug : 'brand-kit email')} ·{' '}
           {def.emailMaxOffers} offers
         </p>
@@ -360,6 +374,67 @@ function PlaybookCard({
               </p>
             </div>
           )}
+
+          {/* Which designs a run may BUILD, as opposed to which one it leads
+              with. The fan-out renders every permitted design against each
+              offer and the dealer picks; `adTemplateId` above only marks the
+              recommended one. Left empty this is unconstrained, which means any
+              plate anyone publishes joins the run — fine for a rooftop with no
+              playbook, wrong for one that says "these are the Chevrolet
+              plates". */}
+          <div>
+            <span className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--muted-foreground)]">
+              Designs built
+              <HelpTip>
+                <p>
+                  Every design the run builds for each offer. The dealer compares them and
+                  picks one. The <strong>Ad template</strong> above is the one marked
+                  recommended, and is always included.
+                </p>
+                <p className="mt-1">
+                  Select none to build <strong>every published template</strong> the account
+                  can see.
+                </p>
+              </HelpTip>
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {(options?.adTemplates ?? []).map((t) => {
+                const on = def.fanOutTemplateIds.includes(t.id);
+                // The recommended design is part of the set whether or not it
+                // is ticked — `effectiveFanOut` unions it in — so show it as on
+                // rather than letting someone believe they excluded it.
+                const forced = !!def.adTemplateId && t.id === def.adTemplateId;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    disabled={forced}
+                    onClick={() =>
+                      setDef({
+                        ...def,
+                        fanOutTemplateIds: on
+                          ? def.fanOutTemplateIds.filter((x) => x !== t.id)
+                          : [...def.fanOutTemplateIds, t.id],
+                      })
+                    }
+                    className={`rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+                      on || forced
+                        ? 'border-[var(--primary)] text-[var(--primary)]'
+                        : 'border-[var(--border)] text-[var(--muted-foreground)]'
+                    } ${forced ? 'opacity-70' : ''}`}
+                    title={forced ? 'The recommended design is always built' : undefined}
+                  >
+                    {t.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+              {def.fanOutTemplateIds.length === 0
+                ? 'Unconstrained — every published template in scope is built.'
+                : `${new Set([...def.fanOutTemplateIds, ...(def.adTemplateId ? [def.adTemplateId] : [])]).size} design(s) per offer.`}
+            </p>
+          </div>
 
           <div className="flex items-center gap-2 border-t border-[var(--border)] pt-3">
             <button

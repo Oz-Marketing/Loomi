@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import { createVersion } from './template-versions';
+import { CAMPAIGN_TEMPLATE_TYPE } from './campaigns';
 
 type TemplateScope = 'library' | 'subaccount' | 'all';
 
@@ -21,11 +22,15 @@ interface TemplateListOptions {
 
 function buildWhere(options: TemplateListOptions = {}) {
   const where: {
-    type?: string;
+    type?: string | { not: string };
     published?: boolean;
     accountKey?: string | null | { not: null };
   } = {};
+  // Campaign-generated bodies are per-campaign scratch, not library entries —
+  // see CAMPAIGN_TEMPLATE_TYPE. They are excluded unless a caller asks for them
+  // by name, so a listing with no type filter doesn't quietly include them.
   if (options.type) where.type = options.type;
+  else where.type = { not: CAMPAIGN_TEMPLATE_TYPE };
   if (options.publishedOnly) where.published = true;
   if (options.accountKey) {
     where.accountKey = options.accountKey;
@@ -142,10 +147,19 @@ export async function getEffectiveTemplatesForAccount(
   const ancestorKeys = await getAncestorAccountKeys(accountKey);
 
   const where = {
-    ...(opts.type ? { type: opts.type } : {}),
+    // Same campaign-generated exclusion `buildWhere` applies. This function does
+    // NOT route through it — it builds its own `where` for the inheritance OR —
+    // so the filter has to be repeated here or per-campaign scratch shows up in
+    // an account's library while being correctly hidden everywhere else.
+    ...(opts.type ? { type: opts.type } : { type: { not: CAMPAIGN_TEMPLATE_TYPE } }),
     OR: [
       { accountKey },
       ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
+      // The shared Loomi library is usable BY this account, so it belongs in
+      // "effective". Without it a shared shell — the OEM offer email among them
+      // — is invisible from inside any rooftop, which is where a designer is
+      // standing when they go looking for it.
+      { accountKey: null },
     ],
   };
 

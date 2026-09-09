@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAccountScope, canAccessAccount } from '@/lib/api-auth';
+import { getAccountScope, canAccessAccount, getAuthSession } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
+import { campaignAccessFor } from '@/lib/campaigns/access';
 import {
   archiveCampaign,
   restoreCampaign,
@@ -31,8 +32,10 @@ async function authorizeCampaign(
 
 /** GET /api/campaigns/[id] — full container + linked assets + derived status. */
 export async function GET(_req: NextRequest, { params }: RouteParams) {
-  const { session, error } = await requirePermission('studio.campaigns.view');
-  if (error) return error;
+  // Registry-direct, not `requirePermission` — see `campaignAccessFor`.
+  const session = await getAuthSession();
+  const access = campaignAccessFor(session);
+  if (!access.allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const { id } = await params;
   const auth = await authorizeCampaign(id, session!);
@@ -40,6 +43,11 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
   const campaign = await getCampaignWithAssets(id);
   if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
+  // A client's entitlement is the OEM runs. Anything else is reported as absent
+  // rather than forbidden, matching how out-of-scope accounts are handled above.
+  if (access.automationOnly && campaign.source !== 'automation') {
+    return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
+  }
   return NextResponse.json({ campaign });
 }
 

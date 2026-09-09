@@ -8,9 +8,11 @@ import {
   ArrowTopRightOnSquareIcon,
   SparklesIcon,
   PaperAirplaneIcon,
+  Squares2X2Icon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { CampaignOfferDesigns } from './campaign-offer-designs';
 import { useAccount } from '@/contexts/account-context';
 import { toast } from '@/lib/toast';
 import { CampaignStatusBadge, AssetStatusBadge, CHANNEL_META, assetEditorPath } from './shared';
@@ -19,15 +21,19 @@ import { EmailPreviewThumb } from './email-preview-thumb';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
 import type { CampaignAssetKind, CampaignAssetSummary, CampaignDetail } from '@/lib/campaigns/types';
 
-const CHANNEL_ORDER: CampaignAssetKind[] = ['email', 'sms', 'landingPage', 'form', 'flow'];
+// Ads first for an OEM offer run — they are the bulk of what it makes, and the
+// email is the companion. Campaigns with no ads are unaffected.
+const CHANNEL_ORDER: CampaignAssetKind[] = ['ad', 'email', 'sms', 'landingPage', 'form', 'flow'];
 
 export function CampaignOverview({ campaignId }: { campaignId: string }) {
   const href = useSubaccountHref();
   const router = useRouter();
-  const { accounts } = useAccount();
+  const { accounts, userRole } = useAccount();
+  // Reading is the client's whole grant here — deleting a run is staff-only.
+  const isStaff = userRole !== 'client';
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<CampaignAssetKind | null>(null);
+  const [activeTab, setActiveTab] = useState<CampaignAssetKind | 'all' | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -47,6 +53,11 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
     }
   };
 
+  // Bumped after a design pick: choosing a plate re-splices the run's offer
+  // email through that template's shell, so the EMAIL half of this page is stale
+  // too — not just the ad tiles.
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/campaigns/${campaignId}`)
@@ -60,7 +71,7 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [campaignId]);
+  }, [campaignId, reloadKey]);
 
   if (error) {
     return (
@@ -93,10 +104,24 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
   const dealerName =
     (campaign.accountKey && accounts[campaign.accountKey]?.dealer) || 'Your dealership';
 
-  // One tab per channel that has assets; default to the first available.
   const availableChannels = CHANNEL_ORDER.filter((k) => byKind(k).length > 0);
-  const activeChannel =
-    activeTab && availableChannels.includes(activeTab) ? activeTab : availableChannels[0] ?? null;
+
+  /**
+   * "All" comes first and is the default whenever a campaign spans more than one
+   * medium.
+   *
+   * The tabs alone were splitting a set. An OEM run makes the ads AND the offer
+   * email from the same offers, and landing on an "Ads" tab with the email
+   * behind a second click presents them as two pieces of work that happen to
+   * share a page. They are one deliverable, so the default view shows the whole
+   * thing and the per-medium tabs become a way to focus rather than the only way
+   * to look. A single-medium campaign gets no "All" — it would be a tab that
+   * duplicates the one beside it.
+   */
+  const tabs: (CampaignAssetKind | 'all')[] =
+    availableChannels.length > 1 ? ['all', ...availableChannels] : availableChannels;
+  const activeView: CampaignAssetKind | 'all' | null =
+    activeTab && tabs.includes(activeTab) ? activeTab : tabs[0] ?? null;
 
   // Compact row: asset name + status + Open link. Used for SMS/LP/form/flow.
   const assetRow = (asset: CampaignAssetSummary) => (
@@ -211,6 +236,22 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
       );
     }
 
+    // Ads: a thumbnail grid. The generic `assetRow` list is right for a flow and
+    // wrong for a plate — an ad is judged by looking at it, and a run's whole
+    // point is the set of designs it produced. Falls back to the name when the
+    // square preview is missing (no image storage configured, say), rather than
+    // rendering an empty tile that reads as a broken ad.
+    if (kind === 'ad') {
+      return (
+        <CampaignOfferDesigns
+          adIds={assets.map((a) => a.id)}
+          accountKey={campaign.accountKey}
+          editorHref={(id) => assetEditorPath(href, 'ad', id)}
+          onChanged={() => setReloadKey((n) => n + 1)}
+        />
+      );
+    }
+
     // Flows (Phase 3) — compact list.
     return <div className="space-y-2">{assets.map(assetRow)}</div>;
   };
@@ -235,13 +276,15 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
         >
           <ArrowLeftIcon className="h-4 w-4" /> All campaigns
         </Link>
-        <button
-          type="button"
-          onClick={() => setConfirmingDelete(true)}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--muted-foreground)] transition hover:text-rose-400"
-        >
-          <TrashIcon className="h-4 w-4" /> Delete
-        </button>
+        {isStaff && (
+          <button
+            type="button"
+            onClick={() => setConfirmingDelete(true)}
+            className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--muted-foreground)] transition hover:text-rose-400"
+          >
+            <TrashIcon className="h-4 w-4" /> Delete
+          </button>
+        )}
       </div>
 
       {confirmingDelete && (
@@ -321,14 +364,14 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
         </div>
       )}
 
-      {/* One tab per medium — keeps content from stacking into a long scroll. */}
-      {availableChannels.length > 0 && activeChannel && (
+      {/* "All" holds the set together; the rest focus one medium. */}
+      {tabs.length > 0 && activeView && (
         <div>
           <div role="tablist" className="mb-6 flex flex-wrap gap-1 border-b border-[var(--border)]">
-            {availableChannels.map((kind) => {
-              const meta = CHANNEL_META[kind];
-              const count = byKind(kind).length;
-              const isActive = kind === activeChannel;
+            {tabs.map((kind) => {
+              const meta = kind === 'all' ? null : CHANNEL_META[kind];
+              const count = kind === 'all' ? campaign.assets.length : byKind(kind).length;
+              const isActive = kind === activeView;
               return (
                 <button
                   key={kind}
@@ -342,8 +385,8 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
                       : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                   }`}
                 >
-                  <meta.Icon className="h-4 w-4" />
-                  {meta.plural}
+                  {meta ? <meta.Icon className="h-4 w-4" /> : <Squares2X2Icon className="h-4 w-4" />}
+                  {meta ? meta.plural : 'Everything'}
                   <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--muted-foreground)]">
                     {count}
                   </span>
@@ -352,7 +395,30 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
             })}
           </div>
 
-          {renderChannelBody(activeChannel)}
+          {activeView === 'all' ? (
+            // Every medium in one scroll, each under its own heading. The
+            // headings are what keep this legible for a six-channel campaign
+            // while still showing the whole set at once.
+            <div className="space-y-8">
+              {availableChannels.map((kind) => {
+                const meta = CHANNEL_META[kind];
+                return (
+                  <section key={kind}>
+                    <div className="mb-3 flex items-center gap-2">
+                      <meta.Icon className="h-4 w-4 text-[var(--muted-foreground)]" />
+                      <h3 className="text-sm font-semibold text-[var(--foreground)]">{meta.plural}</h3>
+                      <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--muted-foreground)]">
+                        {byKind(kind).length}
+                      </span>
+                    </div>
+                    {renderChannelBody(kind)}
+                  </section>
+                );
+              })}
+            </div>
+          ) : (
+            renderChannelBody(activeView)
+          )}
         </div>
       )}
     </div>

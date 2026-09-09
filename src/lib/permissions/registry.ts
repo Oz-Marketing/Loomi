@@ -32,16 +32,27 @@ export type Sector = 'agency' | 'studio' | 'reporting' | 'projects';
 export const SECTORS: Sector[] = ['agency', 'studio', 'reporting', 'projects'];
 
 /**
- * Reporting is the only sector a client tier may enter; Studio, Projects and
- * Agency are internal. That also makes Reporting the only sector where a
- * permission bug is externally visible, which is why Phase 3 rolls it out last.
+ * The sectors a client tier may enter at all. Agency and Projects are internal
+ * and always will be.
+ *
+ * Studio is here for ONE role. A dealer reviews the OEM offers built for them,
+ * and that surface lives in Studio, so the sector gate has to admit them —
+ * but the tight bound is `CLIENT_ALLOWED_SECTOR_ROLES`, which permits only
+ * `studio.client`. Sector membership alone confers nothing; a role does.
+ *
+ * These are also the only sectors where a permission bug is externally visible,
+ * which is why Phase 3 rolled Reporting out last and why widening this list is
+ * a decision rather than a tweak.
  */
-export const CLIENT_ALLOWED_SECTORS: Sector[] = ['reporting'];
+export const CLIENT_ALLOWED_SECTORS: Sector[] = ['reporting', 'studio'];
 
 /** One role per sector, most-privileged first. */
 export const SECTOR_ROLES = {
   agency: ['owner', 'admin', 'user_manager'],
-  studio: ['lead', 'producer', 'designer', 'viewer'],
+  // `client` is NOT a junior Studio seat — see ROLE_PERMISSIONS['studio.client'].
+  // It exists so a dealer can review the OEM offers built for them without
+  // holding Studio, and it is the only Studio role a client tier may be given.
+  studio: ['lead', 'producer', 'designer', 'viewer', 'client'],
   reporting: ['admin', 'analyst', 'client', 'viewer'],
   projects: ['admin', 'lead', 'member', 'requester'],
 } as const;
@@ -104,6 +115,12 @@ export const PERMISSIONS = [
   'studio.templates.edit',
   'studio.templates.publish',
   'studio.adgen.view',
+  // Starting a NEW ad from a template, as distinct from editing one that
+  // exists. Split out because a dealer needs `edit` — adjusting the offer on a
+  // generated ad is the whole point — but must not be able to originate ads:
+  // they are handed pre-built OEM offers, and an ad created from scratch has no
+  // manufacturer program behind it and no co-op provenance.
+  'studio.adgen.create',
   'studio.adgen.edit',
   'studio.adgen.generate',
   'studio.adgen.launch',
@@ -264,6 +281,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'studio.templates.edit',
     'studio.templates.publish',
     'studio.adgen.view',
+    'studio.adgen.create',
     'studio.adgen.edit',
     'studio.adgen.generate',
     'studio.adgen.launch',
@@ -291,6 +309,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'studio.domains.view',
     'studio.domains.manage',
   ],
+
   // Builds everything; cannot publish templates, activate flows, or launch ads.
   // Note `blast.send` is absent here AND from studio.lead — sending is a
   // sensitive capability for everyone.
@@ -304,6 +323,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'studio.templates.view',
     'studio.templates.edit',
     'studio.adgen.view',
+    'studio.adgen.create',
     'studio.adgen.edit',
     'studio.adgen.generate',
     'studio.assets.view',
@@ -334,6 +354,7 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'studio.templates.view',
     'studio.templates.edit',
     'studio.adgen.view',
+    'studio.adgen.create',
     'studio.adgen.edit',
     'studio.adgen.generate',
     'studio.assets.view',
@@ -358,6 +379,40 @@ export const ROLE_PERMISSIONS: Record<SectorRoleRef, readonly Permission[]> = {
     'studio.segments.view',
     'studio.contact_fields.view',
     'studio.domains.view',
+  ],
+
+  /**
+   * A DEALER reviewing the OEM offers built for them. The narrowest role in the
+   * registry, and the only Studio one a client tier may hold.
+   *
+   * `studio.access` is here because the offers surface lives in Studio and the
+   * sector gate would otherwise 403 it — not because the holder gets Studio.
+   * Everything a Studio seat implies is absent: no campaigns, email, templates,
+   * assets, flows, forms, landing pages, no dashboard.
+   *
+   * Two capabilities the automation deliberately withholds:
+   *   • `studio.adgen.generate` — runs are produced by the nightly job against
+   *     manufacturer programs. A dealer asking for more ads on demand is not the
+   *     model, and generation costs renders and AI copy.
+   *   • `studio.adgen.launch` — launching commits real paid-media spend on an
+   *     ad account. Approval and spend are separate decisions, and only one of
+   *     them belongs to the dealer.
+   *
+   * `studio.adgen.edit` IS granted: adjusting an offer is the point. Preflight
+   * re-runs on every edit and blocks export while a manufacturer rule is broken,
+   * and `AdCreative.offerEditedAt` records that the numbers are no longer the
+   * manufacturer's — so the edit is bounded and auditable rather than trusted.
+   */
+  'studio.client': [
+    'studio.access',
+    'studio.adgen.view',
+    'studio.adgen.edit',
+    // Campaigns is where a dealer READS a run — the ads and the offer email are
+    // one deliverable and the campaign is the only place they sit together. VIEW
+    // only: `edit` and `publish` stay with staff, and the list is filtered to
+    // automation campaigns server-side (see `listCampaigns`), so this does not
+    // open the account's manual blasts, flows or landing pages.
+    'studio.campaigns.view',
   ],
 
   // ── Reporting ──
@@ -465,6 +520,11 @@ export function assignableSectorsForTier(tier: PlatformTier): Sector[] {
 export const CLIENT_ALLOWED_SECTOR_ROLES: SectorRoleRef[] = [
   'reporting.client',
   'reporting.viewer',
+  // The `.client` role in each sector is the client-facing one. `studio.client`
+  // carries OEM offer review and nothing else — see its ROLE_PERMISSIONS entry.
+  // No other Studio role may ever be added here: the rest confer campaigns,
+  // templates and assets, which is the whole sector by another name.
+  'studio.client',
 ];
 
 /** Whether a tier may hold this specific role, not merely this sector. */

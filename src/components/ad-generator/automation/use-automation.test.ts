@@ -20,6 +20,7 @@ describe('toPayload', () => {
     windowMode: 'runWindowMode',
     templateId: 'templateMap',
     sizeIds: 'sizeIds',
+    fanOutTemplateIds: 'fanOutTemplateIds',
     maxAds: 'maxAdsPerRun',
     minStock: 'minStock',
     mode: 'mode',

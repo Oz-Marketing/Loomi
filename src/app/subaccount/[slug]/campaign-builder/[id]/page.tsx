@@ -1,4 +1,4 @@
-import { AdminOnly } from '@/components/route-guard';
+import { CampaignViewers } from '@/components/route-guard';
 import { CampaignOverview } from '@/components/campaigns/builder/CampaignOverview';
 
 export default async function SubaccountCampaignOverviewPage({
@@ -8,8 +8,8 @@ export default async function SubaccountCampaignOverviewPage({
 }) {
   const { id } = await params;
   return (
-    <AdminOnly>
+    <CampaignViewers>
       <CampaignOverview campaignId={id} />
-    </AdminOnly>
+    </CampaignViewers>
   );
 }

@@ -23,6 +23,7 @@ export type NotificationType =
   | 'task_comment'
   | 'task_mention'
   // Ad Generator (Studio surface) — autonomous generation
+  | 'incentive_offers_landed'
   | 'incentive_ads_ready'
   | 'coop_guideline_changed'
   // Playbooks (Studio surface) — nightly coverage sweep
@@ -205,6 +206,19 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     label: 'You were mentioned',
     description: 'Someone @mentioned you in a task comment.',
     category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'incentive_offers_landed',
+    label: 'New manufacturer offers published',
+    description:
+      'MarketCheck published a new cycle of OEM offers for a watched vehicle. Fires at poll time, before any ads are built.',
+    category: 'Ad Generator',
+    // Immediate for the same reason as the ads notification, and one more: an
+    // OEM cycle is the START of a window that is often only a few weeks long,
+    // and a digest would spend a day of it. Between cycles the feed can sit
+    // empty for days — this is the signal that the wait is over.
     channel: 'immediate',
     defaultEnabled: true,
   },

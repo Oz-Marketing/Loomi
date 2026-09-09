@@ -11,6 +11,8 @@ import {
 } from './offer-timing';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import { currentNewStock } from './sync-inventory';
+import { createNotification } from '@/lib/notifications/service';
+import { resolveReviewers } from './generate-ads';
 
 /**
  * Offer poll — Phase 1 shadow mode.
@@ -35,6 +37,8 @@ export interface AutomationConfigRow {
   offerTypePriority: string;
   runWindowMode: string;
   rollingDays: number;
+  /** Optional: absent on callers that only poll. Drives who is told a cycle landed. */
+  notifyUserIds?: string | null;
 }
 
 function jsonArray(raw: string | null): string[] {
@@ -127,6 +131,9 @@ export interface ScopeReport {
   usedYear: number;
   usedNational: boolean;
 }
+
+/** Where a reviewer lands from the notification — the run's own surface. */
+const OFFERS_LINK = '/ad-generator';
 
 export interface PollResult {
   accountKey: string;
@@ -277,7 +284,98 @@ export async function pollAccountOffers(
     console.warn('[poll-offers] could not record run:', err);
   }
 
-  return { accountKey: config.accountKey, runId, window, scopes: reports, offersSeen, offersNew, offersEnded };
+  const result: PollResult = {
+    accountKey: config.accountKey, runId, window, scopes: reports, offersSeen, offersNew, offersEnded,
+  };
+  await notifyOffersLanded({ accountKey: config.accountKey, notifyUserIds: config.notifyUserIds ?? null }, result);
+  return result;
+}
+
+/** Distinct models that gained at least one offer in this sweep. */
+export function modelsWithNewOffers(scopes: Pick<ScopeReport, 'model' | 'newFingerprints'>[]): string[] {
+  return [...new Set(scopes.filter((s) => s.newFingerprints.length > 0).map((s) => s.model))];
+}
+
+/**
+ * Name what turned over, readably.
+ *
+ * "40 new offers" is a number; "Colorado, Equinox, Silverado 1500 and 7 more" is
+ * the thing a person can act on. Capped at three because a cycle routinely
+ * covers a dozen models and a notification title is not a list.
+ */
+export function summariseModels(models: string[], max = 3): string {
+  const shown = models.slice(0, max).join(', ');
+  const rest = models.length - Math.min(models.length, max);
+  return rest > 0 ? `${shown} and ${rest} more` : shown;
+}
+
+/**
+ * Tell the account's reviewers that a new OEM cycle landed.
+ *
+ * WHY AT POLL TIME, when generation already notifies half an hour later. Three
+ * reasons, and each one is a real gap:
+ *
+ *  • Generation is off (`enabled: false`) or produced nothing for an unrelated
+ *    reason. The offers still landed, and nobody hears about it.
+ *  • A manufacturer's window is often only a few weeks. Knowing at 06:00 that
+ *    the book turned over is worth more than knowing at 06:30 that ads exist.
+ *  • Between cycles the feed sits empty for days — every Honda program expired
+ *    09/08/2026 with no replacement. Silence is indistinguishable from a broken
+ *    integration, so the arrival of offers has to be its own event.
+ *
+ * Goes to the REVIEWERS (notifyUserIds → account rep → admins), not to clients:
+ * a dealer is told when there are ads to look at, which is `incentive_ads_ready`.
+ * A raw feed change is an operations signal.
+ *
+ * In-app AND email. `createNotification` gates each channel on the user's own
+ * `NotificationPreference`, so someone who muted the bell or the inbox keeps
+ * that choice; `sendEmailNow` only asks for the email, it does not force it.
+ *
+ * Best-effort throughout: a poll that recorded its snapshots has done its job,
+ * and a failed notification must not lose that.
+ */
+async function notifyOffersLanded(
+  config: { accountKey: string; notifyUserIds: string | null },
+  result: PollResult,
+): Promise<void> {
+  if (result.offersNew === 0) return;
+
+  const models = modelsWithNewOffers(result.scopes);
+  if (models.length === 0) return;
+  const vehicles = summariseModels(models);
+
+  let recipients: string[] = [];
+  try {
+    recipients = await resolveReviewers(config);
+  } catch {
+    return;
+  }
+  if (recipients.length === 0) return;
+
+  const n = result.offersNew;
+  const title = `${n} new manufacturer offer${n === 1 ? '' : 's'} published`;
+  const body = `New offers landed for ${vehicles}. Ads build on the next run; nothing publishes until a person approves it.`;
+
+  for (const userId of recipients) {
+    try {
+      await createNotification({
+        userId,
+        type: 'incentive_offers_landed',
+        severity: 'info',
+        title,
+        body,
+        link: OFFERS_LINK,
+        meta: { accountKey: config.accountKey, runId: result.runId, offersNew: n, models },
+        // One per poll run. A cycle can land across several scopes in the same
+        // sweep, and that is one piece of news, not six.
+        dedupeKey: `adgen-offers:${config.accountKey}:${result.runId ?? new Date().toISOString().slice(0, 10)}`,
+        dedupeWindowHours: 12,
+        sendEmailNow: true,
+      });
+    } catch (err) {
+      console.warn('[poll-offers] notification failed:', err);
+    }
+  }
 }
 
 /** Poll every enabled sub-account. Shadow mode — records only. */
@@ -301,6 +399,8 @@ export async function pollAllAccounts(now = new Date()): Promise<PollResult[]> {
         offerTypePriority: true,
         runWindowMode: true,
         rollingDays: true,
+        // Who to tell when a cycle lands — same list generation notifies.
+        notifyUserIds: true,
       },
     });
   } catch (err) {

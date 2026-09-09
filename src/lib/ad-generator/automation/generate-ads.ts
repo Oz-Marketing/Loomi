@@ -1069,7 +1069,12 @@ export async function generateForAccount(
  * the entire draft-for-review premise. So fall back to the sub-account's assigned
  * rep, and then to admins, so the loop closes with no configuration at all.
  */
-export async function resolveReviewers(config: GenerateConfigRow): Promise<string[]> {
+export async function resolveReviewers(
+  // Structural, not `GenerateConfigRow`: the offer POLL needs the same reviewer
+  // list and reads a narrower row. Widening the parameter beats a second copy
+  // of the fallback chain that could disagree about who gets told.
+  config: { accountKey: string; notifyUserIds: string | null },
+): Promise<string[]> {
   const explicit = jsonArray(config.notifyUserIds);
   if (explicit.length) return explicit;
 

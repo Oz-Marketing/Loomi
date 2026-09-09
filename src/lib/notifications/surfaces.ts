@@ -52,14 +52,24 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
  * look different — product news is deliberately neutral, tools wear a colour.
  */
 export interface NotificationCategoryStyle {
-  /** Chip label. The full name is too long for a 360px panel. */
-  short: string;
   /** Icon key — the panel maps this to a component; this file stays React-free. */
   icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'book' | 'sparkles';
   /** Icon-tile foreground and background classes. */
   accent: string;
   tint: string;
   kind: 'product' | 'tool';
+  /**
+   * Which SECTOR this category belongs to, in the vocabulary the permission
+   * registry already uses (studio / reporting / projects).
+   *
+   * Distinct from `NOTIFICATION_CATEGORY_SURFACE`, which answers a narrower
+   * question — which settings HOST shows the toggle, studio or app. A person
+   * filtering their bell thinks in sectors, not hosts: "Projects" and "pacing"
+   * both live on the App host but are nothing like each other.
+   *
+   * `null` means it belongs to no one sector and shows under every filter.
+   */
+  sector: 'studio' | 'reporting' | 'projects' | null;
 }
 
 export const NOTIFICATION_CATEGORY_STYLE: Record<
@@ -67,47 +77,47 @@ export const NOTIFICATION_CATEGORY_STYLE: Record<
   NotificationCategoryStyle
 > = {
   'Ad Generator': {
-    short: 'Ad Gen',
     icon: 'megaphone',
     accent: 'text-sky-500 dark:text-sky-400',
     tint: 'bg-sky-500/12',
     kind: 'tool',
+    sector: 'studio',
   },
   'Meta Ads Planner': {
-    short: 'Pacing',
     icon: 'chart',
     accent: 'text-violet-500 dark:text-violet-400',
     tint: 'bg-violet-500/12',
     kind: 'tool',
+    sector: 'reporting',
   },
   Projects: {
-    short: 'Projects',
     icon: 'clipboard',
     accent: 'text-emerald-500 dark:text-emerald-400',
     tint: 'bg-emerald-500/12',
     kind: 'tool',
+    sector: 'projects',
   },
   'Asset Library': {
-    short: 'Assets',
     icon: 'photo',
     accent: 'text-amber-500 dark:text-amber-400',
     tint: 'bg-amber-500/12',
     kind: 'tool',
+    sector: 'studio',
   },
   Playbooks: {
-    short: 'Playbooks',
     icon: 'book',
     accent: 'text-rose-500 dark:text-rose-400',
     tint: 'bg-rose-500/12',
     kind: 'tool',
+    sector: 'studio',
   },
   'Product Updates': {
     // Neutral on purpose — this is Loomi talking about itself, not your account
     // telling you something needs a decision.
-    short: "What's new",
     icon: 'sparkles',
     accent: 'text-[var(--muted-foreground)]',
     tint: 'bg-[var(--muted)]',
     kind: 'product',
+    sector: null,
   },
 };

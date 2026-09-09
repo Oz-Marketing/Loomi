@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   ArrowUturnLeftIcon,
   BellAlertIcon,
+  ChevronDownIcon,
   Cog6ToothIcon,
   MagnifyingGlassIcon,
   TrashIcon,
@@ -19,11 +20,116 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
+import { SECTOR_ICONS } from '@/components/icons/sector-icons';
+import type { ReactElement, SVGProps } from 'react';
 import {
   NOTIFICATION_CATEGORY_STYLE,
-  NOTIFICATION_CATEGORY_SURFACE,
   type NotificationCategory,
 } from '@/lib/notifications/surfaces';
+
+type SectorFilter = 'all' | 'studio' | 'reporting' | 'projects';
+
+/**
+ * Sector options wear the product's OWN sector marks (`SECTOR_ICONS`), not
+ * heroicons — the same glyphs the surface switcher and the sector brand use, so
+ * "Studio" here is the mark a person already recognises from the rail.
+ */
+const SECTOR_OPTIONS: {
+  value: SectorFilter;
+  label: string;
+  Icon: ((props: SVGProps<SVGSVGElement>) => ReactElement) | null;
+}[] = [
+  { value: 'all', label: 'All sectors', Icon: null },
+  { value: 'studio', label: 'Studio', Icon: SECTOR_ICONS.studio },
+  { value: 'reporting', label: 'Reporting', Icon: SECTOR_ICONS.reporting },
+  // `SECTOR_ICONS` keys the Projects mark as `app`, its host, while the filter
+  // speaks in sectors.
+  { value: 'projects', label: 'Projects', Icon: SECTOR_ICONS.app },
+];
+
+/**
+ * Sector picker — a custom menu, not a native `<select>`.
+ *
+ * A native control cannot carry the sector marks, and on the panel's dark frost
+ * its option list is drawn by the OS in system chrome that ignores the theme.
+ */
+function SectorSelect({
+  value,
+  onChange,
+}: {
+  value: SectorFilter;
+  onChange: (next: SectorFilter) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = SECTOR_OPTIONS.find((o) => o.value === value) ?? SECTOR_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={`Sector: ${current.label}`}
+        className="flex w-full items-center gap-1.5 rounded-lg border border-[var(--sidebar-border-soft)] bg-[var(--sidebar-input)]/60 px-2 py-1.5 text-xs text-[var(--sidebar-foreground)] transition-colors hover:border-[var(--primary)]"
+      >
+        {current.Icon ? (
+          <current.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+        ) : (
+          <BellAlertIcon className="h-3.5 w-3.5 flex-shrink-0 text-[var(--sidebar-muted-foreground)]" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-left">{current.label}</span>
+        <ChevronDownIcon
+          className={`h-3.5 w-3.5 flex-shrink-0 text-[var(--sidebar-muted-foreground)] transition-transform ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className="glass-dropdown absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg shadow-lg animate-dropdown-in"
+        >
+          {SECTOR_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="option"
+              aria-selected={o.value === value}
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[var(--sidebar-muted)] ${
+                o.value === value
+                  ? 'font-semibold text-[var(--primary)]'
+                  : 'text-[var(--sidebar-foreground)]'
+              }`}
+            >
+              {o.Icon ? (
+                <o.Icon className="h-3.5 w-3.5 flex-shrink-0" />
+              ) : (
+                <BellAlertIcon className="h-3.5 w-3.5 flex-shrink-0 text-[var(--sidebar-muted-foreground)]" />
+              )}
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Icon keys in `surfaces.ts` → components. That file stays React-free so the
  *  server can import it too, so the mapping lives here. */
@@ -128,14 +234,13 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [search, setSearch] = useState('');
   /**
-   * Which surface's notifications to show.
+   * Which SECTOR's notifications to show.
    *
-   * Defaults to the one you are standing in: on Studio, Projects and pacing
-   * chatter is someone else's job today. "Everything" is one click away because
-   * the whole point of a bell is that you can be told about the thing you are
-   * not currently looking at.
+   * Defaults to the sector you are standing in — on Studio, project chatter is
+   * someone else's job today — but "All" is one click away, because the whole
+   * point of a bell is being told about the thing you are not looking at.
    */
-  const [scope, setScope] = useState<'here' | 'all' | 'other'>('here');
+  const [sector, setSector] = useState<SectorFilter>('all');
   const surface = useCurrentSurface();
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -157,6 +262,16 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
     load();
   }, [load]);
 
+  // Seed the sector filter from the surface once it resolves. Studio and
+  // Reporting are separate sectors but the same host, so the hook can only get
+  // us as far as "studio"; App means Projects.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || surface === null) return;
+    seeded.current = true;
+    setSector(surface === 'studio' ? 'studio' : surface === 'reporting' ? 'reporting' : 'projects');
+  }, [surface]);
+
   // ESC to close
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -168,24 +283,14 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
 
   const unreadCount = useMemo(() => items.filter((i) => !i.readAt).length, [items]);
 
-  /** Studio and Reporting are one bucket for this purpose — both are Studio-host
-   *  surfaces, and `NOTIFICATION_CATEGORY_SURFACE` only distinguishes studio/app. */
-  const here: 'studio' | 'app' | null = surface === null ? null : surface === 'studio' ? 'studio' : 'app';
-
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((i) => {
-      if (here && scope !== 'all' && i.category) {
-        const owner: 'studio' | 'app' | 'both' = NOTIFICATION_CATEGORY_SURFACE[i.category] ?? 'app';
-        // `both` (product news) belongs on every surface, so it is never
-        // "somewhere else" and stays visible in all three scopes.
-        if (owner !== 'both') {
-          const mine = owner === here;
-          if (scope === 'here' && !mine) return false;
-          if (scope === 'other' && mine) return false;
-        } else if (scope === 'other') {
-          return false;
-        }
+      if (sector !== 'all' && i.category) {
+        const owner = NOTIFICATION_CATEGORY_STYLE[i.category]?.sector ?? null;
+        // `null` is product news — it belongs to no sector and shows under
+        // every filter rather than being hidden by all of them.
+        if (owner !== null && owner !== sector) return false;
       }
       if (!q) return true;
       return (
@@ -195,7 +300,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
         (i.category ?? '').toLowerCase().includes(q)
       );
     });
-  }, [items, search, scope, here]);
+  }, [items, search, sector]);
 
   /** Dismiss one. Optimistic — the row is gone before the round trip, because a
    *  dismiss that pauses reads as a click that did not land. */
@@ -304,10 +409,10 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
           </div>
         </div>
 
-        {/* Search first: with a few dozen rows, finding the one you half
-            remember beats any amount of filtering. */}
-        <div className="px-4 pt-3">
-          <div className="relative">
+        {/* Search carries the row; the sector picker rides alongside it rather
+            than taking a line of its own. */}
+        <div className="flex items-center gap-2 px-4 pt-3">
+          <div className="relative flex-1 min-w-0">
             <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--sidebar-muted-foreground)]" />
             <input
               type="text"
@@ -317,33 +422,36 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
               className="w-full rounded-lg border border-[var(--sidebar-border-soft)] bg-[var(--sidebar-input)]/60 py-1.5 pl-8 pr-2 text-xs text-[var(--sidebar-foreground)] outline-none transition-colors placeholder:text-[var(--sidebar-muted-foreground)] focus:border-[var(--primary)]"
             />
           </div>
+          <div className="w-[128px] flex-shrink-0">
+            <SectorSelect value={sector} onChange={setSector} />
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 px-4 pb-2 pt-2.5">
-          <div className="flex items-center gap-2">
-            {/* A switch, not two tabs: "unread only" is one boolean, and a pair
-                of tabs implied two equal views of the same list. */}
-            <button
-              type="button"
-              role="switch"
-              aria-checked={unreadOnly}
-              onClick={() => setUnreadOnly((v) => !v)}
-              className="inline-flex items-center gap-1.5"
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--sidebar-border-soft)] px-4 pb-3 pt-3">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={unreadOnly}
+            onClick={() => setUnreadOnly((v) => !v)}
+            className="inline-flex items-center gap-1.5"
+          >
+            {/* The knob is anchored with `left-0.5` and travels by exactly the
+                rail's inner width minus its own — without an explicit left it
+                started at the flow position and the "on" translate carried it
+                off the end. */}
+            <span
+              className={`relative block h-4 w-7 flex-shrink-0 rounded-full transition-colors ${
+                unreadOnly ? 'bg-[var(--primary)]' : 'bg-[var(--sidebar-muted)]'
+              }`}
             >
               <span
-                className={`relative h-4 w-7 rounded-full transition-colors ${
-                  unreadOnly ? 'bg-[var(--primary)]' : 'bg-[var(--sidebar-muted)]'
+                className={`absolute left-0.5 top-0.5 block h-3 w-3 rounded-full bg-white shadow-sm transition-transform ${
+                  unreadOnly ? 'translate-x-3' : 'translate-x-0'
                 }`}
-              >
-                <span
-                  className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform ${
-                    unreadOnly ? 'translate-x-3.5' : 'translate-x-0.5'
-                  }`}
-                />
-              </span>
-              <span className="text-[11px] font-medium text-[var(--sidebar-foreground)]">Unread only</span>
-            </button>
-          </div>
+              />
+            </span>
+            <span className="text-[11px] font-medium text-[var(--sidebar-foreground)]">Unread only</span>
+          </button>
           <button
             type="button"
             onClick={handleMarkAllRead}
@@ -354,31 +462,6 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
             Mark all read
           </button>
         </div>
-
-        {/* Sector scope. Hidden when we cannot tell which surface we are on,
-            because a filter that might be lying is worse than none. */}
-        {here && (
-          <div className="flex items-center gap-1 px-4 pb-2.5">
-            {([
-              { key: 'here' as const, label: here === 'studio' ? 'Studio' : 'App' },
-              { key: 'all' as const, label: 'Everything' },
-              { key: 'other' as const, label: 'Other sectors' },
-            ]).map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setScope(opt.key)}
-                className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-                  scope === opt.key
-                    ? 'bg-[var(--primary)] text-[var(--primary-foreground)]'
-                    : 'bg-[var(--sidebar-muted)]/60 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)]'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        )}
 
         <div className="themed-scrollbar flex-1 overflow-y-auto p-3">
           {loading ? (
@@ -391,8 +474,8 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                 ? `Nothing matches "${search.trim()}".`
                 : unreadOnly
                   ? 'No unread notifications.'
-                  : scope === 'other'
-                    ? 'Nothing from other sectors.'
+                  : sector !== 'all'
+                    ? `Nothing in ${SECTOR_OPTIONS.find((o) => o.value === sector)?.label ?? 'this sector'}.`
                     : 'No notifications yet.'}
             </p>
           ) : (
@@ -407,8 +490,11 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                 const inner = (
                   <div
                     className={`group relative flex items-start gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors ${
+                      // Unread wears a wash of the app's primary, not grey —
+                      // grey reads as "disabled" next to a read row, which is
+                      // the opposite of what an unread item is saying.
                       unread
-                        ? 'bg-[var(--sidebar-muted)]/60 hover:bg-[var(--sidebar-muted)]'
+                        ? 'bg-[var(--primary)]/10 hover:bg-[var(--primary)]/[0.16]'
                         : 'hover:bg-[var(--sidebar-muted)]/50'
                     } ${href ? 'cursor-pointer' : ''}`}
                   >
@@ -445,12 +531,14 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                       )}
 
                       <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-[var(--sidebar-muted-foreground)]">
-                        {style && (
+                        {/* The real page name, not an abbreviation — the chip's
+                            job is telling you exactly where this came from. */}
+                        {item.category && style && (
                           <span
                             title={item.typeLabel ?? undefined}
                             className={`rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide ${style.tint} ${style.accent}`}
                           >
-                            {style.short}
+                            {item.category}
                           </span>
                         )}
                         {/* Product news is Loomi talking about itself; a tool
@@ -471,7 +559,13 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                     {/* Per-row actions. Revealed on hover so a quiet list stays
                         quiet, but always present for keyboard users. Both stop
                         propagation — the row itself navigates. */}
-                    <span className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                    {/* `focus-within` keeps these reachable by keyboard, but a
+                        MOUSE click also leaves the button focused — so after
+                        marking a row read/unread the icons stayed pinned open
+                        until you clicked elsewhere. Each handler blurs itself,
+                        which clears the pointer case without costing the
+                        keyboard one. */}
+                    <span className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                       <button
                         type="button"
                         aria-label={unread ? 'Mark as read' : 'Mark as unread'}
@@ -479,6 +573,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          e.currentTarget.blur();
                           void handleToggleRead(item.id, unread);
                         }}
                         className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]"
@@ -496,6 +591,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
+                          e.currentTarget.blur();
                           void handleDelete(item.id, unread);
                         }}
                         className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-red-400"

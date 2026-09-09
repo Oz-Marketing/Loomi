@@ -6,6 +6,13 @@ import {
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import {
+  getCombinedRemaining,
+  recordWarmupSends,
+  releaseWarmupSends,
+  sendingDomain,
+} from '@/lib/sending/warmup';
+import { orderByEngagement } from '@/lib/sending/warmup-ordering';
+import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
   type UnsubscribeFooterConfig,
@@ -1420,6 +1427,30 @@ export async function processEmailBlast(
   // send. No-op for every other blast.
   await materializeResendRecipients(campaignId);
 
+  // ── Warm-up budget ──
+  //
+  // Resolved BEFORE the recipients are loaded, from the accounts that still
+  // have pending rows, because the answer decides how many to load. Domains
+  // with no warm-up row report no limit, which is every established domain —
+  // so for almost every send this is one cheap query that changes nothing.
+  const pendingAccounts = await prisma.emailBlastRecipient.findMany({
+    where: { campaignId, status: 'pending' },
+    select: { accountKey: true },
+    distinct: ['accountKey'],
+  });
+  const warmupSenders = await buildSenderMap(
+    pendingAccounts.map((r) => r.accountKey),
+    '',
+  );
+  const warmupDomains = [
+    ...new Set(
+      [...warmupSenders.values()]
+        .map((sender) => sendingDomain(sender.senderEmail))
+        .filter((domain): domain is string => Boolean(domain)),
+    ),
+  ];
+  const warmupRemaining = await getCombinedRemaining(warmupDomains);
+
   const campaign = await prisma.emailBlast.findUnique({
     where: { id: campaignId },
     include: {
@@ -1470,7 +1501,46 @@ export async function processEmailBlast(
     },
   });
 
-  const uniqueAccountKeys = [...new Set(campaign.recipients.map((r) => r.accountKey))];
+  // ── Apply the warm-up budget ──
+  //
+  // Today's allowance is spent: leave every recipient `pending` and stop. The
+  // blast keeps status 'processing', which is in PROCESSABLE_STATUSES, so the
+  // ordinary sweep picks it up again — tomorrow it will have budget. No new
+  // scheduling machinery, and nothing distinguishes a warm-up pause from any
+  // other partially-processed blast.
+  if (warmupRemaining === 0) {
+    console.log(
+      `[email-blasts] ${campaign.id}: warm-up budget spent for ` +
+        `${warmupDomains.join(', ') || 'sending domain'} — ` +
+        `${campaign.recipients.length} recipient(s) held for the next day`,
+    );
+    return toSummary(
+      await prisma.emailBlast.update({
+        where: { id: campaign.id },
+        data: { status: 'processing', completedAt: null },
+      }),
+    );
+  }
+
+  // Under a cap, send to the most-engaged contacts first — see
+  // ./sending/warmup-ordering.ts for why that ordering is the point rather
+  // than a nicety. Uncapped sends skip both the query and the sort.
+  const recipients =
+    warmupRemaining == null
+      ? campaign.recipients
+      : (await orderByEngagement(campaign.recipients)).slice(0, warmupRemaining);
+
+  // Reserve the budget up front, then hand back whatever the send didn't
+  // actually use. Counting only successes afterwards would let two concurrent
+  // blasts read the same remaining budget and both spend it.
+  const reserved = warmupRemaining == null ? 0 : recipients.length;
+  if (reserved > 0) {
+    for (const domain of warmupDomains) {
+      await recordWarmupSends(domain, reserved);
+    }
+  }
+
+  const uniqueAccountKeys = [...new Set(recipients.map((r) => r.accountKey))];
   // No `defaultFrom`: bulk blasts are NOT allowed on the shared SMTP
   // transport. See the dispatch block below for why.
   const senderByAccount = await buildSenderMap(uniqueAccountKeys, '');
@@ -1480,7 +1550,7 @@ export async function processEmailBlast(
   // rather than one-per-send. Keyed by (accountKey, contactId) because a
   // contact id is only unique within its account.
   const contactById = await loadBlastContacts(
-    campaign.recipients.map((r) => ({
+    recipients.map((r) => ({
       contactId: r.contactId,
       accountKey: r.accountKey,
     })),
@@ -1492,7 +1562,7 @@ export async function processEmailBlast(
   // opt-out only as of draft time is exactly the kind of thing that
   // generates spam complaints, so the send is the authoritative checkpoint.
   const suppressedAtSend = await loadSuppressionSet(
-    campaign.recipients.map((r) => ({
+    recipients.map((r) => ({
       accountKey: r.accountKey,
       email: r.email || '',
     })),
@@ -1509,7 +1579,13 @@ export async function processEmailBlast(
   );
   const baseText = campaign.textContent?.trim() || stripHtml(campaign.htmlContent);
 
-  const tasks = campaign.recipients.map((recipient) => async () => {
+  // Reputation is spent by mail that LEAVES, so only a successful dispatch
+  // counts against the warm-up day. Suppressed, opted-out and invalid
+  // recipients reached no inbox and are released below. Single-threaded task
+  // runner, so a plain counter is safe.
+  let dispatched = 0;
+
+  const tasks = recipients.map((recipient) => async () => {
     const recipientEmail = normalizeEmailAddress(recipient.email || '');
     if (!isLikelyDeliverableEmail(recipientEmail)) {
       await prisma.emailBlastRecipient.update({
@@ -1662,6 +1738,7 @@ export async function processEmailBlast(
           : {}),
       });
 
+      dispatched += 1;
       await prisma.emailBlastRecipient.update({
         where: { id: recipient.id },
         data: {
@@ -1689,6 +1766,20 @@ export async function processEmailBlast(
   });
 
   await withConcurrencyLimit(tasks, concurrency);
+
+  // Give back the reserved budget the send didn't use.
+  //
+  // `dispatched` counts messages SendGrid accepted, which is exactly the set
+  // that reaches a mailbox provider and can affect reputation. A recipient that
+  // was suppressed, opted out, had an unusable address, or that SendGrid
+  // rejected outright never left, so it must not burn a warm-up day. A bounce
+  // is a different thing and is correctly still counted: it is accepted first
+  // and bounces afterwards, by which point the row is already 'sent'.
+  if (reserved > dispatched) {
+    for (const domain of warmupDomains) {
+      await releaseWarmupSends(domain, reserved - dispatched);
+    }
+  }
 
   const counts = await summarizeCampaign(campaign.id);
   const nextStatus = resolveBlastStatus(counts);

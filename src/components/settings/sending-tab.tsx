@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { EnvelopeIcon, KeyIcon, CheckCircleIcon, XCircleIcon, MapPinIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { WarmupPanel } from '@/components/settings/warmup-panel';
 import PrimaryButton from '@/components/primary-button';
 
 interface SendingTabProps {
@@ -527,6 +528,8 @@ export function SendingTab({ accountKey }: SendingTabProps) {
         </div>
       </section>
 
+      <WarmupPanel accountKey={accountKey} />
+
       <section className={sectionCardClass}>
         <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-3">
           Deliverability checklist
@@ -535,7 +538,7 @@ export function SendingTab({ accountKey }: SendingTabProps) {
           <li>Add SendGrid&apos;s DKIM CNAMEs to the sending domain&apos;s DNS.</li>
           <li>Include <code className="text-xs bg-[var(--muted)] px-1 py-0.5 rounded">include:sendgrid.net</code> in the domain&apos;s SPF record.</li>
           <li>Publish a DMARC record (<code className="text-xs bg-[var(--muted)] px-1 py-0.5 rounded">p=none</code> to start, tighten after a clean week).</li>
-          <li>Warm up volume gradually for the first 1–2 weeks of sends from a new domain.</li>
+          <li>Warm up the domain before its first large send — see Domain Warm-up above.</li>
         </ul>
       </section>
     </div>

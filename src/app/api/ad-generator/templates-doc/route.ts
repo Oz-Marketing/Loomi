@@ -22,6 +22,7 @@ import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import {
+  LIVE_TEMPLATE,
   parseSharedKeys,
   serializeSharedKeys,
   templatesForAccount,
@@ -142,7 +143,7 @@ export async function GET(req: NextRequest) {
     const ownerKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
     try {
       const rows = (await prisma.adTemplateDoc.findMany({
-        ...(ownerKey ? { where: { accountKey: ownerKey } } : {}),
+        where: { ...LIVE_TEMPLATE, ...(ownerKey ? { accountKey: ownerKey } : {}) },
         orderBy: { updatedAt: 'desc' },
       })) as Row[];
       return NextResponse.json({ templates: await withApprovals(rows.map(shape)) });
@@ -174,7 +175,7 @@ export async function GET(req: NextRequest) {
       // the wrong account's library is not a mistake worth risking for a narrower
       // query. The table is small and already filtered to published + active.
       const rows = (await prisma.adTemplateDoc.findMany({
-        where: { status: 'published', isActive: true },
+        where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
         orderBy: { name: 'asc' },
       })) as Row[];
       const visible = templatesForAnyAccount(rows, allowed, inherited);
@@ -184,7 +185,7 @@ export async function GET(req: NextRequest) {
     // Admins+: global templates + the active account's own + ancestors' own.
     const inherited = accountKey ? await ancestorsForAccounts([accountKey]) : [];
     const rows = (await prisma.adTemplateDoc.findMany({
-      where: { status: 'published', isActive: true },
+      where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
       orderBy: { name: 'asc' },
     })) as Row[];
     const visible = templatesForAccount(rows, { accountKey: accountKey ?? null, ancestorKeys: inherited });

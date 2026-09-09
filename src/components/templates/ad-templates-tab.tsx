@@ -41,7 +41,7 @@ import { useTemplateFilters } from '@/components/templates/use-template-filters'
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
-import { kindInIndustry, offerKindsForIndustry, templateInIndustry } from '@/lib/ad-generator/industry';
+import { offerKindsForIndustry, splitTemplatesByIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 type DocTemplate = {
@@ -104,18 +104,26 @@ export function AdTemplatesTab({
   // Subaccount facet); inside an account you see only that account's own.
   // A group account's templates are inherited by its rooftops. Industry
   // filter still applies.
-  const templates = useMemo(
-    () =>
-      (data?.templates ?? [])
-        .filter((t) => t.doc)
-        .filter((t) => (accountKey ? t.accountKey === accountKey : true))
-        .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category))
-        // …and to the offer kinds this industry can use at all. A vehicle-offer
-        // template asks a marketing agency for a lease term and a VIN, so it is
-        // withheld the same way an Automotive-TAGGED template already was.
-        .filter((t) => kindInIndustry(t.doc!, accountData?.category)),
-    [data, accountKey, accountData?.category],
-  );
+  // Two counts, not one: what this account can SEE, and how much of what it
+  // OWNS the industry gate is holding back.
+  //
+  // Those used to collapse into a single filtered list, so an account whose
+  // templates were all withheld got the same "none yet" empty state as an
+  // account that genuinely had none — and the templates read as deleted. They
+  // are not: `kindInIndustry` withholds every vehicle-kind template from a
+  // non-vehicle industry, and a doc with no `offerKind` counts as vehicle, so a
+  // full library can render as an empty shelf with nothing on screen saying why.
+  const { templates, hiddenByIndustry } = useMemo(() => {
+    const owned = (data?.templates ?? [])
+      .filter((t) => t.doc)
+      .filter((t) => (accountKey ? t.accountKey === accountKey : true));
+    // The industry/kind pair, split rather than filtered — see
+    // `splitTemplatesByIndustry`. A vehicle-offer template asks a marketing
+    // agency for a lease term and a VIN, so it is withheld the same way an
+    // Automotive-TAGGED template already was.
+    const { visible, hidden } = splitTemplatesByIndustry(owned, accountData?.category);
+    return { templates: visible, hiddenByIndustry: hidden.length };
+  }, [data, accountKey, accountData?.category]);
   // The starting points the New-template modal offers. When the account can
   // only use one kind it isn't a choice, so the modal drops the question and
   // uses that kind's sole-choice wording.
@@ -436,11 +444,20 @@ export function AdTemplatesTab({
       {templates.length === 0 ? (
         <TemplateEmptyState
           icon={MegaphoneIcon}
-          title="No ad templates yet"
+          title={hiddenByIndustry > 0 ? 'Nothing this account can use' : 'No ad templates yet'}
           subtitle={
-            accountKey
-              ? 'No templates for this account yet — an admin can push templates to it from the system library.'
-              : 'Design a reusable layout in the Template Builder — your team starts each ad from one of these.'
+            // The "hidden" case first: telling someone their templates are
+            // withheld and why is the difference between a two-minute settings
+            // change and an afternoon spent believing the work was lost.
+            hiddenByIndustry > 0
+              ? `${hiddenByIndustry} ${hiddenByIndustry === 1 ? 'template is' : 'templates are'} assigned to this `
+                + `account but hidden: ${hiddenByIndustry === 1 ? 'it needs' : 'they need'} `
+                + `a vehicle industry, and this account is set to `
+                + `“${accountData?.category ?? 'no industry'}”. Change the industry in account settings, or move `
+                + `${hiddenByIndustry === 1 ? 'it' : 'them'} to an automotive account.`
+              : accountKey
+                ? 'No templates for this account yet — an admin can push templates to it from the system library.'
+                : 'Design a reusable layout in the Template Builder — your team starts each ad from one of these.'
           }
           actionLabel="New Ad Template"
           onAction={newTemplate}
@@ -462,6 +479,16 @@ export function AdTemplatesTab({
             />
           }
         >
+          {/* Some visible, some withheld. Same confusion as the empty state, so
+              it gets the same explanation rather than only being told when the
+              count happens to reach zero. */}
+          {hiddenByIndustry > 0 && (
+            <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--muted)] px-4 py-3 text-sm text-[var(--muted-foreground)]">
+              {hiddenByIndustry} more {hiddenByIndustry === 1 ? 'template is' : 'templates are'} assigned to this
+              account but hidden — {hiddenByIndustry === 1 ? 'it needs' : 'they need'} a vehicle industry, and this
+              account is set to “{accountData?.category ?? 'no industry'}”.
+            </div>
+          )}
           {filtered.length === 0 ? (
             <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
               No templates match your filters.

@@ -1,29 +1,20 @@
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
-
-const DISPOSABLE_EMAIL_DOMAINS = new Set([
-  'mailinator.com',
-  'guerrillamail.com',
-  '10minutemail.com',
-  'tempmail.com',
-  'trashmail.com',
-  'yopmail.com',
-]);
+import { classifyEmail } from '@/lib/sending/email-domains';
 
 export function normalizeEmailAddress(value: string | null | undefined): string {
   return String(value || '').trim().toLowerCase();
 }
 
+/**
+ * Can this address plausibly receive mail?
+ *
+ * Delegates to {@link classifyEmail}, which is the single place undeliverable
+ * domains are defined. It used to check syntax plus a six-entry disposable
+ * list, which let 850 production contacts on placeholder and mistyped domains
+ * through to be sent to — and every one of those bounces is charged to the
+ * sending domain's reputation.
+ */
 export function isLikelyDeliverableEmail(value: string | null | undefined): boolean {
-  const email = normalizeEmailAddress(value);
-  if (!email) return false;
-  if (!EMAIL_REGEX.test(email)) return false;
-
-  const at = email.lastIndexOf('@');
-  if (at <= 0 || at === email.length - 1) return false;
-  const domain = email.slice(at + 1).toLowerCase();
-  if (DISPOSABLE_EMAIL_DOMAINS.has(domain)) return false;
-
-  return true;
+  return classifyEmail(normalizeEmailAddress(value)) === null;
 }
 
 export function normalizePhoneNumber(value: string | null | undefined): string {

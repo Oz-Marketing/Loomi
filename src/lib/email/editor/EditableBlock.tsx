@@ -5,6 +5,7 @@ import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useEditor } from './EditorContext';
 import { SaveBlockModal } from './SaveBlockModal';
+import { CUSTOM_BLOCK_NAME_PROP } from '@/lib/ad-generator/automation/offer-bindings';
 import type { Block } from '../types';
 import {
   Bars3Icon,
@@ -39,6 +40,23 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
   } = useEditor();
   const [savingBlock, setSavingBlock] = React.useState(false);
 
+  /**
+   * A subtree inserted from the Custom blocks palette.
+   *
+   * It is an ordinary section once inserted — copy-on-insert is deliberate, so a
+   * designer can adapt it here without touching the saved original — which left
+   * nothing on screen to say "this came from a block". The name and a green
+   * treatment give it back an identity, so a card is recognisable among the
+   * plain sections around it.
+   */
+  const customName =
+    typeof block.props[CUSTOM_BLOCK_NAME_PROP] === 'string'
+      ? (block.props[CUSTOM_BLOCK_NAME_PROP] as string).trim()
+      : '';
+  const isCustom = customName.length > 0;
+  const accent = isCustom ? 'var(--adgen-custom-block)' : 'var(--primary)';
+  const label = customName || block.type;
+
   const {
     attributes,
     listeners,
@@ -67,9 +85,9 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
     opacity: isDragging ? 0.4 : 1,
     // Outline (not inset boxShadow) so the selection ring sits on top of section/grid backgrounds.
     outline: isSelected
-      ? '2px solid var(--primary)'
+      ? `2px solid ${accent}`
       : showHover
-        ? '1px solid var(--primary)'
+        ? `1px solid ${accent}`
         : 'none',
     outlineOffset: isSelected || showHover ? '-2px' : 0,
   };
@@ -93,10 +111,10 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
       {showHover && (
         <div
           aria-hidden="true"
-          className="absolute -top-[26px] left-0 px-2.5 py-1 rounded-t-md text-[11px] font-semibold uppercase tracking-wider text-[var(--primary-foreground)] bg-[var(--primary)] opacity-70 pointer-events-none z-[9]"
-          style={{ fontFamily: 'inherit' }}
+          className="absolute -top-[26px] left-0 px-2.5 py-1 rounded-t-md text-[11px] font-semibold uppercase tracking-wider text-white opacity-70 pointer-events-none z-[9]"
+          style={{ fontFamily: 'inherit', background: accent }}
         >
-          {block.type}
+          {label}
         </div>
       )}
 
@@ -105,16 +123,19 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
         <div
           role="toolbar"
           aria-label="Block actions"
-          className="absolute -top-[36px] right-0 flex items-center gap-1 px-2 py-1.5 rounded-t-md bg-[var(--primary)] text-[var(--primary-foreground)] z-10 shadow-md"
-          style={{ fontFamily: 'inherit', fontSize: 13 }}
+          className="absolute -top-[36px] right-0 flex items-center gap-1 px-2 py-1.5 rounded-t-md text-white z-10 shadow-md"
+          style={{ fontFamily: 'inherit', fontSize: 13, background: accent }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
           // dnd-kit's PointerSensor listens for pointerdown — stopping it here keeps
           // toolbar buttons clickable instead of being hijacked into a drag.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <span className="px-2 text-xs font-semibold capitalize tracking-wide">
-            {block.type}
+          <span
+            className={`px-2 text-xs font-semibold tracking-wide ${isCustom ? '' : 'capitalize'}`}
+            title={isCustom ? 'Inserted from a custom block' : undefined}
+          >
+            {label}
           </span>
           <span className="w-px h-4 bg-white/25 mx-0.5" />
           <ToolbarBtn title="Drag to reorder (or drag the block itself)" aria-label="Drag indicator" cursor="grab">

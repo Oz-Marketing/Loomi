@@ -115,11 +115,22 @@ function DndShell(props: V2EditorShellProps) {
               // template stores the block's content inline (copy-on-insert), so
               // without this the document has no way to say "this subtree is the
               // per-offer card" and the run would fall back to the built-in one.
-              const roots = row.repeatOver
-                ? parsed.blocks.map((b, i) =>
-                    i === 0 ? { ...b, props: { ...b.props, repeatOver: row.repeatOver } } : b,
-                  )
-                : parsed.blocks;
+              // Stamp the ROOT of the inserted copy with where it came from:
+              // the name so the editor can label it, and the repeat so the run
+              // can find it. The template stores block content inline, so
+              // without these the document has no memory of either.
+              const roots = parsed.blocks.map((b, i) =>
+                i === 0
+                  ? {
+                      ...b,
+                      props: {
+                        ...b.props,
+                        customBlockName: row.name,
+                        ...(row.repeatOver ? { repeatOver: row.repeatOver } : {}),
+                      },
+                    }
+                  : b,
+              );
               map.set(row.id, roots);
             }
           } catch {

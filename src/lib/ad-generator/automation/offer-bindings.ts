@@ -34,6 +34,17 @@ const TOKEN_RE = /\{\{\s*(offer\.[a-zA-Z]+)\s*\}\}/g;
 export const REPEAT_PROP = 'repeatOver';
 
 /**
+ * The saved block a subtree came from, stamped on its root at insert.
+ *
+ * A custom block is COPIED into the template, so once inserted there is nothing
+ * to distinguish "the OEM offer card" from any other section — the editor
+ * labelled it "Section" like everything else. Carrying the name makes it
+ * identifiable on the canvas without a lookup, and survives the template being
+ * saved and reopened.
+ */
+export const CUSTOM_BLOCK_NAME_PROP = 'customBlockName';
+
+/**
  * Prop key marking text that should wear the DEALER'S brand colour.
  *
  * A custom block is authored once and used by every rooftop, so a colour picked

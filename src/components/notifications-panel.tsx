@@ -39,7 +39,7 @@ const SECTOR_OPTIONS: {
   label: string;
   Icon: ((props: SVGProps<SVGSVGElement>) => ReactElement) | null;
 }[] = [
-  { value: 'all', label: 'All sectors', Icon: null },
+  { value: 'all', label: 'All', Icon: null },
   { value: 'studio', label: 'Studio', Icon: SECTOR_ICONS.studio },
   { value: 'reporting', label: 'Reporting', Icon: SECTOR_ICONS.reporting },
   // `SECTOR_ICONS` keys the Projects mark as `app`, its host, while the filter
@@ -80,7 +80,7 @@ function SectorSelect({
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={`Sector: ${current.label}`}
+        title={`Showing: ${current.label}`}
         className="flex w-full items-center gap-1.5 rounded-lg border border-[var(--sidebar-border-soft)] bg-[var(--sidebar-input)]/60 px-2 py-1.5 text-xs text-[var(--sidebar-foreground)] transition-colors hover:border-[var(--primary)]"
       >
         {current.Icon ? (
@@ -99,7 +99,7 @@ function SectorSelect({
       {open && (
         <div
           role="listbox"
-          className="glass-dropdown absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg shadow-lg animate-dropdown-in"
+          className="panel-menu absolute right-0 top-full z-20 mt-1 w-40 overflow-hidden rounded-lg animate-dropdown-in"
         >
           {SECTOR_OPTIONS.map((o) => (
             <button
@@ -111,10 +111,10 @@ function SectorSelect({
                 onChange(o.value);
                 setOpen(false);
               }}
-              className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-[var(--sidebar-muted)] ${
+              className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-black/5 dark:hover:bg-white/10 ${
                 o.value === value
                   ? 'font-semibold text-[var(--primary)]'
-                  : 'text-[var(--sidebar-foreground)]'
+                  : 'text-[var(--foreground)]'
               }`}
             >
               {o.Icon ? (
@@ -475,7 +475,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
                 : unreadOnly
                   ? 'No unread notifications.'
                   : sector !== 'all'
-                    ? `Nothing in ${SECTOR_OPTIONS.find((o) => o.value === sector)?.label ?? 'this sector'}.`
+                    ? `Nothing in ${SECTOR_OPTIONS.find((o) => o.value === sector)?.label ?? 'that area'}.`
                     : 'No notifications yet.'}
             </p>
           ) : (

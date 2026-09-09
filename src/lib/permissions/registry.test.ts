@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { subjectFromSession } from './require';
 import {
   ROLE_PERMISSIONS,
   PERMISSIONS,
@@ -402,5 +403,30 @@ describe('review regressions', () => {
     });
     expect(can(s, 'blast.send', 'youngHonda')).toBe(false);
     expect(can(s, 'blast.send', 'smithToyota')).toBe(true);
+  });
+});
+
+describe('subjectFromSession — empty stored roles', () => {
+  it('falls back to the legacy mapping when the session carries an EMPTY list', () => {
+    // A session minted before the Phase 1 backfill serialises `sectorRoles: []`.
+    // Read literally that is "assigned nothing", which denies a signed-in admin
+    // everything the registry gates — and the registry-direct gates
+    // (`adGeneratorAllowed`, `campaignAccessFor`) have no legacy path to save
+    // them. Empty must mean absent.
+    const empty = subjectFromSession({
+      user: { role: 'admin', accountKeys: [], sectorRoles: [] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    const absent = subjectFromSession({
+      user: { role: 'admin', accountKeys: [] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    expect(empty.sectorRoles).toEqual(absent.sectorRoles);
+    expect(empty.sectorRoles.length).toBeGreaterThan(0);
+  });
+
+  it('still lets STORED roles win when there are any', () => {
+    const subject = subjectFromSession({
+      user: { role: 'client', accountKeys: [], sectorRoles: ['studio.client'] },
+    } as Parameters<typeof subjectFromSession>[0]);
+    expect(subject.sectorRoles).toEqual(['studio.client']);
   });
 });

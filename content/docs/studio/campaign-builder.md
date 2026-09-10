@@ -1,6 +1,6 @@
 ---
 title: The campaign builder
-summary: Describing a campaign in plain language and getting drafts across every channel back.
+summary: Describing a campaign in plain language, answering a few questions, and getting drafts across every channel back.
 sector: studio
 category: Campaigns
 audience: everyone
@@ -9,6 +9,7 @@ covers:
   - src/app/campaign-builder/**
   - src/app/api/campaigns/**
   - src/lib/ai/campaign-plan.ts
+  - src/lib/ai/campaign-intake.ts
 ---
 
 The campaign builder takes a description of what you want to achieve and comes
@@ -20,15 +21,21 @@ It works in three steps, and you are in control at each one.
 
 # 1. Plan
 
-Describe the campaign the way you would to a colleague:
+Start with one line, the way you would say it to a colleague:
 
 > Service reminder for customers who haven't been in for six months or more.
-> Push the spring maintenance special, and make it easy to book.
 
-You get back a plan: a suggested audience, what each message should do, and
-often a question or two where the description was genuinely ambiguous. Answer
-them — the questions are asked because the answer changes the output, not to
-seem thorough.
+Then Loomi interviews you. Three to five questions — who it should reach, what
+the offer actually is, when it runs, and what you want built — each answered by
+tapping an option, with a box for anything the options miss. The questions are
+written for what you just described and for this account, so they name its real
+services and audiences rather than generic categories. Skip any question marked
+optional; the last one, which channels to build, is the one worth answering,
+because leaving it blank lets Loomi decide for you.
+
+Only then does it draft. You get back a plan: a suggested audience, what each
+message should do, and occasionally a question where something is still
+genuinely ambiguous.
 
 Edit the plan freely. Everything downstream is built from it, so a correction
 here is cheaper than a correction later.

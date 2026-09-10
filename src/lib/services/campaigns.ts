@@ -554,5 +554,10 @@ export async function linkAssetToCampaign(
     case 'flow':
       await prisma.loomiFlow.update({ where: { id: assetId }, data: { campaignId } });
       return;
+    case 'ad':
+      // A hand-built ad added from the manual wizard. (The OEM run attaches its
+      // own ads in bulk — offer-run.ts — and does not come through here.)
+      await prisma.adCreative.update({ where: { id: assetId }, data: { campaignId } });
+      return;
   }
 }

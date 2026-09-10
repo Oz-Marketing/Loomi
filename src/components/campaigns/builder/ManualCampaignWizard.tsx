@@ -3,20 +3,41 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import {
-  ArrowLeftIcon,
-  EnvelopeIcon,
-  ChatBubbleLeftRightIcon,
-  PlusIcon,
-  TrashIcon,
-} from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
-import { SMS_MAX_CHARS } from '@/lib/campaigns/types';
+import { SMS_MAX_CHARS, type CampaignAssetKind } from '@/lib/campaigns/types';
+import { CHANNEL_META } from './shared';
 
+/**
+ * One piece of a hand-built campaign. Email and SMS take their content here;
+ * a landing page, form, flow or ad is created blank under the account and
+ * finished in its own builder — those tools ARE the editor, and a quick-form
+ * for a landing page would be a worse landing-page builder.
+ */
 type ManualItem =
   | { localId: string; kind: 'email'; subject: string; previewText: string; bodyText: string }
-  | { localId: string; kind: 'sms'; message: string };
+  | { localId: string; kind: 'sms'; message: string }
+  | { localId: string; kind: 'landingPage'; name: string }
+  | { localId: string; kind: 'form'; name: string }
+  | { localId: string; kind: 'flow'; name: string }
+  | { localId: string; kind: 'ad'; name: string; templateId: string };
+
+/** The kinds a person can add here, in the order the buttons appear. */
+const ADDABLE: CampaignAssetKind[] = ['email', 'sms', 'landingPage', 'form', 'flow', 'ad'];
+
+function blank(kind: CampaignAssetKind, localId: string): ManualItem {
+  switch (kind) {
+    case 'email':
+      return { localId, kind, subject: '', previewText: '', bodyText: '' };
+    case 'sms':
+      return { localId, kind, message: '' };
+    case 'ad':
+      return { localId, kind, name: '', templateId: '' };
+    default:
+      return { localId, kind, name: '' };
+  }
+}
 
 const inputCls =
   'w-full rounded-md border border-[var(--border)] bg-[var(--card-strong)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition focus:border-[var(--primary)]/60';
@@ -41,6 +62,26 @@ export function ManualCampaignWizard() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initRef = useRef(false);
+  // Published ad designs in scope for this account, for the ad item's picker.
+  // Fetched once the account is known; an account with none simply can't add
+  // an ad here, and the button says so.
+  const [adTemplates, setAdTemplates] = useState<{ id: string; name: string }[] | null>(null);
+  useEffect(() => {
+    if (!accountKey) return;
+    let cancelled = false;
+    fetch(`/api/ad-generator/templates-doc?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { templates: [] }))
+      .then((d: { templates?: { id: string; name: string; status?: string }[] }) => {
+        if (cancelled) return;
+        setAdTemplates((d.templates ?? []).filter((t) => !t.status || t.status === 'published').map((t) => ({ id: t.id, name: t.name })));
+      })
+      .catch(() => {
+        if (!cancelled) setAdTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
 
   useEffect(() => {
     if (initRef.current || !accountsLoaded) return;
@@ -48,18 +89,24 @@ export function ManualCampaignWizard() {
     if (!accountKey) setNeedsAccount(true);
   }, [accountsLoaded, accountKey]);
 
-  const addEmail = () =>
-    setItems((prev) => [...prev, { localId: uid(), kind: 'email', subject: '', previewText: '', bodyText: '' }]);
-  const addSms = () => setItems((prev) => [...prev, { localId: uid(), kind: 'sms', message: '' }]);
+  const add = (kind: CampaignAssetKind) => setItems((prev) => [...prev, blank(kind, uid())]);
   const remove = (id: string) => setItems((prev) => prev.filter((i) => i.localId !== id));
   const patch = (id: string, p: Partial<ManualItem>) =>
     setItems((prev) => prev.map((i) => (i.localId === id ? ({ ...i, ...p } as ManualItem) : i)));
 
-  const canCreate =
-    !!name.trim() &&
-    !!accountKey &&
-    items.length > 0 &&
-    items.every((i) => (i.kind === 'email' ? i.subject.trim() : i.message.trim()));
+  const itemValid = (i: ManualItem): boolean => {
+    switch (i.kind) {
+      case 'email':
+        return !!i.subject.trim();
+      case 'sms':
+        return !!i.message.trim();
+      case 'ad':
+        return !!i.name.trim() && !!i.templateId;
+      default:
+        return !!i.name.trim();
+    }
+  };
+  const canCreate = !!name.trim() && !!accountKey && items.length > 0 && items.every(itemValid);
 
   const handleCreate = async () => {
     if (!accountKey || !canCreate) return;
@@ -79,7 +126,11 @@ export function ManualCampaignWizard() {
         const body =
           item.kind === 'email'
             ? { kind: 'email', subject: item.subject, previewText: item.previewText, bodyText: item.bodyText }
-            : { kind: 'sms', message: item.message };
+            : item.kind === 'sms'
+              ? { kind: 'sms', message: item.message }
+              : item.kind === 'ad'
+                ? { kind: 'ad', name: item.name, templateId: item.templateId }
+                : { kind: item.kind, name: item.name };
         await fetch(`/api/campaigns/${id}/assets`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -106,7 +157,8 @@ export function ManualCampaignWizard() {
       <header className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight">Build a campaign manually</h1>
         <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-          Add your emails and texts. Everything is saved as a draft — you’ll pick recipients and send from each one.
+          Add the pieces — emails, texts, landing pages, forms, flows, and ads. Everything is saved as a draft;
+          you’ll finish each one in its own builder.
         </p>
       </header>
 
@@ -156,12 +208,11 @@ export function ManualCampaignWizard() {
           <div key={item.localId} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
             <div className="mb-3 flex items-center justify-between">
               <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
-                {item.kind === 'email' ? (
-                  <EnvelopeIcon className="h-4 w-4 text-sky-400" />
-                ) : (
-                  <ChatBubbleLeftRightIcon className="h-4 w-4 text-emerald-400" />
-                )}
-                {item.kind === 'email' ? 'Email' : 'Text message'} {i + 1}
+                {(() => {
+                  const Icon = CHANNEL_META[item.kind].Icon;
+                  return <Icon className={`h-4 w-4 ${CHANNEL_META[item.kind].tone.split(' ').pop()}`} />;
+                })()}
+                {CHANNEL_META[item.kind].label} {i + 1}
               </span>
               {items.length > 1 && (
                 <button onClick={() => remove(item.localId)} className="text-[var(--muted-foreground)] transition hover:text-rose-400">
@@ -191,7 +242,7 @@ export function ManualCampaignWizard() {
                   />
                 </div>
               </div>
-            ) : (
+            ) : item.kind === 'sms' ? (
               <div>
                 <label className={labelCls}>Message</label>
                 <textarea
@@ -206,18 +257,67 @@ export function ManualCampaignWizard() {
                   {item.message.length}/{SMS_MAX_CHARS}
                 </p>
               </div>
+            ) : item.kind === 'ad' ? (
+              <div className="space-y-3">
+                <div>
+                  <label className={labelCls}>Name</label>
+                  <input className={inputCls} value={item.name} onChange={(e) => patch(item.localId, { name: e.target.value })} placeholder="e.g. Spring service — square" />
+                </div>
+                <div>
+                  <label className={labelCls}>Design</label>
+                  <select className={inputCls} value={item.templateId} onChange={(e) => patch(item.localId, { templateId: e.target.value })}>
+                    <option value="" disabled>
+                      {adTemplates === null ? 'Loading designs…' : adTemplates.length ? 'Pick a design…' : 'No published designs for this account'}
+                    </option>
+                    {(adTemplates ?? []).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                    A copy of the design, yours to fill in and adjust in the Ad Generator.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className={labelCls}>Name</label>
+                <input
+                  className={inputCls}
+                  value={item.name}
+                  onChange={(e) => patch(item.localId, { name: e.target.value })}
+                  placeholder={
+                    item.kind === 'landingPage' ? 'e.g. Spring service special' : item.kind === 'form' ? 'e.g. Book a service visit' : 'e.g. Service reminder drip'
+                  }
+                />
+                <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                  Created blank under this account — you’ll build it in the{' '}
+                  {item.kind === 'landingPage' ? 'landing page' : item.kind === 'form' ? 'form' : 'flow'} builder after the campaign is created.
+                </p>
+              </div>
             )}
           </div>
         ))}
       </div>
 
-      <div className="mt-4 flex items-center gap-2">
-        <button onClick={addEmail} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]">
-          <PlusIcon className="h-3.5 w-3.5" /> Add email
-        </button>
-        <button onClick={addSms} className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]">
-          <PlusIcon className="h-3.5 w-3.5" /> Add SMS
-        </button>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {ADDABLE.map((kind) => {
+          const meta = CHANNEL_META[kind];
+          const noDesigns = kind === 'ad' && adTemplates !== null && adTemplates.length === 0;
+          return (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => add(kind)}
+              disabled={noDesigns}
+              title={noDesigns ? 'No published ad designs are in scope for this account' : undefined}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <PlusIcon className="h-3.5 w-3.5" /> Add {meta.label.toLowerCase()}
+            </button>
+          );
+        })}
       </div>
 
       <div className="mt-8 flex items-center justify-end">

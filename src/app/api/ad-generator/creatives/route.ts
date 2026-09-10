@@ -10,8 +10,8 @@ import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/
 import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
-import { designHash, resolveSyncState } from '@/lib/ad-generator/template-sync';
-import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { createHandBuiltAd } from '@/lib/ad-generator/create-ad';
+import { resolveSyncState } from '@/lib/ad-generator/template-sync';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -195,47 +195,16 @@ export async function POST(req: NextRequest) {
   if (!canAccessAccount(getAccountScope(session), accountKey)) return forbidden();
   const u = session.user as { id?: string; name?: string | null };
 
-  // The ad's own design copy: an explicit doc (e.g. "from scratch" sends a blank
-  // one), else a snapshot of the source DB template so later master edits don't
-  // change this ad. Code templates are stable, so they stay referenced (null).
-  let docSnapshot: string | null = null;
-  if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
-    docSnapshot = JSON.stringify(body.doc);
-  } else {
-    try {
-      const tpl = await prisma.adTemplateDoc.findUnique({ where: { id: templateId }, select: { doc: true } });
-      if (tpl?.doc) docSnapshot = tpl.doc;
-    } catch {
-      docSnapshot = null;
-    }
-  }
-  // Which template revision this copy came from. The ad is DETACHED (copy-on-use
-  // is unchanged for hand-built ads), but recording the revision still matters:
-  // it's what lets an untouched copy be told a fix landed upstream and offered
-  // the update, instead of quietly sitting on a stale design forever.
-  let docHash: string | null = null;
-  if (docSnapshot) {
-    try {
-      docHash = designHash(JSON.parse(docSnapshot) as TemplateDoc);
-    } catch {
-      docHash = null;
-    }
-  }
-
   try {
-    const row = await prisma.adCreative.create({
-      data: {
-        accountKey,
-        name,
-        templateId,
-        doc: docSnapshot,
-        data: JSON.stringify(body.data ?? {}),
-        status: body.status === 'ready' ? 'ready' : 'draft',
-        createdById: u.id ?? null,
-        createdByName: u.name ?? null,
-        templateSync: 'detached',
-        templateDocHash: docHash,
-      },
+    const row = await createHandBuiltAd({
+      accountKey,
+      name,
+      templateId,
+      data: body.data,
+      status: body.status === 'ready' ? 'ready' : 'draft',
+      doc: body.doc,
+      createdById: u.id ?? null,
+      createdByName: u.name ?? null,
     });
     return NextResponse.json({ creative: { id: row.id, name: row.name } });
   } catch (err) {

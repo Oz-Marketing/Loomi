@@ -15,6 +15,10 @@ import {
   updateSmsBlastDraft,
 } from '@/lib/services/sms-blasts';
 import { SMS_MAX_CHARS } from '@/lib/campaigns/types';
+import { createLandingPage } from '@/lib/services/landing-pages';
+import { createForm } from '@/lib/services/forms';
+import { createFlow } from '@/lib/services/loomi-flows';
+import { createHandBuiltAd } from '@/lib/ad-generator/create-ad';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -45,10 +49,11 @@ function wrapManualEmailHtml(subject: string, bodyText: string): string {
 /**
  * POST /api/campaigns/[id]/assets
  *
- * Manual-wizard helper: create a channel draft (email or SMS), populate it with
- * the wizard's quick-form content, and attach it to the campaign container. The
- * draft stays in 'draft' status — the user finishes targeting/sending in the
- * existing per-channel editor.
+ * Manual-wizard helper: create a draft of one kind — email, SMS, landing page,
+ * form, flow, or ad — and attach it to the campaign container. Email and SMS
+ * take the wizard's quick-form content; the rest are created blank under the
+ * account and finished in their own builder. Every draft stays a draft — the
+ * user targets, sends or publishes from the existing per-channel surface.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   const { session, error } = await requirePermission('studio.campaigns.edit');
@@ -116,6 +121,43 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
       await updateSmsBlastDraft(draft.id, { message, metadata });
       await linkAssetToCampaign('sms', draft.id, id);
       return NextResponse.json({ asset: { id: draft.id, kind: 'sms', name: name ?? 'SMS' } }, { status: 201 });
+    }
+
+    if (kind === 'landingPage') {
+      const lp = await createLandingPage({ accountKey: accountKeys[0], name: name ?? 'Landing page', createdByUserId: session!.user.id });
+      await linkAssetToCampaign('landingPage', lp.id, id);
+      return NextResponse.json({ asset: { id: lp.id, kind: 'landingPage', name: lp.name } }, { status: 201 });
+    }
+
+    if (kind === 'form') {
+      const form = await createForm({ accountKey: accountKeys[0], name: name ?? 'Form', createdByUserId: session!.user.id });
+      await linkAssetToCampaign('form', form.id, id);
+      return NextResponse.json({ asset: { id: form.id, kind: 'form', name: form.name } }, { status: 201 });
+    }
+
+    if (kind === 'flow') {
+      const flow = await createFlow({ name: name ?? 'Flow', accountKey: accountKeys[0], createdByUserId: session!.user.id });
+      await linkAssetToCampaign('flow', flow.id, id);
+      return NextResponse.json({ asset: { id: flow.id, kind: 'flow', name: flow.name } }, { status: 201 });
+    }
+
+    if (kind === 'ad') {
+      // Originating an ad is staff work — a client can adjust the offer on an
+      // ad the run built for them, but a hand-built ad has no manufacturer
+      // program behind it. Same bar as POST /api/ad-generator/creatives.
+      const { error: createDenied } = await requirePermission('studio.adgen.create');
+      if (createDenied) return createDenied;
+      const templateId = typeof body?.templateId === 'string' ? body.templateId.trim() : '';
+      if (!templateId) return NextResponse.json({ error: 'templateId is required for an ad' }, { status: 400 });
+      const ad = await createHandBuiltAd({
+        accountKey: accountKeys[0],
+        name: name ?? 'Untitled ad',
+        templateId,
+        createdById: session!.user.id,
+        createdByName: session!.user.name ?? null,
+      });
+      await linkAssetToCampaign('ad', ad.id, id);
+      return NextResponse.json({ asset: { id: ad.id, kind: 'ad', name: ad.name } }, { status: 201 });
     }
 
     return NextResponse.json({ error: 'Unsupported asset kind' }, { status: 400 });

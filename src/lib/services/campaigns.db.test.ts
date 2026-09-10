@@ -9,7 +9,7 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { prisma } from '@/lib/prisma';
-import { createCampaign, listCampaigns } from './campaigns';
+import { createCampaign, linkAssetToCampaign, listCampaigns } from './campaigns';
 
 const RUN = !!process.env.RUN_DB_TESTS;
 const PREFIX = '__vitest_campaigns_';
@@ -26,6 +26,7 @@ describe.skipIf(!RUN)('listCampaigns — DB integration', () => {
   });
 
   afterAll(async () => {
+    await prisma.adCreative.deleteMany({ where: { accountKey: acct } });
     await prisma.campaign.deleteMany({ where: { accountKey: acct } });
     await prisma.account.deleteMany({ where: { key: acct } });
   });
@@ -38,5 +39,15 @@ describe.skipIf(!RUN)('listCampaigns — DB integration', () => {
   it('returns everything for staff', async () => {
     const rows = await listCampaigns({ accountKeys: [acct] });
     expect(rows.map((r) => r.source).sort()).toEqual(['ai', 'automation', 'manual']);
+  });
+
+  it('links a hand-built ad to a campaign — the kind the manual wizard adds', async () => {
+    const campaign = await createCampaign({ name: 'With an ad', accountKey: acct, source: 'manual' });
+    const ad = await prisma.adCreative.create({
+      data: { accountKey: acct, name: 'Hand-built', templateId: 't1', data: '{}' },
+      select: { id: true },
+    });
+    await linkAssetToCampaign('ad', ad.id, campaign.id);
+    expect((await prisma.adCreative.findUnique({ where: { id: ad.id } }))?.campaignId).toBe(campaign.id);
   });
 });

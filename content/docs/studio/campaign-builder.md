@@ -66,6 +66,13 @@ work is assembling rather than inventing.
 It is worth less on a campaign whose whole point is a specific creative idea — by
 the time you have described the idea precisely enough, you have written it.
 
+# Building a campaign by hand
+
+**Start manually** skips the plan. Name the campaign and add its pieces —
+emails and texts take their content right there; a landing page, form, flow or
+ad is created blank under the account and finished in its own builder, which is
+the better editor for it. Everything lands as a draft.
+
 # Campaigns from manufacturer offers
 
 For accounts in a vehicle industry, most campaigns are not described — they

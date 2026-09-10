@@ -336,7 +336,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     config = null;
   }
 
-  const windowMode = config?.runWindowMode ?? 'next_month';
+  const windowMode = config?.runWindowMode ?? 'current_month';
   const window: RunWindow = runWindowFor(
     { runWindowMode: windowMode, rollingDays: config?.rollingDays ?? 30 },
     now,

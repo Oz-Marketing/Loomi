@@ -236,13 +236,18 @@ export async function createCampaign(input: {
   contextSnapshot?: string | null;
   createdByUserId?: string | null;
   createdByRole?: string | null;
+  /** The OEM run's cycle key. Only the automation path sets it. */
+  automationKey?: string | null;
+  /** `building` when a run is about to write into the new container. */
+  status?: 'draft' | 'building';
 }): Promise<CampaignDetail> {
   const created = await prisma.campaign.create({
     data: {
       name: input.name.trim() || 'Untitled campaign',
       accountKey: input.accountKey,
       source: input.source,
-      status: 'draft',
+      status: input.status ?? 'draft',
+      automationKey: input.automationKey ?? null,
       goal: input.goal ?? null,
       plan: input.plan ? JSON.stringify(input.plan) : null,
       contextSnapshot: input.contextSnapshot ?? null,

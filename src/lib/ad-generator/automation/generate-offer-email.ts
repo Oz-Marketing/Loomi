@@ -186,7 +186,21 @@ export function rankOffers<T extends { offerType: string }>(
 export async function generateOfferEmail(
   config: OfferEmailConfigRow,
   generated: GeneratedAd[],
-  opts: { runId?: string | null } = {},
+  opts: {
+    runId?: string | null;
+    /**
+     * The cycle's Campaign, owned by `runOfferCampaign`. When given, this step
+     * never creates a container or touches the creatives — it only drafts or
+     * refreshes the email and hangs it off the campaign it was handed.
+     */
+    campaignId?: string | null;
+    /**
+     * The cycle key (`adgen:<account>:<yyyy-mm>`) to file the draft under, so
+     * every run for a cycle refreshes ONE draft. Without it the key is the
+     * offer-set fingerprint, which filed a new draft whenever the set changed.
+     */
+    cycleKey?: string | null;
+  } = {},
 ): Promise<OfferEmailResult> {
   const base: OfferEmailResult = {
     accountKey: config.accountKey,
@@ -292,7 +306,51 @@ export async function generateOfferEmail(
   });
   if (!usable.length) return { ...base, reason: 'no_disclaimer' };
 
-  const ranked = rankOffers(usable, jsonArray(config.offerTypePriority), config.emailMaxOffers);
+  const priority = jsonArray(config.offerTypePriority);
+  const thisRun = rankOffers(usable, priority, config.emailMaxOffers);
+
+  // The draft this cycle already has, if any. Looked up here — before the
+  // document is built — because a later run for the same cycle merges its
+  // offers with the draft's rather than replacing them: a hand run scoped to
+  // two models must not shrink the email to two offers.
+  const automationKey = opts.cycleKey ?? offerEmailKey(config.accountKey, thisRun.map((v) => v.fingerprint));
+  const existing = await prisma.emailBlast.findUnique({
+    where: { automationKey },
+    select: { id: true, status: true, campaignId: true, metadata: true },
+  });
+
+  // Never touch a draft that has left the draft state — a person has scheduled
+  // or sent it, and rewriting its body underneath them is not a refresh.
+  if (existing && existing.status !== 'draft') {
+    return {
+      ...base,
+      blastId: existing.id,
+      campaignId: existing.campaignId,
+      offers: thisRun.length,
+      reason: 'already_sent',
+    };
+  }
+
+  const priorMeta = existing ? safeJson<OfferEmailMetadata>(existing.metadata) : null;
+  let pool: typeof usable = usable;
+  if (existing && opts.cycleKey && opts.campaignId) {
+    // Carry the draft's other offers forward — but only those still live on the
+    // campaign, so an offer whose ad was archived or expired drops out.
+    const seen = new Set(usable.map((v) => v.fingerprint));
+    const live = new Set(
+      (
+        await prisma.adCreative.findMany({
+          where: { campaignId: opts.campaignId, archivedAt: null, offerFingerprint: { not: null } },
+          select: { offerFingerprint: true },
+        })
+      ).map((r) => r.offerFingerprint as string),
+    );
+    const carried = (priorMeta?.offerInput?.vehicles ?? []).filter(
+      (v): v is typeof usable[number] => !!v.fingerprint && !seen.has(v.fingerprint) && live.has(v.fingerprint),
+    );
+    pool = [...usable, ...carried];
+  }
+  const ranked = rankOffers(pool, priority, config.emailMaxOffers);
 
   // Own branding only — deliberately NOT the inherited chain the playbooks audit
   // walks. `generate-ads` resolves the creative's colours the same way, and an
@@ -358,40 +416,10 @@ export async function generateOfferEmail(
     }
   }
 
-  const automationKey = offerEmailKey(config.accountKey, ranked.map((v) => v.fingerprint));
-  const existing = await prisma.emailBlast.findUnique({
-    where: { automationKey },
-    select: { id: true, status: true, campaignId: true },
-  });
-
-  // Never touch a draft that has left the draft state — a person has scheduled
-  // or sent it, and rewriting its body underneath them is not a refresh.
-  if (existing && existing.status !== 'draft') {
-    return {
-      ...base,
-      blastId: existing.id,
-      campaignId: existing.campaignId,
-      offers: ranked.length,
-      reason: 'already_sent',
-    };
-  }
-
   // Reuse the template row this draft already owns. A run that refreshes an
   // existing draft (unchanged offers, new numbers) must not leave a second
   // "Offers" template behind every time it fires.
-  let priorSlug: string | null = null;
-  if (existing) {
-    const prior = await prisma.emailBlast
-      .findUnique({ where: { id: existing.id }, select: { metadata: true } })
-      .catch(() => null);
-    try {
-      priorSlug = prior?.metadata
-        ? ((JSON.parse(prior.metadata) as { templateSlug?: string }).templateSlug ?? null)
-        : null;
-    } catch {
-      priorSlug = null;
-    }
-  }
+  const priorSlug: string | null = priorMeta?.templateSlug ?? null;
   // Same shell guard as `restyleOfferEmail`: the generated body must never be
   // written over the shell it was built from.
   const reuseSlug = reusableTemplateSlug(priorSlug, shellSlug);
@@ -404,7 +432,9 @@ export async function generateOfferEmail(
 
   // The container the ads and the email share — the `Campaign` link
   // `AdCreative.campaignId` was reserved for.
-  let campaignId = existing?.campaignId ?? null;
+  // Owned by the run when it hands one in; created here only for a caller that
+  // predates the orchestrator.
+  let campaignId = opts.campaignId ?? existing?.campaignId ?? null;
   if (!campaignId) {
     const container = await prisma.campaign.create({
       data: {
@@ -453,11 +483,14 @@ export async function generateOfferEmail(
   });
   await prisma.emailBlast.update({ where: { id: blastId }, data: { campaignId } });
 
-  // Hang the run's ads off the same container.
-  await prisma.adCreative.updateMany({
-    where: { id: { in: generated.map((g) => g.creativeId) } },
-    data: { campaignId },
-  });
+  // Hang the run's ads off the same container — the orchestrator's job when it
+  // handed us the campaign; done here only on the legacy path.
+  if (!opts.campaignId) {
+    await prisma.adCreative.updateMany({
+      where: { id: { in: generated.map((g) => g.creativeId) } },
+      data: { campaignId },
+    });
+  }
 
   return {
     accountKey: config.accountKey,

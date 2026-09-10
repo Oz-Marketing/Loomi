@@ -59,8 +59,13 @@ export function runWindowFor(config: Pick<AutomationConfigRow, 'runWindowMode' |
     case 'rolling':
       return rollingWindow(now, config.rollingDays || 30);
     case 'next_month':
-    default:
       return nextMonthWindow(now);
+    case 'current_month':
+    default:
+      // The schema default. `next_month` was the fallback here while the
+      // column defaulted to `current_month`, so an unreadable mode planned a
+      // different month than a saved one.
+      return monthWindow(now);
   }
 }
 

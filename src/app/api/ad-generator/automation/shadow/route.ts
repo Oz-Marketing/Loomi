@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
           zip: (body.zip ?? account?.postalCode ?? '').trim() || null,
           runWindowMode: ['current_month', 'next_month', 'rolling'].includes(body.runWindowMode ?? '')
             ? body.runWindowMode!
-            : 'next_month',
+            : 'current_month',
           offerTypePriority: JSON.stringify(
             (body.offerTypePriority ?? ['lease', 'apr', 'cash']).filter((t) =>
               ['lease', 'apr', 'cash'].includes(t),

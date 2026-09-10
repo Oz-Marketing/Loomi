@@ -27,6 +27,13 @@ import { expandPerOffer, repeatsPerOffer } from './offer-bindings';
 export const OFFERS_PLACEHOLDER = '{{offers}}';
 
 export interface OfferEmailVehicle {
+  /**
+   * The ad's composite `offerFingerprint`. Persisted with the draft so a later
+   * run for the same cycle can merge its offers with the draft's and prune
+   * ones whose ad is gone. Optional: drafts written before it was recorded
+   * still parse, and are simply not merged from.
+   */
+  fingerprint?: string;
   /** "2026 Chevrolet Silverado 1500" — the ad's `vehicleName`. */
   name: string;
   /** EVOX jellybean (or inventory photo) — the ad's `vehicleImageUrl`. */

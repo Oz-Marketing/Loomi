@@ -37,7 +37,7 @@ import {
 import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
 import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
-import { generateAllAccounts } from '@/lib/ad-generator/automation/generate-ads';
+import { generateAllAccounts } from '@/lib/ad-generator/automation/offer-run';
 import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
 import { sweepMediaExpiration } from '@/lib/services/media-expiration';
 import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
@@ -363,7 +363,10 @@ async function main(): Promise<void> {
     await runAdgenPollOffers();
   });
 
-  await boss.createQueue(ADGEN_GENERATE_QUEUE);
+  // No retries and a long expiry: pg-boss's defaults (expire 15 min, retry
+  // twice) would re-fire a slow fan-out while the first pass still runs. The
+  // per-account run lock is the guarantee against overlap, not the schedule.
+  await boss.createQueue(ADGEN_GENERATE_QUEUE, { retryLimit: 0, expireInSeconds: 3600 });
   await boss.work(ADGEN_GENERATE_QUEUE, async () => {
     await runAdgenGenerate();
   });

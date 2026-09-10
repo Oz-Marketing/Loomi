@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { createNotification } from '@/lib/notifications/service';
+import { archiveAllEndedOfferCycles, archiveEndedOfferCycles } from './offer-campaign';
 
 /**
  * Expiration sweep — retire ads whose underlying OEM offer has ended.
@@ -112,6 +113,18 @@ export async function expireStaleAds(accountKey?: string, now = new Date()): Pro
     } catch (err) {
       console.warn(`[expire-ads] could not update ${ad.id}:`, err);
     }
+  }
+
+  // Ended offer cycles come off the Campaigns page here too — a sweep, so an
+  // account whose automation is OFF (run by hand last month, nothing scheduled)
+  // still rolls over when its month ends.
+  try {
+    const rolled = accountKey
+      ? { archived: (await archiveEndedOfferCycles(accountKey, now)).length }
+      : await archiveAllEndedOfferCycles(now);
+    if (rolled.archived) console.log(`[expire-ads] archived ${rolled.archived} ended offer campaign(s)`);
+  } catch (err) {
+    console.warn('[expire-ads] cycle rollover failed:', err);
   }
 
   // Heartbeat, written even on a no-op sweep — same reasoning as the other jobs:

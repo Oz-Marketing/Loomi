@@ -31,7 +31,7 @@ describe('windowPreview matches the server run window', () => {
     }
   }
 
-  it('falls through to next month for an unrecognised mode, as the server does', () => {
+  it('falls through to the current month for an unrecognised mode, as the server does', () => {
     const now = new Date('2026-07-30T12:00:00Z');
     const w = runWindowFor({ runWindowMode: 'nonsense', rollingDays: 30 }, now);
     expect(windowPreview('nonsense', now)).toBe(`${iso(w.start)} → ${iso(w.end)}`);

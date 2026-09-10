@@ -32,7 +32,7 @@ import {
   PlayIcon,
   PlusIcon,
   TrashIcon,
-  XCircleIcon,
+  XCircleIcon, BoltIcon,
 } from '@heroicons/react/24/outline';
 import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
@@ -536,6 +536,11 @@ function RunRow({ run: r }: { run: RunSummary }) {
                   {r.issueCount} skipped
                   {expandable && !open && <span className="ml-1 opacity-70">— why?</span>}
                 </span>
+              )}
+              {r.campaignId && (
+                <Link href={`/campaign-builder/${r.campaignId}`} className="font-medium text-[var(--primary)] hover:underline">
+                  Open campaign
+                </Link>
               )}
             </>
           ) : (
@@ -1639,6 +1644,19 @@ export function ShadowPanel({
         title="Run history"
         help={<p>Every run is recorded, including ones that changed nothing — otherwise a stalled job looks identical to a quiet month.</p>}
       >
+        {/* The run itself lives on Campaigns, where its output lands; this is a
+            door to it from the place people come to see whether it ran. */}
+        {accountKey && (
+          <div className="mb-3 flex justify-end">
+            <Link
+              href={`/campaign-builder?run=oem&account=${encodeURIComponent(accountKey)}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+            >
+              <BoltIcon className="h-3.5 w-3.5" />
+              Run now
+            </Link>
+          </div>
+        )}
         {report?.runs.length ? (
           <div className="space-y-1.5">
             {report.runs.map((r) => <RunRow key={r.id} run={r} />)}

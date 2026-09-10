@@ -116,6 +116,24 @@ export function CampaignList() {
     [data],
   );
 
+  // A client with nothing Active may be between cycles: last month's campaign
+  // archived, the manufacturer's next programs not yet published. That is a
+  // different message from "never had one", so the newest archived campaign is
+  // asked for — clients only, only when Active is empty.
+  const { data: endedData } = useSWR<{ campaigns?: CampaignSummary[] }>(
+    !isStaff && data && (data.campaigns?.length ?? 0) === 0 && statusFilter !== 'archived'
+      ? '/api/campaigns?archived=only&limit=1'
+      : null,
+    fetcher,
+  );
+  const endedCycle = useMemo(() => {
+    const c = endedData?.campaigns?.[0];
+    if (!c || c.source !== 'automation') return null;
+    // "October 2026 offers — Young Honda Ogden" → "October"
+    const m = /^([A-Z][a-z]+) \d{4} offers/.exec(c.name);
+    return m ? m[1] : 'Last month';
+  }, [endedData]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return campaigns
@@ -305,6 +323,7 @@ export function CampaignList() {
           isStaff={isStaff}
           oemEligible={oemEligible}
           accountName={accountData?.dealer ?? null}
+          endedCycleMonth={endedCycle}
           onRunOem={() => openOemRun()}
         />
       )}
@@ -493,6 +512,7 @@ function EmptyState({
   isStaff,
   oemEligible,
   accountName,
+  endedCycleMonth,
   onRunOem,
 }: {
   searchOrFilter: boolean;
@@ -500,6 +520,8 @@ function EmptyState({
   isStaff: boolean;
   oemEligible: boolean;
   accountName: string | null;
+  /** For a client between cycles: the month whose offers just ended. */
+  endedCycleMonth: string | null;
   onRunOem: () => void;
 }) {
   if (searchOrFilter) {
@@ -518,11 +540,23 @@ function EmptyState({
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--muted)]">
           <BoltIcon className="h-6 w-6 text-[var(--muted-foreground)]" />
         </div>
-        <h2 className="text-lg font-semibold text-[var(--foreground)]">No campaigns yet</h2>
-        <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
-          Your first campaign appears here once your manufacturer offers have been built into ad
-          designs. There’s nothing to do until then.
-        </p>
+        {endedCycleMonth ? (
+          <>
+            <h2 className="text-lg font-semibold text-[var(--foreground)]">{endedCycleMonth}’s offers have ended</h2>
+            <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
+              The next campaign appears here once the manufacturer publishes new programs. Past
+              campaigns are under Archived.
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold text-[var(--foreground)]">No campaigns yet</h2>
+            <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
+              Your first campaign appears here once your manufacturer offers have been built into ad
+              designs. There’s nothing to do until then.
+            </p>
+          </>
+        )}
       </div>
     );
   }

@@ -7,7 +7,6 @@ import useSWR from 'swr';
 import {
   BoltIcon,
   SparklesIcon,
-  PencilSquareIcon,
   MegaphoneIcon,
   TrashIcon,
   ArchiveBoxIcon,
@@ -24,6 +23,7 @@ import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-actio
 import { AutomatedChip, CampaignStatusBadge, CHANNEL_META } from './shared';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import { OfferRunModal } from '@/components/campaigns/offer-run/offer-run-modal';
+import { CreateCampaignMenu } from './create-campaign-menu';
 import { CAMPAIGN_SOURCE_LABEL } from '@/lib/campaigns/types';
 import type { CampaignAssetKind, CampaignSummary } from '@/lib/campaigns/types';
 
@@ -263,33 +263,7 @@ export function CampaignList() {
           </p>
         </div>
         <div className={`flex items-center gap-2 ${isStaff ? '' : 'hidden'}`}>
-          <Link
-            href={href('/campaign-builder/new/manual')}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-          >
-            <PencilSquareIcon className="h-4 w-4" />
-            Start manually
-          </Link>
-          {/* Secondary, not the hero: one hero per header, and the Loomi AI
-              control keeps the gradient. The team's own verb for this action. */}
-          {oemEligible && (
-            <button
-              type="button"
-              onClick={() => openOemRun()}
-              title="Build ad designs and the offer email from this account’s manufacturer offers"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-            >
-              <BoltIcon className="h-4 w-4" />
-              Generate from OEM offers
-            </button>
-          )}
-          <Link
-            href={href('/campaign-builder/new')}
-            className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"
-          >
-            <SparklesIcon className="h-4 w-4" />
-            New with AI
-          </Link>
+          <CreateCampaignMenu href={href} oemEligible={oemEligible} onRunOem={() => openOemRun()} />
         </div>
       </header>
 
@@ -572,33 +546,8 @@ function EmptyState({
           ? `Build a campaign from ${accountName ? `${accountName}’s` : 'the account’s'} manufacturer offers, describe one for Loomi to draft, or start manually.`
           : 'Describe what you want to promote and Loomi will draft every channel together — or start manually and fill in the pieces yourself.'}
       </p>
-      <div className="mt-5 flex items-center justify-center gap-3">
-        {oemEligible && (
-          <button
-            type="button"
-            onClick={onRunOem}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-          >
-            <BoltIcon className="h-4 w-4" />
-            Generate from OEM offers
-          </button>
-        )}
-        <Link
-          href={href('/campaign-builder/new')}
-          className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"
-        >
-          <SparklesIcon className="h-4 w-4" />
-          {/* One verb for the AI path on this page — the header says "New with AI". */}
-          New with AI
-        </Link>
-        {/* The body has promised this since the page shipped; the link did not exist. */}
-        <Link
-          href={href('/campaign-builder/new/manual')}
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--muted-foreground)] transition hover:text-[var(--foreground)]"
-        >
-          <PencilSquareIcon className="h-4 w-4" />
-          Start manually
-        </Link>
+      <div className="mt-5 flex items-center justify-center">
+        <CreateCampaignMenu href={href} oemEligible={oemEligible} onRunOem={onRunOem} align="center" />
       </div>
     </div>
   );

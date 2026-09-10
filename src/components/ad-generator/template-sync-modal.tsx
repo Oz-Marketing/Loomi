@@ -1,11 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { XMarkIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import type { ApplyResult } from '@/lib/ad-generator/template-sync-apply';
 import type { ChangeKind } from '@/lib/ad-generator/template-sync';
+import type { SyncRunStatus } from '@/app/api/ad-generator/templates-doc/[id]/sync/route';
 
 /**
  * "You changed a template. N ads were built from it. Apply the change?"
@@ -36,8 +37,8 @@ export function shouldPromptSync(impact: SyncImpact | null): boolean {
   return impact.counts.active + impact.counts.expired > 0;
 }
 
-/** Ads per request — matches the cap on the sync route. */
-const BATCH = 10;
+/** How often to ask the run how it's going. */
+const POLL_MS = 1500;
 
 export function TemplateSyncModal({
   impact,
@@ -59,60 +60,94 @@ export function TemplateSyncModal({
     impact.counts.active === 0 && impact.counts.expired > 0,
   );
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(0);
+  // STATE, not a ref. The poll below is keyed on this, and a ref would not
+  // re-render — so the effect ran once while the id was still null, bailed out,
+  // and the dialog sat on "0 of 24" through a run that had already finished.
+  const [runId, setRunId] = useState<string | null>(null);
+  const [run, setRun] = useState<SyncRunStatus | null>(null);
   const [results, setResults] = useState<ApplyResult[] | null>(null);
 
   const ids = includeExpired ? [...impact.activeIds, ...impact.expiredIds] : impact.activeIds;
 
+  /**
+   * Start the run. The work happens on the worker — see the route — so this
+   * only hands over the ad list and gets back a run id to follow.
+   */
   const apply = async () => {
     if (!ids.length) return;
     setBusy(true);
-    setDone(0);
-    const all: ApplyResult[] = [];
+    setRun(null);
+    setRunId(null);
     try {
-      // Chunked so each request stays inside its timeout and the user sees real
-      // progress rather than one indefinite spinner — a template used by forty
-      // ads is forty sequential Chromium renders.
-      for (let i = 0; i < ids.length; i += BATCH) {
-        const batch = ids.slice(i, i + BATCH);
-        const res = await fetch(`/api/ad-generator/templates-doc/${impact.templateId}/sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: batch }),
-        });
-        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
-        const json = (await res.json()) as { results?: ApplyResult[] };
-        all.push(...(json.results ?? []));
-        setDone(Math.min(i + BATCH, ids.length));
-      }
-      setResults(all);
-      const updated = all.filter((r) => r.outcome === 'updated').length;
-      const blocked = all.filter((r) => r.outcome === 'blocked').length;
-      const failed = all.filter((r) => r.outcome === 'failed').length;
-      if (blocked || failed) {
-        toast.warning(
-          `${updated} ad(s) updated · ${blocked + failed} kept their current design`,
-        );
-      } else {
-        toast.success(`${updated} ad(s) updated`);
-      }
+      const res = await fetch(`/api/ad-generator/templates-doc/${impact.templateId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const json = (await res.json()) as { runId?: string };
+      if (!json.runId) throw new Error('The update did not start');
+      setRunId(json.runId);
     } catch (err) {
-      toast.error(`Couldn't finish: ${err instanceof Error ? err.message : 'unknown error'}`);
-      // Keep whatever landed — a partial run is still worth reporting, and the
-      // ads that didn't take the change can be updated individually later.
-      setResults(all.length ? all : null);
-    } finally {
       setBusy(false);
+      toast.error(`Couldn't start: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   };
 
+  // Follow the run until it lands. Deliberately re-armed with a timeout rather
+  // than an interval, so a slow response can never stack up overlapping polls.
+  useEffect(() => {
+    if (!busy || !runId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/ad-generator/templates-doc/${impact.templateId}/sync?runId=${encodeURIComponent(runId)}`,
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const status = (await res.json()) as SyncRunStatus;
+        if (cancelled) return;
+        setRun(status);
+        if (status.status === 'done' || status.status === 'failed') {
+          setResults(status.results);
+          setBusy(false);
+          if (status.status === 'failed') {
+            toast.error(`Couldn't finish: ${status.error || 'unknown error'}`);
+          } else if (status.blocked || status.failed) {
+            toast.warning(
+              `${status.updated} ad(s) updated · ${status.blocked + status.failed} kept their current design`,
+            );
+          } else {
+            toast.success(`${status.updated} ad(s) updated`);
+          }
+          return;
+        }
+      } catch {
+        // A dropped poll is not a failed run — the worker is still going. Try
+        // again on the next tick rather than declaring the whole thing broken.
+      }
+      if (!cancelled) timer = setTimeout(poll, POLL_MS);
+    };
+
+    // Ask immediately as well as on the interval: a short run can be finished
+    // before the first tick, and waiting to say so looks like nothing happened.
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [busy, runId, impact.templateId]);
+
   const problems = (results ?? []).filter((r) => r.outcome === 'blocked' || r.outcome === 'failed');
+  const done = run?.processed ?? 0;
 
   if (typeof document === 'undefined') return null;
   return createPortal(
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 p-4"
-      onClick={() => !busy && onClose()}
+      onClick={onClose}
     >
       <div
         className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-xl backdrop-blur-2xl"
@@ -136,7 +171,6 @@ export function TemplateSyncModal({
           </div>
           <button
             onClick={onClose}
-            disabled={busy}
             title="Close"
             aria-label="Close"
             className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-40"
@@ -221,9 +255,32 @@ export function TemplateSyncModal({
           )}
 
           {busy && (
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 p-3 text-xs text-[var(--muted-foreground)]">
-              Re-rendering {done} of {ids.length}… each ad is re-checked against the manufacturer rules
-              before it changes.
+            <div className="animate-fade-in-up space-y-2 rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 p-3 text-xs text-[var(--muted-foreground)]">
+              <div>
+                {run?.status === 'queued'
+                  ? `Queued ${ids.length} ad(s)…`
+                  : `Re-rendering ${done} of ${run?.total ?? ids.length}…`}{' '}
+                each ad is re-checked against the manufacturer rules before it changes.
+              </div>
+              {/* Height-animated in the same way as every other progress bar in
+                  the app; see globals.css. */}
+              <div className="h-1.5 overflow-hidden rounded-full bg-[var(--border)]">
+                <div
+                  className="h-full rounded-full bg-[var(--primary)] transition-[width] duration-500 ease-out"
+                  style={{ width: `${Math.round((done / Math.max(1, run?.total ?? ids.length)) * 100)}%` }}
+                />
+              </div>
+              <div>This runs in the background. You can close this and carry on working.</div>
+              {run?.stalled && (
+                <div className="flex items-start gap-1.5 text-amber-600 dark:text-amber-400">
+                  <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {done > 0
+                      ? `This has not moved past ${done} for a while. Whatever did not make it can be updated from the ad itself.`
+                      : 'Nothing has picked this up yet. It will start on its own once background processing is back.'}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -265,10 +322,9 @@ export function TemplateSyncModal({
             <>
               <button
                 onClick={onClose}
-                disabled={busy}
-                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-40"
+                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-semibold text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
               >
-                Don&apos;t apply
+                {busy ? 'Close' : "Don't apply"}
               </button>
               <button
                 onClick={apply}

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import {
   ArrowTopRightOnSquareIcon,
   ChevronLeftIcon,
@@ -11,6 +10,7 @@ import {
   EyeIcon,
 } from '@heroicons/react/24/outline';
 import { AssetStatusBadge, assetEditorPath } from './shared';
+import { OpenAssetLink } from './asset-editor-sheet';
 import { EmailPreviewThumb } from './email-preview-thumb';
 import type { CampaignAssetSummary } from '@/lib/campaigns/types';
 
@@ -90,12 +90,15 @@ export function CampaignEmailGallery({
             </button>
           )}
           {showOpen && (
-            <Link
+            <OpenAssetLink
+              kind="email"
+              id={active.id}
+              name={active.name}
               href={assetEditorPath(href, 'email', active.id)}
               className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
             >
               Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-            </Link>
+            </OpenAssetLink>
           )}
         </div>
       </div>

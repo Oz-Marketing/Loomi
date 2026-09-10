@@ -53,9 +53,16 @@ hand.
 
 # 3. Review
 
-Open each asset in its own editor and treat it as a first draft from a competent
-colleague who has never met this client: the structure is usually right, the
-specifics need your judgment.
+Open each asset and treat it as a first draft from a competent colleague who has
+never met this client: the structure is usually right, the specifics need your
+judgment.
+
+**Open** raises the real editor over the campaign — the blast builder, the
+landing-page builder, the flow canvas, the Ad Generator, each at full size and
+exactly as it behaves on its own page. Close it and you are back on the
+campaign, which reloads to pick up what you changed. Cmd-click (Ctrl-click on
+Windows) opens the same editor in a new tab instead, and the bar along the top
+has a link that does the same.
 
 What to check every time:
 

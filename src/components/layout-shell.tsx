@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
@@ -179,7 +179,25 @@ function CampaignBuilderProgress({
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const normalizedPath = stripSubaccountPrefix(pathname);
+
+  // Rendered inside the campaign detail's editor sheet, which is an iframe over
+  // the campaign. The sheet supplies the chrome — the way back, the asset's
+  // name, a link to the same editor as an ordinary page — so the sidebar and
+  // the utility bar would be a second, wrong copy of it.
+  //
+  // The frame is named, and a frame's name survives navigation inside it, so an
+  // editor that links on to its own next step (Recipients → Message, a landing
+  // page's overview → its builder) stays chrome-less without having to carry
+  // the query param forward. Read after mount so the server's markup and the
+  // first client render agree; the initial src always carries `embed=1`, so
+  // this only matters for a reload inside the frame.
+  const [framed, setFramed] = useState(false);
+  useEffect(() => {
+    if (window.name === 'loomi-embed') setFramed(true);
+  }, []);
+  const isEmbed = searchParams.get('embed') === '1' || framed;
   const isFullScreen =
     normalizedPath.startsWith('/preview')
     || normalizedPath.startsWith('/login')
@@ -240,8 +258,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // exactly what shouldn't follow you into a manual.
   const isDocs = builderProbe === '/docs' || builderProbe.startsWith('/docs/');
 
-  if (isFullScreen) {
-    return <div className="flex-1">{children}</div>;
+  // The surfaces that already own their whole canvas keep their own wrapper
+  // below; everything else, embedded, simply loses the shell.
+  const isEmbedBare =
+    isEmbed && !isWebsiteBuilder && !isAdBuilder && !isTemplateEditor && !isCampaignBuilder;
+
+  if (isFullScreen || isEmbedBare) {
+    return <div className="flex-1 min-w-0">{children}</div>;
   }
 
   // Clients used to get a chrome-less page — no sidebar, no top utility bar —
@@ -276,23 +299,27 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-h-screen">
         <header className="flex-shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-6 h-16 border-b border-[var(--border)] bg-[var(--card)]/80 backdrop-blur-md">
           <div className="flex items-center gap-3 min-w-0">
-            <button
-              type="button"
-              onClick={() => {
-                // Best-effort: flush any focused input's onBlur so the
-                // currently-typed value gets persisted before we navigate.
-                // Autosave handles the rest, so no exit-confirmation
-                // prompt — work is already preserved as a draft.
-                const active = document.activeElement as HTMLElement | null;
-                if (active && typeof active.blur === 'function') active.blur();
-                router.push('/messaging/blasts');
-              }}
-              className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-              aria-label="Exit campaign builder"
-              title="Exit"
-            >
-              <ArrowLeftIcon className="w-4 h-4" />
-            </button>
+            {/* Embedded, the sheet's own "Back to campaign" is the way out; a
+                second one leading to the blast list would be a trap door. */}
+            {!isEmbed && (
+              <button
+                type="button"
+                onClick={() => {
+                  // Best-effort: flush any focused input's onBlur so the
+                  // currently-typed value gets persisted before we navigate.
+                  // Autosave handles the rest, so no exit-confirmation
+                  // prompt — work is already preserved as a draft.
+                  const active = document.activeElement as HTMLElement | null;
+                  if (active && typeof active.blur === 'function') active.blur();
+                  router.push('/messaging/blasts');
+                }}
+                className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+                aria-label="Exit campaign builder"
+                title="Exit"
+              >
+                <ArrowLeftIcon className="w-4 h-4" />
+              </button>
+            )}
             <BlastNameField id={builderBlastId(normalizedPath)} channel={channel} />
           </div>
           <CampaignBuilderProgress current={step} channel={channel} path={pathname} />

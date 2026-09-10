@@ -25,7 +25,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Squares2X2Icon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { groupVariants, type VariantGroup } from '@/lib/ad-generator/variant-groups';
@@ -34,6 +33,7 @@ import { AdPreviewThumb } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdData, AdTemplate } from '@/lib/ad-generator/types';
+import { OpenAssetLink, useAssetEditor } from './asset-editor-sheet';
 
 /** The subset of the creatives payload this surface needs. */
 type Creative = {
@@ -70,6 +70,7 @@ export function CampaignOfferDesigns({
   /** True while a run is writing into this campaign — picking is disabled. */
   frozen?: boolean;
 }) {
+  const editor = useAssetEditor();
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [templates, setTemplates] = useState<AdTemplate[]>([]);
   const [branding, setBranding] = useState<Record<string, unknown> | null>(null);
@@ -239,7 +240,13 @@ export function CampaignOfferDesigns({
                   : 'border-[var(--border)] hover:border-[var(--primary)]'
               }`}
             >
-              <Link href={editorHref(lead.id)} className="block">
+              <OpenAssetLink
+                kind="ad"
+                id={lead.id}
+                name={lead.name}
+                href={editorHref(lead.id)}
+                className="block"
+              >
                 {/* Three sources, in order of fidelity. The stored thumbnail is
                     the real render but only exists AFTER a pick — the deferred
                     sizes are what produce it — so a run that nobody has decided
@@ -265,7 +272,7 @@ export function CampaignOfferDesigns({
                     </span>
                   </div>
                 )}
-              </Link>
+              </OpenAssetLink>
               <div className="flex flex-1 flex-col gap-1.5 p-2.5">
                 <span className="truncate text-xs font-medium text-[var(--foreground)]">
                   {group.name}
@@ -307,7 +314,15 @@ export function CampaignOfferDesigns({
         otherOfferCount={Math.max(0, (groups?.filter((g) => g.variants.length > 1).length ?? 1) - 1)}
         onUndo={(id) => void pick(id, true)}
         onOpenEditor={(id) => {
-          window.location.href = editorHref(id);
+          const href = editorHref(id);
+          // Inside the campaign detail the design opens over it; anywhere else
+          // this grid is used, it is still a page navigation.
+          if (editor) {
+            setCompareKey(null);
+            editor.open({ kind: 'ad', id, name: creatives?.find((c) => c.id === id)?.name, href });
+            return;
+          }
+          window.location.href = href;
         }}
         onClose={() => setCompareKey(null)}
       />

@@ -11,6 +11,13 @@
  * Session-gated (not admin): pulling a template fix into your own ad is normal
  * client work, and the ad is re-preflighted either way, so it can't be used to
  * push a non-compliant design through.
+ *
+ * Stays synchronous, unlike the template-level push, because one ad is one
+ * render — `syncRenderSizeIds` renders the preview size only. This used to
+ * render every size the template defined, which on a 16-size design was enough
+ * to blow past nginx's 60-second upstream timeout for a SINGLE ad. `maxDuration`
+ * below is a Vercel setting and does nothing on the droplet; the real ceiling is
+ * nginx's, and it is 60 seconds.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';

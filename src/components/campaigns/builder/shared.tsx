@@ -6,6 +6,7 @@
  * targeting + send/publish happens, since the builder itself never sends).
  */
 import {
+  BoltIcon,
   EnvelopeIcon,
   ChatBubbleLeftRightIcon,
   RectangleStackIcon,
@@ -67,6 +68,27 @@ export function AssetStatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium capitalize ${tone}`}>
       {status}
+    </span>
+  );
+}
+
+/**
+ * The chip an automation campaign wears instead of a derived status badge.
+ *
+ * The derived status is meaningless for a campaign of ads: an ad goes live only
+ * through an AdLaunch, never through its own status, so `isAssetDraft` is
+ * always true for it and the badge froze at "Ready to review" forever. What a
+ * person needs to know is WHAT this is (built from the account's manufacturer
+ * offers) and whether a run is writing into it right now.
+ */
+export function AutomatedChip({ building }: { building: boolean }) {
+  return (
+    <span
+      title={building ? 'A run is building this campaign’s designs' : 'Built from the account’s manufacturer offers'}
+      className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/12 px-2 py-0.5 text-[10px] font-medium text-[var(--primary)]"
+    >
+      <BoltIcon className={`h-3 w-3 ${building ? 'animate-pulse' : ''}`} />
+      {building ? 'Building…' : 'Automated'}
     </span>
   );
 }

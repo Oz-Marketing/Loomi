@@ -65,3 +65,35 @@ work is assembling rather than inventing.
 
 It is worth less on a campaign whose whole point is a specific creative idea — by
 the time you have described the idea precisely enough, you have written it.
+
+# Campaigns from manufacturer offers
+
+For accounts in a vehicle industry, most campaigns are not described — they
+are built from the manufacturer's current offers. Those arrive as **Automated**
+campaigns: one per account per month, named for the month the offers are for
+("October 2026 offers — Young Honda Ogden"), holding one ad design per
+permitted template for each offer, and the companion offer email when the
+account has email on.
+
+They are built two ways, into the same campaign:
+
+- **On a schedule**, once a day, for accounts with automation on.
+- **By hand**, from the Campaigns page — **Generate from OEM offers**. Pick the
+  account, pick the vehicles and offer types, review what will be built and
+  where it lands, and go. The run takes a few minutes; the campaign shows
+  **Building…** meanwhile and you can follow it from the wizard or from
+  Ad Automation settings → Run history.
+
+A campaign built by hand today and the scheduled run tomorrow land in the same
+place — the month's campaign is refreshed, not duplicated. When the month ends
+the campaign moves to Archived on its own.
+
+**Picking a design.** Each offer shows one design and, where more than one was
+built, a **Select a design** button. Picking one archives the others; **Change
+design** and undo stay available. Picking a design does not change the email.
+
+:::note
+An account's own users see Automated campaigns and nothing else on this page.
+They can pick designs; sending and publishing stay with the account team.
+:::
+

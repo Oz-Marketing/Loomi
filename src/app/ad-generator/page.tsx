@@ -328,6 +328,7 @@ export default function AdGeneratorListPage() {
                 offerTypes: v.offerTypes ?? [],
                 wouldChoose: v.wouldChoose ?? null,
                 wouldChooseType: v.wouldChooseType ?? null,
+                latestEnd: (v as { latestEnd?: string | null }).latestEnd ?? null,
               })),
           );
         },

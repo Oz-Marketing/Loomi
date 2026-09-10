@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
 import {
   BoltIcon,
@@ -21,7 +21,9 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { useListView } from '@/components/view-switcher';
 import type { StatusFilterValue } from '@/components/status-filter';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
-import { CampaignStatusBadge, CHANNEL_META } from './shared';
+import { AutomatedChip, CampaignStatusBadge, CHANNEL_META } from './shared';
+import { isVehicleIndustry } from '@/lib/ad-generator/industry';
+import { OfferRunModal } from '@/components/campaigns/offer-run/offer-run-modal';
 import { CAMPAIGN_SOURCE_LABEL } from '@/lib/campaigns/types';
 import type { CampaignAssetKind, CampaignSummary } from '@/lib/campaigns/types';
 
@@ -65,7 +67,28 @@ export function CampaignList() {
   // A dealer READS this page. Creating a campaign, archiving one and deleting one
   // are staff actions — the client tier holds `studio.campaigns.view` and
   // nothing else, and the routes behind these controls are still `AdminOnly`.
-  const { userRole, accounts } = useAccount();
+  const { userRole, accounts, accountData, scopedAccountKeys } = useAccount();
+  const searchParams = useSearchParams();
+  // The OEM run is offered wherever a vehicle-industry account is in scope —
+  // `scopedAccountKeys` is the active account plus anything beneath it, or every
+  // account in admin mode, so one rule covers a single account and a group.
+  // Never hidden for readiness — the modal says what is missing. (This list does
+  // not itself change with the roll-up choice, so it deliberately reads the key
+  // list rather than the roll-up flag; the coverage test holds every reader of
+  // that flag to a scope toggle.)
+  const oemEligible = scopedAccountKeys.some((k) => isVehicleIndustry(accounts[k]?.category));
+  const [oemOpen, setOemOpen] = useState(false);
+  const [oemAccount, setOemAccount] = useState<string | null>(null);
+  const openOemRun = (forAccount?: string | null) => {
+    // One account in scope → it is the one; otherwise the wizard's first step asks.
+    setOemAccount(forAccount ?? (scopedAccountKeys.length === 1 ? scopedAccountKeys[0] : null));
+    setOemOpen(true);
+  };
+  // ?run=oem&account=<key> lets other surfaces open the wizard in place.
+  useEffect(() => {
+    if (searchParams.get('run') === 'oem') openOemRun(searchParams.get('account'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const isStaff = userRole !== 'client';
   const router = useRouter();
   const { confirm } = useLoomiDialog();
@@ -229,6 +252,19 @@ export function CampaignList() {
             <PencilSquareIcon className="h-4 w-4" />
             Start manually
           </Link>
+          {/* Secondary, not the hero: one hero per header, and the Loomi AI
+              control keeps the gradient. The team's own verb for this action. */}
+          {oemEligible && (
+            <button
+              type="button"
+              onClick={() => openOemRun()}
+              title="Build ad designs and the offer email from this account’s manufacturer offers"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+            >
+              <BoltIcon className="h-4 w-4" />
+              Generate from OEM offers
+            </button>
+          )}
           <Link
             href={href('/campaign-builder/new')}
             className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"
@@ -263,7 +299,14 @@ export function CampaignList() {
       )}
 
       {!isLoading && filtered.length === 0 && !loadError && (
-        <EmptyState searchOrFilter={!!search.trim() || statusFilter === 'archived'} href={href} isStaff={isStaff} />
+        <EmptyState
+          searchOrFilter={!!search.trim() || statusFilter === 'archived'}
+          href={href}
+          isStaff={isStaff}
+          oemEligible={oemEligible}
+          accountName={accountData?.dealer ?? null}
+          onRunOem={() => openOemRun()}
+        />
       )}
 
       {filtered.length > 0 && (
@@ -314,22 +357,17 @@ export function CampaignList() {
                         </p>
                       )}
                       <div className="flex items-center gap-2">
-                        <CampaignStatusBadge status={c.status} />
-                        {c.source !== 'manual' && (
+                        {c.source === 'automation' ? (
+                          <AutomatedChip building={c.status === 'building'} />
+                        ) : (
+                          <CampaignStatusBadge status={c.status} />
+                        )}
+                        {c.source === 'ai' && (
                           <span
-                            title={
-                              c.source === 'automation'
-                                ? 'Built from the account’s manufacturer offers'
-                                : 'Generated by the AI campaign builder'
-                            }
+                            title="Generated by the AI campaign builder"
                             className="inline-flex items-center gap-1 text-[10px] font-medium text-[var(--muted-foreground)]"
                           >
-                            {c.source === 'automation' ? (
-                              <BoltIcon className="h-3 w-3" />
-                            ) : (
-                              <SparklesIcon className="h-3 w-3" />
-                            )}{' '}
-                            {CAMPAIGN_SOURCE_LABEL[c.source]}
+                            <SparklesIcon className="h-3 w-3" /> {CAMPAIGN_SOURCE_LABEL[c.source]}
                           </span>
                         )}
                       </div>
@@ -393,7 +431,11 @@ export function CampaignList() {
                           </td>
                         )}
                         <td className="px-3 py-3">
-                          <CampaignStatusBadge status={c.status} />
+                          {c.source === 'automation' ? (
+                            <AutomatedChip building={c.status === 'building'} />
+                          ) : (
+                            <CampaignStatusBadge status={c.status} />
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <ChannelChips campaign={c} />
@@ -426,6 +468,13 @@ export function CampaignList() {
         </div>
       )}
 
+      <OfferRunModal
+        open={oemOpen}
+        onClose={() => setOemOpen(false)}
+        initialAccountKey={oemAccount}
+        onDone={() => void mutate()}
+      />
+
       {selectedIds.size > 0 && (
         <BulkActionDock
           count={selectedIds.size}
@@ -442,10 +491,16 @@ function EmptyState({
   searchOrFilter,
   href,
   isStaff,
+  oemEligible,
+  accountName,
+  onRunOem,
 }: {
   searchOrFilter: boolean;
   href: (p: string) => string;
   isStaff: boolean;
+  oemEligible: boolean;
+  accountName: string | null;
+  onRunOem: () => void;
 }) {
   if (searchOrFilter) {
     return (
@@ -479,10 +534,21 @@ function EmptyState({
       </div>
       <h2 className="text-lg font-semibold text-[var(--foreground)]">No campaigns yet</h2>
       <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
-        Describe what you want to promote and Loomi will draft every channel together — or start
-        manually and fill in the pieces yourself.
+        {oemEligible
+          ? `Build a campaign from ${accountName ? `${accountName}’s` : 'the account’s'} manufacturer offers, describe one for Loomi to draft, or start manually.`
+          : 'Describe what you want to promote and Loomi will draft every channel together — or start manually and fill in the pieces yourself.'}
       </p>
       <div className="mt-5 flex items-center justify-center gap-3">
+        {oemEligible && (
+          <button
+            type="button"
+            onClick={onRunOem}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+          >
+            <BoltIcon className="h-4 w-4" />
+            Generate from OEM offers
+          </button>
+        )}
         <Link
           href={href('/campaign-builder/new')}
           className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"

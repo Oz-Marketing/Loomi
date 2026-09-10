@@ -58,6 +58,7 @@ export function CampaignOfferDesigns({
   accountKey,
   editorHref,
   onChanged,
+  frozen = false,
 }: {
   /** The campaign's ad asset ids — the run's output, archived ones excluded. */
   adIds: string[];
@@ -66,6 +67,8 @@ export function CampaignOfferDesigns({
   editorHref: (id: string) => string;
   /** Called after a pick lands, so the campaign payload can refetch. */
   onChanged?: () => void;
+  /** True while a run is writing into this campaign — picking is disabled. */
+  frozen?: boolean;
 }) {
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [templates, setTemplates] = useState<AdTemplate[]>([]);
@@ -274,7 +277,7 @@ export function CampaignOfferDesigns({
                 {/* A chosen design has archived its siblings out of this list,
                     so `variants.length` is 1 exactly when there WAS a choice —
                     `selected` is the fact that survives the pick. */}
-                {(group.variants.length > 1 || group.selected) && (
+                {!frozen && (group.variants.length > 1 || group.selected) && (
                   <button
                     type="button"
                     onClick={() => setCompareKey(group.key)}

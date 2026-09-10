@@ -10,12 +10,13 @@ import {
   PaperAirplaneIcon,
   Squares2X2Icon,
   TrashIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { CampaignOfferDesigns } from './campaign-offer-designs';
 import { useAccount } from '@/contexts/account-context';
 import { toast } from '@/lib/toast';
-import { CampaignStatusBadge, AssetStatusBadge, CHANNEL_META, assetEditorPath } from './shared';
+import { CampaignStatusBadge, AssetStatusBadge, AutomatedChip, CHANNEL_META, assetEditorPath } from './shared';
 import { CampaignEmailGallery } from './email-gallery';
 import { EmailPreviewThumb } from './email-preview-thumb';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
@@ -256,6 +257,7 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
           accountKey={campaign.accountKey}
           editorHref={(id) => assetEditorPath(href, 'ad', id)}
           onChanged={() => setReloadKey((n) => n + 1)}
+          frozen={campaign.status === 'building'}
         />
       );
     }
@@ -340,7 +342,11 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
       <header className="mb-8">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">{campaign.name}</h1>
-          <CampaignStatusBadge status={campaign.status} />
+          {campaign.source === 'automation' ? (
+            <AutomatedChip building={campaign.status === 'building'} />
+          ) : (
+            <CampaignStatusBadge status={campaign.status} />
+          )}
           {campaign.source === 'ai' && (
             <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
               <SparklesIcon className="h-3.5 w-3.5" /> Built with AI
@@ -354,6 +360,15 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
           <p className="mt-2 max-w-2xl text-sm text-[var(--muted-foreground)]">“{campaign.goal}”</p>
         )}
       </header>
+
+      {campaign.source === 'automation' && campaign.status === 'building' && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-3">
+          <BoltIcon className="mt-0.5 h-4 w-4 flex-shrink-0 animate-pulse text-[var(--primary)]" />
+          <p className="text-xs leading-relaxed text-[var(--foreground)]">
+            Loomi is still building this campaign — designs may change until it finishes.
+          </p>
+        </div>
+      )}
 
       {/* Drafts-only reminder — the builder never sends.
           An automation campaign reads differently: its viewer is usually the

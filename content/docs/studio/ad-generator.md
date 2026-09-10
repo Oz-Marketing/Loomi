@@ -98,3 +98,14 @@ say so rather than exporting the set and hoping.
 - Every size, not just the first one
 - On a video ad, that the poster frame is a frame you'd be happy to show as a
   still — it's the thumbnail, not just the first frame
+
+# Ads from manufacturer offers
+
+For vehicle accounts, the Ad Generator can build ads from the manufacturer's
+live offers instead of a form: **New ad → Generate from OEM offers**. The run
+builds every permitted design for each vehicle you pick and adds them to the
+account's campaign for the month on the Campaigns page — where the account's
+users review them and pick a design per offer. The same run is available from
+Campaigns, and it is what the scheduled automation does every morning for
+accounts with automation on.
+

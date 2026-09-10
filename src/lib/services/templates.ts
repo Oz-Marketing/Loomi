@@ -202,27 +202,20 @@ export async function updateTemplate(
     await createVersion(existing.id, existing.content, userId);
   }
 
-  // Derive new slug from title when title changes
+  // THE SLUG IS FROZEN AT CREATION. Renaming used to re-derive it, which
+  // quietly repointed an identifier every time someone edited a label —
+  // "OEM Monthly Offers" → "OEM Monthly Offers — Fall" moved the row from
+  // `oem-monthly-offers` to `oem-monthly-offers-fall` and broke everything
+  // holding the old one: a playbook's `emailTemplateSlug`, a blast's
+  // `metadata.templateSlug`, any bookmarked editor URL. Nothing rewrites those
+  // references, and nothing told the person renaming that they existed.
+  //
+  // Slug identifies, title labels. A rename now changes only the label.
   const updateData: Record<string, unknown> = {
     ...data,
     updatedAt: new Date(),
     updatedByUserId: userId || null,
   };
-  if (data.title && data.title !== existing.title) {
-    const newSlug = data.title
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-    if (newSlug && newSlug !== slug) {
-      // Only rename if the new slug doesn't collide with another template
-      const collision = await prisma.template.findUnique({ where: { slug: newSlug } });
-      if (!collision) {
-        updateData.slug = newSlug;
-      }
-    }
-  }
 
   return prisma.template.update({
     where: { slug },

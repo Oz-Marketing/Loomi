@@ -92,6 +92,13 @@ export function assetEditorPath(
     case 'flow':
       return href(`/flows/${id}`);
     case 'ad':
-      return href(`/ad-generator/${id}`);
+      // BARE, not `href()`-prefixed. Clients live under /subaccount/<slug>/ and
+      // `useSubaccountHref` prefixes every path — but there is no
+      // src/app/subaccount/[slug]/ad-generator route, so the prefixed link
+      // 404'd for every client who clicked a design. /ad-generator is not an
+      // admin page (proxy.ts ADMIN_PAGES); its gate is `adGeneratorAllowed`,
+      // which the client tier passes, and the [id] editor already narrows
+      // fields for non-managers.
+      return `/ad-generator/${id}`;
   }
 }

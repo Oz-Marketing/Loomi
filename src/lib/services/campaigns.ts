@@ -53,6 +53,12 @@ function isAssetDraft(kind: CampaignAssetKind, status: string): boolean {
       return status !== 'published';
     case 'flow':
       return status === 'draft';
+    case 'ad':
+      // An ad never leaves "draft" through its own status: it goes live only
+      // through an AdLaunch, so its status column says nothing the campaign
+      // badge could honestly report. Named here so the default branch below
+      // stops being load-bearing for the one kind that reaches it every time.
+      return true;
     default:
       return true;
   }

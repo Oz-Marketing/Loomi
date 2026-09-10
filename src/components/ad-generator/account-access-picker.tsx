@@ -112,8 +112,11 @@ export function AccountAccessPicker({
             <span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">
               {accounts[ownerKey]?.dealer || ownerKey}
             </span>
+            {/* Listed but not toggleable: an account cannot lose access to its
+                own template. "Included" says the fact; "owner" left people
+                looking for the switch that would never be there. */}
             <span className="flex-shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
-              owner
+              included
             </span>
           </div>
         )}

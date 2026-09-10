@@ -20,7 +20,6 @@ import { getAuthSession, getAccountScope } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
-import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import {
   LIVE_TEMPLATE,
   canAccountUseTemplate,
@@ -53,16 +52,6 @@ type Row = {
   createdByEmail: string | null;
   createdByImage: string | null;
 };
-
-/**
- * Every ancestor of the given accounts, deduped. A template authored at a
- * parent (group) account is inherited by each rooftop beneath it.
- */
-async function ancestorsForAccounts(keys: string[]): Promise<string[]> {
-  if (!keys.length) return [];
-  const chains = await Promise.all(keys.map((k) => getAncestorAccountKeys(k)));
-  return [...new Set(chains.flat())].filter((k) => !keys.includes(k));
-}
 
 function parseTags(raw: string | null): string[] {
   if (!raw) return [];
@@ -158,11 +147,8 @@ export async function GET(req: NextRequest) {
       if (!ownerKey) return NextResponse.json({ templates: await withApprovals(all.map(shape)) });
       // Same rule as every other read — a global template is not "in" one
       // account's library, so only explicitly granted rows count here.
-      const inherited = await ancestorsForAccounts([ownerKey]);
       const mine = all.filter(
-        (r) =>
-          !isGlobalTemplate(r)
-          && canAccountUseTemplate(r, { accountKey: ownerKey, ancestorKeys: inherited }),
+        (r) => !isGlobalTemplate(r) && canAccountUseTemplate(r, { accountKey: ownerKey }),
       );
       const shaped = mine.map((r) => ({ ...shape(r), sharedIn: r.accountKey !== ownerKey }));
       return NextResponse.json({ templates: await withApprovals(shaped) });
@@ -186,8 +172,6 @@ export async function GET(req: NextRequest) {
     if (session.user.role === 'client') {
       const keys = getAccountScope(session) ?? [];
       const allowed = accountKey ? (keys.includes(accountKey) ? [accountKey] : []) : keys;
-      // Inherit templates authored at any ancestor (group) account.
-      const inherited = await ancestorsForAccounts(allowed);
       // Scoping is partly in a JSON column (`sharedAccountKeys`), so the final cut
       // happens in JS against one shared rule — the alternative is a `where` that
       // has to be kept in step across five call sites, and a template leaking into
@@ -197,17 +181,16 @@ export async function GET(req: NextRequest) {
         where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
         orderBy: { name: 'asc' },
       })) as Row[];
-      const visible = templatesForAnyAccount(rows, allowed, inherited);
+      const visible = templatesForAnyAccount(rows, allowed);
       return NextResponse.json({ templates: await withApprovals(visible.map(shape).filter((t) => t.doc)) });
     }
 
-    // Admins+: global templates + the active account's own + ancestors' own.
-    const inherited = accountKey ? await ancestorsForAccounts([accountKey]) : [];
+    // Admins+: global templates plus whatever the active account was granted.
     const rows = (await prisma.adTemplateDoc.findMany({
       where: { status: 'published', isActive: true, ...LIVE_TEMPLATE },
       orderBy: { name: 'asc' },
     })) as Row[];
-    const visible = templatesForAccount(rows, { accountKey: accountKey ?? null, ancestorKeys: inherited });
+    const visible = templatesForAccount(rows, { accountKey: accountKey ?? null });
     // Only return rows whose doc parses to a usable shape.
     return NextResponse.json({ templates: await withApprovals(visible.map(shape).filter((t) => t.doc)) });
   } catch (err) {

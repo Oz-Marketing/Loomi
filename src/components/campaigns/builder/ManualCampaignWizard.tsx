@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -73,7 +73,6 @@ export function ManualCampaignWizard() {
   const { accountKey, accounts, accountsLoaded, setAccount } = useAccount();
 
   const [step, setStep] = useState<Step>('pieces');
-  const [needsAccount, setNeedsAccount] = useState(false);
   const [name, setName] = useState('');
   // Empty to start: the grid is the first thing you answer, so nothing is
   // chosen for you. (It used to open with one email whether you wanted one or
@@ -81,7 +80,6 @@ export function ManualCampaignWizard() {
   const [items, setItems] = useState<ManualItem[]>([]);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const initRef = useRef(false);
   // Published ad designs in scope for this account, for the ad piece's picker.
   // Fetched once the account is known; an account with none simply can't add
   // an ad here, and the card says so.
@@ -103,11 +101,13 @@ export function ManualCampaignWizard() {
     };
   }, [accountKey]);
 
-  useEffect(() => {
-    if (initRef.current || !accountsLoaded) return;
-    initRef.current = true;
-    if (!accountKey) setNeedsAccount(true);
-  }, [accountsLoaded, accountKey]);
+  /**
+   * Ask for an account when there isn't one — or when the one we have is not in
+   * the list this user can see. A stale selection used to sail through here and
+   * fail on the foreign key at the end, after the whole form was filled in.
+   * Derived rather than latched, so choosing one clears it.
+   */
+  const needsAccount = accountsLoaded && (!accountKey || !accounts[accountKey]);
 
   const add = (kind: CampaignAssetKind) => setItems((prev) => [...prev, blank(kind, uid())]);
   const remove = (id: string) => setItems((prev) => prev.filter((i) => i.localId !== id));
@@ -222,10 +222,7 @@ export function ManualCampaignWizard() {
                 className={inputCls}
                 defaultValue=""
                 onChange={(e) => {
-                  if (e.target.value) {
-                    setAccount({ mode: 'account', accountKey: e.target.value });
-                    setNeedsAccount(false);
-                  }
+                  if (e.target.value) setAccount({ mode: 'account', accountKey: e.target.value });
                 }}
               >
                 <option value="" disabled>

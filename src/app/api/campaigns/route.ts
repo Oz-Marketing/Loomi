@@ -3,6 +3,7 @@ import { getAccountScope, canAccessAccount, getAuthSession } from '@/lib/api-aut
 import { requirePermission } from '@/lib/permissions/require';
 import { campaignAccessFor } from '@/lib/campaigns/access';
 import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
+import { getAccount } from '@/lib/services/accounts';
 
 /**
  * GET /api/campaigns — list campaign containers visible to the session.
@@ -56,6 +57,17 @@ export async function POST(req: NextRequest) {
   const scope = getAccountScope(session!);
   if (!canAccessAccount(scope, accountKey)) {
     return NextResponse.json({ error: 'Forbidden account selection' }, { status: 403 });
+  }
+
+  // `canAccessAccount` answers "may you", not "does it exist" — an unrestricted
+  // admin passes it for any string. Without this check a stale account
+  // selection reached Prisma and came back as a raw foreign-key error in a 500,
+  // which is neither readable nor actionable.
+  if (!(await getAccount(accountKey))) {
+    return NextResponse.json(
+      { error: 'That account no longer exists — pick another and try again' },
+      { status: 404 },
+    );
   }
 
   try {

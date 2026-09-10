@@ -69,10 +69,12 @@ the time you have described the idea precisely enough, you have written it.
 
 # Building a campaign by hand
 
-**Start manually** skips the plan. Name the campaign and add its pieces —
-emails and texts take their content right there; a landing page, form, flow or
-ad is created blank under the account and finished in its own builder, which is
-the better editor for it. Everything lands as a draft.
+**Create campaign → Manually** skips the plan. It runs in two steps: name the
+campaign and tick the pieces it needs from the grid — email, text, landing page,
+form, flow, ad, and more than one of any of them — then fill in only what you
+ticked. Emails and texts take their content right there; a landing page, form,
+flow or ad is created blank under the account and finished in its own builder,
+which is the better editor for it. Everything lands as a draft.
 
 # Campaigns from manufacturer offers
 
@@ -86,7 +88,8 @@ account has email on.
 They are built two ways, into the same campaign:
 
 - **On a schedule**, once a day, for accounts with automation on.
-- **By hand**, from the Campaigns page — **Generate from OEM offers**. Pick the
+- **By hand**, from the Campaigns page — **Create campaign → From OEM
+  offers**. Pick the
   account, pick the vehicles and offer types, review what will be built and
   where it lands, and go. The run takes a few minutes; the campaign shows
   **Building…** meanwhile and you can follow it from the wizard or from

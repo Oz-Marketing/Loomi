@@ -498,6 +498,20 @@ function RunRow({ run: r }: { run: RunSummary }) {
             </span>
           )}
           <span className="text-[var(--muted-foreground)]">{relTime(r.startedAt)}</span>
+          {/* An open row is a run in progress — or one the process died under,
+              which the next run closes as `abandoned` after 15 minutes. Both
+              used to render as a finished run with zero counts. */}
+          {!r.finishedAt && !r.error && (
+            <span className="inline-flex items-center gap-1 text-[var(--primary)]">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--primary)]" />
+              running
+            </span>
+          )}
+          {r.trigger?.kind === 'manual' && (
+            <span className="text-[var(--muted-foreground)]">
+              by {r.trigger.userName || 'a team member'}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap gap-x-3 text-[var(--muted-foreground)]">
           {r.kind === 'offer_poll' ? (
@@ -535,7 +549,7 @@ function RunRow({ run: r }: { run: RunSummary }) {
         {r.error && (
           <p className="w-full break-words text-red-500">
             <ExclamationTriangleIcon className="mr-1 inline h-3 w-3" />
-            {r.error}
+            {r.error === 'abandoned' ? 'interrupted — closed after 15 minutes' : r.error}
           </p>
         )}
         {/* The reasons matter most when a run built nothing, so don't make that

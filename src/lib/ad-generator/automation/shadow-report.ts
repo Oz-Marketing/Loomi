@@ -168,6 +168,10 @@ export interface RunSummary {
   skipped: SkippedVehicle[];
   /** How many ads the run produced, for runs that recorded it. */
   generatedCount: number | null;
+  /** Who started a generate run: a person, or the schedule. Null on older rows. */
+  trigger?: { kind: 'manual' | 'scheduled'; userId?: string | null; userName?: string | null } | null;
+  /** The Campaign the run wrote into, when it did. */
+  campaignId?: string | null;
 }
 
 export interface ShadowReport {
@@ -535,7 +539,12 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     .findMany({ where: { OR: [{ accountKey }, { accountKey: null }] }, orderBy: { startedAt: 'desc' }, take: 15 })
     .catch(() => []);
   const runs: RunSummary[] = runRows.map((r) => {
-    const detail = safeJson<{ skipped?: unknown; generated?: unknown }>(r.detail);
+    const detail = safeJson<{
+      skipped?: unknown;
+      generated?: unknown;
+      trigger?: RunSummary['trigger'];
+      campaignId?: string | null;
+    }>(r.detail);
     return {
       id: r.id,
       kind: r.kind,
@@ -550,6 +559,8 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       error: r.error,
       skipped: parseSkips(detail?.skipped),
       generatedCount: Array.isArray(detail?.generated) ? detail.generated.length : null,
+      trigger: detail?.trigger ?? null,
+      campaignId: detail?.campaignId ?? null,
     };
   });
 

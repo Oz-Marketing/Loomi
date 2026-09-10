@@ -9,6 +9,7 @@ import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { designHash, resolveSyncState } from '@/lib/ad-generator/template-sync';
 import { changedOfferFields } from '@/lib/ad-generator/offer-edit';
 import type { AdData } from '@/lib/ad-generator/types';
+import { creativeCampaignIsBuilding } from '@/lib/ad-generator/automation/offer-campaign';
 
 /** Prefix for the note left when a person changes an ad's offer values. */
 const OFFER_EDITED_NOTE = 'Offer values were edited by hand, so this ad no longer states the manufacturer\'s published terms —';
@@ -116,6 +117,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   });
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!canAccessAccount(getAccountScope(session), existing.accountKey)) return forbidden();
+  // Same guard as the select route: while a run writes into this ad's campaign
+  // an edit would be overwritten by (or overwrite) the run's own upsert.
+  if (await creativeCampaignIsBuilding(id)) {
+    return NextResponse.json({ error: 'run_in_progress' }, { status: 409 });
+  }
 
   let body: {
     name?: string;

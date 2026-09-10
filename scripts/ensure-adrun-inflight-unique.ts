@@ -16,7 +16,11 @@
  * `abandoned` first — here, so the index can be created, and on every
  * `beginRun` after that as the recovery path.
  *
- * Before `db push` for the usual reason; idempotent via catalog checks.
+ * AFTER `db push`, unlike the other ensure scripts: a partial index cannot be
+ * declared in the Prisma schema, and `db push` drops any index the schema does
+ * not know about — so one created before the push is gone by the time the app
+ * starts. Idempotent via catalog checks, so it simply re-creates it each deploy
+ * if push removed it.
  */
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';

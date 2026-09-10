@@ -20,14 +20,21 @@ export async function GET(req: NextRequest) {
   if (!access.allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const scope = getAccountScope(session!);
-  const includeArchived = new URL(req.url).searchParams.get('archived') === '1';
+  const params = new URL(req.url).searchParams;
+  const archived = params.get('archived');
+  const limitRaw = Number(params.get('limit'));
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50;
 
   const campaigns = await listCampaigns({
     accountKeys: scope,
-    includeArchived,
+    // `only` is the Archived filter; `1` is the old include-everything form.
+    archivedOnly: archived === 'only',
+    includeArchived: archived === '1',
+    limit,
     automationOnly: access.automationOnly,
   });
-  return NextResponse.json({ campaigns });
+  // `hasMore` lets the list offer "Load more" without a second count query.
+  return NextResponse.json({ campaigns, hasMore: campaigns.length >= limit, limit });
 }
 
 export async function POST(req: NextRequest) {

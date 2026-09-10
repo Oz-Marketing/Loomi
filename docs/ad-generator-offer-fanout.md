@@ -442,6 +442,68 @@ Do not infer the mode from whether an element binds `o2_vehicleImageUrl`. It is 
 plausible heuristic and the wrong place for one: it decides what a compliance
 check runs against.
 
+## One run, one campaign per account per cycle (2026-09-10)
+
+The run owns its Campaign. `runOfferCampaign` (`offer-run.ts`) is the single
+orchestrator: the 06:30 job calls it per enabled account, the shadow route's
+`generate` action calls it awaited, and `POST /api/ad-generator/automation/offer-run`
+calls it after answering 202. Nothing else creates an automation campaign.
+
+**What it fixed.** The container was created inside the offer-EMAIL step, on
+the scheduled path only, only when `emailEnabled`, and keyed off the offer-set
+fingerprint. A hand run built ads that reached no campaign; an email-off account
+never got one; two runs that saw different offers made two campaigns for one
+month.
+
+**Ownership map.**
+
+| Concern | Home |
+| --- | --- |
+| Trigger + result | Campaigns (the client's home) — `Generate from OEM offers` (Phase 2) |
+| Second door | Ad Generator → New ad → Generate from OEM offers (same orchestrator) |
+| Config + run history | Settings → Ad Automation |
+| Recipe | Playbooks — presets config columns; never runs anything |
+
+**Rules.**
+
+1. **Key:** `Campaign.automationKey = adgen:<accountKey>:<yyyy-mm>`, the UTC
+   month of the run window's START — what the run is FOR. Under `next_month` a
+   late-September run names October. Unique; the ensure script creates it before
+   `db push` and keys existing rows from their runs' windows.
+2. **Rollover is a sweep, not a side effect of creation.** At the top of every
+   run and in the 05:00 expire job, automation campaigns whose key month is
+   strictly before the current UTC month are archived. A `next_month` container
+   built in September survives 1 October; September is archived on 1 October;
+   in the month-end wait state (nothing to build) the ended month still rolls.
+3. **Attach only orphans.** An ad already on a LIVE container stays there; a new
+   container is created only when something attaches. The container is
+   `building` while a run writes into it — `/select` and `PATCH /creatives/[id]`
+   409 meanwhile, the client sees "Building…" — and `draft` after, always.
+4. **Lock:** a partial unique index on the open run row (`accountKey`, `kind`)
+   WHERE `finishedAt IS NULL`. The second `beginRun` is a 409. Rows a dead
+   process left open are closed as `abandoned` after 15 minutes. This index
+   cannot be declared in the Prisma schema and `db push` drops it, so its ensure
+   script runs AFTER the push.
+5. **Email is a member of the container, never its cause.** Filed under the
+   cycle key and refreshed in place; a later run merges its offers with the
+   draft's, keeping only those still live on the campaign. `already_sent`
+   leaves it alone. Email off → the campaign exists anyway; an ads-only
+   campaign is the common shape.
+6. **Reversal recorded:** a manual run now drafts the email when email is on.
+   The 2026-09-02 stance ("a surprise nobody asked for") predates Campaigns
+   becoming the client's home; the try-before-commit path is the dry run.
+7. **Edits win:** the upsert skips `name`/`data` when `offerEditedAt` is set.
+8. **Window default** is `current_month` everywhere (resolver, save route,
+   form, report, client preview) — it was `next_month` in the fallbacks while
+   the column defaulted to `current_month`.
+9. **Notifications:** reviewers only on scheduled runs; the account's users get
+   a link to the campaign, deduped per campaign per day.
+
+Tests: `offer-campaign.test.ts` (key, name, ended-month rule) and
+`offer-run.db.test.ts` (container, same-cycle convergence, the lock, rollover,
+abandoned-run recovery) — the latter under `RUN_DB_TESTS=1` with a fixture
+generator; the rendering path is covered by the staging pass.
+
 ## The paired email (2026-09-04) — superseded 2026-09-08
 
 This section described `AdTemplateDoc.emailTemplateSlug`: a per-design pairing

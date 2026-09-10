@@ -74,14 +74,19 @@ export function CampaignList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
+  // One automation campaign per account per month fills a 50-row window fast
+  // for staff who see every account; "Load more" widens it in place.
+  const PAGE = 50;
+  const [limit, setLimit] = useState(PAGE);
 
-  // 'archived' needs the include-archived API response, then we keep only the
-  // archived rows; 'all' shows the live (non-archived) working set.
-  const swrKey = statusFilter === 'archived' ? '/api/campaigns?archived=1' : '/api/campaigns';
-  const { data, error, isLoading, mutate } = useSWR<{ campaigns?: CampaignSummary[]; error?: string }>(
-    swrKey,
-    fetcher,
-  );
+  // The Archived filter asks the API for archived rows only, so a full window
+  // of live campaigns can't crowd them out of a shared page.
+  const swrKey = `/api/campaigns?limit=${limit}${statusFilter === 'archived' ? '&archived=only' : ''}`;
+  const { data, error, isLoading, mutate } = useSWR<{
+    campaigns?: CampaignSummary[];
+    hasMore?: boolean;
+    error?: string;
+  }>(swrKey, fetcher);
 
   const campaigns: CampaignSummary[] = useMemo(
     () => (Array.isArray(data?.campaigns) ? data!.campaigns! : []),
@@ -407,6 +412,18 @@ export function CampaignList() {
             </div>
           )}
         </>
+      )}
+
+      {data?.hasMore && !isLoading && (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setLimit((n) => n + PAGE)}
+            className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+          >
+            Load more
+          </button>
+        </div>
       )}
 
       {selectedIds.size > 0 && (

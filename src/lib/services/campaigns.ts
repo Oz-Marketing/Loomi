@@ -273,6 +273,12 @@ export async function getCampaignRow(id: string) {
 export async function listCampaigns(options?: {
   accountKeys?: string[] | null;
   includeArchived?: boolean;
+  /** Only archived rows — the Archived filter. Wins over `includeArchived`. */
+  archivedOnly?: boolean;
+  /**
+   * Page size. One automation campaign per account per month fills a shared
+   * 50-row window quickly for staff, so the list can ask for more.
+   */
   limit?: number;
   /**
    * Restrict to machine-generated OEM runs.
@@ -285,10 +291,11 @@ export async function listCampaigns(options?: {
    */
   automationOnly?: boolean;
 }): Promise<CampaignSummary[]> {
-  const limit = Math.max(1, Math.min(100, options?.limit ?? 50));
+  const limit = Math.max(1, Math.min(500, options?.limit ?? 50));
   const scope = options?.accountKeys;
   const where: Record<string, unknown> = {};
-  if (!options?.includeArchived) where.archivedAt = null;
+  if (options?.archivedOnly) where.archivedAt = { not: null };
+  else if (!options?.includeArchived) where.archivedAt = null;
   // scope `null` (developer/super_admin) or `[]` (unrestricted admin) = no filter.
   if (scope && scope.length > 0) where.accountKey = { in: scope };
   if (options?.automationOnly) where.source = 'automation';

@@ -4658,6 +4658,67 @@ model AdAutomationRun {
   @@index([kind, startedAt])
 }
 
+/// One "push this template's design into the ads built from it" run.
+///
+/// Exists because the work is far too slow to answer an HTTP request with. A
+/// template used by 214 ads is 214 Chromium renders and 214 uploads; nginx cuts
+/// an upstream request off at 60 seconds, so the old synchronous route could not
+/// finish and returned 504 no matter how small the client made its batches.
+///
+/// So the route creates one of these, hands back the id, and the worker does the
+/// work — while this row carries the progress the dialog polls and the outcome a
+/// person can still read after closing it.
+model AdTemplateSyncRun {
+  id String @id @default(cuid())
+
+  /// The AdTemplateDoc whose design is being pushed out.
+  templateId String
+  /// Scope the run was started in, for the audit trail. The ads themselves are
+  /// re-authorized per id when the run is created, never from this.
+  accountKey      String?
+  startedByUserId String?
+
+  /// queued | running | done | failed
+  status String @default("queued")
+
+  /// The ads this run owns, as a JSON string[]. Frozen at creation: the run
+  /// applies to the set the person saw and approved in the dialog, not to
+  /// whatever matches the template by the time the worker gets to it.
+  creativeIds String @db.Text
+
+  /// A snapshot of the design being pushed, as a JSON TemplateDoc.
+  ///
+  /// NOT re-read from AdTemplateDoc at run time. The builder autosaves every
+  /// 1.2s, so re-reading would push whatever the designer has typed since into
+  /// ads whose owner approved a different design.
+  doc String @db.Text
+
+  total     Int @default(0)
+  processed Int @default(0)
+  updated   Int @default(0)
+  blocked   Int @default(0)
+  failedAds Int @default(0)
+  skipped   Int @default(0)
+
+  /// JSON ApplyResult[], appended as each ad lands, so a run that dies partway
+  /// still says which ads took the change.
+  results String? @db.Text
+  /// Set only when the run itself failed, as opposed to individual ads failing.
+  error   String? @db.Text
+
+  startedAt DateTime @default(now())
+  /// Moves on every progress write, which is once per ad. This is what lets a
+  /// `running` row be told apart from one the worker died in the middle of —
+  /// without it, a pm2 restart mid-run leaves a row that polls as "in progress"
+  /// forever and a dialog that never resolves.
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  @@index([templateId, startedAt])
+  @@index([startedByUserId, startedAt])
+  @@index([status, startedAt])
+}
+
 // A dealer inventory feed. The Young feeds are Vehicle Listing Ads exports —
 // CSV in the Google/Meta VLA product schema, despite the .../feed/vla/... URL
 // suggesting XML. `fieldMapping` carries a per-feed column-name override so a

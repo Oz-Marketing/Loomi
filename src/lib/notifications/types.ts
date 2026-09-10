@@ -26,6 +26,7 @@ export type NotificationType =
   | 'incentive_offers_landed'
   | 'incentive_ads_ready'
   | 'coop_guideline_changed'
+  | 'template_sync_finished'
   // Playbooks (Studio surface) — nightly coverage sweep
   | 'playbook_drift'
   // Media Library (Studio surface) — rights management
@@ -243,6 +244,21 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     // built against rules that may no longer be in force.
     channel: 'immediate',
     defaultEnabled: true,
+  },
+  {
+    type: 'template_sync_finished',
+    label: 'Template change finished applying to ads',
+    description:
+      'A template design you pushed to the ads built from it has finished, including any ads that kept their current design.',
+    category: 'Ad Generator',
+    // Immediate: it answers a question the person is actively holding open, and
+    // a run of a few hundred ads takes minutes. In a digest it would arrive long
+    // after they stopped wondering.
+    channel: 'immediate',
+    defaultEnabled: true,
+    // In-app only by default. You started this yourself and the bell is right
+    // there; mailing everyone their own button presses is noise.
+    defaultEmailEnabled: false,
   },
   {
     type: 'playbook_drift',

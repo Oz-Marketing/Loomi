@@ -5,7 +5,9 @@ import { loadActiveCoopPack } from './coop-pack-store';
 import type { CoopRulePack } from './coop-rules';
 import { resolveTemplateCoopCheck } from './coop-template-check-store';
 import type { TemplateDoc } from './doc-types';
+import { previewSizeId } from './automation/plan-variants';
 import { preflight, summarizePreflight, type CoopDesignVerdict } from './preflight';
+import { openAdRenderSession, type AdRenderSession } from './render';
 import { mergeRenderData, renderCreativeSizes, renderCreativeToS3 } from './render-creative';
 import { designHash, resolveSyncState } from './template-sync';
 import { vehicleFromData } from './vehicle-fields';
@@ -38,6 +40,84 @@ export interface ApplyResult {
   /** Set when the ad was `ready` and had to be demoted for review. */
   demoted?: boolean;
   sizes?: number;
+  /**
+   * This ad failed IN THE RENDERER, as opposed to a lookup or a write.
+   *
+   * The batch shares one Chromium, and a browser that dies takes every later ad
+   * with it unless it is replaced — so the batch uses this to throw the session
+   * away and open a fresh one. Narrower than `outcome === 'failed'` on purpose:
+   * an ad that was simply not found says nothing about the browser's health, and
+   * relaunching over it would pay a second of launch for no reason.
+   */
+  renderFailed?: boolean;
+}
+
+/**
+ * How long one ad's render may take before the run gives up on it.
+ *
+ * Generous — a size measures well under a second locally and a remote vehicle
+ * photo adds at most the renderer's own 8-second image wait — so reaching this
+ * does not mean "slow", it means wedged.
+ *
+ * It has to exist. `page.screenshot()` takes no timeout, and under real resource
+ * pressure it can simply never return: reproduced here with several Chromium
+ * instances competing, where the screenshot hung indefinitely while the same
+ * page rendered in 74 ms once the machine was clear. Nothing downstream would
+ * have caught it. The web request that used to wrap this work at least died with
+ * nginx; a worker job has no such backstop, so 24 ads sat at 0 processed with
+ * the queue entry held `active` until pg-boss expired it an hour later.
+ */
+const RENDER_TIMEOUT_MS = 120_000;
+
+/**
+ * Bound a render, and make sure abandoning it stays quiet.
+ *
+ * The losing promise is deliberately given a `catch`: it rejects later, when the
+ * recycled browser closes underneath it, and an unhandled rejection there would
+ * take the whole worker process down — the one outcome worse than a failed ad.
+ */
+async function withRenderTimeout<T>(work: Promise<T>, ms = RENDER_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Rendering did not finish within ${Math.round(ms / 1000)}s, so this ad was left alone.`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([work, guard]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    void work.catch(() => {});
+  }
+}
+
+/** Per-outcome tallies for a run, in the shape the dialog and the run row use. */
+export interface ApplyTally {
+  updated: number;
+  blocked: number;
+  failed: number;
+  skipped: number;
+}
+
+/**
+ * Reduce results to counts.
+ *
+ * One place, because the progress row, the finished dialog and the completion
+ * notification all show these numbers and two of them disagreeing would read as
+ * ads going missing. `skipped` folds `unchanged` in with `skipped_detached`:
+ * both mean "we left this ad exactly as it was", which is the only distinction
+ * a tally needs to carry.
+ */
+export function summarizeApplyResults(results: ApplyResult[]): ApplyTally {
+  const tally: ApplyTally = { updated: 0, blocked: 0, failed: 0, skipped: 0 };
+  for (const r of results) {
+    if (r.outcome === 'updated') tally.updated += 1;
+    else if (r.outcome === 'blocked') tally.blocked += 1;
+    else if (r.outcome === 'failed') tally.failed += 1;
+    else tally.skipped += 1;
+  }
+  return tally;
 }
 
 function safeJson<T>(raw: string | null): T | null {
@@ -129,9 +209,51 @@ export class RuleCache {
 export interface ApplyOptions {
   /** Force the push even though the ad is detached (the explicit per-ad reset). */
   force?: boolean;
-  /** Which sizes to render. Defaults to every size the new doc defines. */
+  /**
+   * Which sizes to render. Defaults to the ONE preview size (see
+   * {@link syncRenderSizeIds}), not to every size the doc defines.
+   */
   sizeIds?: string[];
   now?: Date;
+  /** Render on a Chromium the caller owns — see `RenderCreativeInput.session`. */
+  session?: AdRenderSession;
+  /**
+   * Called after each ad, so a long run can report progress while it is still
+   * running. Failures here are swallowed: reporting must never fail the work
+   * it is reporting on.
+   */
+  onResult?: (result: ApplyResult) => void | Promise<void>;
+}
+
+/**
+ * Which sizes a sync re-renders. ONE size, the squarest, unless told otherwise.
+ *
+ * The old default was "every size the doc defines", and that is what made this
+ * feature unusable: a 9-size template pushed to 214 ads is 1,926 retina
+ * screenshots and 1,926 uploads, which no HTTP request can survive and which
+ * spends minutes of Chromium on artifacts nothing reads.
+ *
+ * Because nothing does read them. The stored PNGs are a thumbnail (`persisted[0]`)
+ * and nothing else: launching to Meta, the ZIP export, the launch kit and the ad
+ * detail preview all re-render from the ad's own stored doc. So a size rendered
+ * here is written to S3 and never fetched.
+ *
+ * The proof-of-renderability argument for rasterizing is answered the same way
+ * generation answers it — `previewSizeId` there, this here — because `preflight`
+ * checks EVERY size statically and costs nothing. What one render leaves
+ * uncovered is genuine rasterizer failure at some other size, which surfaces at
+ * pick time and is reported loudly there.
+ */
+export function syncRenderSizeIds(doc: TemplateDoc, sizeIds?: string[]): string[] | undefined {
+  const defined = doc.sizes.map((s) => s.id);
+  if (sizeIds?.length) {
+    const wanted = defined.filter((id) => sizeIds.includes(id));
+    // A caller naming nothing this design has is a misconfiguration, not a
+    // reason to render nothing — same fallback as generation and the pick.
+    if (wanted.length) return wanted;
+  }
+  const preview = previewSizeId(doc);
+  return preview ? [preview] : undefined;
 }
 
 /**
@@ -204,18 +326,20 @@ export async function applyTemplateDocToCreative(
   const coopEntry = make ? await cache.coopPack(make) : null;
   const coopDesign = await cache.designVerdict(row.templateId, templateDoc, coopEntry);
 
-  const docSizeIds = templateDoc.sizes.map((s) => s.id);
-  const wanted = opts.sizeIds?.length ? docSizeIds.filter((id) => opts.sizeIds!.includes(id)) : [];
-  const renderSizeIds = wanted.length ? wanted : undefined;
+  const renderSizeIds = syncRenderSizeIds(templateDoc, opts.sizeIds);
 
   const renderData = mergeRenderData(templateDoc, data);
+  // Deliberately NOT narrowed to `renderSizeIds`. Preflight is a static check
+  // over the whole design, so it costs nothing to run wide, and rendering one
+  // size must never shrink what gets CHECKED — that would let a template edit
+  // break the legibility minimum on a leaderboard and still report compliant.
+  // Generation makes the same split for the same reason.
   const pf = preflight({
     doc: templateDoc,
     data: renderData,
     oemRule,
     coopPack: coopEntry?.pack ?? null,
     coopDesign,
-    sizeIds: renderSizeIds,
   });
 
   if (!pf.ok) {
@@ -246,23 +370,29 @@ export async function applyTemplateDocToCreative(
   let sizes = 0;
   try {
     if (isS3Configured()) {
-      const persisted = await renderCreativeToS3({
-        creativeId: row.id,
-        doc: templateDoc,
-        data,
-        accountKey: row.accountKey,
-        sizeIds: renderSizeIds,
-      });
-      thumbnailUrl = persisted[0]?.url ?? null;
-      sizes = persisted.length;
-    } else {
-      sizes = (
-        await renderCreativeSizes({
+      const persisted = await withRenderTimeout(
+        renderCreativeToS3({
+          creativeId: row.id,
           doc: templateDoc,
           data,
           accountKey: row.accountKey,
           sizeIds: renderSizeIds,
-        })
+          session: opts.session,
+        }),
+      );
+      thumbnailUrl = persisted[0]?.url ?? null;
+      sizes = persisted.length;
+    } else {
+      sizes = (
+        await withRenderTimeout(
+          renderCreativeSizes({
+            doc: templateDoc,
+            data,
+            accountKey: row.accountKey,
+            sizeIds: renderSizeIds,
+            session: opts.session,
+          }),
+        )
       ).length;
     }
   } catch (err) {
@@ -271,6 +401,7 @@ export async function applyTemplateDocToCreative(
       name: row.name,
       outcome: 'failed',
       detail: err instanceof Error ? err.message : 'Unknown render error',
+      renderFailed: true,
     };
   }
 
@@ -306,7 +437,14 @@ export async function applyTemplateDocToCreative(
  * Push a template's design into several ads, one at a time.
  *
  * Sequential on purpose: each ad is a Chromium render, and running a batch of
- * them concurrently on a 2-vCPU droplet is how you turn a sync into an outage.
+ * them concurrently is how you turn a sync into an outage — the web process is
+ * capped at 1536 MB and one retina screenshot costs 60-80 MB of transient CDP
+ * buffers.
+ *
+ * ONE browser for the whole run. `renderAdBatch` launches and closes its own
+ * Chromium per call, so this used to pay a launch (~1s, and more under load) for
+ * every single ad. The session is opened here and closed in `finally`, including
+ * on the throw path, or the Chromium process leaks.
  */
 export async function applyTemplateDocToCreatives(
   creativeIds: string[],
@@ -315,17 +453,71 @@ export async function applyTemplateDocToCreatives(
 ): Promise<ApplyResult[]> {
   const cache = new RuleCache(opts.now ?? new Date());
   const out: ApplyResult[] = [];
-  for (const id of creativeIds) {
-    try {
-      out.push(await applyTemplateDocToCreative(id, templateDoc, opts, cache));
-    } catch (err) {
-      out.push({
-        creativeId: id,
-        name: '',
-        outcome: 'failed',
-        detail: err instanceof Error ? err.message : 'Unknown error',
-      });
+
+  // A caller that already holds a session keeps ownership of it; otherwise this
+  // run owns the one it opens, and only an owned session may be recycled.
+  const borrowed = opts.session ?? null;
+  // A holder rather than a bare `let`: the assignments below happen inside
+  // nested functions, which TypeScript's flow analysis cannot see, so a plain
+  // local would still read as `null` in the `finally` and the close would be
+  // typed away as unreachable.
+  const held: { session: AdRenderSession | null } = { session: null };
+
+  /** Open lazily, so a run of zero ads never launches a browser. */
+  async function liveSession(): Promise<AdRenderSession> {
+    if (!held.session) held.session = await openAdRenderSession();
+    return held.session;
+  }
+
+  /**
+   * Throw away a browser that has died, so the next ad gets a fresh one.
+   *
+   * Without this, sharing one Chromium across the run traded a real property
+   * away: a crash used to cost the ONE ad that was mid-render, because every ad
+   * launched its own browser. Shared, a dead target makes every later ad fail
+   * with "Session closed" — observed, three ads in, on the first live run of
+   * this code. A relaunch is about a second and only happens after a render has
+   * actually failed.
+   */
+  async function recycle(): Promise<void> {
+    const dead = held.session;
+    held.session = null;
+    if (dead) await dead.close().catch(() => {});
+  }
+
+  try {
+    for (const id of creativeIds) {
+      let result: ApplyResult;
+      try {
+        const session = borrowed ?? (await liveSession());
+        result = await applyTemplateDocToCreative(id, templateDoc, { ...opts, session }, cache);
+      } catch (err) {
+        // Reaching here means the browser would not start at all, or the apply
+        // threw outside its own handling. Reported against this ad and the run
+        // carries on: the next ad retries the launch, which is what makes a
+        // transient Chromium failure self-heal instead of ending the run.
+        result = {
+          creativeId: id,
+          name: '',
+          outcome: 'failed',
+          detail: err instanceof Error ? err.message : 'Unknown error',
+          renderFailed: true,
+        };
+      }
+      if (result.renderFailed && !borrowed) await recycle();
+
+      out.push(result);
+      if (opts.onResult) {
+        // Progress reporting must never fail the work it reports on.
+        try {
+          await opts.onResult(result);
+        } catch (err) {
+          console.warn('[template-sync] progress callback failed:', err);
+        }
+      }
     }
+  } finally {
+    if (held.session) await held.session.close().catch(() => {});
   }
   return out;
 }

@@ -34,6 +34,11 @@ import {
   DELIVER_CRM_LEAD_QUEUE,
   type DeliverCrmLeadJob,
 } from '@/lib/integrations/crm/dispatch';
+import {
+  ADGEN_TEMPLATE_SYNC_QUEUE,
+  runTemplateSyncJob,
+  type TemplateSyncJob,
+} from '@/lib/ad-generator/template-sync-job';
 import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
 import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
@@ -421,6 +426,18 @@ async function main(): Promise<void> {
       }
     },
   );
+
+  // Template → ad design sync. Event-driven (no schedule): saving a template
+  // and choosing to apply it creates an AdTemplateSyncRun and enqueues one job.
+  // Lives here rather than in the route because the work is minutes long — a
+  // 9-size template across 214 ads is 214 renders — and nginx cuts an upstream
+  // request off at 60 seconds.
+  await boss.createQueue(ADGEN_TEMPLATE_SYNC_QUEUE);
+  await boss.work<TemplateSyncJob>(ADGEN_TEMPLATE_SYNC_QUEUE, async (jobs) => {
+    for (const job of jobs) {
+      await runTemplateSyncJob(job.data.runId);
+    }
+  });
 
   // Recurring schedule: every minute. pg-boss is idempotent on schedule
   // creation, so this is safe to call on every boot.

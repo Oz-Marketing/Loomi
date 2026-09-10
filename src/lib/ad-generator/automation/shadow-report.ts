@@ -185,7 +185,7 @@ export interface ShadowReport {
     /** Size ids to render; empty = every size the template defines. */
     sizeIds: string[];
     radius: number;
-    maxAdsPerRun: number;
+    maxVehiclesPerRun: number;
     minStock: number;
     offerTypePriority: string[];
     /** draft | ready. `ready` still needs a verified co-op pack to take effect. */
@@ -293,7 +293,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         templateMap: string | null;
         sizeIds: string | null;
         fanOutTemplateIds: string | null;
-        maxAdsPerRun: number;
+        maxVehiclesPerRun: number;
         minStock: number;
         mode: string;
         emailEnabled: boolean;
@@ -321,7 +321,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         templateMap: true,
         sizeIds: true,
         fanOutTemplateIds: true,
-        maxAdsPerRun: true,
+        maxVehiclesPerRun: true,
         minStock: true,
         mode: true,
         emailEnabled: true,
@@ -653,7 +653,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         }
       })(),
       radius: config?.radius ?? 75,
-      maxAdsPerRun: config?.maxAdsPerRun ?? 10,
+      maxVehiclesPerRun: config?.maxVehiclesPerRun ?? 25,
       minStock: config?.minStock ?? 0,
       offerTypePriority: jsonArray(config?.offerTypePriority ?? null),
       mode: config?.mode ?? 'draft',
@@ -767,7 +767,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         vehicles.filter(
           (v) => v.wouldChoose && stockGatePassed(stockGate(v.stock, config?.minStock ?? 0)),
         ).length,
-        config?.maxAdsPerRun ?? 10,
+        config?.maxVehiclesPerRun ?? 25,
       ),
     },
   };

@@ -442,40 +442,30 @@ Do not infer the mode from whether an element binds `o2_vehicleImageUrl`. It is 
 plausible heuristic and the wrong place for one: it decides what a compliance
 check runs against.
 
-## The paired email (2026-09-04)
+## The paired email (2026-09-04) — superseded 2026-09-08
 
-Connor's rule: for every ad template there should be a matching email, most of
-the time. `AdTemplateDoc.emailTemplateSlug` is that pairing — per design, not per
-account, because the library holds several plate designs and they do not all want
-the same send. It is authored in the builder's settings menu ("Paired email") and
-mirrored from the doc to the column on save, exactly as `category` and `tags` are.
+This section described `AdTemplateDoc.emailTemplateSlug`: a per-design pairing
+between an ad template and an email shell, with `restyleOfferEmail` re-splicing
+the run's email through the winning design's shell whenever a client picked a
+design. **That mechanism is gone.** It violated the documented invariant that
+config columns describe what runs — the email shell became a consequence of
+which ad won, which nothing could predict or configure — and in practice it
+clobbered the shell template itself once.
 
-**The conflict, and how it resolves.** A run fans out across MANY templates but
-sends ONE email — six sends to one dealer list is how a database gets burned. So
-the email follows the *winning* design:
+What holds now:
 
-1. At generation, `generateOfferEmail` resolves the shell from the RECOMMENDED
-   ad's template, falling back to `AdAutomationConfig.emailTemplateId` and then
-   to a standalone document.
-2. When a dealer picks a different design, the select route calls
-   `restyleOfferEmail`, which re-splices the same offers through the new
-   template's shell. The plate and the send never disagree.
-
-**Why the input is persisted.** Re-splicing needs the offers again, and the
-generated document has already baked them into blocks. Reconstructing them from
-the ads would re-derive formatting and disclaimers that were resolved once at
-generation — the drift `offer-email-doc` exists to prevent. So the run stores its
-`OfferEmailInput` on the blast metadata and a pick replays it.
-
-**Two slugs, deliberately distinct.** `metadata.shellSlug` is the shell spliced
-into; `metadata.templateSlug` is the rendered artifact
-`createCampaignEmailTemplate` writes on every save. Conflating them made the
-no-op check never match, so a repeat pick re-rendered the body and left another
-template row behind each time.
-
-`restyleOfferEmail` never throws and never touches a blast that has left the
-draft state. A pick must not fail because an email could not be restyled — the
-choice is what the dealer asked for, and a stale email is recoverable.
+- **The email shell is the account's automation setting.** The playbook presets
+  `emailTemplateSlug`; the Config tab writes it to `AdAutomationConfig`; the run
+  reads the config. One source of truth, the same as every other creative step.
+- **Picking a design is about the ads only.** The select route marks one design
+  as chosen and archives its siblings. It does not touch the offer email, and
+  the campaign's compare control says so ("Select a design" / "Change design").
+- **The run's `OfferEmailInput` is still persisted on the blast metadata**, but
+  for a different reason: a later run for the same cycle merges its offers with
+  the draft's and refreshes it in place, instead of filing a second draft.
+- `metadata.shellSlug` (the shell spliced into) and `metadata.templateSlug`
+  (the rendered artifact) stay distinct, for the reason recorded before: conflating
+  them made the no-op check never match.
 
 ## Cost
 

@@ -9,20 +9,16 @@ _Nothing currently in active build — track open PRs in GitHub._
 
 ## Up next
 
-### AI Campaign Builder Assistant
-- **Surface**: studio home (`/dashboard`) — the hero placeholder is
-  already wired in `src/app/dashboard/page.tsx` and shows a
-  "Coming soon" preview of the textarea + Generate button.
-- **What it does**: user describes a campaign idea in plain language
-  (e.g. _"Service reminder for customers who haven't been in for 6+
-  months"_) and the assistant drafts coordinated touchpoints across
-  every medium the studio supports — email, SMS, flows, landing pages.
-- **Output**: a multi-channel campaign plan the user can edit before
-  scheduling. Each touchpoint lands in its appropriate builder
-  (Messaging, Flows, Landing Pages) as a draft.
-- **Why this slot**: the hero is the first thing a creative-mode user
-  sees after the analytics moved out — it's the natural place to bias
-  them toward starting a new thing.
+### Campaigns — every channel from every door
+- **Shipped**: the AI Campaign Builder at `/campaign-builder` (plan →
+  generate → review; email, SMS, landing pages, forms), the manual
+  wizard (email, SMS), and the OEM offer run landing as `Automated`
+  campaigns — the client tier's Studio home.
+- **Next**: manual gets landing pages, forms, flows and ads; the AI
+  planner fills the `flows` slot it already has; an on-demand
+  "Generate from OEM offers" on Campaigns that lands in the same
+  monthly container the scheduled run uses. Ads from the AI planner are
+  deliberately parked — for a vehicle account that IS the offer run.
 
 ### Forms analytics
 - Build out `/reporting/websites` form-funnel rollup (submission counts,

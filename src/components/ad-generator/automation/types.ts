@@ -79,7 +79,8 @@ export interface ShadowScope {
   /** Designs the fan-out may build; empty = every published template in scope. */
   fanOutTemplateIds: string[];
   radius: number;
-  maxAdsPerRun: number;
+  /** The cap counts VEHICLES — every permitted design is built for each. */
+  maxVehiclesPerRun: number;
   minStock: number;
   offerTypePriority: string[];
   mode: string;

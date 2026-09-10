@@ -45,13 +45,14 @@ export const candidateKey = (c: GenerateCandidate) =>
 
 export function GenerateOffersModal({
   candidates,
-  maxAdsPerRun,
+  maxVehiclesPerRun,
   busy,
   onCancel,
   onGenerate,
 }: {
   candidates: GenerateCandidate[];
-  maxAdsPerRun: number;
+  /** The account's vehicle cap — a run builds every permitted design for at most this many vehicles. */
+  maxVehiclesPerRun: number;
   busy: boolean;
   onCancel: () => void;
   onGenerate: (scope: { vehicles: string[]; offerTypes: string[] }) => void;
@@ -82,7 +83,7 @@ export function GenerateOffersModal({
   );
 
   const total = selected.size;
-  const capped = Math.min(total, maxAdsPerRun);
+  const capped = Math.min(total, maxVehiclesPerRun);
 
   function toggleVehicle(key: string) {
     const next = new Set(selected);
@@ -246,10 +247,11 @@ export function GenerateOffersModal({
             </div>
           )}
 
-          {total > maxAdsPerRun && (
+          {total > maxVehiclesPerRun && (
             <p className="mt-3 text-[11px] text-amber-500">
-              The run cap is {maxAdsPerRun} ad{maxAdsPerRun === 1 ? '' : 's'}, so only the first{' '}
-              {maxAdsPerRun} of your {total} will be built. Raise it in Automation → Settings.
+              The run cap is {maxVehiclesPerRun} vehicle{maxVehiclesPerRun === 1 ? '' : 's'}; {total} are
+              selected, so {total - maxVehiclesPerRun} will be left out. Raise{' '}
+              <strong>Max vehicles per run</strong> in Ad Automation settings.
             </p>
           )}
         </div>

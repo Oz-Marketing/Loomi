@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     templateMap?: Record<string, string>;
     sizeIds?: string[];
     fanOutTemplateIds?: string[];
-    maxAdsPerRun?: number;
+    maxVehiclesPerRun?: number;
     minStock?: number;
     radius?: number;
     mode?: string;
@@ -184,7 +184,10 @@ export async function POST(req: NextRequest) {
             Array.isArray(body.fanOutTemplateIds) && body.fanOutTemplateIds.length
               ? JSON.stringify(body.fanOutTemplateIds.filter((x) => typeof x === 'string' && x.trim()))
               : null,
-          maxAdsPerRun: clamp(body.maxAdsPerRun, 1, 100, 10),
+          // Counted in VEHICLES. `maxAdsPerRun` is retired (generate-ads.ts) and
+          // is no longer written — the Settings field was still bound to it, so
+          // the cap a person set never reached the cap the run enforced.
+          maxVehiclesPerRun: clamp(body.maxVehiclesPerRun, 1, 100, 25),
           minStock: clamp(body.minStock, 0, 500, 0),
           radius: clamp(body.radius, 5, 500, 75),
           mode: body.mode === 'ready' ? 'ready' : 'draft',

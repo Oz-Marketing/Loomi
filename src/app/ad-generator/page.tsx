@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, EnvelopeIcon, MegaphoneIcon, SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon, LifebuoyIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { openSupportModal } from '@/lib/ui-events';
@@ -59,7 +59,6 @@ import {
   countByStage,
   isWaitingOnSomeone,
   stageOf,
-  stageOfEmail,
   tallyStages,
   type AdStage,
 } from '@/lib/ad-generator/ad-lifecycle';
@@ -102,21 +101,8 @@ type Creative = {
   data: AdData;
 };
 
-/** An offer email the same generate run produced. Clients only — staff read a
- *  run in Campaigns, which a client cannot reach. */
-type GeneratedEmail = {
-  id: string;
-  subject: string;
-  status: string;
-  scheduledFor: string | null;
-  updatedAt: string;
-  campaignId: string | null;
-};
-
-/** One row of the CLIENT list: an offer with its designs, or the run's email. */
-type ClientItem =
-  | { kind: 'offer'; key: string; stage: AdStage; group: VariantGroup<FacetedCreative> }
-  | { kind: 'email'; key: string; stage: AdStage; email: GeneratedEmail };
+/** One row of the CLIENT list: an offer with its designs. The run's email lives on Campaigns. */
+type ClientItem = { kind: 'offer'; key: string; stage: AdStage; group: VariantGroup<FacetedCreative> };
 
 /**
  * One campaign's whole output — its ads AND its offer email — as a single
@@ -193,7 +179,7 @@ export default function AdGeneratorListPage() {
   const [generating, setGenerating] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
   const [candidates, setCandidates] = useState<GenerateCandidate[]>([]);
-  const [maxAdsPerRun, setMaxAdsPerRun] = useState(10);
+  const [maxVehiclesPerRun, setMaxVehiclesPerRun] = useState(25);
   // Bulk selection. Ids rather than indices so it survives filtering and reloads.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -320,7 +306,7 @@ export default function AdGeneratorListPage() {
         (
           d: {
             configured?: boolean;
-            scope?: { templateMap?: Record<string, string>; maxAdsPerRun?: number };
+            scope?: { templateMap?: Record<string, string>; maxVehiclesPerRun?: number };
             vehicles?: (GenerateCandidate & { liveOffers?: number })[];
           } | null,
         ) => {
@@ -328,7 +314,7 @@ export default function AdGeneratorListPage() {
           setAutomationBlocker(
             !d?.configured ? 'unconfigured' : !d.scope?.templateMap?.all ? 'no-template' : null,
           );
-          setMaxAdsPerRun(d?.scope?.maxAdsPerRun ?? 10);
+          setMaxVehiclesPerRun(d?.scope?.maxVehiclesPerRun ?? 25);
           // Only vehicles that could actually produce an ad — on the lot with at
           // least one live offer. The dialog narrows further from there.
           setCandidates(
@@ -547,30 +533,6 @@ export default function AdGeneratorListPage() {
    */
   const [stageSel, setStageSel] = useState<AdStage[]>([]);
 
-  /**
-   * The offer emails the same runs produced. CLIENT ONLY — a run's email lives
-   * in Campaigns for staff, and `studio.client` cannot reach Campaigns, so
-   * without this the client sees half of what was made for them.
-   */
-  const [genEmails, setGenEmails] = useState<GeneratedEmail[]>([]);
-  useEffect(() => {
-    if (!accountKey || isManager) {
-      setGenEmails([]);
-      return;
-    }
-    let cancelled = false;
-    fetch(`/api/ad-generator/generated-emails?accountKey=${encodeURIComponent(accountKey)}`)
-      .then((r) => (r.ok ? r.json() : { emails: [] }))
-      .then((d: { emails?: GeneratedEmail[] }) => {
-        if (!cancelled) setGenEmails(d.emails ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setGenEmails([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountKey, isManager, creatives]);
 
   /**
    * Groups the stage filter admits. Empty selection = all of them.
@@ -600,14 +562,8 @@ export default function AdGeneratorListPage() {
       stage: stageOf(group),
       group,
     }));
-    const mails: ClientItem[] = genEmails.map((email) => ({
-      kind: 'email',
-      key: `email:${email.id}`,
-      stage: stageOfEmail(email.status, email.scheduledFor),
-      email,
-    }));
-    return [...mails, ...ads];
-  }, [shown, genEmails]);
+    return ads;
+  }, [shown]);
 
   /**
    * One folder per run, and the run is the OUTER container.
@@ -632,7 +588,7 @@ export default function AdGeneratorListPage() {
     const order: string[] = [];
     const byRun = new Map<string, ClientItem[]>();
     for (const i of clientItems) {
-      const cid = i.kind === 'offer' ? i.group.lead.campaignId : i.email.campaignId;
+      const cid = i.group.lead.campaignId;
       const key = cid ? `run:${cid}` : 'loose';
       const cur = byRun.get(key);
       if (cur) cur.push(i);
@@ -644,7 +600,6 @@ export default function AdGeneratorListPage() {
 
     const folders = order.map((key) => {
       const list = byRun.get(key)!;
-      const email = list.find((i) => i.kind === 'email');
       // Waiting first inside the folder, then the settled work, so opening one
       // puts the decision at the top left.
       const items = [...list].sort(
@@ -652,9 +607,9 @@ export default function AdGeneratorListPage() {
       );
       return {
         key,
-        // Named by its email when it has one — that subject IS the run's name,
-        // since the Campaign container was created from it.
-        title: key === 'loose' ? null : email?.kind === 'email' ? email.email.subject : 'Generated offers',
+        // The run's email — and its name — live on Campaigns now, which is the
+        // client's home; this page only ever shows a client the ads.
+        title: key === 'loose' ? null : 'Generated offers',
         items,
         counts: tallyStages(list.map((i) => i.stage)),
         waiting: list.filter((i) => isWaitingOnSomeone(i.stage)).length,
@@ -972,11 +927,7 @@ export default function AdGeneratorListPage() {
 
   /** One item of a client's campaign folder — an ad, or the run's offer email. */
   function renderClientItem(item: ClientItem) {
-    return item.kind === 'email' ? (
-      <GeneratedEmailCard key={item.key} email={item.email} stage={item.stage} />
-    ) : (
-      renderOfferCard(item.group)
-    );
+    return renderOfferCard(item.group);
   }
 
   /**
@@ -1716,7 +1667,7 @@ export default function AdGeneratorListPage() {
       {genOpen && (
         <GenerateOffersModal
           candidates={candidates}
-          maxAdsPerRun={maxAdsPerRun}
+          maxVehiclesPerRun={maxVehiclesPerRun}
           busy={generating}
           onCancel={() => !generating && setGenOpen(false)}
           onGenerate={(scope) => void generateFromOffers(scope)}
@@ -1895,48 +1846,6 @@ function ScratchSetupModal({
   );
 }
 
-/**
- * The offer email a run produced, shown beside the ads it shipped with.
- *
- * CLIENT-ONLY, and read-only. Staff read a run in Campaigns, which has a real
- * Emails tab and an editor behind it; `studio.client` cannot reach Campaigns or
- * Emails & SMS, so for a dealer this card IS the whole of what they see of the
- * email. It deliberately doesn't link anywhere: sending a client to a 403 is
- * worse than showing them a card that plainly does nothing but inform.
- *
- * Visually distinct from an ad card on purpose — an envelope and no thumbnail,
- * because inventing a fake ad preview for an email would be worse than none.
- */
-function GeneratedEmailCard({ email, stage }: { email: GeneratedEmail; stage: AdStage }) {
-  return (
-    <div className="glass-card flex flex-col gap-3 rounded-2xl border border-[var(--border)] p-4">
-      <div className="flex items-center gap-2">
-        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-          <EnvelopeIcon className="h-4 w-4" />
-        </span>
-        <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-          Offer email
-        </span>
-        <StageChip stage={stage} count={1} />
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-[var(--foreground)]" title={email.subject}>
-          {email.subject}
-        </div>
-        <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-          {email.scheduledFor
-            ? `Scheduled for ${new Date(email.scheduledFor).toLocaleDateString()}`
-            : 'Not scheduled yet'}
-          {' · '}
-          Updated {new Date(email.updatedAt).toLocaleDateString()}
-        </div>
-      </div>
-      <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
-        Your team sends this — it goes out with the offers above.
-      </p>
-    </div>
-  );
-}
 
 /**
  * Where this offer stands, as one chip.

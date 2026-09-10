@@ -47,7 +47,7 @@ export interface TemplateCardProps {
   name: string;
   status?: TemplateCardStatus;
   /** Optional scope line (account name / org name / "All accounts"). */
-  scope?: { label: string; kind: 'account' | 'org' | 'global' };
+  scope?: { label: string; kind: 'account' | 'org' | 'global'; title?: string };
   category?: string | null;
   tags?: string[];
   /** Shared vocabulary powering the category/tag popovers. */
@@ -59,6 +59,24 @@ export interface TemplateCardProps {
   editable?: boolean;
   /** Extra badges (e.g. an ad's Scheduled/Expired badge). */
   badges?: ReactNode;
+  /**
+   * Marks laid over the thumbnail's bottom-left corner.
+   *
+   * For facts that QUALIFY the template rather than identify it — co-op
+   * standing, "this one is not yours". They were pills in the meta strip, where
+   * they competed with the name, the audience and the tags for the same eye;
+   * the thumbnail has room and they read fine as small marks on it.
+   */
+  cornerBadges?: ReactNode;
+  /**
+   * A chip on the status line, for state that is time-sensitive rather than
+   * descriptive — an ad template's Scheduled/Expired window.
+   */
+  statusNote?: ReactNode;
+  /** A leading chip on the taxonomy row (an ad's offer kind, say). */
+  leadMeta?: ReactNode;
+  /** Render tags in one neutral skin. See `TagChip`'s `tone`. */
+  mutedTags?: boolean;
   /** How much this template actually gets used. Omit on surfaces that don't
    *  track it — the row simply doesn't render. */
   usage?: TemplateCardUsage;
@@ -154,6 +172,10 @@ export function TemplateCard({
   isClient = false,
   editable = false,
   badges,
+  cornerBadges,
+  statusNote,
+  leadMeta,
+  mutedTags = false,
   usage,
   actions = [],
   onClick,
@@ -185,7 +207,8 @@ export function TemplateCard({
   const canEditTaxonomy = editable && (!!onCategoryChange || !!onTagsChange);
   const allTags = Array.from(new Set([...taxonomy.tags, ...tags]));
   const showAuthor = !isClient && !!author && (!!author.name || !!author.email || !!author.avatarUrl);
-  const showAuthorLine = !!status || showAuthor;
+  // Status moved up to the reach line, so the footer is the author alone.
+  const showAuthorLine = showAuthor;
 
   return (
     <div
@@ -197,7 +220,14 @@ export function TemplateCard({
         selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : 'border-[var(--border)]'
       } ${onClick ? 'cursor-pointer hover:border-[var(--primary)]' : ''}`}
     >
-      <div className="overflow-hidden rounded-t-2xl">{preview}</div>
+      <div className="relative overflow-hidden rounded-t-2xl">
+        {preview}
+        {cornerBadges && (
+          <div className="pointer-events-none absolute bottom-1.5 left-1.5 flex flex-wrap items-center gap-1">
+            {cornerBadges}
+          </div>
+        )}
+      </div>
 
       {/* Multi-select checkbox (email library) */}
       {selectable && (
@@ -255,11 +285,38 @@ export function TemplateCard({
       <div className="p-3">
         <div className="truncate text-sm font-semibold text-[var(--foreground)]">{name}</div>
 
-        {badges && <div className="mt-0.5 flex flex-wrap items-center gap-1">{badges}</div>}
+        {/* Status and reach on ONE line. They are the two halves of the same
+            question — can this be used, and by whom — and reading them apart is
+            how a card came to say "Published" beside an audience it no longer
+            had. */}
+        {(status || scope || statusNote) && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {status && <StatusBadge status={status} />}
+            {scope && (
+              <span
+                title={scope.title}
+                className="flex min-w-0 items-center gap-1 text-[11px] text-[var(--muted-foreground)]"
+              >
+                {scope.kind === 'account' ? (
+                  <BuildingStorefrontIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                ) : scope.kind === 'org' ? (
+                  <BuildingOffice2Icon className="h-3.5 w-3.5 flex-shrink-0" />
+                ) : (
+                  <GlobeAltIcon className="h-3.5 w-3.5 flex-shrink-0" />
+                )}
+                <span className="truncate">{scope.label}</span>
+              </span>
+            )}
+            {statusNote}
+          </div>
+        )}
+
+        {badges && <div className="mt-1 flex flex-wrap items-center gap-1">{badges}</div>}
 
         {/* Category + Tags */}
-        {(canEditTaxonomy || category || tags.length > 0) && (
+        {(canEditTaxonomy || category || tags.length > 0 || leadMeta) && (
           <div className="mt-1.5 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            {leadMeta}
             {/* Category */}
             {canEditTaxonomy ? (
               <div className="relative" ref={catRef}>
@@ -312,6 +369,7 @@ export function TemplateCard({
                 key={tag}
                 tag={tag}
                 size="xs"
+                tone={mutedTags ? 'muted' : 'color'}
                 removable={canEditTaxonomy}
                 onRemove={canEditTaxonomy ? () => onTagsChange?.(tags.filter((x) => x !== tag)) : undefined}
               />
@@ -346,27 +404,12 @@ export function TemplateCard({
           </div>
         )}
 
-        {/* Scope */}
-        {scope && (
-          <span className="mt-1 flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
-            {scope.kind === 'account' ? (
-              <BuildingStorefrontIcon className="h-3.5 w-3.5 flex-shrink-0" />
-            ) : scope.kind === 'org' ? (
-              <BuildingOffice2Icon className="h-3.5 w-3.5 flex-shrink-0" />
-            ) : (
-              <GlobeAltIcon className="h-3.5 w-3.5 flex-shrink-0" />
-            )}
-            <span className="truncate">{scope.label}</span>
-          </span>
-        )}
-
         {/* Usage — how often this template actually gets picked up. */}
         {usage && <UsageBar usage={usage} />}
 
         {/* Authorship: status badge + circle avatar + name (name/avatar hidden for clients), no timestamp */}
         {showAuthorLine && (
           <div className="mt-2 flex items-center gap-2 border-t border-[var(--border)] pt-2">
-            {status && <StatusBadge status={status} />}
             {showAuthor && (
               <span className="flex min-w-0 items-center gap-1.5">
                 <UserAvatar

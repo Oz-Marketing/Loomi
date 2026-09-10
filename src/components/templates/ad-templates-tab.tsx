@@ -36,7 +36,7 @@ import { TemplateFilterRail } from '@/components/templates/template-filter-rail'
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
-import { OfferKindBadge } from '@/components/ad-generator/offer-kind-badge';
+import { OfferKindLabel } from '@/components/ad-generator/offer-kind-badge';
 import { offerKindsForIndustry, splitTemplatesByIndustry } from '@/lib/ad-generator/industry';
 import { audienceLabel, isGlobalTemplate } from '@/lib/ad-generator/template-access';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -372,7 +372,7 @@ export function AdTemplatesTab({
   }
 
   /**
-   * "Availability" — live-or-draft, who can use it, and when, in one place.
+   * "Publish" — who it goes live for, and when, in one place.
    *
    * These were three menu entries (Publish / Move to draft, Share, Schedule…) that
    * each set part of the same thing. Publishing announced a template to everyone,
@@ -382,7 +382,7 @@ export function AdTemplatesTab({
    */
   const availabilityAction = (t: DocTemplate): TemplateCardAction => ({
     key: 'availability',
-    label: `Availability — ${t.status === 'published' ? audienceLabel(t, (k) => scopeName(k) ?? k) : 'Draft'}`,
+    label: `Publish — ${t.status === 'published' ? audienceLabel(t, (k) => scopeName(k) ?? k) : 'Draft'}`,
     icon: RocketLaunchIcon,
     run: () => setAvailabilityFor(t),
   });
@@ -535,6 +535,11 @@ export function AdTemplatesTab({
                     scope={{
                       label: audienceLabel(t, (k) => scopeName(k) ?? k),
                       kind: isGlobalTemplate(t) ? 'global' : 'account',
+                      // The names behind the count, which used to be the "N
+                      // shared" pill's tooltip.
+                      title: t.sharedAccountKeys.length
+                        ? t.sharedAccountKeys.map((k) => scopeName(k) ?? k).join(', ')
+                        : undefined,
                     }}
                     category={t.category}
                     tags={t.tags ?? []}
@@ -550,49 +555,54 @@ export function AdTemplatesTab({
                       if (!usageData) return undefined;
                       return { total: u?.total ?? 0, auto: u?.auto ?? 0, archived: u?.archived ?? 0 };
                     })()}
-                    badges={
+                    /* The card carried ten pills across four rows — offer kind,
+                       a share count, "shared with you", co-op, a category, three
+                       tags, the audience and the status — in six different
+                       colours, so nothing read as more urgent than anything
+                       else. They are redistributed by WHAT THEY ARE, not merged
+                       away: state on the status line, description on the
+                       taxonomy line, qualifiers onto the thumbnail.
+
+                       The one actually deleted is "N shared", which said the
+                       same thing as the audience line beside it. Its roll-call
+                       tooltip moves onto that line, so no information is lost. */
+                    mutedTags
+                    statusNote={
+                      badge ? (
+                        <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                          {badge}
+                        </span>
+                      ) : undefined
+                    }
+                    /* What KIND of ad this builds decides the whole form someone
+                       fills in and cannot change after creation — but it
+                       DESCRIBES the template, which is the taxonomy row's job.
+                       Same move the ad grid already made when its chip row hit
+                       five badges. */
+                    leadMeta={
+                      <span className="inline-flex items-center rounded bg-[var(--muted)] px-1.5 py-px text-[10px] capitalize text-[var(--muted-foreground)]">
+                        <OfferKindLabel doc={t.doc} />
+                      </span>
+                    }
+                    cornerBadges={
                       <>
-                        {/* First badge: what KIND of ad this template builds. It
-                            decides the whole form a user will fill, and it can't
-                            be changed after creation — so it belongs on the card
-                            rather than only inside the builder. */}
-                        <OfferKindBadge doc={t.doc} />
-                        {/* Who, by name. The scope line above already gives the
-                            audience; this is the roll-call behind a count. */}
-                        {t.sharedAccountKeys.length > 1 && (
-                          <span
-                            title={t.sharedAccountKeys.map((k) => scopeName(k) ?? k).join(', ')}
-                            className="inline-block rounded bg-[var(--primary)]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--primary)]"
-                          >
-                            {t.sharedAccountKeys.length} shared
-                          </span>
-                        )}
-                        {/* Not this account's template — it belongs to whoever
-                            owns it, and edits here would reach them. */}
+                        {/* Not this account's template — edits here reach its
+                            owner. A qualifier on the whole card, so it sits on
+                            the card's image rather than in the fact list. */}
                         {t.sharedIn && (
-                          <span
-                            title={`Shared from ${scopeName(t.accountKey) ?? 'the shared library'} — copy it to make a version you can edit`}
-                            className="inline-block rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]"
-                          >
+                          <span className="rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white backdrop-blur">
                             shared with you
                           </span>
                         )}
-                        {badge && (
-                          <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                            {badge}
-                          </span>
-                        )}
-                        {/* Co-op standing. Green only when it can actually vouch for
-                            the current design — a stale approval has to look
+                        {/* Co-op standing. Green only when it can vouch for the
+                            CURRENT design — a stale approval has to look
                             different from a live one, or the badge is worse than
                             nothing. */}
                         {t.coopApproval && t.coopApproval.state !== 'none' && (
                           <span
                             title={t.coopApproval.reason}
-                            className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                              t.coopApproval.state === 'current'
-                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white backdrop-blur ${
+                              t.coopApproval.state === 'current' ? 'bg-emerald-600/85' : 'bg-amber-600/85'
                             }`}
                           >
                             {approvalLabel(t.coopApproval.state)}

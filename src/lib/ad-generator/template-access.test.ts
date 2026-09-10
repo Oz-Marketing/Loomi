@@ -85,21 +85,30 @@ describe('canAccountUseTemplate', () => {
     expect(canAccountUseTemplate(globalButShared, { accountKey: 'young-subaru' })).toBe(false);
   });
 
-  it('inherits a template owned by a group account', () => {
+  it('does NOT flow a group template down to the accounts beneath it', () => {
+    // Inheritance used to make this true, which made "self" a lie: a group
+    // choosing itself was publishing to its whole fleet, with no setting that
+    // said so and no way to take it back. Reaching a sub-account is now a
+    // deliberate share.
     expect(
       canAccountUseTemplate({ accountKey: 'young-group', sharedAccountKeys: null }, {
         accountKey: 'young-subaru',
-        ancestorKeys: ['young-group'],
+      }),
+    ).toBe(false);
+  });
+
+  it('reaches a sub-account once the group actually shares it', () => {
+    expect(
+      canAccountUseTemplate({ accountKey: 'young-group', sharedAccountKeys: '["young-subaru"]' }, {
+        accountKey: 'young-subaru',
       }),
     ).toBe(true);
   });
 
-  it('does not let inheritance launder a sibling share', () => {
-    // A template shared WITH the group is not the group's to hand down.
+  it('does not let a share with the group reach the group\u2019s children', () => {
     expect(
-      canAccountUseTemplate({ accountKey: 'other-rooftop', sharedAccountKeys: '["young-group"]' }, {
+      canAccountUseTemplate({ accountKey: 'other-account', sharedAccountKeys: '["young-group"]' }, {
         accountKey: 'young-subaru',
-        ancestorKeys: ['young-group'],
       }),
     ).toBe(false);
   });

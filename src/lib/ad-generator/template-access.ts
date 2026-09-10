@@ -50,27 +50,29 @@ export function isGlobalTemplate(row: TemplateScopeRow): boolean {
 /**
  * Whether `accountKey` can use this template.
  *
- * `ancestorKeys` are the organization/group accounts above it — a template
- * authored at a group is inherited by every sub-account beneath it, which predates
- * sharing and still holds.
+ * ACCESS IS EXPLICIT. A group's template used to flow down to every account
+ * beneath it automatically, which made the Availability modal a liar: a group
+ * picking "only us" was in fact publishing to its whole fleet, and there was no
+ * setting anywhere that said so or could undo it. Now the owner sees it, and
+ * everyone else is on the share list or is not.
+ *
+ * That is the whole rule. The three states a person can choose — draft, self,
+ * shared with named accounts — are the three states that exist, with nothing
+ * implicit underneath them.
  */
 export function canAccountUseTemplate(
   row: TemplateScopeRow,
-  ctx: { accountKey: string | null; ancestorKeys?: string[] },
+  ctx: { accountKey: string | null },
 ): boolean {
   if (isGlobalTemplate(row)) return true;
   if (!ctx.accountKey) return false;
-  const granted = templateAccessKeys(row);
-  if (granted.includes(ctx.accountKey)) return true;
-  // Inheritance applies to the OWNER only. A group's own template flows down; one
-  // shared with a sibling rooftop does not become the group's to hand out.
-  return !!row.accountKey && (ctx.ancestorKeys ?? []).includes(row.accountKey);
+  return templateAccessKeys(row).includes(ctx.accountKey);
 }
 
 /** Filter a list to what one account may use. */
 export function templatesForAccount<T extends TemplateScopeRow>(
   rows: T[],
-  ctx: { accountKey: string | null; ancestorKeys?: string[] },
+  ctx: { accountKey: string | null },
 ): T[] {
   return rows.filter((r) => canAccountUseTemplate(r, ctx));
 }
@@ -79,12 +81,9 @@ export function templatesForAccount<T extends TemplateScopeRow>(
 export function templatesForAnyAccount<T extends TemplateScopeRow>(
   rows: T[],
   accountKeys: string[],
-  ancestorKeys: string[] = [],
 ): T[] {
   return rows.filter(
-    (r) =>
-      isGlobalTemplate(r)
-      || accountKeys.some((k) => canAccountUseTemplate(r, { accountKey: k, ancestorKeys })),
+    (r) => isGlobalTemplate(r) || accountKeys.some((k) => canAccountUseTemplate(r, { accountKey: k })),
   );
 }
 

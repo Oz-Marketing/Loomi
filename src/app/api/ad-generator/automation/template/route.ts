@@ -27,7 +27,6 @@ import { prisma } from '@/lib/prisma';
 import { LIVE_TEMPLATE, canAccountUseTemplate, parseSharedKeys } from '@/lib/ad-generator/template-access';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { usableByAutomation } from '@/lib/ad-generator/offer-kinds';
-import { getAncestorAccountKeys } from '@/lib/services/accounts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,16 +80,11 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
-    // A template authored at the group account is inherited by each rooftop
-    // beneath it, so the scope check needs the ancestor chain — without it a
-    // dealer in a group sees only globals and its own.
-    const ancestorKeys = await getAncestorAccountKeys(accountKey).catch(() => [] as string[]);
-
     const templates = rows
       .filter((r) =>
         canAccountUseTemplate(
           { accountKey: r.accountKey, sharedAccountKeys: parseSharedKeys(r.sharedAccountKeys) },
-          { accountKey, ancestorKeys },
+          { accountKey },
         ),
       )
       .map((r) => ({
@@ -134,11 +128,10 @@ export async function POST(req: NextRequest) {
       if (!row || row.status !== 'published' || !row.isActive || row.deletedAt) {
         return NextResponse.json({ error: 'That design is not available.' }, { status: 400 });
       }
-      const ancestorKeys = await getAncestorAccountKeys(accountKey).catch(() => [] as string[]);
       if (
         !canAccountUseTemplate(
           { accountKey: row.accountKey, sharedAccountKeys: parseSharedKeys(row.sharedAccountKeys) },
-          { accountKey, ancestorKeys },
+          { accountKey },
         )
       ) {
         return forbidden();

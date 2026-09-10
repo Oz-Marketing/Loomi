@@ -18,16 +18,25 @@ export function TagChip({
   removable,
   onRemove,
   size = 'sm',
+  tone = 'color',
 }: {
   tag: string;
   removable?: boolean;
   onRemove?: () => void;
   size?: 'xs' | 'sm';
+  /**
+   * `color` gives each tag its own hue, which is how you tell them apart in a
+   * tag PICKER. `muted` drops that on a surface where the tags sit beside real
+   * status: a card carrying six differently-coloured chips reads as six alerts,
+   * and the two that actually needed attention stop standing out.
+   */
+  tone?: 'color' | 'muted';
 }) {
   const color = getTagColor(tag);
   const px = size === 'xs' ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]';
+  const skin = tone === 'muted' ? 'bg-[var(--muted)] text-[var(--muted-foreground)]' : color.className;
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full ${px} ${color.className}`}>
+    <span className={`inline-flex items-center gap-1 rounded-full ${px} ${skin}`}>
       {tag}
       {removable && (
         <button

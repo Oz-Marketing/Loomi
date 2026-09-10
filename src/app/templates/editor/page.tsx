@@ -8875,7 +8875,27 @@ export default function TemplateEditorPage() {
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-  const designLabel = parsed?.frontmatter?.title || slugLabel;
+  /**
+   * A v2 template keeps its title in the JSON doc, not in v1 frontmatter.
+   *
+   * The header used to read and write `parsed.frontmatter.title` for every
+   * template. On a v2 doc that field does not exist, so the name fell back to
+   * the SLUG — and renaming wrote into a shape nothing serializes, then the
+   * next edit from the visual shell rebuilt `code` and the typed name vanished.
+   * A template created from scratch in the blast builder is v2, which is why it
+   * could not be renamed at all.
+   */
+  const v2Doc = useMemo(() => parseV2Template(code), [code]);
+  const designLabel = v2Doc?.title || parsed?.frontmatter?.title || slugLabel;
+
+  /** Write the title back to whichever shape this template actually is. */
+  const applyTemplateTitle = (title: string) => {
+    if (v2Doc) {
+      handleCodeChange(JSON.stringify({ ...v2Doc, title }, null, 2));
+      return;
+    }
+    if (parsed) updateFrontmatter("title", title);
+  };
   const isDragDropTemplate = useMemo(
     () => hasVisualTemplateScaffold(code),
     [code],
@@ -8972,9 +8992,7 @@ export default function TemplateEditorPage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     const trimmed = editTitleValue.trim();
-                    if (trimmed && parsed) {
-                      updateFrontmatter("title", trimmed);
-                    }
+                    if (trimmed) applyTemplateTitle(trimmed);
                     setIsEditingTitle(false);
                   } else if (e.key === "Escape") {
                     setIsEditingTitle(false);
@@ -8982,9 +9000,7 @@ export default function TemplateEditorPage() {
                 }}
                 onBlur={() => {
                   const trimmed = editTitleValue.trim();
-                  if (trimmed && parsed) {
-                    updateFrontmatter("title", trimmed);
-                  }
+                  if (trimmed) applyTemplateTitle(trimmed);
                   setIsEditingTitle(false);
                 }}
                 autoFocus

@@ -4,7 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { buildAccountContextForKey } from '@/lib/campaigns/account-context';
 import { generateCampaignPlan } from '@/lib/ai/campaign-plan';
 import { createCampaign } from '@/lib/services/campaigns';
-import { PHASE_2_CHANNELS } from '@/lib/campaigns/types';
+import { PHASE_3_CHANNELS } from '@/lib/campaigns/types';
 
 /**
  * POST /api/campaigns/ai/plan
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const { name, plan } = await generateCampaignPlan({
       goal,
       accountContext,
-      channels: PHASE_2_CHANNELS,
+      channels: PHASE_3_CHANNELS,
     });
 
     const campaign = await createCampaign({

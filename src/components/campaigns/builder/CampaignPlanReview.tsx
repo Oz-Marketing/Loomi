@@ -11,6 +11,7 @@ import {
   SparklesIcon,
   ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
+import { FlowIcon } from '@/components/icon-map';
 import {
   SMS_MAX_CHARS,
   type CampaignPlan,
@@ -128,7 +129,10 @@ export function CampaignPlanReview({
   const updateClarification = (id: string, answer: string) =>
     update({ clarifications: plan.clarifications.map((c) => (c.id === id ? { ...c, answer } : c)) });
 
-  const totalTouches = plan.emails.length + plan.sms.length;
+  const flows = plan.flows ?? [];
+  const removeFlow = (key: string) => update({ flows: flows.filter((f) => f.key !== key) });
+  // A flow counts once: it is one thing to approve, however many steps it has.
+  const totalTouches = plan.emails.length + plan.sms.length + flows.length;
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -401,6 +405,54 @@ export function CampaignPlanReview({
           )}
         </div>
       </section>
+
+      {/* Flows — an ongoing sequence, planned as steps. Read-only here: the
+          steps are built as draft nodes and finished in the flow builder, which
+          is the editor for a sequence. */}
+      {flows.length > 0 && (
+        <section className="mb-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+              <FlowIcon className="h-4 w-4 text-amber-400" /> Flows ({flows.length})
+            </h3>
+          </div>
+          <div className="space-y-3">
+            {flows.map((flow) => (
+              <div key={flow.key} className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-[var(--foreground)]">{flow.purpose}</p>
+                    {flow.trigger && (
+                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">Suggested trigger: {flow.trigger}</p>
+                    )}
+                  </div>
+                  <button onClick={() => removeFlow(flow.key)} className="text-[var(--muted-foreground)] transition hover:text-rose-400" aria-label="Remove flow">
+                    <TrashIcon className="h-4 w-4" />
+                  </button>
+                </div>
+                <ol className="space-y-1.5 text-xs">
+                  {flow.steps.map((step, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-0.5 w-16 flex-shrink-0 text-[var(--muted-foreground)]">
+                        {step.delayDays === 0 ? (i === 0 ? 'On entry' : 'Then') : `+${step.delayDays} day${step.delayDays === 1 ? '' : 's'}`}
+                      </span>
+                      <span className="flex-shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">
+                        {step.channel === 'sms' ? 'SMS' : 'Email'}
+                      </span>
+                      <span className="min-w-0 text-[var(--foreground)]">
+                        {step.channel === 'sms' ? step.message : step.subject || step.purpose}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+                <p className="mt-3 text-[11px] text-[var(--muted-foreground)]">
+                  Built as a draft flow — you’ll set who enters it, and adjust the steps, in the flow builder.
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Approve */}
       <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--card-strong)]/95 px-4 py-3 backdrop-blur">

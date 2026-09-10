@@ -13,7 +13,8 @@ covers:
 
 The campaign builder takes a description of what you want to achieve and comes
 back with a coordinated set of drafts — email, text, and where it fits, a
-landing page and a form.
+landing page, a form, and a flow (an ongoing sequence a contact moves through,
+built as draft steps you finish in the flow builder).
 
 It works in three steps, and you are in control at each one.
 

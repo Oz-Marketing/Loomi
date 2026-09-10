@@ -43,8 +43,11 @@ export type CampaignChannel = 'email' | 'sms' | 'landingPage' | 'form' | 'flow';
 /** Channels the builder can actually generate today (Phase 1). */
 export const PHASE_1_CHANNELS: CampaignChannel[] = ['email', 'sms'];
 
-/** Phase 2 adds landing pages + lead forms (flows remain Phase 3). */
+/** Phase 2 adds landing pages + lead forms. */
 export const PHASE_2_CHANNELS: CampaignChannel[] = ['email', 'sms', 'landingPage', 'form'];
+
+/** Phase 3 adds flows — the planner fills the `flows` slot the plan always had. */
+export const PHASE_3_CHANNELS: CampaignChannel[] = ['email', 'sms', 'landingPage', 'form', 'flow'];
 
 /** Twilio single-segment-friendly cap mirrored from the SMS campaign service. */
 export const SMS_MAX_CHARS = 640;
@@ -96,10 +99,31 @@ export interface CampaignPlanFormSpec {
   fields?: string[];
 }
 
+/** One step of a planned drip: wait `delayDays` after the previous step, then send. */
+export interface CampaignPlanFlowStep {
+  /** Days after the previous step (0 = immediately). The first step's delay is from enrollment. */
+  delayDays: number;
+  channel: 'email' | 'sms';
+  purpose: string;
+  /** Email steps: the subject; the body is generated at build time. */
+  subject?: string;
+  /** SMS steps: the final, send-ready message. */
+  message?: string;
+}
+
+/**
+ * A planned automation — an ongoing sequence a contact moves through, as
+ * opposed to a campaign's one-off touches. Built as a Loomi Flow: trigger →
+ * (wait →) step → …, every step a draft node the person finishes in the flow
+ * builder. `trigger` is a plain-English suggestion; the flow's real trigger is
+ * set in the builder.
+ */
 export interface CampaignPlanFlowSpec {
   key: string;
   purpose: string;
-  shape?: string;
+  /** Plain English: who should enter this flow and when. Suggestion only. */
+  trigger?: string;
+  steps: CampaignPlanFlowStep[];
 }
 
 export interface CampaignPlanAudience {

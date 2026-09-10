@@ -14,11 +14,12 @@ _Nothing currently in active build — track open PRs in GitHub._
   generate → review; email, SMS, landing pages, forms), the manual
   wizard (email, SMS), and the OEM offer run landing as `Automated`
   campaigns — the client tier's Studio home.
-- **Next**: manual gets landing pages, forms, flows and ads; the AI
-  planner fills the `flows` slot it already has; an on-demand
-  "Generate from OEM offers" on Campaigns that lands in the same
-  monthly container the scheduled run uses. Ads from the AI planner are
-  deliberately parked — for a vehicle account that IS the offer run.
+- **Shipped 2026-09-10**: manual gets landing pages, forms, flows and
+  ads; the AI planner fills its `flows` slot; "Generate from OEM offers"
+  on Campaigns lands in the same monthly container the scheduled run
+  uses.
+- **Parked**: ads from the AI planner — for a vehicle account that IS the
+  offer run.
 
 ### Forms analytics
 - Build out `/reporting/websites` form-funnel rollup (submission counts,

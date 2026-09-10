@@ -496,8 +496,10 @@ export async function upsertCampaignEmailTemplate(
 
     if (prior && !isLibraryTemplate) {
       try {
-        // Title is deliberately NOT passed: `updateTemplate` re-derives the slug
-        // from a changed title, which would defeat the reuse this exists for.
+        // Title is deliberately NOT passed. `updateTemplate` no longer
+        // re-derives the slug — the slug is frozen at creation — but a
+        // generated row's title is not the campaign's to overwrite either, and
+        // reuse only needs the content.
         await templateService.updateTemplate(
           existingSlug,
           { content: input.content, preheader: input.previewText || undefined },

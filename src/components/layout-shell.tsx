@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
-import { AppLogo } from '@/components/app-logo';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { SurfaceShell } from '@/components/surface-shell';
 import {
@@ -293,7 +293,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
             >
               <ArrowLeftIcon className="w-4 h-4" />
             </button>
-            <AppLogo className="h-7 w-auto" />
+            <BlastNameField id={builderBlastId(normalizedPath)} channel={channel} />
           </div>
           <CampaignBuilderProgress current={step} channel={channel} path={pathname} />
           <div />

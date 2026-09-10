@@ -1,5 +1,5 @@
 import { adTemplateFromDoc } from './doc-template';
-import { renderAdBatch } from './render';
+import { renderAdBatch, type AdRenderSession } from './render';
 import { usedFontFamilies } from './fonts';
 import { embedAccountFontCss, googleFontFaceCss } from './render-fonts';
 import { usedGoogleFontFamilies } from './google-fonts';
@@ -84,6 +84,16 @@ export interface RenderCreativeInput {
   sizeIds?: string[];
   /** Pixel density. 2 = retina, matching the interactive export. */
   scale?: number;
+  /**
+   * Render on a Chromium the CALLER owns, instead of launching one here.
+   *
+   * Launching the browser dominates a single render's latency, so a caller that
+   * renders many creatives in a row (the template→ad sync pushing one design
+   * into 200 ads) should open one session and pass it to every call rather than
+   * paying that cost 200 times. Ownership stays with the caller: this never
+   * closes a session it did not open.
+   */
+  session?: AdRenderSession;
 }
 
 /**
@@ -97,6 +107,7 @@ export async function renderCreativeSizes({
   accountKey,
   sizeIds,
   scale = 2,
+  session,
 }: RenderCreativeInput): Promise<RenderedSize[]> {
   // Checked before any work: posterizing and embedding fonts for a size list that
   // matches nothing is wasted effort.
@@ -111,14 +122,21 @@ export async function renderCreativeSizes({
   const still = await stillRenderFor({ doc, template: adTemplateFromDoc(doc.id, doc), data: withFonts });
   const template = still.template;
 
-  const pngs = await renderAdBatch(
-    sizes.map((size) => ({
-      html: template.render(still.data, size),
-      width: size.width,
-      height: size.height,
-      scale,
-    })),
-  );
+  const items = sizes.map((size) => ({
+    html: template.render(still.data, size),
+    width: size.width,
+    height: size.height,
+    scale,
+  }));
+
+  // A borrowed session renders in place; otherwise `renderAdBatch` launches its
+  // own Chromium for these sizes and closes it again.
+  const pngs: Buffer[] = [];
+  if (session) {
+    for (const item of items) pngs.push(await session.render(item));
+  } else {
+    pngs.push(...(await renderAdBatch(items)));
+  }
 
   return sizes.map((size, i) => ({
     sizeId: size.id,

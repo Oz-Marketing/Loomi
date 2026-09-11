@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Link from 'next/link';
 import {
   ArrowTopRightOnSquareIcon,
   ChevronLeftIcon,
@@ -11,6 +10,7 @@ import {
   EyeIcon,
 } from '@heroicons/react/24/outline';
 import { AssetStatusBadge, assetEditorPath } from './shared';
+import { OpenAssetLink } from './asset-editor-sheet';
 import { EmailPreviewThumb } from './email-preview-thumb';
 import type { CampaignAssetSummary } from '@/lib/campaigns/types';
 
@@ -21,9 +21,17 @@ import type { CampaignAssetSummary } from '@/lib/campaigns/types';
 export function CampaignEmailGallery({
   assets,
   href,
+  showOpen = true,
 }: {
   assets: CampaignAssetSummary[];
   href: (path: string) => string;
+  /**
+   * Whether to offer the editor link. False for a client viewing an automation
+   * campaign: Open lands in the blast recipients wizard, whose Continue PATCH
+   * 403s the client tier — a door that opens onto a wall. The rendered preview
+   * and "View in browser" are what they came for and stay.
+   */
+  showOpen?: boolean;
 }) {
   const [index, setIndex] = useState(0);
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
@@ -81,12 +89,17 @@ export function CampaignEmailGallery({
               <EyeIcon className="h-3.5 w-3.5" /> View in browser
             </button>
           )}
-          <Link
-            href={assetEditorPath(href, 'email', active.id)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
-          >
-            Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-          </Link>
+          {showOpen && (
+            <OpenAssetLink
+              kind="email"
+              id={active.id}
+              name={active.name}
+              href={assetEditorPath(href, 'email', active.id)}
+              className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
+            >
+              Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+            </OpenAssetLink>
+          )}
         </div>
       </div>
 

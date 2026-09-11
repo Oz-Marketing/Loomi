@@ -2,12 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
 import {
   BoltIcon,
   SparklesIcon,
-  PencilSquareIcon,
   MegaphoneIcon,
   TrashIcon,
   ArchiveBoxIcon,
@@ -21,7 +20,10 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { useListView } from '@/components/view-switcher';
 import type { StatusFilterValue } from '@/components/status-filter';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
-import { CampaignStatusBadge, CHANNEL_META } from './shared';
+import { AutomatedChip, CampaignStatusBadge, CHANNEL_META } from './shared';
+import { isVehicleIndustry } from '@/lib/ad-generator/industry';
+import { OfferRunModal } from '@/components/campaigns/offer-run/offer-run-modal';
+import { CreateCampaignMenu } from './create-campaign-menu';
 import { CAMPAIGN_SOURCE_LABEL } from '@/lib/campaigns/types';
 import type { CampaignAssetKind, CampaignSummary } from '@/lib/campaigns/types';
 
@@ -65,7 +67,28 @@ export function CampaignList() {
   // A dealer READS this page. Creating a campaign, archiving one and deleting one
   // are staff actions — the client tier holds `studio.campaigns.view` and
   // nothing else, and the routes behind these controls are still `AdminOnly`.
-  const { userRole } = useAccount();
+  const { userRole, accounts, accountData, scopedAccountKeys } = useAccount();
+  const searchParams = useSearchParams();
+  // The OEM run is offered wherever a vehicle-industry account is in scope —
+  // `scopedAccountKeys` is the active account plus anything beneath it, or every
+  // account in admin mode, so one rule covers a single account and a group.
+  // Never hidden for readiness — the modal says what is missing. (This list does
+  // not itself change with the roll-up choice, so it deliberately reads the key
+  // list rather than the roll-up flag; the coverage test holds every reader of
+  // that flag to a scope toggle.)
+  const oemEligible = scopedAccountKeys.some((k) => isVehicleIndustry(accounts[k]?.category));
+  const [oemOpen, setOemOpen] = useState(false);
+  const [oemAccount, setOemAccount] = useState<string | null>(null);
+  const openOemRun = (forAccount?: string | null) => {
+    // One account in scope → it is the one; otherwise the wizard's first step asks.
+    setOemAccount(forAccount ?? (scopedAccountKeys.length === 1 ? scopedAccountKeys[0] : null));
+    setOemOpen(true);
+  };
+  // ?run=oem&account=<key> lets other surfaces open the wizard in place.
+  useEffect(() => {
+    if (searchParams.get('run') === 'oem') openOemRun(searchParams.get('account'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const isStaff = userRole !== 'client';
   const router = useRouter();
   const { confirm } = useLoomiDialog();
@@ -74,19 +97,42 @@ export function CampaignList() {
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
+  // One automation campaign per account per month fills a 50-row window fast
+  // for staff who see every account; "Load more" widens it in place.
+  const PAGE = 50;
+  const [limit, setLimit] = useState(PAGE);
 
-  // 'archived' needs the include-archived API response, then we keep only the
-  // archived rows; 'all' shows the live (non-archived) working set.
-  const swrKey = statusFilter === 'archived' ? '/api/campaigns?archived=1' : '/api/campaigns';
-  const { data, error, isLoading, mutate } = useSWR<{ campaigns?: CampaignSummary[]; error?: string }>(
-    swrKey,
-    fetcher,
-  );
+  // The Archived filter asks the API for archived rows only, so a full window
+  // of live campaigns can't crowd them out of a shared page.
+  const swrKey = `/api/campaigns?limit=${limit}${statusFilter === 'archived' ? '&archived=only' : ''}`;
+  const { data, error, isLoading, mutate } = useSWR<{
+    campaigns?: CampaignSummary[];
+    hasMore?: boolean;
+    error?: string;
+  }>(swrKey, fetcher);
 
   const campaigns: CampaignSummary[] = useMemo(
     () => (Array.isArray(data?.campaigns) ? data!.campaigns! : []),
     [data],
   );
+
+  // A client with nothing Active may be between cycles: last month's campaign
+  // archived, the manufacturer's next programs not yet published. That is a
+  // different message from "never had one", so the newest archived campaign is
+  // asked for — clients only, only when Active is empty.
+  const { data: endedData } = useSWR<{ campaigns?: CampaignSummary[] }>(
+    !isStaff && data && (data.campaigns?.length ?? 0) === 0 && statusFilter !== 'archived'
+      ? '/api/campaigns?archived=only&limit=1'
+      : null,
+    fetcher,
+  );
+  const endedCycle = useMemo(() => {
+    const c = endedData?.campaigns?.[0];
+    if (!c || c.source !== 'automation') return null;
+    // "October 2026 offers — Young Honda Ogden" → "October"
+    const m = /^([A-Z][a-z]+) \d{4} offers/.exec(c.name);
+    return m ? m[1] : 'Last month';
+  }, [endedData]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -154,7 +200,7 @@ export function CampaignList() {
     const okConfirm = await confirm({
       title: ids.length === 1 ? 'Delete this campaign?' : `Delete ${ids.length} campaigns?`,
       message:
-        'This permanently deletes the campaign and every asset it generated (emails, texts, landing pages, forms) from their channel pages too. This can’t be undone.',
+        'This permanently deletes the campaign and every asset it generated (emails, texts, landing pages, forms) from their channel pages too. Ad designs are unlinked and stay in the Ad Generator. This can’t be undone.',
       confirmLabel: 'Delete forever',
       destructive: true,
     });
@@ -213,24 +259,11 @@ export function CampaignList() {
           <p className="mt-1 text-sm text-[var(--muted-foreground)]">
             {isStaff
               ? 'Multi-channel campaigns — email, SMS, and more — built together and reviewed as one.'
-              : 'The offers built for you each month — the ads and the email that goes with them.'}
+              : 'What Loomi built from your manufacturer offers — one campaign for each month’s programs.'}
           </p>
         </div>
         <div className={`flex items-center gap-2 ${isStaff ? '' : 'hidden'}`}>
-          <Link
-            href={href('/campaign-builder/new/manual')}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-          >
-            <PencilSquareIcon className="h-4 w-4" />
-            Start manually
-          </Link>
-          <Link
-            href={href('/campaign-builder/new')}
-            className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"
-          >
-            <SparklesIcon className="h-4 w-4" />
-            New with AI
-          </Link>
+          <CreateCampaignMenu href={href} oemEligible={oemEligible} onRunOem={() => openOemRun()} />
         </div>
       </header>
 
@@ -258,7 +291,15 @@ export function CampaignList() {
       )}
 
       {!isLoading && filtered.length === 0 && !loadError && (
-        <EmptyState searchOrFilter={!!search.trim() || statusFilter === 'archived'} href={href} />
+        <EmptyState
+          searchOrFilter={!!search.trim() || statusFilter === 'archived'}
+          href={href}
+          isStaff={isStaff}
+          oemEligible={oemEligible}
+          accountName={accountData?.dealer ?? null}
+          endedCycleMonth={endedCycle}
+          onRunOem={() => openOemRun()}
+        />
       )}
 
       {filtered.length > 0 && (
@@ -300,23 +341,26 @@ export function CampaignList() {
                       }`}
                     >
                       <h3 className="line-clamp-2 text-sm font-semibold text-[var(--foreground)]">{c.name}</h3>
+                      {/* Staff see every account's campaigns in one list (the API
+                          scopes by session, not by the switcher), so a card has
+                          to say whose it is. A client's list is one account. */}
+                      {isStaff && c.accountKey && (
+                        <p className="-mt-1.5 truncate text-xs text-[var(--muted-foreground)]">
+                          {accounts[c.accountKey]?.dealer || c.accountKey}
+                        </p>
+                      )}
                       <div className="flex items-center gap-2">
-                        <CampaignStatusBadge status={c.status} />
-                        {c.source !== 'manual' && (
+                        {c.source === 'automation' ? (
+                          <AutomatedChip building={c.status === 'building'} />
+                        ) : (
+                          <CampaignStatusBadge status={c.status} />
+                        )}
+                        {c.source === 'ai' && (
                           <span
-                            title={
-                              c.source === 'automation'
-                                ? 'Built by the OEM offer run, not by hand'
-                                : 'Generated by the AI campaign builder'
-                            }
+                            title="Generated by the AI campaign builder"
                             className="inline-flex items-center gap-1 text-[10px] font-medium text-[var(--muted-foreground)]"
                           >
-                            {c.source === 'automation' ? (
-                              <BoltIcon className="h-3 w-3" />
-                            ) : (
-                              <SparklesIcon className="h-3 w-3" />
-                            )}{' '}
-                            {CAMPAIGN_SOURCE_LABEL[c.source]}
+                            <SparklesIcon className="h-3 w-3" /> {CAMPAIGN_SOURCE_LABEL[c.source]}
                           </span>
                         )}
                       </div>
@@ -346,6 +390,7 @@ export function CampaignList() {
                       />
                     </th>
                     <th className="px-3 py-2.5 font-medium">Name</th>
+                    {isStaff && <th className="px-3 py-2.5 font-medium">Account</th>}
                     <th className="px-3 py-2.5 font-medium">Status</th>
                     <th className="px-3 py-2.5 font-medium">Channels</th>
                     <th className="px-3 py-2.5 font-medium">Source</th>
@@ -373,8 +418,17 @@ export function CampaignList() {
                           />
                         </td>
                         <td className="px-3 py-3 font-medium text-[var(--foreground)]">{c.name}</td>
+                        {isStaff && (
+                          <td className="px-3 py-3 text-xs text-[var(--muted-foreground)]">
+                            {c.accountKey ? accounts[c.accountKey]?.dealer || c.accountKey : '—'}
+                          </td>
+                        )}
                         <td className="px-3 py-3">
-                          <CampaignStatusBadge status={c.status} />
+                          {c.source === 'automation' ? (
+                            <AutomatedChip building={c.status === 'building'} />
+                          ) : (
+                            <CampaignStatusBadge status={c.status} />
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <ChannelChips campaign={c} />
@@ -395,6 +449,25 @@ export function CampaignList() {
         </>
       )}
 
+      {data?.hasMore && !isLoading && (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setLimit((n) => n + PAGE)}
+            className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+          >
+            Load more
+          </button>
+        </div>
+      )}
+
+      <OfferRunModal
+        open={oemOpen}
+        onClose={() => setOemOpen(false)}
+        initialAccountKey={oemAccount}
+        onDone={() => void mutate()}
+      />
+
       {selectedIds.size > 0 && (
         <BulkActionDock
           count={selectedIds.size}
@@ -407,12 +480,61 @@ export function CampaignList() {
   );
 }
 
-function EmptyState({ searchOrFilter, href }: { searchOrFilter: boolean; href: (p: string) => string }) {
+function EmptyState({
+  searchOrFilter,
+  href,
+  isStaff,
+  oemEligible,
+  accountName,
+  endedCycleMonth,
+  onRunOem,
+}: {
+  searchOrFilter: boolean;
+  href: (p: string) => string;
+  isStaff: boolean;
+  oemEligible: boolean;
+  accountName: string | null;
+  /** For a client between cycles: the month whose offers just ended. */
+  endedCycleMonth: string | null;
+  onRunOem: () => void;
+}) {
   if (searchOrFilter) {
     return (
       <div className="py-16 text-center text-sm text-[var(--muted-foreground)]">No campaigns match.</div>
     );
   }
+
+  // The CLIENT tier lands here as its normal state — every account has zero
+  // campaigns until its first offer run. It used to get the staff empty state,
+  // whose one button led to a page that says "requires admin access". Nothing
+  // AI happens for a client here, so no gradient and no sparkle either.
+  if (!isStaff) {
+    return (
+      <div className="glass-card rounded-xl p-12 text-center">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--muted)]">
+          <BoltIcon className="h-6 w-6 text-[var(--muted-foreground)]" />
+        </div>
+        {endedCycleMonth ? (
+          <>
+            <h2 className="text-lg font-semibold text-[var(--foreground)]">{endedCycleMonth}’s offers have ended</h2>
+            <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
+              The next campaign appears here once the manufacturer publishes new programs. Past
+              campaigns are under Archived.
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 className="text-lg font-semibold text-[var(--foreground)]">No campaigns yet</h2>
+            <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
+              Your first campaign appears here once your manufacturer offers have been built into ad
+              designs. There’s nothing to do until then.
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="glass-card rounded-xl p-12 text-center">
       <div className="iris-rainbow-gradient mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full shadow-md">
@@ -420,17 +542,12 @@ function EmptyState({ searchOrFilter, href }: { searchOrFilter: boolean; href: (
       </div>
       <h2 className="text-lg font-semibold text-[var(--foreground)]">No campaigns yet</h2>
       <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
-        Describe what you want to promote and Loomi will draft every channel together — or start
-        manually and fill in the pieces yourself.
+        {oemEligible
+          ? `Build a campaign from ${accountName ? `${accountName}’s` : 'the account’s'} manufacturer offers, describe one for Loomi to draft, or start manually.`
+          : 'Describe what you want to promote and Loomi will draft every channel together — or start manually and fill in the pieces yourself.'}
       </p>
-      <div className="mt-5 flex items-center justify-center gap-2">
-        <Link
-          href={href('/campaign-builder/new')}
-          className="iris-rainbow-gradient inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold text-zinc-900 shadow-sm transition hover:opacity-90"
-        >
-          <SparklesIcon className="h-4 w-4" />
-          Build with AI
-        </Link>
+      <div className="mt-5 flex items-center justify-center">
+        <CreateCampaignMenu href={href} oemEligible={oemEligible} onRunOem={onRunOem} align="center" />
       </div>
     </div>
   );

@@ -4,7 +4,6 @@ import { generateAdCopy } from '@/lib/ai/ad-copy';
 import { evoxConfigured } from '@/lib/integrations/evox';
 import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
-import { createNotification } from '@/lib/notifications/service';
 import { brandLogoData } from '../brand-logos';
 import { LIVE_TEMPLATE, templatesForAccount } from '../template-access';
 import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
@@ -46,7 +45,6 @@ import { resolveAutomationTemplate, type TemplateCandidate } from './resolve-aut
 import { effectiveFanOut } from '@/lib/playbooks/creative';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import {
-  generateOfferEmail,
   type OfferEmailConfigRow,
   type OfferEmailResult,
 } from './generate-offer-email';
@@ -73,7 +71,6 @@ import {
  * Server-only.
  */
 
-const NOTIFY_LINK = '/ad-generator';
 
 // The reason vocabulary lives in `skip-reasons` so the run-history UI can label a
 // skip without importing this server-only module.
@@ -123,12 +120,17 @@ export interface GenerateResult {
   generated: GeneratedAd[];
   skipped: SkippedVehicle[];
   /**
-   * The companion offer email, on the scheduled path only. Null on a manual
-   * run: an operator generating a slice of offers from the dialog is iterating
-   * on creative, and producing a customer-facing email draft as a side effect
-   * of that is a surprise nobody asked for.
+   * The companion offer email. Set by `runOfferCampaign` on any run — scheduled
+   * or by hand — when the account has email on. This reverses an earlier
+   * decision that a manual run drafts no email (2026-09-10): the container is
+   * the client's deliverable and the email is a member of it, refreshed in
+   * place per cycle; the try-before-commit path is the dry run.
    */
   email?: OfferEmailResult | null;
+  /** The run window, for the run row. */
+  window?: { start: string; end: string };
+  scopesChecked?: number;
+  offersSeen?: number;
 }
 
 function jsonArray(raw: string | null): string[] {
@@ -239,7 +241,6 @@ export async function generateForAccount(
   opts: { now?: Date; scope?: GenerateScope } = {},
 ): Promise<GenerateResult> {
   const now = opts.now ?? new Date();
-  const started = new Date();
   const window = runWindowFor(config, now);
   const configured = jsonArray(config.offerTypePriority).filter((t): t is SelectableOfferType =>
     ['lease', 'apr', 'cash'].includes(t),
@@ -617,6 +618,8 @@ export async function generateForAccount(
           templateSync: true,
           copy: true,
           copySource: true,
+          // Set when a person changed the manufacturer's numbers on this ad.
+          offerEditedAt: true,
         },
       })
       .catch(() => null);
@@ -975,8 +978,12 @@ export async function generateForAccount(
         templateDocHash: designHash(tpl.doc),
       },
       update: {
-        name,
-        data: JSON.stringify(data),
+        // A person who corrected the offer on this ad outranks the feed. The
+        // re-run used to rewrite `data` unconditionally, so a hand run at noon
+        // silently put the manufacturer's figure back over the one a client had
+        // just fixed. Everything else — status, recommendation, expiry, copy —
+        // still refreshes; only the edited payload and its name are theirs.
+        ...(existing?.offerEditedAt ? {} : { name, data: JSON.stringify(data) }),
         status: nextStatus,
         thumbnailUrl,
         offerGroupKey: fingerprint,
@@ -1025,40 +1032,19 @@ export async function generateForAccount(
     });
   }
 
-  // ── run record (heartbeat — written even when nothing generated) ──
-  let runId: string | null = null;
-  try {
-    const run = await prisma.adAutomationRun.create({
-      data: {
-        accountKey: config.accountKey,
-        kind: 'generate',
-        startedAt: started,
-        finishedAt: new Date(),
-        scopesChecked: groups.size,
-        offersSeen: snapshots.length,
-        issueCount: skipped.length,
-        detail: JSON.stringify({
-          window: { start: window.start.toISOString(), end: window.end.toISOString() },
-          generated,
-          skipped,
-        }),
-      },
-    });
-    runId = run.id;
-    // Stamp the run onto the ads it produced, so a draft can be traced back.
-    if (generated.length) {
-      await prisma.adCreative.updateMany({
-        where: { id: { in: generated.map((g) => g.creativeId) } },
-        data: { runId: run.id },
-      });
-    }
-  } catch (err) {
-    console.warn('[generate-ads] could not record run:', err);
-  }
-
-  await notifyReviewers(config, generated, runId);
-  await notifyClients(config, generated, runId);
-  return { accountKey: config.accountKey, runId, generated, skipped };
+  // The run row, the runId stamp, the Campaign container and every notification
+  // belong to `runOfferCampaign` (offer-run.ts) — the one orchestrator the
+  // scheduled job and the on-demand route both call. This function's job ends
+  // at "the creatives exist"; it reports what it looked at so the run row can.
+  return {
+    accountKey: config.accountKey,
+    runId: null,
+    generated,
+    skipped,
+    window: { start: window.start.toISOString(), end: window.end.toISOString() },
+    scopesChecked: groups.size,
+    offersSeen: snapshots.length,
+  };
 }
 
 /**
@@ -1128,137 +1114,3 @@ export async function resolveClientWatchers(accountKey: string): Promise<string[
   }
 }
 
-/** Tell the reviewers there are drafts waiting. Best-effort. */
-async function notifyReviewers(
-  config: GenerateConfigRow,
-  generated: GeneratedAd[],
-  runId: string | null,
-): Promise<void> {
-  const fresh = generated.filter((g) => !g.updated);
-  if (fresh.length === 0) return; // nothing new to look at
-  const recipients = await resolveReviewers(config);
-  if (recipients.length === 0) {
-    console.warn(`[generate-ads] ${config.accountKey}: ${fresh.length} draft(s) with no one to notify`);
-    return;
-  }
-
-  const heldBack = generated.filter((g) => g.status === 'draft' && g.warnings.length > 0).length;
-  const body =
-    `${fresh.length} new draft ad(s) from OEM offers` +
-    (heldBack ? `, ${heldBack} with review notes` : '') +
-    '. Nothing publishes until approved.';
-
-  for (const userId of recipients) {
-    try {
-      await createNotification({
-        userId,
-        type: 'incentive_ads_ready',
-        severity: 'info',
-        title: `${fresh.length} offer ad(s) ready to review`,
-        body,
-        link: NOTIFY_LINK,
-        meta: { accountKey: config.accountKey, runId, count: fresh.length },
-        // One notification per run, not per ad.
-        dedupeKey: `adgen:${config.accountKey}:${runId ?? 'norun'}`,
-        dedupeWindowHours: 12,
-      });
-    } catch (err) {
-      console.warn('[generate-ads] notification failed:', err);
-    }
-  }
-}
-
-/**
- * Tell the account's own people that this month's ads exist.
- *
- * Separate from `notifyReviewers`, which reaches Oz staff. A client lands on the
- * Ad Generator when they sign in, and before this the only way they learned that
- * new offers had been built was to go looking — which makes an automation that
- * runs at 6am overnight effectively invisible to the people whose ads they are.
- *
- * IN-APP ONLY. `createNotification` emails only when `sendEmailNow` is set, and
- * it is deliberately not set here: this fires on every run that produces
- * anything, and turning that into dealer email without anyone asking is how a
- * useful feature becomes a complaint. It still honors each user's own
- * `NotificationPreference`, so a client who has muted this type hears nothing.
- *
- * Counts what needs a DECISION, not what was produced. "12 new ads" reads as
- * work; "4 offers ready to review" is the true size of the ask, because the
- * designs for one offer are one choice.
- */
-async function notifyClients(
-  config: GenerateConfigRow,
-  generated: GeneratedAd[],
-  runId: string | null,
-): Promise<void> {
-  const fresh = generated.filter((g) => !g.updated);
-  if (fresh.length === 0) return;
-
-  const recipients = await resolveClientWatchers(config.accountKey);
-  if (recipients.length === 0) return;
-
-  // One entry per offer group — several designs for one offer are one decision.
-  const offers = new Set(fresh.map((g) => g.offerGroupKey)).size;
-  const choices = new Set(
-    fresh.filter((g) => !g.recommended).map((g) => g.offerGroupKey),
-  ).size;
-
-  const title = `${offers} new offer ad${offers === 1 ? '' : 's'} ready to review`;
-  const body =
-    `This month's manufacturer offers have been built into ad designs` +
-    (choices ? `, with more than one design to choose from on ${choices} of them` : '') +
-    '. Nothing runs until you approve it.';
-
-  for (const userId of recipients) {
-    try {
-      await createNotification({
-        userId,
-        type: 'incentive_ads_ready',
-        severity: 'info',
-        title,
-        body,
-        link: NOTIFY_LINK,
-        meta: { accountKey: config.accountKey, runId, offers },
-        // One per run, matching the reviewer notification.
-        dedupeKey: `adgen-client:${config.accountKey}:${runId ?? 'norun'}`,
-        dedupeWindowHours: 12,
-      });
-    } catch (err) {
-      console.warn('[generate-ads] client notification failed:', err);
-    }
-  }
-}
-
-/** Generate for every enabled sub-account. */
-export async function generateAllAccounts(now = new Date()): Promise<GenerateResult[]> {
-  let configs: GenerateConfigRow[] = [];
-  try {
-    configs = (await prisma.adAutomationConfig.findMany({
-      where: { enabled: true },
-      select: GENERATE_CONFIG_SELECT,
-    })) as GenerateConfigRow[];
-  } catch (err) {
-    console.warn('[generate-ads] config table unavailable:', err);
-    return [];
-  }
-
-  const out: GenerateResult[] = [];
-  for (const config of configs) {
-    try {
-      const result = await generateForAccount(config, { now });
-      // The companion email. Isolated in its own try: an email that fails to
-      // build must never lose the ads that were already generated and recorded
-      // — they are the thing the run exists to produce.
-      let email: OfferEmailResult | null = null;
-      try {
-        email = await generateOfferEmail(config, result.generated, { runId: result.runId });
-      } catch (err) {
-        console.error(`[generate-ads] ${config.accountKey} offer email failed:`, err);
-      }
-      out.push({ ...result, email });
-    } catch (err) {
-      console.error(`[generate-ads] ${config.accountKey} failed:`, err);
-    }
-  }
-  return out;
-}

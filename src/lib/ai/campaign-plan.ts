@@ -6,8 +6,8 @@
  * audience) plus any genuinely-needed clarifying questions. The user reviews /
  * edits the plan, then it's generated into draft assets.
  *
- * Phase 1 channels: email + sms. The plan shape carries landingPages/forms/
- * flows arrays for forward-compat; the planner leaves them empty for now.
+ * Channels: email + sms (Phase 1), landing pages + forms (Phase 2), and flows
+ * (Phase 3) — an ongoing sequence, planned as steps and built as a Loomi Flow.
  */
 import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import {
@@ -19,6 +19,8 @@ import {
   type CampaignPlanSmsSpec,
   type CampaignPlanFormSpec,
   type CampaignPlanLandingPageSpec,
+  type CampaignPlanFlowSpec,
+  type CampaignPlanFlowStep,
   type CampaignPlanClarification,
 } from '@/lib/campaigns/types';
 
@@ -27,6 +29,8 @@ const MAX_SMS = 4;
 const MAX_CLARIFICATIONS = 3;
 const MAX_FORMS = 1;
 const MAX_LANDING_PAGES = 1;
+const MAX_FLOWS = 1;
+const MAX_FLOW_STEPS = 5;
 
 function buildSystemPrompt(channels: CampaignChannel[]): string {
   const channelList = channels.join(', ');
@@ -72,6 +76,18 @@ function buildSystemPrompt(channels: CampaignChannel[]): string {
     '     "headline": string,                // the hero headline',
     '     "sections": [string],              // short labels of the sections the page should have',
     '     "embeddedFormKey": string          // the forms[].key of the lead form to embed (if any)',
+    '  } ],',
+    '  "flows": [ {                           // ONLY if the goal is an ONGOING sequence (0 or 1)',
+    '     "key": string,                     // e.g. "fl1"',
+    '     "purpose": string,',
+    '     "trigger": string,                 // plain English: who enters it and when',
+    `     "steps": [ {                       // 2-${MAX_FLOW_STEPS} steps, in order`,
+    '        "delayDays": number,           // days after the previous step (first step: 0)',
+    '        "channel": "email" | "sms",',
+    '        "purpose": string,',
+    '        "subject": string,             // email steps only',
+    '        "message": string              // sms steps only — FINAL send-ready copy',
+    '     } ]',
     '  } ]',
     '}',
     '',
@@ -81,6 +97,7 @@ function buildSystemPrompt(channels: CampaignChannel[]): string {
     `- If "sms" is allowed, include 0-${MAX_SMS} short SMS touches. Promotional SMS MUST end with an opt-out like "Txt STOP to opt out." Keep each under ${SMS_MAX_CHARS} characters.`,
     '- If "landingPage" is allowed AND the goal implies lead capture (book, register, RSVP, request a quote, claim an offer, get details), propose EXACTLY ONE landing page and EXACTLY ONE form, and set the landing page\'s embeddedFormKey to that form\'s key. Keep the form to 3-5 fields (name, email, phone, + at most one goal-specific field). Do NOT propose a landing page or form for a pure announcement/newsletter goal — leave both arrays empty.',
     '- Order touches by sendOffsetDays (0, 2, 5, ...). Keep the cadence realistic.',
+    `- If "flow" is allowed AND the goal describes an ONGOING sequence rather than a one-off push — a drip, a nurture, a welcome series, a follow-up after an event, anything a contact should move through over time — propose EXACTLY ONE flow with 2-${MAX_FLOW_STEPS} steps, and keep the one-off emails/sms to the announcements that do not belong in the sequence. Do NOT propose a flow for a single sale, event, or newsletter — leave the array empty.`,
     '- Prefer fewer, higher-quality touches over many. Do not pad.',
     '- Keep clarifications empty when the goal is already actionable.',
     '- EMOJIS: never use emojis in the campaign name, email subjects, email preview text, or email key points. For SMS, use emojis only sparingly and only when one genuinely fits the tone and audience — default to none. Never use decorative emoji sequences (e.g. number emojis).',
@@ -187,6 +204,46 @@ function normalizeLandingPages(raw: unknown): CampaignPlanLandingPageSpec[] {
     }));
 }
 
+function normalizeFlowSteps(raw: unknown): CampaignPlanFlowStep[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((st): st is Record<string, unknown> => Boolean(st) && typeof st === 'object')
+    .slice(0, MAX_FLOW_STEPS)
+    .map((st): CampaignPlanFlowStep | null => {
+      const channel = st.channel === 'sms' ? 'sms' : st.channel === 'email' ? 'email' : null;
+      if (!channel) return null;
+      const message = channel === 'sms' ? asString(st.message).trim().slice(0, SMS_MAX_CHARS) : undefined;
+      if (channel === 'sms' && !message) return null;
+      return {
+        delayDays: asOffset(st.delayDays),
+        channel,
+        purpose: asString(st.purpose, channel === 'sms' ? 'Text touch' : 'Email touch'),
+        subject: channel === 'email' ? asString(st.subject) || undefined : undefined,
+        message,
+      };
+    })
+    .filter((st): st is CampaignPlanFlowStep => st !== null);
+}
+
+/**
+ * Exported for its test: a flow the model half-describes must come back as
+ * something the build step can turn into nodes, or not at all.
+ */
+export function normalizeFlows(raw: unknown): CampaignPlanFlowSpec[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((f): f is Record<string, unknown> => Boolean(f) && typeof f === 'object')
+    .slice(0, MAX_FLOWS)
+    .map((f, i): CampaignPlanFlowSpec => ({
+      key: `fl${i + 1}`,
+      purpose: asString(f.purpose, 'Automated sequence'),
+      trigger: asString(f.trigger) || undefined,
+      steps: normalizeFlowSteps(f.steps),
+    }))
+    // A flow with fewer than two steps is a one-off touch wearing a costume.
+    .filter((f) => f.steps.length >= 2);
+}
+
 export interface GeneratedCampaignPlan {
   name: string;
   plan: CampaignPlan;
@@ -200,6 +257,7 @@ function normalizePlan(raw: unknown, channels: CampaignChannel[]): GeneratedCamp
   const sms = allow.has('sms') ? normalizeSms(obj.sms) : [];
   const forms = allow.has('form') ? normalizeForms(obj.forms) : [];
   const landingPages = allow.has('landingPage') ? normalizeLandingPages(obj.landingPages) : [];
+  const flows = allow.has('flow') ? normalizeFlows(obj.flows) : [];
 
   // Reconcile the LP's embedded-form reference: if it points at a missing form
   // key (or none), default it to the single generated form (if any).
@@ -230,7 +288,7 @@ function normalizePlan(raw: unknown, channels: CampaignChannel[]): GeneratedCamp
     sms,
     landingPages,
     forms,
-    flows: [],
+    flows,
   };
 
   return { name, plan };
@@ -266,7 +324,7 @@ export async function generateCampaignPlan(input: {
   }
 
   const result = normalizePlan(parsed, input.channels);
-  if (result.plan.emails.length === 0 && result.plan.sms.length === 0) {
+  if (result.plan.emails.length === 0 && result.plan.sms.length === 0 && result.plan.flows.length === 0) {
     throw new Error('Campaign planner produced no touchpoints');
   }
   return result;

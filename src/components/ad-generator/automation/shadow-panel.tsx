@@ -32,15 +32,16 @@ import {
   PlayIcon,
   PlusIcon,
   TrashIcon,
-  XCircleIcon,
+  XCircleIcon, BoltIcon,
 } from '@heroicons/react/24/outline';
 import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { aspectLabel } from '@/lib/ad-generator/ad-size-library';
 import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
 import { skipReasonFix, skipReasonLabel, summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
 import type { CreativeStep, CycleState, RunSummary, ShadowReport } from './types';
-import { STEP_LABEL } from '@/lib/playbooks/creative';
+import { STEP_LABEL, detachedSteps } from '@/lib/playbooks/creative';
 import { type Automation } from './use-automation';
 
 /** Cycle-state presentation. `expiring_unrenewed` is amber, NOT red: the OEM
@@ -497,6 +498,20 @@ function RunRow({ run: r }: { run: RunSummary }) {
             </span>
           )}
           <span className="text-[var(--muted-foreground)]">{relTime(r.startedAt)}</span>
+          {/* An open row is a run in progress — or one the process died under,
+              which the next run closes as `abandoned` after 15 minutes. Both
+              used to render as a finished run with zero counts. */}
+          {!r.finishedAt && !r.error && (
+            <span className="inline-flex items-center gap-1 text-[var(--primary)]">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--primary)]" />
+              running
+            </span>
+          )}
+          {r.trigger?.kind === 'manual' && (
+            <span className="text-[var(--muted-foreground)]">
+              by {r.trigger.userName || 'a team member'}
+            </span>
+          )}
         </div>
         <div className="flex flex-wrap gap-x-3 text-[var(--muted-foreground)]">
           {r.kind === 'offer_poll' ? (
@@ -522,6 +537,11 @@ function RunRow({ run: r }: { run: RunSummary }) {
                   {expandable && !open && <span className="ml-1 opacity-70">— why?</span>}
                 </span>
               )}
+              {r.campaignId && (
+                <Link href={`/campaign-builder/${r.campaignId}`} className="font-medium text-[var(--primary)] hover:underline">
+                  Open campaign
+                </Link>
+              )}
             </>
           ) : (
             <>
@@ -534,7 +554,7 @@ function RunRow({ run: r }: { run: RunSummary }) {
         {r.error && (
           <p className="w-full break-words text-red-500">
             <ExclamationTriangleIcon className="mr-1 inline h-3 w-3" />
-            {r.error}
+            {r.error === 'abandoned' ? 'interrupted — closed after 15 minutes' : r.error}
           </p>
         )}
         {/* The reasons matter most when a run built nothing, so don't make that
@@ -627,18 +647,25 @@ export function ShadowPanel({
 
   // Drift computed from what's ON SCREEN, not from the saved report: an override
   // should light up the moment you make it, not after you save.
+  //
+  // Through `detachedSteps` — the same rule the server and the playbook page
+  // use — rather than a hand-rolled copy. The copy that lived here checked four
+  // of the five creative steps and skipped `fanOut`, so an account could drift
+  // from its playbook's design list with nothing lighting up.
   const detached: CreativeStep[] = useMemo(() => {
     const def = playbook?.definition;
     if (!def) return [];
-    const out: CreativeStep[] = [];
-    if (form.templateId !== def.adTemplateId) out.push('adTemplate');
-    const a = [...form.sizeIds].sort().join(' ');
-    const b = [...def.sizeIds].sort().join(' ');
-    if (a !== b) out.push('sizes');
-    if (form.emailTemplateId !== def.emailTemplateSlug) out.push('emailTemplate');
-    if ((Number(form.emailMaxOffers) || 6) !== def.emailMaxOffers) out.push('emailMaxOffers');
-    return out;
-  }, [playbook, form.templateId, form.sizeIds, form.emailTemplateId, form.emailMaxOffers]);
+    return detachedSteps(
+      {
+        adTemplateId: form.templateId,
+        fanOutTemplateIds: form.fanOutTemplateIds,
+        sizeIds: form.sizeIds,
+        emailTemplateSlug: form.emailTemplateId,
+        emailMaxOffers: Number(form.emailMaxOffers) || 6,
+      },
+      def,
+    );
+  }, [playbook, form.templateId, form.fanOutTemplateIds, form.sizeIds, form.emailTemplateId, form.emailMaxOffers]);
 
   /** Picking a playbook writes every field it presets, in one move. */
   const applyPlaybook = (id: string) => {
@@ -647,6 +674,10 @@ export function ShadowPanel({
     const def = playbookOptions.find((p) => p.id === id)?.definition;
     if (!def) return;
     set('templateId', def.adTemplateId);
+    // The designs the run builds. This was the one preset the apply skipped, so
+    // "constrain the fan-out to the playbook" never reached the config from the
+    // UI — every account built every published design regardless.
+    set('fanOutTemplateIds', [...def.fanOutTemplateIds]);
     set('sizeIds', [...def.sizeIds]);
     set('emailTemplateId', def.emailTemplateSlug);
     set('emailMaxOffers', String(def.emailMaxOffers));
@@ -662,6 +693,9 @@ export function ShadowPanel({
         // Sizes belong to the design, so ids picked against another template
         // would silently render nothing.
         set('sizeIds', [...def.sizeIds]);
+        break;
+      case 'fanOut':
+        set('fanOutTemplateIds', [...def.fanOutTemplateIds]);
         break;
       case 'sizes':
         set('sizeIds', [...def.sizeIds]);
@@ -729,7 +763,7 @@ export function ShadowPanel({
     form.focus.trim() || 'every model with stock',
     templateName ?? 'no template',
     form.sizeIds.length ? `${form.sizeIds.length} size${form.sizeIds.length === 1 ? '' : 's'}` : 'all sizes',
-    `up to ${form.maxAds}/run`,
+    `up to ${form.maxVehicles} vehicles/run`,
     form.mode === 'ready' ? 'publish-ready' : 'drafts',
   ].join(' · ');
 
@@ -904,8 +938,8 @@ export function ShadowPanel({
                   <p className="mt-1.5 flex gap-1 text-[10px] text-amber-500">
                     <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
                     <span>
-                      This multiplies the run. The cap of {form.maxAds || 10} ads still applies,
-                      and anything over it is cut without choosing which.
+                      This multiplies the run. The cap of {form.maxVehicles || 25} vehicles still
+                      applies — it falls on a vehicle boundary, so no vehicle is left half-built.
                     </span>
                   </p>
                 )}
@@ -1036,9 +1070,33 @@ export function ShadowPanel({
                 />
               </div>
 
+              {/* WHICH designs a run builds — the fan-out. This is the one creative
+                  step the playbook presets that never had a control here, so the
+                  column stayed empty for every UI-configured account and the run
+                  built every published design regardless of the playbook. */}
+              <div className="mb-4">
+                <Field
+                  label="Designs built"
+                  help={
+                    <p>
+                      Which designs a run builds for every offer. Leave it empty to build every
+                      published design in scope. The recommended design above is always included,
+                      and the account picks one on the campaign.
+                    </p>
+                  }
+                >
+                  <MultiSelect
+                    value={form.fanOutTemplateIds}
+                    onChange={(v) => set('fanOutTemplateIds', v)}
+                    options={pickerTemplates.map((t) => ({ value: t.id, label: t.name }))}
+                    placeholder="Every published design in scope"
+                  />
+                </Field>
+              </div>
+
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label="Max ads per run" help={<p>Ceiling on how many ads one <strong>Generate drafts</strong> produces, so a big feed change can&apos;t flood the review queue with a hundred ads at once.</p>}>
-                  <input value={form.maxAds} onChange={(e) => set('maxAds', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
+                <Field label="Max vehicles per run" help={<p>Ceiling on how many vehicles one run builds ads for, so a big feed change can&apos;t flood the review queue. Every permitted design is built for each vehicle that makes the cut.</p>}>
+                  <input value={form.maxVehicles} onChange={(e) => set('maxVehicles', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
                 </Field>
 
                 <Field label="Output" help={<p><strong>Draft</strong> holds every ad for a person to approve. <strong>Ready</strong> publishes automatically, but only for makes with a verified co-op pack.</p>}>
@@ -1586,6 +1644,19 @@ export function ShadowPanel({
         title="Run history"
         help={<p>Every run is recorded, including ones that changed nothing — otherwise a stalled job looks identical to a quiet month.</p>}
       >
+        {/* The run itself lives on Campaigns, where its output lands; this is a
+            door to it from the place people come to see whether it ran. */}
+        {accountKey && (
+          <div className="mb-3 flex justify-end">
+            <Link
+              href={`/campaign-builder?run=oem&account=${encodeURIComponent(accountKey)}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+            >
+              <BoltIcon className="h-3.5 w-3.5" />
+              Run now
+            </Link>
+          </div>
+        )}
         {report?.runs.length ? (
           <div className="space-y-1.5">
             {report.runs.map((r) => <RunRow key={r.id} run={r} />)}

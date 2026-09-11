@@ -215,6 +215,29 @@ export function resolveDefaultAccountKey(
   return organizations[0] ?? [...keys].sort(byName)[0] ?? null;
 }
 
+/**
+ * Is the active selection an account that isn't there any more?
+ *
+ * The stored selection is a cookie (shared across the studio / app / reporting
+ * surfaces) and nothing validates it on restore, so it can name an account this
+ * user cannot see, one carried over from another environment, or one that has
+ * been deleted. Left alone, the app sits in a scope whose account does not
+ * exist and every per-account write fails on a foreign key instead of saying
+ * so.
+ *
+ * An EMPTY map is not evidence: it means the account list hasn't landed yet, or
+ * that /api/accounts failed — both of which set `accountsLoaded`. Wiping the
+ * selection there would log the user out of their account on a blip.
+ */
+export function activeAccountIsMissing(
+  account: AccountType,
+  accounts: Record<string, AccountData>,
+): boolean {
+  if (account.mode !== 'account') return false;
+  if (Object.keys(accounts).length === 0) return false;
+  return !accounts[account.accountKey];
+}
+
 interface AccountContextValue {
   account: AccountType;
   setAccount: (account: AccountType) => void;
@@ -614,7 +637,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     // would follow you onto a page that cannot aggregate — which is exactly the
     // mixed-client roster docs/account-scope.md exists to prevent.
     if (account.mode === 'all' && allAccountsSurface()) return;
-    if (account.mode === 'account') return;
+    // A selection naming an account that isn't there is treated as unresolved,
+    // and the default opens instead — see `activeAccountIsMissing`.
+    if (account.mode === 'account' && !activeAccountIsMissing(account, accounts)) return;
     if (
       typeof window !== 'undefined' &&
       (window.location.pathname.startsWith('/subaccount/') ||

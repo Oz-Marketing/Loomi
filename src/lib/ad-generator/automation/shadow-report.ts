@@ -168,6 +168,10 @@ export interface RunSummary {
   skipped: SkippedVehicle[];
   /** How many ads the run produced, for runs that recorded it. */
   generatedCount: number | null;
+  /** Who started a generate run: a person, or the schedule. Null on older rows. */
+  trigger?: { kind: 'manual' | 'scheduled'; userId?: string | null; userName?: string | null } | null;
+  /** The Campaign the run wrote into, when it did. */
+  campaignId?: string | null;
 }
 
 export interface ShadowReport {
@@ -185,7 +189,7 @@ export interface ShadowReport {
     /** Size ids to render; empty = every size the template defines. */
     sizeIds: string[];
     radius: number;
-    maxAdsPerRun: number;
+    maxVehiclesPerRun: number;
     minStock: number;
     offerTypePriority: string[];
     /** draft | ready. `ready` still needs a verified co-op pack to take effect. */
@@ -293,7 +297,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         templateMap: string | null;
         sizeIds: string | null;
         fanOutTemplateIds: string | null;
-        maxAdsPerRun: number;
+        maxVehiclesPerRun: number;
         minStock: number;
         mode: string;
         emailEnabled: boolean;
@@ -321,7 +325,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         templateMap: true,
         sizeIds: true,
         fanOutTemplateIds: true,
-        maxAdsPerRun: true,
+        maxVehiclesPerRun: true,
         minStock: true,
         mode: true,
         emailEnabled: true,
@@ -336,7 +340,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     config = null;
   }
 
-  const windowMode = config?.runWindowMode ?? 'next_month';
+  const windowMode = config?.runWindowMode ?? 'current_month';
   const window: RunWindow = runWindowFor(
     { runWindowMode: windowMode, rollingDays: config?.rollingDays ?? 30 },
     now,
@@ -535,7 +539,12 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     .findMany({ where: { OR: [{ accountKey }, { accountKey: null }] }, orderBy: { startedAt: 'desc' }, take: 15 })
     .catch(() => []);
   const runs: RunSummary[] = runRows.map((r) => {
-    const detail = safeJson<{ skipped?: unknown; generated?: unknown }>(r.detail);
+    const detail = safeJson<{
+      skipped?: unknown;
+      generated?: unknown;
+      trigger?: RunSummary['trigger'];
+      campaignId?: string | null;
+    }>(r.detail);
     return {
       id: r.id,
       kind: r.kind,
@@ -550,6 +559,8 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       error: r.error,
       skipped: parseSkips(detail?.skipped),
       generatedCount: Array.isArray(detail?.generated) ? detail.generated.length : null,
+      trigger: detail?.trigger ?? null,
+      campaignId: detail?.campaignId ?? null,
     };
   });
 
@@ -653,7 +664,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         }
       })(),
       radius: config?.radius ?? 75,
-      maxAdsPerRun: config?.maxAdsPerRun ?? 10,
+      maxVehiclesPerRun: config?.maxVehiclesPerRun ?? 25,
       minStock: config?.minStock ?? 0,
       offerTypePriority: jsonArray(config?.offerTypePriority ?? null),
       mode: config?.mode ?? 'draft',
@@ -767,7 +778,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         vehicles.filter(
           (v) => v.wouldChoose && stockGatePassed(stockGate(v.stock, config?.minStock ?? 0)),
         ).length,
-        config?.maxAdsPerRun ?? 10,
+        config?.maxVehiclesPerRun ?? 25,
       ),
     },
   };

@@ -3,6 +3,7 @@ import { getAccountScope, canAccessAccount, getAuthSession } from '@/lib/api-aut
 import { requirePermission } from '@/lib/permissions/require';
 import { campaignAccessFor } from '@/lib/campaigns/access';
 import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
+import { getAccount } from '@/lib/services/accounts';
 
 /**
  * GET /api/campaigns — list campaign containers visible to the session.
@@ -20,14 +21,21 @@ export async function GET(req: NextRequest) {
   if (!access.allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 
   const scope = getAccountScope(session!);
-  const includeArchived = new URL(req.url).searchParams.get('archived') === '1';
+  const params = new URL(req.url).searchParams;
+  const archived = params.get('archived');
+  const limitRaw = Number(params.get('limit'));
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50;
 
   const campaigns = await listCampaigns({
     accountKeys: scope,
-    includeArchived,
+    // `only` is the Archived filter; `1` is the old include-everything form.
+    archivedOnly: archived === 'only',
+    includeArchived: archived === '1',
+    limit,
     automationOnly: access.automationOnly,
   });
-  return NextResponse.json({ campaigns });
+  // `hasMore` lets the list offer "Load more" without a second count query.
+  return NextResponse.json({ campaigns, hasMore: campaigns.length >= limit, limit });
 }
 
 export async function POST(req: NextRequest) {
@@ -49,6 +57,17 @@ export async function POST(req: NextRequest) {
   const scope = getAccountScope(session!);
   if (!canAccessAccount(scope, accountKey)) {
     return NextResponse.json({ error: 'Forbidden account selection' }, { status: 403 });
+  }
+
+  // `canAccessAccount` answers "may you", not "does it exist" — an unrestricted
+  // admin passes it for any string. Without this check a stale account
+  // selection reached Prisma and came back as a raw foreign-key error in a 500,
+  // which is neither readable nor actionable.
+  if (!(await getAccount(accountKey))) {
+    return NextResponse.json(
+      { error: 'That account no longer exists — pick another and try again' },
+      { status: 404 },
+    );
   }
 
   try {

@@ -11,24 +11,26 @@
  * service functions the worker calls, so triggering by hand and letting the cron
  * fire are the same code path.
  *
- * Still shadow mode: nothing here creates a creative or renders anything.
+ * `generate` is the one action that DOES create creatives — and, since it runs
+ * through `runOfferCampaign`, a Campaign the account's users can see. It is
+ * kept here for the Automation panel's dev trigger; the wizard's door is
+ * /api/ad-generator/automation/offer-run, which answers 202 and is polled.
  * Admin-only — it burns MarketCheck quota and exposes raw feed data.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { canAccessAccount, forbidden, getAccountScope, getAuthSession } from '@/lib/api-auth';
-import { requirePermission } from '@/lib/permissions/require';
-import { adGeneratorAllowed } from '@/lib/ad-generator/access';
+import { getAuthSession } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { buildShadowReport } from '@/lib/ad-generator/automation/shadow-report';
 import { pollAccountOffers, type AutomationConfigRow } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
 import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
+import { GENERATE_CONFIG_SELECT, type GenerateConfigRow } from '@/lib/ad-generator/automation/generate-ads';
 import {
-  generateForAccount,
-  GENERATE_CONFIG_SELECT,
-  type GenerateConfigRow,
-} from '@/lib/ad-generator/automation/generate-ads';
-import type { SelectableOfferType } from '@/lib/ad-generator/automation/select-offer';
+  beginRun,
+  OfferRunInProgressError,
+  runOfferCampaign,
+} from '@/lib/ad-generator/automation/offer-run';
+import { gateOfferRun as gate, sanitizeScope } from '@/lib/ad-generator/automation/route-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,17 +43,6 @@ function clamp(value: unknown, min: number, max: number, fallback: number): numb
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
-}
-
-async function gate(accountKey: string) {
-  if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-  const session = await getAuthSession();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const { error } = await requirePermission('studio.adgen.generate');
-  if (error) return error;
-  if (!accountKey) return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
-  if (!canAccessAccount(getAccountScope(session), accountKey)) return forbidden();
-  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -102,7 +93,7 @@ export async function POST(req: NextRequest) {
     templateMap?: Record<string, string>;
     sizeIds?: string[];
     fanOutTemplateIds?: string[];
-    maxAdsPerRun?: number;
+    maxVehiclesPerRun?: number;
     minStock?: number;
     radius?: number;
     mode?: string;
@@ -155,7 +146,7 @@ export async function POST(req: NextRequest) {
           zip: (body.zip ?? account?.postalCode ?? '').trim() || null,
           runWindowMode: ['current_month', 'next_month', 'rolling'].includes(body.runWindowMode ?? '')
             ? body.runWindowMode!
-            : 'next_month',
+            : 'current_month',
           offerTypePriority: JSON.stringify(
             (body.offerTypePriority ?? ['lease', 'apr', 'cash']).filter((t) =>
               ['lease', 'apr', 'cash'].includes(t),
@@ -184,7 +175,10 @@ export async function POST(req: NextRequest) {
             Array.isArray(body.fanOutTemplateIds) && body.fanOutTemplateIds.length
               ? JSON.stringify(body.fanOutTemplateIds.filter((x) => typeof x === 'string' && x.trim()))
               : null,
-          maxAdsPerRun: clamp(body.maxAdsPerRun, 1, 100, 10),
+          // Counted in VEHICLES. `maxAdsPerRun` is retired (generate-ads.ts) and
+          // is no longer written — the Settings field was still bound to it, so
+          // the cap a person set never reached the cap the run enforced.
+          maxVehiclesPerRun: clamp(body.maxVehiclesPerRun, 1, 100, 25),
           minStock: clamp(body.minStock, 0, 500, 0),
           radius: clamp(body.radius, 5, 500, 75),
           mode: body.mode === 'ready' ? 'ready' : 'draft',
@@ -291,25 +285,39 @@ export async function POST(req: NextRequest) {
             { status: 400 },
           );
         }
-        // Optional per-run narrowing from the Generate dialog. Validated hard:
-        // these come from a client, and an unrecognised offer type reaching
-        // `selectOffer` would reject every incentive without saying why.
-        const rawVehicles = Array.isArray(body.scope?.vehicles) ? body.scope!.vehicles! : [];
-        const rawTypes = Array.isArray(body.scope?.offerTypes) ? body.scope!.offerTypes! : [];
-        const scope = {
-          vehicles: rawVehicles.filter((v): v is string => typeof v === 'string' && !!v.trim()),
-          offerTypes: rawTypes.filter((t): t is SelectableOfferType =>
-            t === 'lease' || t === 'apr' || t === 'cash',
-          ),
-        };
-        const result = await generateForAccount(config, { scope });
+        // Through the orchestrator, awaited: this is the Automation panel's dev
+        // trigger and the Ad Generator page refetches on the response. The
+        // wizard uses /offer-run, which answers 202 and is polled instead.
+        const session = await getAuthSession();
+        const now = new Date();
+        let runId: string;
+        try {
+          runId = await beginRun(accountKey, now);
+        } catch (err) {
+          if (err instanceof OfferRunInProgressError) {
+            return NextResponse.json(
+              { error: 'run_in_progress', since: err.since?.toISOString() ?? null },
+              { status: 409 },
+            );
+          }
+          throw err;
+        }
+        const result = await runOfferCampaign(config, {
+          runId,
+          scope: sanitizeScope(body.scope),
+          trigger: { kind: 'manual', userId: session?.user?.id ?? null, userName: session?.user?.name ?? null },
+          notifyClients: true,
+          now,
+        });
         return NextResponse.json({
           ok: true,
           runId: result.runId,
+          campaignId: result.campaignId,
           created: result.generated.filter((g) => !g.updated).length,
           refreshed: result.generated.filter((g) => g.updated).length,
           generated: result.generated,
           skipped: result.skipped,
+          email: result.email ? { blastId: result.email.blastId, reason: result.email.reason } : null,
         });
       }
 

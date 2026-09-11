@@ -21,7 +21,7 @@ describe('toPayload', () => {
     templateId: 'templateMap',
     sizeIds: 'sizeIds',
     fanOutTemplateIds: 'fanOutTemplateIds',
-    maxAds: 'maxAdsPerRun',
+    maxVehicles: 'maxVehiclesPerRun',
     minStock: 'minStock',
     mode: 'mode',
     emailEnabled: 'emailEnabled',

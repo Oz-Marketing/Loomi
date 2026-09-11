@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { nextSelfScope, parseSelfScope } from '@/lib/active-account';
-import { resolveDefaultAccountKey } from './account-context';
+import { activeAccountIsMissing, resolveDefaultAccountKey } from './account-context';
 import type { AccountData } from './account-context';
 
 // Agency scope used to be where a user with no stored selection landed. It isn't
@@ -96,5 +96,30 @@ describe('roll-up vs self scope (a group viewed as itself)', () => {
     const once = nextSelfScope(new Set(), 'yag', true);
     const twice = nextSelfScope(parseSelfScope(once), 'yag', true);
     expect(twice).toBe('yag');
+  });
+});
+
+// A stale account cookie used to strand the app in a scope whose account does
+// not exist: the picker looked normal, and the failure only arrived at the end,
+// as a raw foreign-key error from whatever you tried to save.
+describe('activeAccountIsMissing', () => {
+  const accounts = { youngChev: account('Young Chevrolet'), pjfCorp: account('PJF Corp') };
+
+  it('is true for a selection the account list does not contain', () => {
+    expect(activeAccountIsMissing({ mode: 'account', accountKey: 'ghostRooftop' }, accounts)).toBe(true);
+  });
+
+  it('is false for a selection that is there', () => {
+    expect(activeAccountIsMissing({ mode: 'account', accountKey: 'youngChev' }, accounts)).toBe(false);
+  });
+
+  it('is false for the scopes that name no account', () => {
+    expect(activeAccountIsMissing({ mode: 'admin' }, accounts)).toBe(false);
+    expect(activeAccountIsMissing({ mode: 'all' }, accounts)).toBe(false);
+  });
+
+  it('is false when no accounts have loaded — an empty list is not evidence', () => {
+    expect(activeAccountIsMissing({ mode: 'account', accountKey: 'youngChev' }, {})).toBe(false);
+    expect(activeAccountIsMissing({ mode: 'account', accountKey: 'ghostRooftop' }, {})).toBe(false);
   });
 });

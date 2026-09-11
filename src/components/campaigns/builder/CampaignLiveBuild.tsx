@@ -30,6 +30,7 @@ function initialItems(plan: CampaignPlan): BuildItem[] {
     ...plan.sms.map((s): BuildItem => ({ key: s.key, kind: 'sms', label: s.purpose, status: 'pending' })),
     ...(plan.forms ?? []).map((f): BuildItem => ({ key: f.key, kind: 'form', label: f.purpose, status: 'pending' })),
     ...(plan.landingPages ?? []).map((lp): BuildItem => ({ key: lp.key, kind: 'landingPage', label: lp.purpose, status: 'pending' })),
+    ...(plan.flows ?? []).map((f): BuildItem => ({ key: f.key, kind: 'flow', label: f.purpose, status: 'pending' })),
   ];
 }
 

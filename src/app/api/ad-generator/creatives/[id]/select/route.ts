@@ -38,6 +38,7 @@ import { isS3Configured } from '@/lib/s3';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdData } from '@/lib/ad-generator/types';
 import { renderCreativeToS3 } from '@/lib/ad-generator/render-creative';
+import { creativeCampaignIsBuilding } from '@/lib/ad-generator/automation/offer-campaign';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,6 +93,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .catch(() => null);
   if (!ad) return NextResponse.json({ error: 'Not found' }, { status: 404 });
   if (!canAccessAccount(getAccountScope(session), ad.accountKey)) return forbidden();
+  // A run is rewriting this campaign's designs right now; a pick would race
+  // the run's own upsert of this row. The client sees "Building…" meanwhile.
+  if (await creativeCampaignIsBuilding(ad.id)) {
+    return NextResponse.json({ error: 'run_in_progress' }, { status: 409 });
+  }
 
   let body: { undo?: boolean } = {};
   try {

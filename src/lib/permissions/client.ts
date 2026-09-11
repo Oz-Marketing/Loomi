@@ -21,9 +21,10 @@
 import {
   resolvePermissions,
   type Permission,
-  type PlatformTier,
   type SectorRoleRef,
 } from './registry';
+import { legacyTierFor } from './legacy';
+import type { UserRole } from '@/lib/roles';
 
 /** The session shape this needs — a subset of `session.user`. */
 export type ClientPermissionUser = {
@@ -45,8 +46,14 @@ export function roleGrants(
 ): boolean {
   const refs = user?.sectorRoles;
   if (!refs || refs.length === 0) return false;
+  // `role` is the legacy UserRole (developer | super_admin | admin | client),
+  // not a PlatformTier. It used to be cast straight across, so `admin` and
+  // `super_admin` — neither of which is a tier — fell through the tier check
+  // and lost every Studio role: an admin with studio.lead read as holding
+  // nothing, and every gate built on this silently no-op'd for the people it
+  // was meant to widen for. Map it the way the server does.
   const granted = resolvePermissions({
-    tier: (user?.role as PlatformTier) ?? 'staff',
+    tier: user?.role ? legacyTierFor(user.role as UserRole) : 'staff',
     sectorRoles: refs as SectorRoleRef[],
     scopeMode: 'all',
     accountKeys: [],

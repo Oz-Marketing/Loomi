@@ -10,11 +10,13 @@
  * This folds them back: one tile per OFFER, with "Compare N designs" when there
  * is a choice to make.
  *
- * WHY IT LIVES ON CAMPAIGNS. A dealer's Studio surface is Campaigns — the ads
+ * WHY IT LIVES ON CAMPAIGNS. A client's Studio surface is Campaigns — the ads
  * and the offer email are one deliverable and this is the only place they sit
- * together. Picking a design here also settles the EMAIL: the pick re-splices
- * the run's offer email through the shell paired with the winning ad template
- * (`AdTemplateDoc.emailTemplateSlug`), so the plate and the send always match.
+ * together. The pick is about the ADS only: it marks one design as the one to
+ * use and archives its siblings. It does not touch the offer email — the email
+ * shell is the account's automation setting, not a consequence of which ad won.
+ * (An earlier version re-spliced the email through a shell paired with the
+ * winning template; that pairing was removed 2026-09-08.)
  *
  * It reads the ad-generator APIs rather than the campaign payload because the
  * compare modal needs each design's full doc + data to render a true preview,
@@ -23,15 +25,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Squares2X2Icon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
-import { groupVariants } from '@/lib/ad-generator/variant-groups';
+import { groupVariants, type VariantGroup } from '@/lib/ad-generator/variant-groups';
 import { VariantCompareModal, type CompareVariant } from '@/components/ad-generator/variant-compare-modal';
 import { AdPreviewThumb } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdData, AdTemplate } from '@/lib/ad-generator/types';
+import { OpenAssetLink, useAssetEditor } from './asset-editor-sheet';
 
 /** The subset of the creatives payload this surface needs. */
 type Creative = {
@@ -56,6 +58,7 @@ export function CampaignOfferDesigns({
   accountKey,
   editorHref,
   onChanged,
+  frozen = false,
 }: {
   /** The campaign's ad asset ids — the run's output, archived ones excluded. */
   adIds: string[];
@@ -64,7 +67,10 @@ export function CampaignOfferDesigns({
   editorHref: (id: string) => string;
   /** Called after a pick lands, so the campaign payload can refetch. */
   onChanged?: () => void;
+  /** True while a run is writing into this campaign — picking is disabled. */
+  frozen?: boolean;
 }) {
+  const editor = useAssetEditor();
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [templates, setTemplates] = useState<AdTemplate[]>([]);
   const [branding, setBranding] = useState<Record<string, unknown> | null>(null);
@@ -102,10 +108,45 @@ export function CampaignOfferDesigns({
     return groupVariants(rows);
   }, [creatives, adIds]);
 
-  const compareGroup = useMemo(
-    () => groups?.find((g) => g.key === compareKey) ?? null,
-    [groups, compareKey],
-  );
+  /**
+   * The group the compare modal shows — fetched WHOLE, archived siblings
+   * included, the way the Ad Generator's compare does.
+   *
+   * `groups` above is built from the campaign's live designs only. Picking one
+   * archives its siblings, so after a pick the group there has one variant:
+   * the modal showed a single design with nothing to compare against, and Undo
+   * had nothing to undo to. The creatives route serves a whole group by key for
+   * exactly this reason; re-fetching whenever `groups` changes keeps the modal
+   * current after a pick or an undo.
+   */
+  const [compareGroup, setCompareGroup] = useState<VariantGroup<Creative> | null>(null);
+  useEffect(() => {
+    if (!compareKey || !accountKey) {
+      setCompareGroup(null);
+      return;
+    }
+    // Group keys are `g:<offerGroupKey>`; a `solo:` key has no siblings to fetch.
+    if (!compareKey.startsWith('g:')) {
+      setCompareGroup(groups?.find((g) => g.key === compareKey) ?? null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}&group=${encodeURIComponent(compareKey.slice(2))}`,
+        );
+        const json = res.ok ? await res.json() : { creatives: [] };
+        const rows: Creative[] = Array.isArray(json.creatives) ? json.creatives : [];
+        if (!cancelled) setCompareGroup(groupVariants(rows).find((g) => g.key === compareKey) ?? null);
+      } catch {
+        if (!cancelled) setCompareGroup(groups?.find((g) => g.key === compareKey) ?? null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [compareKey, accountKey, groups]);
 
   async function pick(id: string, undo = false) {
     setBusyId(id);
@@ -120,17 +161,7 @@ export function CampaignOfferDesigns({
         toast.error(json?.error || 'Could not save that choice');
         return;
       }
-      // The pick may also re-point the run's offer email at the winning
-      // template's shell — but only when that template has a paired shell and
-      // the blast is still a draft. Say so only when it actually happened;
-      // claiming the email changed when it did not is worse than saying nothing.
-      toast.success(
-        undo
-          ? 'Choice undone'
-          : json?.emailRestyled
-            ? 'Design selected — the offer email now matches it'
-            : 'Design selected',
-      );
+      toast.success(undo ? 'Choice undone' : 'Design selected');
       await load();
       onChanged?.();
     } catch {
@@ -209,7 +240,13 @@ export function CampaignOfferDesigns({
                   : 'border-[var(--border)] hover:border-[var(--primary)]'
               }`}
             >
-              <Link href={editorHref(lead.id)} className="block">
+              <OpenAssetLink
+                kind="ad"
+                id={lead.id}
+                name={lead.name}
+                href={editorHref(lead.id)}
+                className="block"
+              >
                 {/* Three sources, in order of fidelity. The stored thumbnail is
                     the real render but only exists AFTER a pick — the deferred
                     sizes are what produce it — so a run that nobody has decided
@@ -235,7 +272,7 @@ export function CampaignOfferDesigns({
                     </span>
                   </div>
                 )}
-              </Link>
+              </OpenAssetLink>
               <div className="flex flex-1 flex-col gap-1.5 p-2.5">
                 <span className="truncate text-xs font-medium text-[var(--foreground)]">
                   {group.name}
@@ -244,14 +281,19 @@ export function CampaignOfferDesigns({
                   {group.selected && <span className="text-emerald-500">In use</span>}
                   <span>{lead.status}</span>
                 </div>
-                {group.variants.length > 1 && (
+                {/* A chosen design has archived its siblings out of this list,
+                    so `variants.length` is 1 exactly when there WAS a choice —
+                    `selected` is the fact that survives the pick. */}
+                {!frozen && (group.variants.length > 1 || group.selected) && (
                   <button
                     type="button"
                     onClick={() => setCompareKey(group.key)}
                     className="mt-0.5 inline-flex items-center justify-center gap-1 rounded-md bg-[var(--primary)] px-2 py-1.5 text-[11px] font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
                   >
                     <Squares2X2Icon className="h-3 w-3" />
-                    {group.selected ? 'Change template' : 'Select a template'}
+                    {/* "design", like every neighbouring string — a template is
+                        what the designer authored; this is one rendered result. */}
+                    {group.selected ? 'Change design' : 'Select a design'}
                   </button>
                 )}
               </div>
@@ -272,7 +314,15 @@ export function CampaignOfferDesigns({
         otherOfferCount={Math.max(0, (groups?.filter((g) => g.variants.length > 1).length ?? 1) - 1)}
         onUndo={(id) => void pick(id, true)}
         onOpenEditor={(id) => {
-          window.location.href = editorHref(id);
+          const href = editorHref(id);
+          // Inside the campaign detail the design opens over it; anywhere else
+          // this grid is used, it is still a page navigation.
+          if (editor) {
+            setCompareKey(null);
+            editor.open({ kind: 'ad', id, name: creatives?.find((c) => c.id === id)?.name, href });
+            return;
+          }
+          window.location.href = href;
         }}
         onClose={() => setCompareKey(null)}
       />

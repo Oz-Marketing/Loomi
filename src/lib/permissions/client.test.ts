@@ -27,4 +27,14 @@ describe('roleGrants — the client-side UI gate', () => {
     // canTierHoldRole drops the ref, so a stale row cannot confer Studio access.
     expect(roleGrants({ role: 'client', sectorRoles: ['studio.lead'] }, 'studio.templates.edit')).toBe(false);
   });
+
+  it('maps the legacy admin roles onto the staff tier instead of dropping them', () => {
+    // The bug: `role` is a UserRole, not a PlatformTier. Cast straight across,
+    // 'admin' and 'super_admin' matched no tier, so a Studio Lead who happened
+    // to be an admin read as holding nothing — the gate this exists to widen
+    // never widened for the people most likely to hold the role.
+    expect(roleGrants({ role: 'admin', sectorRoles: ['studio.lead'] }, 'studio.templates.edit')).toBe(true);
+    expect(roleGrants({ role: 'super_admin', sectorRoles: ['studio.lead'] }, 'studio.templates.edit')).toBe(true);
+    expect(roleGrants({ role: 'developer', sectorRoles: ['studio.lead'] }, 'studio.templates.edit')).toBe(true);
+  });
 });

@@ -53,6 +53,12 @@ function isAssetDraft(kind: CampaignAssetKind, status: string): boolean {
       return status !== 'published';
     case 'flow':
       return status === 'draft';
+    case 'ad':
+      // An ad never leaves "draft" through its own status: it goes live only
+      // through an AdLaunch, so its status column says nothing the campaign
+      // badge could honestly report. Named here so the default branch below
+      // stops being load-bearing for the one kind that reaches it every time.
+      return true;
     default:
       return true;
   }
@@ -230,13 +236,18 @@ export async function createCampaign(input: {
   contextSnapshot?: string | null;
   createdByUserId?: string | null;
   createdByRole?: string | null;
+  /** The OEM run's cycle key. Only the automation path sets it. */
+  automationKey?: string | null;
+  /** `building` when a run is about to write into the new container. */
+  status?: 'draft' | 'building';
 }): Promise<CampaignDetail> {
   const created = await prisma.campaign.create({
     data: {
       name: input.name.trim() || 'Untitled campaign',
       accountKey: input.accountKey,
       source: input.source,
-      status: 'draft',
+      status: input.status ?? 'draft',
+      automationKey: input.automationKey ?? null,
       goal: input.goal ?? null,
       plan: input.plan ? JSON.stringify(input.plan) : null,
       contextSnapshot: input.contextSnapshot ?? null,
@@ -262,6 +273,12 @@ export async function getCampaignRow(id: string) {
 export async function listCampaigns(options?: {
   accountKeys?: string[] | null;
   includeArchived?: boolean;
+  /** Only archived rows — the Archived filter. Wins over `includeArchived`. */
+  archivedOnly?: boolean;
+  /**
+   * Page size. One automation campaign per account per month fills a shared
+   * 50-row window quickly for staff, so the list can ask for more.
+   */
   limit?: number;
   /**
    * Restrict to machine-generated OEM runs.
@@ -274,10 +291,11 @@ export async function listCampaigns(options?: {
    */
   automationOnly?: boolean;
 }): Promise<CampaignSummary[]> {
-  const limit = Math.max(1, Math.min(100, options?.limit ?? 50));
+  const limit = Math.max(1, Math.min(500, options?.limit ?? 50));
   const scope = options?.accountKeys;
   const where: Record<string, unknown> = {};
-  if (!options?.includeArchived) where.archivedAt = null;
+  if (options?.archivedOnly) where.archivedAt = { not: null };
+  else if (!options?.includeArchived) where.archivedAt = null;
   // scope `null` (developer/super_admin) or `[]` (unrestricted admin) = no filter.
   if (scope && scope.length > 0) where.accountKey = { in: scope };
   if (options?.automationOnly) where.source = 'automation';
@@ -535,6 +553,11 @@ export async function linkAssetToCampaign(
       return;
     case 'flow':
       await prisma.loomiFlow.update({ where: { id: assetId }, data: { campaignId } });
+      return;
+    case 'ad':
+      // A hand-built ad added from the manual wizard. (The OEM run attaches its
+      // own ads in bulk — offer-run.ts — and does not come through here.)
+      await prisma.adCreative.update({ where: { id: assetId }, data: { campaignId } });
       return;
   }
 }

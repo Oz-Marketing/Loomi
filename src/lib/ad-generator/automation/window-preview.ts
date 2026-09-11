@@ -33,8 +33,11 @@ export function windowPreview(mode: string, now = new Date(), rollingDays = DEFA
     const start = new Date(Date.UTC(y, m, now.getUTCDate()));
     return `${iso(start)} → ${iso(new Date(start.getTime() + rollingDays * DAY))}`;
   }
-  // Anything that isn't `current_month` or `rolling` falls through to next
-  // month, the same default `runWindowFor` applies to an unrecognised mode.
-  const off = mode === 'current_month' ? 0 : 1;
+  // Anything that isn't `next_month` or `rolling` is the current month — the
+  // schema default, and the same fallback `runWindowFor` applies to an
+  // unrecognised mode. (Both used to fall through to NEXT month while the
+  // column defaulted to current, so an unreadable mode planned a different
+  // month than a saved one.)
+  const off = mode === 'next_month' ? 1 : 0;
   return `${iso(new Date(Date.UTC(y, m + off, 1)))} → ${iso(new Date(Date.UTC(y, m + off + 1, 0)))}`;
 }

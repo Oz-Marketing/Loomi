@@ -188,7 +188,10 @@ now asserts every queue that is `work`ed or `schedule`d is also `createQueue`'d.
     only place they sit together — the Ad Generator list shows half of it. The
     list page redirects the client tier to `/campaign-builder`; they still reach
     the ad EDITOR by opening a design from the campaign, which is what
-    `studio.adgen.edit` is for.
+    `studio.adgen.edit` is for. That link must be the BARE `/ad-generator/<id>`
+    — there is no `/subaccount/[slug]/ad-generator` route, and the account href
+    builder prefixes every path, so a prefixed link 404s for every client (it
+    did, until 2026-09-10; `assetEditorPath` has the test).
   - **`automationOnly` is an entitlement, not a filter.** `listCampaigns` turns
     it into `where.source = 'automation'` and the `[id]` route 404s a
     non-automation campaign for the client tier. Never move that bound into a

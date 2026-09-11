@@ -6,6 +6,7 @@
  * targeting + send/publish happens, since the builder itself never sends).
  */
 import {
+  BoltIcon,
   EnvelopeIcon,
   ChatBubbleLeftRightIcon,
   RectangleStackIcon,
@@ -72,6 +73,27 @@ export function AssetStatusBadge({ status }: { status: string }) {
 }
 
 /**
+ * The chip an automation campaign wears instead of a derived status badge.
+ *
+ * The derived status is meaningless for a campaign of ads: an ad goes live only
+ * through an AdLaunch, never through its own status, so `isAssetDraft` is
+ * always true for it and the badge froze at "Ready to review" forever. What a
+ * person needs to know is WHAT this is (built from the account's manufacturer
+ * offers) and whether a run is writing into it right now.
+ */
+export function AutomatedChip({ building }: { building: boolean }) {
+  return (
+    <span
+      title={building ? 'A run is building this campaign’s designs' : 'Built from the account’s manufacturer offers'}
+      className="inline-flex items-center gap-1 rounded-full bg-[var(--primary)]/12 px-2 py-0.5 text-[10px] font-medium text-[var(--primary)]"
+    >
+      <BoltIcon className={`h-3 w-3 ${building ? 'animate-pulse' : ''}`} />
+      {building ? 'Building…' : 'Automated'}
+    </span>
+  );
+}
+
+/**
  * Returns the in-app editor path for an asset, given an href builder
  * (`useSubaccountHref()`), so links stay within the active sub-account.
  */
@@ -92,6 +114,13 @@ export function assetEditorPath(
     case 'flow':
       return href(`/flows/${id}`);
     case 'ad':
-      return href(`/ad-generator/${id}`);
+      // BARE, not `href()`-prefixed. Clients live under /subaccount/<slug>/ and
+      // `useSubaccountHref` prefixes every path — but there is no
+      // src/app/subaccount/[slug]/ad-generator route, so the prefixed link
+      // 404'd for every client who clicked a design. /ad-generator is not an
+      // admin page (proxy.ts ADMIN_PAGES); its gate is `adGeneratorAllowed`,
+      // which the client tier passes, and the [id] editor already narrows
+      // fields for non-managers.
+      return `/ad-generator/${id}`;
   }
 }

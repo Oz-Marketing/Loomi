@@ -27,7 +27,8 @@ export interface ScopeForm {
   templateId: string;
   sizeIds: string[];
   fanOutTemplateIds: string[];
-  maxAds: string;
+  /** Bound to `maxVehiclesPerRun` — the cap counts vehicles, not ads. */
+  maxVehicles: string;
   minStock: string;
   mode: string;
   // ── companion offer email ──
@@ -57,11 +58,11 @@ export const BLANK_FORM: ScopeForm = {
   focus: '',
   exclude: '',
   zip: '',
-  windowMode: 'next_month',
+  windowMode: 'current_month',
   templateId: '',
   sizeIds: [],
   fanOutTemplateIds: [],
-  maxAds: '10',
+  maxVehicles: '25',
   minStock: '0',
   mode: 'draft',
   emailEnabled: false,
@@ -79,11 +80,11 @@ function formFromReport(rep: ShadowReport): ScopeForm {
     focus: rep.scope?.focusModels?.join(', ') ?? '',
     exclude: rep.scope?.excludeModels?.join(', ') ?? '',
     zip: rep.scope?.zip ?? '',
-    windowMode: rep.runWindow?.mode ?? 'next_month',
+    windowMode: rep.runWindow?.mode ?? 'current_month',
     templateId: rep.scope?.templateMap?.all ?? '',
     sizeIds: rep.scope?.sizeIds ?? [],
     fanOutTemplateIds: rep.scope?.fanOutTemplateIds ?? [],
-    maxAds: String(rep.scope?.maxAdsPerRun ?? 10),
+    maxVehicles: String(rep.scope?.maxVehiclesPerRun ?? 25),
     minStock: String(rep.scope?.minStock ?? 0),
     mode: rep.scope?.mode ?? 'draft',
     emailEnabled: rep.scope?.emailEnabled ?? false,
@@ -111,7 +112,7 @@ export function toPayload(f: ScopeForm) {
     templateMap: f.templateId ? { all: f.templateId } : {},
     sizeIds: f.sizeIds,
     fanOutTemplateIds: f.fanOutTemplateIds,
-    maxAdsPerRun: Number(f.maxAds) || 10,
+    maxVehiclesPerRun: Number(f.maxVehicles) || 25,
     minStock: Number(f.minStock) || 0,
     mode: f.mode,
     emailEnabled: f.emailEnabled,

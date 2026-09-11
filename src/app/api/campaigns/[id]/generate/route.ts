@@ -22,6 +22,9 @@ import { generateLandingPageForSpec } from '@/lib/ai/lp-generator';
 import { renderTemplateBuild } from '@/lib/email/build-to-html';
 import { createForm } from '@/lib/services/forms';
 import { createLandingPage } from '@/lib/services/landing-pages';
+import { createFlow, updateFlowGraph } from '@/lib/services/loomi-flows';
+import { prisma } from '@/lib/prisma';
+import type { NodeType } from '@/lib/flows/validation';
 import type { CampaignBuildEvent } from '@/lib/campaigns/types';
 
 // Uses Prisma + the Anthropic SDK + react-email's renderer — must be Node, and
@@ -105,7 +108,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
         const ctx = row?.contextSnapshot ?? undefined;
 
         const total =
-          plan.emails.length + plan.sms.length + plan.forms.length + plan.landingPages.length;
+          plan.emails.length + plan.sms.length + plan.forms.length + plan.landingPages.length + (plan.flows ?? []).length;
         send({ type: 'plan_started', total });
 
         // ── Emails (concurrent, AI-generated) ──
@@ -258,6 +261,93 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               kind: 'landingPage',
               key: spec.key,
               message: err instanceof Error ? err.message : 'Failed to create landing page',
+            });
+          }
+        }
+
+        // ── Flows — an ongoing sequence, built as a Loomi Flow. ──
+        // Trigger → (wait →) step → …, every step a DRAFT node: email steps get
+        // a generated Template the flow node points at (editable in the email
+        // editor), SMS steps carry the plan's final copy. The flow itself stays
+        // a draft with no real trigger — that is set in the flow builder, where
+        // "who enters this" needs a list or an event a plan cannot know.
+        for (const spec of plan.flows ?? []) {
+          send({ type: 'asset_started', kind: 'flow', key: spec.key, label: spec.purpose });
+          try {
+            const flow = await createFlow({
+              name: spec.purpose,
+              description: spec.trigger ? `Suggested trigger: ${spec.trigger}` : undefined,
+              accountKey,
+              createdByUserId: session!.user.id,
+            });
+            const trigger = flow.nodes.find((n) => n.type === 'trigger') ?? flow.nodes[0];
+            const nodes: { id?: string; type: NodeType; config: unknown; x: number; y: number }[] = [
+              { id: trigger.id, type: 'trigger', config: trigger.config, x: trigger.x, y: trigger.y },
+            ];
+            const edges: { fromNodeId: string; toNodeId: string }[] = [];
+            let prev = trigger.id;
+            let y = trigger.y;
+            let n = 0;
+            for (const step of spec.steps) {
+              if (step.delayDays > 0) {
+                const waitId = `client-wait-${++n}`;
+                y += 140;
+                nodes.push({ id: waitId, type: 'wait', config: { ms: step.delayDays * 86_400_000 }, x: trigger.x, y });
+                edges.push({ fromNodeId: prev, toNodeId: waitId });
+                prev = waitId;
+              }
+              const stepId = `client-step-${++n}`;
+              y += 140;
+              if (step.channel === 'sms') {
+                nodes.push({ id: stepId, type: 'sms', config: { message: step.message ?? '' }, x: trigger.x, y });
+              } else {
+                // The email body is generated the same way a campaign email is,
+                // and persisted as a Template the node references by id.
+                const emailSpec = {
+                  key: `${spec.key}-${n}`,
+                  purpose: step.purpose,
+                  subject: step.subject || step.purpose,
+                  sendOffsetDays: 0,
+                };
+                const { templateBuild } = await generateEmailForSpec(emailSpec, {
+                  accountContext: ctx,
+                  campaignSummary: plan.summary,
+                  mode: emailMode,
+                  assets: plan.assets,
+                });
+                let templateId: string | null = null;
+                if (templateBuild) {
+                  const rendered = await renderTemplateBuild(templateBuild, { subject: emailSpec.subject });
+                  const slug = await createCampaignEmailTemplate({
+                    accountKey,
+                    title: emailSpec.subject,
+                    content: rendered.template ? JSON.stringify(rendered.template) : rendered.html,
+                    createdByUserId: session!.user.id,
+                  });
+                  templateId = (await prisma.template.findUnique({ where: { slug }, select: { id: true } }))?.id ?? null;
+                }
+                nodes.push({
+                  id: stepId,
+                  type: 'email',
+                  config: templateId ? { templateId, subject: emailSpec.subject } : { subject: emailSpec.subject, html: '' },
+                  x: trigger.x,
+                  y,
+                });
+              }
+              edges.push({ fromNodeId: prev, toNodeId: stepId });
+              prev = stepId;
+            }
+            await updateFlowGraph(flow.id, { nodes, edges });
+            await linkAssetToCampaign('flow', flow.id, id);
+            successCount += 1;
+            send({ type: 'asset_done', kind: 'flow', key: spec.key, assetId: flow.id, name: spec.purpose });
+          } catch (err) {
+            errorCount += 1;
+            send({
+              type: 'asset_error',
+              kind: 'flow',
+              key: spec.key,
+              message: err instanceof Error ? err.message : 'Failed to create flow',
             });
           }
         }

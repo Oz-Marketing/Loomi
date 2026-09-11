@@ -66,6 +66,10 @@ export interface RunSummary {
   /** Why vehicles were passed over — the run's own record of it. */
   skipped: RunSkip[];
   generatedCount: number | null;
+  /** Who started a generate run: a person, or the schedule. Null on older rows. */
+  trigger?: { kind: 'manual' | 'scheduled'; userId?: string | null; userName?: string | null } | null;
+  /** The Campaign the run wrote into, when it did. */
+  campaignId?: string | null;
 }
 
 export interface ShadowScope {
@@ -79,7 +83,8 @@ export interface ShadowScope {
   /** Designs the fan-out may build; empty = every published template in scope. */
   fanOutTemplateIds: string[];
   radius: number;
-  maxAdsPerRun: number;
+  /** The cap counts VEHICLES — every permitted design is built for each. */
+  maxVehiclesPerRun: number;
   minStock: number;
   offerTypePriority: string[];
   mode: string;

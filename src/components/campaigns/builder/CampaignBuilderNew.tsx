@@ -8,9 +8,14 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { CampaignPlanReview } from './CampaignPlanReview';
 import { CampaignLiveBuild } from './CampaignLiveBuild';
+import { CampaignIntakeInterview } from './CampaignIntakeInterview';
+import type { CampaignIntakeAnswer, CampaignIntakeQuestion } from '@/lib/ai/campaign-intake';
 import type { CampaignDetail, CampaignPlan, CampaignStatus } from '@/lib/campaigns/types';
 
-type Phase = 'account' | 'goal' | 'planning' | 'review' | 'building';
+// `asking` fetches the interview; `questions` runs it. Both sit between the
+// opening line and `planning`, which is now the only phase that waits on a
+// long model call.
+type Phase = 'account' | 'goal' | 'asking' | 'questions' | 'planning' | 'review' | 'building';
 
 export function CampaignBuilderNew() {
   const router = useRouter();
@@ -25,6 +30,7 @@ export function CampaignBuilderNew() {
   const [goal, setGoal] = useState(goalParam);
   const [campaign, setCampaign] = useState<CampaignDetail | null>(null);
   const [plan, setPlan] = useState<CampaignPlan | null>(null);
+  const [questions, setQuestions] = useState<CampaignIntakeQuestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
 
@@ -32,14 +38,43 @@ export function CampaignBuilderNew() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Actions ──
-  const startPlan = async (g: string, key: string) => {
+  /** Opening line → the interview's questions. */
+  const startIntake = async (g: string, key: string) => {
+    setError(null);
+    setPhase('asking');
+    try {
+      const res = await fetch('/api/campaigns/ai/intake', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goal: g, accountKey: key }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to start the campaign');
+      setQuestions(data.questions ?? []);
+      setPhase('questions');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start the campaign');
+      setPhase('goal');
+    }
+  };
+
+  const startPlan = async (
+    g: string,
+    key: string,
+    intake?: { answers: CampaignIntakeAnswer[]; channels: string[] },
+  ) => {
     setError(null);
     setPhase('planning');
     try {
       const res = await fetch('/api/campaigns/ai/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ goal: g, accountKey: key }),
+        body: JSON.stringify({
+          goal: g,
+          accountKey: key,
+          answers: intake?.answers ?? [],
+          channels: intake?.channels ?? [],
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Failed to plan campaign');
@@ -48,7 +83,7 @@ export function CampaignBuilderNew() {
       setPhase('review');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to plan campaign');
-      setPhase('goal');
+      setPhase(questions.length ? 'questions' : 'goal');
     }
   };
 
@@ -81,7 +116,7 @@ export function CampaignBuilderNew() {
     } else if (!accountKey) {
       setPhase('account');
     } else if (goalParam.trim()) {
-      void startPlan(goalParam, accountKey);
+      void startIntake(goalParam, accountKey);
     } else {
       setPhase('goal');
     }
@@ -114,7 +149,7 @@ export function CampaignBuilderNew() {
 
   const handleAccountChosen = (key: string) => {
     setAccount({ mode: 'account', accountKey: key });
-    if (goal.trim()) void startPlan(goal, key);
+    if (goal.trim()) void startIntake(goal, key);
     else setPhase('goal');
   };
 
@@ -167,7 +202,7 @@ export function CampaignBuilderNew() {
             </div>
             <h1 className="text-xl font-bold tracking-tight">What do you want to promote?</h1>
             <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-              Describe the campaign and Loomi will draft the emails and texts together.
+              A line is enough — Loomi asks a few questions before it drafts anything.
             </p>
           </div>
           {error && (
@@ -183,7 +218,7 @@ export function CampaignBuilderNew() {
                 onChange={(e) => setGoal(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && goal.trim() && accountKey) {
-                    void startPlan(goal, accountKey);
+                    void startIntake(goal, accountKey);
                   }
                 }}
                 rows={3}
@@ -193,7 +228,7 @@ export function CampaignBuilderNew() {
               <button
                 type="button"
                 disabled={!goal.trim() || !accountKey}
-                onClick={() => accountKey && startPlan(goal, accountKey)}
+                onClick={() => accountKey && startIntake(goal, accountKey)}
                 className="iris-rainbow-gradient absolute bottom-2.5 right-2.5 flex h-9 w-9 items-center justify-center rounded-full text-white shadow-md transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <ArrowUpIcon className="h-4 w-4" />
@@ -201,6 +236,24 @@ export function CampaignBuilderNew() {
             </div>
           </div>
         </div>
+      )}
+
+      {phase === 'asking' && (
+        <div className="py-20 text-center">
+          <div className="iris-rainbow-gradient mx-auto mb-4 flex h-12 w-12 animate-pulse items-center justify-center rounded-full shadow-md">
+            <SparklesIcon className="h-6 w-6 text-zinc-900" />
+          </div>
+          <p className="text-sm text-[var(--muted-foreground)]">Reading the account…</p>
+        </div>
+      )}
+
+      {phase === 'questions' && (
+        <CampaignIntakeInterview
+          questions={questions}
+          submitting={false}
+          onBack={() => setPhase('goal')}
+          onDone={(intake) => accountKey && startPlan(goal, accountKey, intake)}
+        />
       )}
 
       {phase === 'planning' && (

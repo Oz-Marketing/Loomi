@@ -10,12 +10,14 @@ import {
   PaperAirplaneIcon,
   Squares2X2Icon,
   TrashIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { CampaignOfferDesigns } from './campaign-offer-designs';
 import { useAccount } from '@/contexts/account-context';
 import { toast } from '@/lib/toast';
-import { CampaignStatusBadge, AssetStatusBadge, CHANNEL_META, assetEditorPath } from './shared';
+import { CampaignStatusBadge, AssetStatusBadge, AutomatedChip, CHANNEL_META, assetEditorPath } from './shared';
+import { AssetEditorProvider, OpenAssetLink } from './asset-editor-sheet';
 import { CampaignEmailGallery } from './email-gallery';
 import { EmailPreviewThumb } from './email-preview-thumb';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
@@ -102,7 +104,9 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
   const hasAssets = campaign.assetCounts.total > 0;
   const canResume = !hasAssets && campaign.source === 'ai' && !!campaign.plan;
   const dealerName =
-    (campaign.accountKey && accounts[campaign.accountKey]?.dealer) || 'Your dealership';
+    // "Your account", not "Your dealership": Loomi is industry-agnostic in its
+    // own copy, and a client here may be a clinic or a store.
+    (campaign.accountKey && accounts[campaign.accountKey]?.dealer) || 'Your account';
 
   const availableChannels = CHANNEL_ORDER.filter((k) => byKind(k).length > 0);
 
@@ -132,12 +136,15 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
       <p className="min-w-0 truncate text-sm font-medium text-[var(--foreground)]">{asset.name}</p>
       <div className="flex flex-shrink-0 items-center gap-3">
         <AssetStatusBadge status={asset.status} />
-        <Link
+        <OpenAssetLink
+          kind={asset.kind}
+          id={asset.id}
+          name={asset.name}
           href={assetEditorPath(href, asset.kind, asset.id)}
           className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
         >
           Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-        </Link>
+        </OpenAssetLink>
       </div>
     </div>
   );
@@ -148,7 +155,13 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
 
     // Emails: one at a time, with a dot pager + desktop/mobile preview toggle.
     if (kind === 'email') {
-      return <CampaignEmailGallery assets={assets} href={href} />;
+      return (
+        <CampaignEmailGallery
+          assets={assets}
+          href={href}
+          showOpen={isStaff || campaign.source !== 'automation'}
+        />
+      );
     }
 
     // SMS: phone on the LEFT (all texts as one thread), Open list on the RIGHT.
@@ -179,12 +192,15 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
                 <p className="min-w-0 truncate text-sm font-medium text-[var(--foreground)]">{asset.name}</p>
                 <div className="flex flex-shrink-0 items-center gap-3">
                   <AssetStatusBadge status={asset.status} />
-                  <Link
+                  <OpenAssetLink
+                    kind={asset.kind}
+                    id={asset.id}
+                    name={asset.name}
                     href={assetEditorPath(href, asset.kind, asset.id)}
                     className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
                   >
                     Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                  </Link>
+                  </OpenAssetLink>
                 </div>
               </div>
               {asset.lpHtml && (
@@ -208,12 +224,15 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
                 <p className="min-w-0 truncate text-sm font-medium text-[var(--foreground)]">{asset.name}</p>
                 <div className="flex flex-shrink-0 items-center gap-3">
                   <AssetStatusBadge status={asset.status} />
-                  <Link
+                  <OpenAssetLink
+                    kind={asset.kind}
+                    id={asset.id}
+                    name={asset.name}
                     href={assetEditorPath(href, asset.kind, asset.id)}
                     className="inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] transition hover:underline"
                   >
                     Open <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
-                  </Link>
+                  </OpenAssetLink>
                 </div>
               </div>
               {asset.formFields && asset.formFields.length > 0 && (
@@ -248,6 +267,7 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
           accountKey={campaign.accountKey}
           editorHref={(id) => assetEditorPath(href, 'ad', id)}
           onChanged={() => setReloadKey((n) => n + 1)}
+          frozen={campaign.status === 'building'}
         />
       );
     }
@@ -263,11 +283,17 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
     counts.landingPage && `${counts.landingPage} landing page${counts.landingPage === 1 ? '' : 's'}`,
     counts.form && `${counts.form} form${counts.form === 1 ? '' : 's'}`,
     counts.flow && `${counts.flow} flow${counts.flow === 1 ? '' : 's'}`,
+    // Ads are the offer run's SHARED rows — deleting the campaign unlinks them
+    // (the FK is SetNull) and they stay in the Ad Generator, re-attaching on
+    // the next run while their offer is live. Say so, rather than let "delete
+    // every asset" imply the designs go too.
+    counts.ad && `${counts.ad} ad design${counts.ad === 1 ? '' : 's'} (unlinked — still in the Ad Generator)`,
   ]
     .filter(Boolean)
     .join(', ');
 
   return (
+    <AssetEditorProvider onClosed={() => setReloadKey((n) => n + 1)}>
     <div className="animate-fade-in-up mx-auto max-w-4xl">
       <div className="mb-5 flex items-center justify-between gap-3">
         <Link
@@ -327,25 +353,49 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
       <header className="mb-8">
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-bold tracking-tight">{campaign.name}</h1>
-          <CampaignStatusBadge status={campaign.status} />
+          {campaign.source === 'automation' ? (
+            <AutomatedChip building={campaign.status === 'building'} />
+          ) : (
+            <CampaignStatusBadge status={campaign.status} />
+          )}
           {campaign.source === 'ai' && (
             <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
               <SparklesIcon className="h-3.5 w-3.5" /> Built with AI
             </span>
           )}
         </div>
-        {campaign.goal && (
+        {/* The goal is a person's brief, quoted back. An automation campaign's
+            "goal" is the run id the generator stamped there — not something to
+            quote at anyone. */}
+        {campaign.goal && campaign.source !== 'automation' && (
           <p className="mt-2 max-w-2xl text-sm text-[var(--muted-foreground)]">“{campaign.goal}”</p>
         )}
       </header>
 
-      {/* Drafts-only reminder — the builder never sends. */}
+      {campaign.source === 'automation' && campaign.status === 'building' && (
+        <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-3">
+          <BoltIcon className="mt-0.5 h-4 w-4 flex-shrink-0 animate-pulse text-[var(--primary)]" />
+          <p className="text-xs leading-relaxed text-[var(--foreground)]">
+            Loomi is still building this campaign — designs may change until it finishes.
+          </p>
+        </div>
+      )}
+
+      {/* Drafts-only reminder — the builder never sends.
+          An automation campaign reads differently: its viewer is usually the
+          account's user, who picks a design and does NOT send — the account team
+          does. And an ads-only campaign (email off for the account, the common
+          shape) must not promise a send at all. */}
       {hasAssets && (
         <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 py-3">
           <PaperAirplaneIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
           <p className="text-xs leading-relaxed text-[var(--muted-foreground)]">
-            Everything below is a <span className="font-medium text-[var(--foreground)]">draft</span>. Open each one
-            to review the content, choose who to send to, and schedule or publish — nothing has been sent.
+            Everything below is a <span className="font-medium text-[var(--foreground)]">draft</span>.{' '}
+            {campaign.source === 'automation'
+              ? counts.email > 0
+                ? 'Pick the design you want for each offer — your account team handles the send.'
+                : 'Pick the design you want for each offer — nothing runs until your account team approves it.'
+              : 'Open each one to review the content, choose who to send to, and schedule or publish — nothing has been sent.'}
           </p>
         </div>
       )}
@@ -422,5 +472,6 @@ export function CampaignOverview({ campaignId }: { campaignId: string }) {
         </div>
       )}
     </div>
+    </AssetEditorProvider>
   );
 }

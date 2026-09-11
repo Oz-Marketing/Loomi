@@ -361,7 +361,7 @@ async function notifyReviewers(
   }
   const heldBack = generated.filter((g) => g.status === 'draft' && g.warnings.length > 0).length;
   const body =
-    `${fresh.length} new draft ad(s) from OEM offers` +
+    `${fresh.length} new draft ad${fresh.length === 1 ? '' : 's'} from OEM offers` +
     (heldBack ? `, ${heldBack} with review notes` : '') +
     '. Nothing publishes until approved.';
   for (const userId of recipients) {
@@ -370,7 +370,7 @@ async function notifyReviewers(
         userId,
         type: 'incentive_ads_ready',
         severity: 'info',
-        title: `${fresh.length} offer ad(s) ready to review`,
+        title: `${fresh.length} offer ad${fresh.length === 1 ? '' : 's'} ready to review`,
         body,
         link: REVIEWER_LINK,
         meta: { accountKey: config.accountKey, runId, count: fresh.length },

@@ -471,6 +471,25 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (!userAccountKeys.includes(newAccount.accountKey)) return;
     }
     setAccountState(newAccount);
+    // The `?account=` handoff token is SPENT once someone picks an account —
+    // by hand in the switcher, or by clicking a notification for a different
+    // one. Leaving a stale token in the URL means the next refresh silently
+    // reverts the choice, because the mount effect above trusts the param over
+    // the cookie.
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('account');
+      const chosen = newAccount.mode === 'account' ? newAccount.accountKey : null;
+      if (token && token !== chosen) {
+        params.delete('account');
+        const q = params.toString();
+        window.history.replaceState(
+          {},
+          '',
+          window.location.pathname + (q ? `?${q}` : '') + window.location.hash,
+        );
+      }
+    }
     // Persist so the selection survives reloads and stays in sync across the
     // studio / app / reporting surfaces (shared parent-domain cookie).
     writeActiveAccountCookie(

@@ -21,6 +21,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 import { SECTOR_ICONS } from '@/components/icons/sector-icons';
+import { Collapse } from '@/components/ui/collapse';
+import { useAccount } from '@/contexts/account-context';
 import type { ReactElement, SVGProps } from 'react';
 import {
   NOTIFICATION_CATEGORY_STYLE,
@@ -212,6 +214,82 @@ export function resolveNotificationHref(item: {
   return qs ? `${path}?${qs}` : path;
 }
 
+/**
+ * The account a notification is ABOUT, which is not the account you are
+ * standing in. Almost every automated notification names one in `meta` — the
+ * panel uses it to label the row and to switch scope on the way out.
+ */
+export function notificationAccountKey(item: { metaJson: string | null }): string | null {
+  if (!item.metaJson) return null;
+  try {
+    const meta = JSON.parse(item.metaJson) as Record<string, unknown>;
+    return typeof meta.accountKey === 'string' && meta.accountKey ? meta.accountKey : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A numeric field off `meta`, or null when it is absent or not a number. */
+function metaCount(item: { metaJson: string | null }, field: string): number | null {
+  if (!item.metaJson) return null;
+  try {
+    const meta = JSON.parse(item.metaJson) as Record<string, unknown>;
+    const value = meta[field];
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which rows collapse together.
+ *
+ * The nightly Ad Generator run touches every enabled account, so one night's
+ * work arrives as thirty-odd separate rows that say almost the same thing. They
+ * are the SAME NEWS about DIFFERENT accounts, so they bundle by type and by
+ * day — never across days, because "this morning" and "last Tuesday" are not
+ * one thing to act on.
+ */
+export function notificationGroupKey(item: { type: string; createdAt: string }): string {
+  return `${item.type}:${new Date(item.createdAt).toDateString()}`;
+}
+
+/** Below this a bundle is just a row wearing extra chrome. */
+const GROUP_MIN = 3;
+
+/**
+ * The visible list, with pile-ups folded into bundles.
+ *
+ * A bundle sits where its NEWEST member would have sat, so the panel still
+ * reads newest-first; everything that never piles up is left exactly as it was.
+ */
+export function groupNotifications<T extends { id: string; type: string; createdAt: string }>(
+  items: T[],
+): ({ kind: 'single'; key: string; item: T } | { kind: 'group'; key: string; items: T[] })[] {
+  const buckets = new Map<string, T[]>();
+  for (const item of items) {
+    const key = notificationGroupKey(item);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(item);
+    else buckets.set(key, [item]);
+  }
+
+  const rows: ({ kind: 'single'; key: string; item: T } | { kind: 'group'; key: string; items: T[] })[] = [];
+  const emitted = new Set<string>();
+  for (const item of items) {
+    const key = notificationGroupKey(item);
+    const bucket = buckets.get(key)!;
+    if (bucket.length < GROUP_MIN) {
+      rows.push({ kind: 'single', key: item.id, item });
+      continue;
+    }
+    if (emitted.has(key)) continue;
+    emitted.add(key);
+    rows.push({ kind: 'group', key, items: bucket });
+  }
+  return rows;
+}
+
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();
@@ -221,6 +299,354 @@ function formatRelative(iso: string): string {
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`;
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+interface RowActions {
+  /** Mark read (if unread), take the row's account with you, and — when the
+   *  row actually links somewhere — close the panel behind you. */
+  onOpen: (item: ApiNotification, navigating: boolean) => void;
+  onToggleRead: (id: string, currentlyUnread: boolean) => void;
+  onDelete: (id: string, wasUnread: boolean) => void;
+}
+
+/**
+ * Per-row actions. Revealed on hover so a quiet list stays quiet, but always
+ * present for keyboard users.
+ *
+ * `focus-within` keeps these reachable by keyboard, but a MOUSE click also
+ * leaves the button focused — so after marking a row read/unread the icons
+ * stayed pinned open until you clicked elsewhere. Each handler blurs itself,
+ * which clears the pointer case without costing the keyboard one.
+ */
+function RowActions({
+  unread,
+  onRead,
+  onDismiss,
+  readLabel,
+  dismissLabel,
+}: {
+  unread: boolean;
+  onRead: () => void;
+  onDismiss: () => void;
+  readLabel?: string;
+  dismissLabel?: string;
+}) {
+  return (
+    <span className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+      <button
+        type="button"
+        aria-label={readLabel ?? (unread ? 'Mark as read' : 'Mark as unread')}
+        title={readLabel ?? (unread ? 'Mark as read' : 'Mark as unread')}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.currentTarget.blur();
+          onRead();
+        }}
+        className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]"
+      >
+        {unread ? (
+          <CheckIcon className="h-3.5 w-3.5" />
+        ) : (
+          <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
+        )}
+      </button>
+      <button
+        type="button"
+        aria-label={dismissLabel ?? 'Dismiss'}
+        title={dismissLabel ?? 'Dismiss'}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          e.currentTarget.blur();
+          onDismiss();
+        }}
+        className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-red-400"
+      >
+        <TrashIcon className="h-3.5 w-3.5" />
+      </button>
+    </span>
+  );
+}
+
+/**
+ * One notification.
+ *
+ * `showCategory` is off inside a bundle — the bundle's header already says
+ * which part of the product is talking, and repeating it on every child turns
+ * the expanded list into a wall of identical chips. The ACCOUNT chip stays,
+ * because inside a bundle it is the only thing telling the rows apart.
+ */
+function NotificationRow({
+  item,
+  accountName,
+  showCategory,
+  actions,
+}: {
+  item: ApiNotification;
+  accountName: string | null;
+  showCategory: boolean;
+  actions: RowActions;
+}) {
+  const unread = !item.readAt;
+  const style = item.category ? NOTIFICATION_CATEGORY_STYLE[item.category] : null;
+  const Icon = style ? CATEGORY_ICON[style.icon] : BellAlertIcon;
+  const href = resolveNotificationHref(item);
+  const alarming = item.severity !== 'info';
+
+  const inner = (
+    <div
+      className={`group relative flex items-start gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors ${
+        // Unread wears a wash of the app's primary, not grey — grey reads as
+        // "disabled" next to a read row, which is the opposite of what an
+        // unread item is saying.
+        unread
+          ? 'bg-[var(--primary)]/10 hover:bg-[var(--primary)]/[0.16]'
+          : 'hover:bg-[var(--sidebar-muted)]/50'
+      } ${href ? 'cursor-pointer' : ''}`}
+    >
+      {/* The category tile is the row's identity — one glance says which part
+          of the product is talking. Inside a bundle the header carries it, so
+          the children indent under a plain dot instead. */}
+      {showCategory ? (
+        <span
+          className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${
+            style?.tint ?? 'bg-[var(--muted)]'
+          }`}
+        >
+          <Icon className={`h-4 w-4 ${style?.accent ?? 'text-[var(--muted-foreground)]'}`} />
+        </span>
+      ) : (
+        <span className="mt-2 flex h-1.5 w-1.5 flex-shrink-0 items-center justify-center">
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${
+              unread ? 'bg-[var(--primary)]' : 'bg-[var(--sidebar-muted-foreground)]/40'
+            }`}
+          />
+        </span>
+      )}
+
+      <div className="min-w-0 flex-1">
+        {/* Severity colours the TITLE, not a rail down the side. The rail put a
+            stripe on every row and turned the panel into one undifferentiated
+            column; the words are what someone reads, so that is where "this
+            needs attention" belongs. */}
+        <p
+          className={`pr-10 text-xs leading-snug ${
+            SEVERITY_TITLE[item.severity] ||
+            (unread ? 'text-[var(--sidebar-foreground)]' : 'text-[var(--sidebar-foreground)]/75')
+          } ${unread ? 'font-semibold' : ''}`}
+        >
+          {item.title}
+        </p>
+        {item.body && (
+          <p className="mt-0.5 text-[11px] leading-snug text-[var(--sidebar-muted-foreground)]">
+            {item.body}
+          </p>
+        )}
+
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-[var(--sidebar-muted-foreground)]">
+          {/* The real page name, not an abbreviation — the chip's job is
+              telling you exactly where this came from. */}
+          {showCategory && item.category && style && (
+            <span
+              title={item.typeLabel ?? undefined}
+              className={`rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide ${style.tint} ${style.accent}`}
+            >
+              {item.category}
+            </span>
+          )}
+          {/* WHOSE. Without it every automated row reads as generic product
+              chatter, and clicking is the only way to find out which account
+              is being talked about. */}
+          {accountName && (
+            <span
+              title={accountName}
+              className="max-w-[10rem] truncate rounded bg-[var(--sidebar-muted)] px-1.5 py-0.5 font-medium text-[var(--sidebar-foreground)]/80"
+            >
+              {accountName}
+            </span>
+          )}
+          {/* Product news is Loomi talking about itself; a tool notification is
+              your account needing something. */}
+          {style?.kind === 'product' && <span>Announcement</span>}
+          {alarming && (
+            <ExclamationTriangleIcon
+              className={`h-3 w-3 ${
+                item.severity === 'critical' ? 'text-red-400' : 'text-amber-400'
+              }`}
+            />
+          )}
+          <span>·</span>
+          <span className="whitespace-nowrap">{formatRelative(item.createdAt)}</span>
+        </div>
+      </div>
+
+      <RowActions
+        unread={unread}
+        onRead={() => actions.onToggleRead(item.id, unread)}
+        onDismiss={() => actions.onDelete(item.id, unread)}
+      />
+      {unread && (
+        <span className="absolute right-2.5 top-3 h-1.5 w-1.5 rounded-full bg-[var(--primary)] transition-opacity group-hover:opacity-0" />
+      )}
+    </div>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} onClick={() => actions.onOpen(item, true)} className="block">
+        {inner}
+      </Link>
+    );
+  }
+  return <div onClick={() => actions.onOpen(item, false)}>{inner}</div>;
+}
+
+/**
+ * A night's worth of the same news, folded into one row.
+ *
+ * Collapsed it answers the only two questions a pile-up raises — what happened
+ * and to how many accounts — and its read/dismiss act on the whole bundle, so
+ * clearing one night is one click instead of thirty. Expanded it is the same
+ * rows as before, each still linking to its own account.
+ */
+function NotificationGroup({
+  items,
+  accountNameFor,
+  actions,
+  onBulkRead,
+  onBulkDelete,
+}: {
+  items: ApiNotification[];
+  accountNameFor: (item: ApiNotification) => string | null;
+  actions: RowActions;
+  onBulkRead: (ids: string[], markUnread: boolean) => void;
+  onBulkDelete: (ids: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const first = items[0];
+  const style = first.category ? NOTIFICATION_CATEGORY_STYLE[first.category] : null;
+  const Icon = style ? CATEGORY_ICON[style.icon] : BellAlertIcon;
+  const unread = items.filter((i) => !i.readAt).length;
+  const severity = items.some((i) => i.severity === 'critical')
+    ? 'critical'
+    : items.some((i) => i.severity === 'warning')
+      ? 'warning'
+      : 'info';
+
+  const names = Array.from(
+    new Set(items.map((i) => accountNameFor(i)).filter((n): n is string => Boolean(n))),
+  );
+  // Only when EVERY member carries the same counter — `count` (ads built) and
+  // `offers` (offers covered) are different units, and a sum across a mix would
+  // be a number that means nothing.
+  const counts = items.map((i) => metaCount(i, 'count'));
+  const total = counts.every((c) => c !== null) ? counts.reduce((a, c) => a + (c ?? 0), 0) : null;
+
+  // One account gets NAMED — "1 account" is a worse answer than the account
+  // itself, and a bundle of repeat runs on a single rooftop is common.
+  const spread =
+    names.length === 1
+      ? `for ${names[0]}`
+      : names.length > 1
+        ? `across ${names.length} accounts`
+        : `in ${items.length} updates`;
+  const headline =
+    total !== null && total > 0
+      ? `${first.typeLabel ?? first.title} — ${total} ${spread}`
+      : `${first.typeLabel ?? first.title} — ${spread.replace(/^(for|across|in) /, '')}`;
+  const subject =
+    names.length > 1
+      ? `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` +${names.length - 3} more` : ''}`
+      : `${items.length} update${items.length === 1 ? '' : 's'}`;
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--sidebar-border-soft)]/50">
+      <div
+        className={`group relative flex items-start transition-colors ${
+          unread
+            ? 'bg-[var(--primary)]/10 hover:bg-[var(--primary)]/[0.16]'
+            : 'bg-[var(--sidebar-muted)]/40 hover:bg-[var(--sidebar-muted)]/70'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-start gap-2.5 px-2.5 py-2.5 text-left"
+        >
+          <span
+            className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${
+              style?.tint ?? 'bg-[var(--muted)]'
+            }`}
+          >
+            <Icon className={`h-4 w-4 ${style?.accent ?? 'text-[var(--muted-foreground)]'}`} />
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <p
+              className={`pr-16 text-xs leading-snug ${
+                SEVERITY_TITLE[severity] ||
+                (unread ? 'text-[var(--sidebar-foreground)]' : 'text-[var(--sidebar-foreground)]/75')
+              } ${unread ? 'font-semibold' : ''}`}
+            >
+              {headline}
+            </p>
+            <p className="mt-0.5 truncate text-[11px] leading-snug text-[var(--sidebar-muted-foreground)]">
+              {subject}
+            </p>
+
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-[var(--sidebar-muted-foreground)]">
+              {first.category && style && (
+                <span
+                  className={`rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide ${style.tint} ${style.accent}`}
+                >
+                  {first.category}
+                </span>
+              )}
+              {unread > 0 && <span>{unread} unread</span>}
+              <span>·</span>
+              <span className="whitespace-nowrap">{formatRelative(first.createdAt)}</span>
+              <ChevronDownIcon
+                className={`h-3 w-3 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+              />
+            </div>
+          </div>
+        </button>
+
+        <RowActions
+          unread={unread > 0}
+          readLabel={unread > 0 ? 'Mark all in this group read' : 'Mark all in this group unread'}
+          dismissLabel="Dismiss all in this group"
+          onRead={() =>
+            onBulkRead(
+              items.filter((i) => (unread > 0 ? !i.readAt : Boolean(i.readAt))).map((i) => i.id),
+              unread === 0,
+            )
+          }
+          onDismiss={() => onBulkDelete(items.map((i) => i.id))}
+        />
+        {unread > 0 && (
+          <span className="absolute right-2.5 top-3 h-1.5 w-1.5 rounded-full bg-[var(--primary)] transition-opacity group-hover:opacity-0" />
+        )}
+      </div>
+
+      <Collapse open={open}>
+        <div className="space-y-1 border-t border-[var(--sidebar-border-soft)]/50 p-1.5">
+          {items.map((item) => (
+            <NotificationRow
+              key={item.id}
+              item={item}
+              accountName={accountNameFor(item)}
+              showCategory={false}
+              actions={actions}
+            />
+          ))}
+        </div>
+      </Collapse>
+    </div>
+  );
 }
 
 interface NotificationsPanelProps {
@@ -243,6 +669,7 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
   const [sector, setSector] = useState<SectorFilter>('all');
   const surface = useCurrentSurface();
   const panelRef = useRef<HTMLDivElement>(null);
+  const { accounts, accountsLoaded, setAccount } = useAccount();
 
   const load = useCallback(async () => {
     try {
@@ -353,6 +780,44 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
     }
   };
 
+  /** Read/unread for a whole bundle, in one round trip instead of thirty. */
+  const handleBulkRead = async (ids: string[], markUnread: boolean) => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    const readAt = markUnread ? null : new Date().toISOString();
+    setItems((prev) => prev.map((i) => (gone.has(i.id) ? { ...i, readAt } : i)));
+    onChange?.(
+      markUnread ? unreadCount + ids.length : Math.max(0, unreadCount - ids.length),
+    );
+    try {
+      await fetch('/api/notifications/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, unread: markUnread }),
+      });
+    } catch {
+      /* the optimistic flip stands; the next load reconciles */
+    }
+  };
+
+  /** Dismiss a whole bundle. Optimistic, for the same reason one row is. */
+  const handleBulkDelete = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    const unreadGone = items.filter((i) => gone.has(i.id) && !i.readAt).length;
+    setItems((prev) => prev.filter((i) => !gone.has(i.id)));
+    if (unreadGone > 0) onChange?.(Math.max(0, unreadCount - unreadGone));
+    try {
+      await fetch('/api/notifications', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+    } catch {
+      /* the rows are already gone locally; the next load reconciles */
+    }
+  };
+
   const handleMarkAllRead = async () => {
     if (unreadCount === 0) return;
     setItems((prev) => prev.map((i) => (i.readAt ? i : { ...i, readAt: new Date().toISOString() })));
@@ -367,6 +832,42 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
       /* ignore */
     }
   };
+
+  /**
+   * The account a row is about, named the way the switcher names it.
+   *
+   * Held back until the account list lands — flashing the raw key and swapping
+   * it for the dealer name a beat later is worse than showing nothing.
+   */
+  const accountNameFor = (item: ApiNotification): string | null => {
+    const key = notificationAccountKey(item);
+    if (!key || !accountsLoaded) return null;
+    return accounts[key]?.dealer ?? key;
+  };
+
+  const rowActions: RowActions = {
+    onOpen: (item, navigating) => {
+      /**
+       * TAKE THE ACCOUNT WITH YOU.
+       *
+       * `resolveNotificationHref` already puts `?account=<key>` on the link,
+       * but the provider only reads that param when it MOUNTS — and a click
+       * inside the app is a soft navigation, so it never re-runs. The result
+       * was landing on the right page still scoped to the account you were
+       * already standing in: told about Young Chevrolet, shown Young Nissan.
+       * `setAccount` enforces the role's own account restrictions, so this
+       * cannot widen anyone's reach.
+       */
+      const key = notificationAccountKey(item);
+      if (key) setAccount({ mode: 'account', accountKey: key });
+      void handleItemClick(item);
+      if (navigating) onClose();
+    },
+    onToggleRead: (id, currentlyUnread) => void handleToggleRead(id, currentlyUnread),
+    onDelete: (id, wasUnread) => void handleDelete(id, wasUnread),
+  };
+
+  const rows = groupNotifications(visible);
 
   return (
     <div className="fixed inset-0 z-50 animate-overlay-in" onClick={onClose}>
@@ -480,152 +981,26 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
             </p>
           ) : (
             <div className="space-y-2">
-              {visible.map((item) => {
-                const unread = !item.readAt;
-                const style = item.category ? NOTIFICATION_CATEGORY_STYLE[item.category] : null;
-                const Icon = style ? CATEGORY_ICON[style.icon] : BellAlertIcon;
-                const href = resolveNotificationHref(item);
-                const alarming = item.severity !== 'info';
-
-                const inner = (
-                  <div
-                    className={`group relative flex items-start gap-2.5 rounded-lg px-2.5 py-2.5 transition-colors ${
-                      // Unread wears a wash of the app's primary, not grey —
-                      // grey reads as "disabled" next to a read row, which is
-                      // the opposite of what an unread item is saying.
-                      unread
-                        ? 'bg-[var(--primary)]/10 hover:bg-[var(--primary)]/[0.16]'
-                        : 'hover:bg-[var(--sidebar-muted)]/50'
-                    } ${href ? 'cursor-pointer' : ''}`}
-                  >
-                    {/* The category tile is the row's identity — one glance says
-                        which part of the product is talking. */}
-                    <span
-                      className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${
-                        style?.tint ?? 'bg-[var(--muted)]'
-                      }`}
-                    >
-                      <Icon className={`h-4 w-4 ${style?.accent ?? 'text-[var(--muted-foreground)]'}`} />
-                    </span>
-
-                    <div className="min-w-0 flex-1">
-                      {/* Severity colours the TITLE, not a rail down the side.
-                          The rail put a stripe on every row and turned the
-                          panel into one undifferentiated column; the words are
-                          what someone reads, so that is where "this needs
-                          attention" belongs. */}
-                      <p
-                        className={`pr-10 text-xs leading-snug ${
-                          SEVERITY_TITLE[item.severity] ||
-                          (unread
-                            ? 'text-[var(--sidebar-foreground)]'
-                            : 'text-[var(--sidebar-foreground)]/75')
-                        } ${unread ? 'font-semibold' : ''}`}
-                      >
-                        {item.title}
-                      </p>
-                      {item.body && (
-                        <p className="mt-0.5 text-[11px] leading-snug text-[var(--sidebar-muted-foreground)]">
-                          {item.body}
-                        </p>
-                      )}
-
-                      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-[var(--sidebar-muted-foreground)]">
-                        {/* The real page name, not an abbreviation — the chip's
-                            job is telling you exactly where this came from. */}
-                        {item.category && style && (
-                          <span
-                            title={item.typeLabel ?? undefined}
-                            className={`rounded px-1.5 py-0.5 font-semibold uppercase tracking-wide ${style.tint} ${style.accent}`}
-                          >
-                            {item.category}
-                          </span>
-                        )}
-                        {/* Product news is Loomi talking about itself; a tool
-                            notification is your account needing something. */}
-                        {style?.kind === 'product' && <span>Announcement</span>}
-                        {alarming && (
-                          <ExclamationTriangleIcon
-                            className={`h-3 w-3 ${
-                              item.severity === 'critical' ? 'text-red-400' : 'text-amber-400'
-                            }`}
-                          />
-                        )}
-                        <span>·</span>
-                        <span className="whitespace-nowrap">{formatRelative(item.createdAt)}</span>
-                      </div>
-                    </div>
-
-                    {/* Per-row actions. Revealed on hover so a quiet list stays
-                        quiet, but always present for keyboard users. Both stop
-                        propagation — the row itself navigates. */}
-                    {/* `focus-within` keeps these reachable by keyboard, but a
-                        MOUSE click also leaves the button focused — so after
-                        marking a row read/unread the icons stayed pinned open
-                        until you clicked elsewhere. Each handler blurs itself,
-                        which clears the pointer case without costing the
-                        keyboard one. */}
-                    <span className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-                      <button
-                        type="button"
-                        aria-label={unread ? 'Mark as read' : 'Mark as unread'}
-                        title={unread ? 'Mark as read' : 'Mark as unread'}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.currentTarget.blur();
-                          void handleToggleRead(item.id, unread);
-                        }}
-                        className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]"
-                      >
-                        {unread ? (
-                          <CheckIcon className="h-3.5 w-3.5" />
-                        ) : (
-                          <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label="Dismiss"
-                        title="Dismiss"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          e.currentTarget.blur();
-                          void handleDelete(item.id, unread);
-                        }}
-                        className="rounded-md p-1 text-[var(--sidebar-muted-foreground)] transition-colors hover:bg-[var(--sidebar-muted)] hover:text-red-400"
-                      >
-                        <TrashIcon className="h-3.5 w-3.5" />
-                      </button>
-                    </span>
-                    {unread && (
-                      <span className="absolute right-2.5 top-3 h-1.5 w-1.5 rounded-full bg-[var(--primary)] transition-opacity group-hover:opacity-0" />
-                    )}
-                  </div>
-                );
-
-                if (href) {
-                  return (
-                    <Link
-                      key={item.id}
-                      href={href}
-                      onClick={() => {
-                        handleItemClick(item);
-                        onClose();
-                      }}
-                      className="block"
-                    >
-                      {inner}
-                    </Link>
-                  );
-                }
-                return (
-                  <div key={item.id} onClick={() => handleItemClick(item)}>
-                    {inner}
-                  </div>
-                );
-              })}
+              {rows.map((row) =>
+                row.kind === 'group' ? (
+                  <NotificationGroup
+                    key={row.key}
+                    items={row.items}
+                    accountNameFor={accountNameFor}
+                    actions={rowActions}
+                    onBulkRead={handleBulkRead}
+                    onBulkDelete={handleBulkDelete}
+                  />
+                ) : (
+                  <NotificationRow
+                    key={row.key}
+                    item={row.item}
+                    accountName={accountNameFor(row.item)}
+                    showCategory
+                    actions={rowActions}
+                  />
+                ),
+              )}
             </div>
           )}
         </div>

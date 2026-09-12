@@ -1,0 +1,18 @@
+{
+  // Cypress gets its own program. Its globals are mocha + chai (`describe`,
+  // `it`, `expect`), which have no business in the Next.js/vitest program that
+  // `npm run verify` — the deploy gate — typechecks. The root tsconfig
+  // excludes this folder and cypress.config.ts; `npm run verify:e2e` checks
+  // them here instead.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["cypress", "node"],
+    "noEmit": true,
+    "incremental": false,
+    "isolatedModules": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  "include": ["**/*.ts", "../cypress.config.ts"],
+  "exclude": []
+}

@@ -1,0 +1,125 @@
+name: E2E
+
+# Deliberately NOT a deploy gate.
+#
+# Branch protection on main and staging requires a check named exactly
+# `verify` (typecheck.yml) and nothing else, and the deploy workflows declare
+# `needs: [build, verify]`. A browser suite is too young to be handed the
+# power to stop a production deploy — one flaky selector and nobody can ship.
+# When it has earned that, add this workflow to the deploy `needs:` list; the
+# machinery is already here.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # A throwaway database created fresh for this job — never a shared one.
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/loomi_e2e?schema=public
+      # Must match the origin the suite visits: NextAuth derives its cookie
+      # names and the `secure` flag from this (src/lib/auth.ts).
+      NEXTAUTH_URL: http://localhost:3000
+      # Signing key for a throwaway database that outlives the job by zero
+      # seconds. Not a secret, and deliberately not read from one — a missing
+      # secret would fail the run in a way that looks like a product bug.
+      NEXTAUTH_SECRET: e2e-ci-signing-key-not-a-secret
+      CYPRESS_BASE_URL: http://localhost:3000
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: loomi_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d loomi_e2e"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Installs dependencies AND caches the Cypress browser binary. Every
+      # other workflow sets CYPRESS_INSTALL_BINARY=0 because it has no use for
+      # a browser; this is the one job that does.
+      - name: Install dependencies
+        uses: cypress-io/github-action@v6
+        with:
+          runTests: false
+          # The repo's peer tree needs this flag — a bare `npm ci` fails.
+          install-command: npm ci --legacy-peer-deps
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Create the schema
+        run: npx prisma db push
+
+      - name: Seed the sign-in identity
+        # prisma/seed.ts writes connor@ozmktg.com / admin123 — the pair
+        # cypress.config.ts hands cy.login(). Without this the whole suite
+        # fails at the first sign-in.
+        run: npm run db:seed
+
+      - name: Typecheck the e2e suite
+        # Cypress lives outside the root tsconfig program, so `npm run verify`
+        # never sees it. This is where that code is kept honest.
+        run: npm run verify:e2e
+
+      - name: Build
+        run: npm run build:assets
+
+      - name: Run the suite
+        uses: cypress-io/github-action@v6
+        with:
+          install: false
+          # Electron is deprecated as a test browser in Cypress 16 and is the
+          # flakier of the two under load — it drops its debugger connection.
+          # Chrome is preinstalled on the runner.
+          browser: chrome
+          start: npm start
+          wait-on: http://localhost:3000/login
+          # `next start` is fast, but a cold runner plus a first request that
+          # touches the DB is not instant.
+          wait-on-timeout: 180
+          # Record only when the key is actually configured, so the suite still
+          # runs (and still reports) on a fork or before the secret is added.
+          record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+        env:
+          CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+          # A repo VARIABLE, not a secret — the project id identifies the
+          # Cypress Cloud project and is safe in the clear. Same pattern as
+          # vars.ENABLE_PLAYBOOKS in the deploy workflows.
+          CYPRESS_PROJECT_ID: ${{ vars.CYPRESS_PROJECT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload failure artifacts
+        # Only useful when the run was NOT recorded — Cypress Cloud already
+        # has these otherwise.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-artifacts
+          path: |
+            cypress/screenshots
+            cypress/videos
+          if-no-files-found: ignore
+          retention-days: 7

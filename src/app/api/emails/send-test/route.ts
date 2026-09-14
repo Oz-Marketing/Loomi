@@ -43,6 +43,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as SendTestBody;
     const to = body.to?.trim() || '';
+    // Sent verbatim. This used to prefix "[TEST] ", which is a spam-filter
+    // trigger token in its own right — so the one send whose job is to
+    // predict a blast's inbox placement was scored on a subject line no
+    // blast would ever carry.
     const subject = body.subject?.trim() || 'Test Email from Loomi Studio';
     const html = body.html;
     const accountKey = typeof body.accountKey === 'string' ? body.accountKey.trim() : '';
@@ -143,7 +147,7 @@ export async function POST(req: NextRequest) {
             from: { email: account.senderEmail, name: account.senderName || account.dealer || undefined },
             replyTo: account.replyToEmail ? { email: account.replyToEmail } : undefined,
             to: { email: recipient },
-            subject: `[TEST] ${subject}`,
+            subject,
             html: composed.html,
             text: composed.text,
             categories: ['loomi', 'send-test'],
@@ -206,7 +210,7 @@ export async function POST(req: NextRequest) {
       from: smtpFrom,
       ...(account?.replyToEmail ? { replyTo: account.replyToEmail } : {}),
       to: recipients.join(', '),
-      subject: `[TEST] ${subject}`,
+      subject,
       html: composed.html,
       text: composed.text,
     });

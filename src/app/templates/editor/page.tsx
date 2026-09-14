@@ -11016,8 +11016,9 @@ export default function TemplateEditorPage() {
                 />
               </div>
               <p className="text-[10px] text-[var(--muted-foreground)]">
-                Sends the compiled preview HTML with current preview data.
-                Subject will be prefixed with [TEST].
+                Sends the compiled preview HTML with current preview data,
+                including this account&apos;s email footer. Identical to what a
+                recipient receives.
               </p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-[var(--border)] bg-[var(--muted)]/30">

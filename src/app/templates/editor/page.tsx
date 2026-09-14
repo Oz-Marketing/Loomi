@@ -8297,9 +8297,19 @@ export default function TemplateEditorPage() {
         if (data.hint) toast.info(data.hint);
         return;
       }
+      // Name the provider and the From address: a test send that "works"
+      // but never arrives is almost always an identity or reputation
+      // problem, and neither is visible without these two.
       toast.success(
         `Test email sent to ${data.recipients} recipient${data.recipients === 1 ? "" : "s"}`,
+        {
+          description: `From ${data.from} via ${data.provider === "sendgrid" ? "SendGrid" : "SMTP"}`,
+        },
       );
+      if (data.rejected?.length) {
+        toast.warning(`Refused by the mail server: ${data.rejected.join(", ")}`);
+      }
+      if (data.footerNote) toast.info(data.footerNote);
       setShowSendTest(false);
     } catch (err: any) {
       toast.error(err.message || "Failed to send test email");

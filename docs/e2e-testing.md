@@ -85,23 +85,31 @@ to `/login`.
 
 Recording needs **two** values, and they are not the same kind of thing:
 
-| Value | Secret? | Where it goes |
+| Value | Secret? | Where it lives |
 |---|---|---|
-| `projectId` | No | `CYPRESS_PROJECT_ID`, set in CI as a repo **variable** |
-| record key | **Yes** | `CYPRESS_RECORD_KEY`, a GitHub **secret** / your shell |
+| `projectId` | No | committed in `cypress.config.ts` (`fp9rva`) |
+| record key | **Yes** | `CYPRESS_RECORD_KEY` — a GitHub secret, or your shell |
 
-`--record` without a `projectId` fails before it reaches the network — the key
-alone is not enough. Find the id in Cypress Cloud → Project Settings.
+`--record` without a `projectId` fails before it reaches the network, so the
+key alone is not enough. That is why the id is committed: it is an identifier,
+not a credential, and Cypress's own convention is to check it in. Override it
+for a different Cloud project with `CYPRESS_PROJECT_ID`, which Cypress honors
+natively — no edit needed.
 
 **The record key never goes in this repo.** It is a write credential for the
 org's Cypress Cloud; anyone holding it can post runs. Rotate it in Project
 Settings if it is ever pasted somewhere it shouldn't be.
 
 ```bash
-export CYPRESS_PROJECT_ID=<from Cypress Cloud>
 export CYPRESS_RECORD_KEY=<from Cypress Cloud>
 CYPRESS_BASE_URL=http://localhost:3000 npm run e2e:record
 ```
+
+A recorded run uploads **Test Replay** — Cypress Cloud's DOM-level capture, and
+the thing to open when a CI failure needs debugging. It is strictly better than
+video for that, so local runs don't encode video at all (`video` is on only
+under `CI`, where it is the fallback evidence for a run that had no record key
+and therefore no Test Replay).
 
 ---
 

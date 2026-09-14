@@ -104,11 +104,9 @@ jobs:
           # runs (and still reports) on a fork or before the secret is added.
           record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
         env:
+          # The only piece of Cypress Cloud config that is a secret. The
+          # projectId lives in cypress.config.ts, so this is all CI needs.
           CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
-          # A repo VARIABLE, not a secret — the project id identifies the
-          # Cypress Cloud project and is safe in the clear. Same pattern as
-          # vars.ENABLE_PLAYBOOKS in the deploy workflows.
-          CYPRESS_PROJECT_ID: ${{ vars.CYPRESS_PROJECT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload failure artifacts

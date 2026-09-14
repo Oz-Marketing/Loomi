@@ -21,12 +21,17 @@ const baseUrl = process.env.CYPRESS_BASE_URL ?? 'http://localhost:3000';
 
 export default defineConfig({
   /**
-   * The Cypress Cloud project this run reports to, from Cypress Cloud →
-   * Project Settings. It is NOT a secret and is fine to commit; the record
-   * key is, and that one only ever arrives as CYPRESS_RECORD_KEY (a GitHub
-   * Actions secret, or your own shell) — never as a literal in this repo.
+   * The Cypress Cloud project this run reports to.
+   *
+   * This is an identifier, NOT a credential — Cypress's own convention is to
+   * commit it, and `--record` refuses to run without it. The RECORD KEY is the
+   * secret half, and it only ever arrives as CYPRESS_RECORD_KEY (a GitHub
+   * Actions secret, or your own shell); it must never appear in this repo.
+   *
+   * Cypress honors a `CYPRESS_PROJECT_ID` env var as an override, so pointing
+   * a run at a different Cloud project needs no edit here.
    */
-  projectId: process.env.CYPRESS_PROJECT_ID,
+  projectId: 'fp9rva',
 
   e2e: {
     baseUrl,

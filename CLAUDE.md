@@ -55,7 +55,15 @@ updates the relevant section **in the same change**.
 - After rebasing onto staging, also `npx prisma generate` (schema drift causes
   phantom errors in unrelated files) and `rm -rf .next` (stale route types
   reference files other branches deleted).
-- Verify only proves types. It does not exercise the UI, the worker, or a deploy.
+- **`npm run verify` does NOT typecheck the Cypress suite.** `cypress/` and
+  `cypress.config.ts` are excluded from the root tsconfig on purpose — mocha
+  and chai globals have no business in the app's program — so a broken spec
+  passes the gate and fails nowhere. `npm run verify:e2e` is that check, and
+  `e2e.yml` runs it on every PR.
+- Verify only proves types. It does not exercise the worker or a deploy. For
+  the UI there is `npm run e2e` — Cypress against an already-running server
+  (it starts nothing; always pass `CYPRESS_BASE_URL`). It is deliberately NOT
+  a deploy gate. See `docs/e2e-testing.md`.
 
 ## Branches, deploys, and authorization
 
@@ -259,6 +267,11 @@ guard.
 
 ## Assorted traps
 
+- **Keep `CYPRESS_INSTALL_BINARY=0` on every `npm ci` except `e2e.yml`'s.**
+  Cypress is a devDep and the droplet's install deliberately keeps devDeps (the
+  worker runs on `tsx`), so dropping the flag pulls a ~200MB browser binary
+  onto a 2GB/1vCPU box that can never run it — and slows the required `verify`
+  check for nothing.
 - **Maizzle is gone.** Email renders via react-email (`renderEmailTemplate()` in
   `src/lib/email/render.ts`); HTML-only templates pass through uncompiled. Legacy
   `<x-base>`/`<x-core>` markup is unsupported and renders raw. The remaining

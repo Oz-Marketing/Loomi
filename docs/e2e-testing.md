@@ -79,6 +79,68 @@ reworded heading teaches people to ignore it. It asserts the ways a page dies
 unnoticed: a non-2xx response, the error boundary, the 404 page, and a bounce
 to `/login`.
 
+### `reporting-leakage.cy.ts` — the margin guard
+
+Reporting admits the client tier, so anything `/api/reporting/*` returns reaches
+a dealer. This spec signs in as a **client** user and checks four things:
+
+1. the session really is the client tier (without this the file is theater —
+   a fallback to the staff identity would pass everything while proving nothing)
+2. `my-reports` never offers a client Budget or Executive
+3. `/api/reporting/budget` refuses a client *itself*, not just the link to it
+4. nothing the client's browser fetches carries a margin marker
+
+For (4) it walks the sidebar the app renders for that client, visits each
+report, records which endpoints were called with which params, then re-requests
+them as the client and inspects the bodies. New reports are covered the day
+they ship, because the nav is the source of truth.
+
+**Why the ban list is narrower than the unit test's.** `budget-view.test.ts`
+bans the substrings `cost` and `revenue` outright. That is right there — the
+input is synthetic and the output is one budget DTO. It is wrong across the
+whole reporting surface, and would fail immediately on legitimate data:
+
+| Report | Legitimate keys |
+|---|---|
+| `direct-mail` | `cost`, `costPerRo`, `revenue`, `revenuePerPiece` |
+| `sales-trend` | `newRevenue`, `usedRevenue`, `leaseRevenue`, `totalRevenue` |
+| `acquisition-cost` | `revenue` |
+
+Those are the **dealer's own** figures — what they spent on a mail drop, what
+their service lane earned. Showing them is the point of the report. They are a
+different thing from Oz's cost of buying media and the markup on it.
+
+So the sweep carries only markers with no legitimate dealer-facing meaning:
+`spendTarget`, `markup`, `margin`, `costKnown`, `byLineType`, `knownRevenue`,
+`uncostedAmount`. Each was checked against the live responses of twelve client
+reports and hit nothing. **Don't add `cost` or `revenue`** — it will cry wolf,
+and a suite that cries wolf gets switched off.
+
+`spendTarget` is the one to understand: it is `amount × markupSnapshot`, so
+printed beside `amount` it lets anyone divide one by the other and read the
+markup. It is a margin figure wearing an innocent name.
+
+**The spec was verified by breaking it.** Injecting `spendTarget: 1234` into
+`/api/reporting/leads` made it fail, naming the endpoint and the key; reverting
+made it pass. A leak test nobody has seen fail is not evidence of anything.
+
+That exercise also caught a flaw worth remembering: the first version used
+`req.continue(res => ...)`, which makes Cypress buffer the upstream body, and
+any request the browser cancels mid-navigation then fails the test with an
+opaque CDP error. Capture the URL in the intercept and read the body back with
+`cy.request` instead.
+
+### A note on client credentials
+
+The spec uses the seeded client (`alex.client@ozmktg.com`). `prisma/seed.ts`
+sets that password on every run, including on rows that already exist — but a
+long-lived dev database can still have drifted (mine had this user on the staff
+password). Override without re-seeding:
+
+```bash
+CYPRESS_CLIENT_PASSWORD=... npm run e2e
+```
+
 ---
 
 ## Cypress Cloud

@@ -69,6 +69,16 @@ export default defineConfig({
       // Override anywhere real with CYPRESS_LOGIN_EMAIL / CYPRESS_LOGIN_PASSWORD.
       LOGIN_EMAIL: 'connor@ozmktg.com',
       LOGIN_PASSWORD: 'admin123',
+
+      // A CLIENT-tier identity, for the reporting leak spec. Also from the
+      // seed, which sets this password on every run — including on existing
+      // rows, so a re-seed always restores it.
+      //
+      // A long-lived dev database can still have drifted from the seed (mine
+      // had this user on the staff password). If sign-in fails locally, either
+      // re-seed or override: CYPRESS_CLIENT_PASSWORD=... npm run e2e
+      CLIENT_EMAIL: 'alex.client@ozmktg.com',
+      CLIENT_PASSWORD: 'client123',
     },
   },
 });

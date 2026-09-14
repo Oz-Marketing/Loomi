@@ -31,7 +31,7 @@ import { Prisma } from '@prisma/client';
 import {
   addFilterDays,
   endOfFilterDay,
-  parseFilterDate,
+  resolveFilterDateBound,
   startOfFilterDay,
 } from '@/lib/smart-list-engine';
 import { SEGMENT_REF_FIELD } from './constants';
@@ -476,10 +476,16 @@ function escapeLike(value: string): string {
 // ── Dates ───────────────────────────────────────────────────────
 //
 // Bounds are computed with the engine's own helpers so relative windows
-// ("within the last 30 days") resolve to the same instants on both
-// paths. Comparisons against a NULL column yield NULL → the row isn't
-// selected, which matches the engine returning false when it can't
-// parse a date.
+// ("within the last 30 days", "6 months ago") resolve to the same
+// instants on both paths. Comparisons against a NULL column yield NULL →
+// the row isn't selected, which matches the engine returning false when
+// it can't parse a date.
+//
+// before/after/between go through resolveFilterDateBound rather than
+// parseFilterDate, which is what lets their value be a relative token
+// instead of a literal date — and, more to the point, guarantees the
+// fast path and the preview agree on when "6 months ago" starts, since
+// there is only one implementation of it.
 
 function translateDate(
   field: string,
@@ -488,7 +494,10 @@ function translateDate(
   value2: string | undefined,
 ): Prisma.Sql | null {
   const col = Prisma.raw(`"Contact"."${columnName(field)}"`);
-  const todayStart = startOfFilterDay(new Date());
+  // One `now` per condition, matching the engine — two relative bounds
+  // that each read the clock can straddle midnight and disagree.
+  const now = new Date();
+  const todayStart = startOfFilterDay(now);
 
   switch (operator) {
     case 'is_empty':
@@ -498,16 +507,16 @@ function translateDate(
     case 'overdue':
       return Prisma.sql`${col} < ${todayStart}`;
     case 'before': {
-      const bound = parseFilterDate(value);
+      const bound = resolveFilterDateBound(value, 'start', now);
       return bound ? Prisma.sql`${col} < ${bound}` : FALSE;
     }
     case 'after': {
-      const bound = parseFilterDate(value);
+      const bound = resolveFilterDateBound(value, 'start', now);
       return bound ? Prisma.sql`${col} > ${bound}` : FALSE;
     }
     case 'between': {
-      const lower = parseFilterDate(value);
-      const upper = parseFilterDate(value2);
+      const lower = resolveFilterDateBound(value, 'start', now);
+      const upper = resolveFilterDateBound(value2, 'end', now);
       if (!lower || !upper) return FALSE;
       return Prisma.sql`(${col} >= ${lower} AND ${col} <= ${upper})`;
     }

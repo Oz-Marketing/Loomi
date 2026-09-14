@@ -51,7 +51,10 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # No browser needed to build; the e2e workflow owns the binary.
       - run: npm ci --legacy-peer-deps --no-audit --no-fund
+        env:
+          CYPRESS_INSTALL_BINARY: "0"
 
       - name: Build Next.js assets
         # The build never connects to the DB — dynamic routes aren't
@@ -235,6 +238,11 @@ jobs:
 
             # Runtime deps + tooling (the worker runs via tsx, a devDep; prisma
             # CLI runs db push below) — install all, no --omit=dev.
+            #
+            # Because devDeps ARE installed here, cypress would drag its ~200MB
+            # browser binary onto a 2GB/1vCPU droplet that can never run it.
+            # The npm package is harmless; only the binary download is skipped.
+            export CYPRESS_INSTALL_BINARY=0
             npm ci --legacy-peer-deps --no-audit --no-fund
 
             # Load env vars for the DB steps + runtime (Prisma needs DATABASE_URL).

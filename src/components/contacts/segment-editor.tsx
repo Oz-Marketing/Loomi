@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -11,7 +10,6 @@ import {
   BookmarkSquareIcon,
   ChartBarIcon,
   CheckCircleIcon,
-  ChevronDownIcon,
   EnvelopeIcon,
   ExclamationTriangleIcon,
   FunnelIcon,
@@ -25,6 +23,8 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
+import { LoomiSelect } from '@/components/contacts/loomi-select';
+import { DateValueInput } from '@/components/contacts/date-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 import type {
@@ -36,6 +36,7 @@ import type {
   FilterOperator,
 } from '@/lib/smart-list-types';
 import {
+  DAY_COUNT_DATE_OPERATORS,
   FIELD_CATEGORIES,
   FILTERABLE_FIELDS,
   NO_VALUE_OPERATORS,
@@ -832,22 +833,26 @@ function ConditionRow({
   // checkbox picker rather than the comma-separated text box — the
   // stored values are opaque ids, so typing them isn't a real option.
   const isOptionMultiSelect = fieldType === 'multiselect' && hasOptions;
+  // A date field's value is a date for some operators and a day COUNT
+  // for others, so the input follows the operator, not just the type.
+  const isDayCountInput =
+    fieldType === 'date' && DAY_COUNT_DATE_OPERATORS.includes(condition.operator);
   const isNumberInput =
+    isDayCountInput ||
     fieldType === 'number' ||
     (fieldType === 'numeric_text' && condition.operator.startsWith('num_'));
-  const isDateInput = fieldType === 'date' && condition.operator !== 'within_days';
+  const isDateInput = fieldType === 'date' && !isDayCountInput;
 
-  const inputType = isNumberInput ? 'number' : isDateInput ? 'date' : 'text';
-  const placeholder =
-    condition.operator === 'within_days'
-      ? 'days (e.g. 30)'
-      : isNumberInput
-        ? 'number'
-        : fieldType === 'tags' || fieldType === 'multiselect'
-          ? 'tag1, tag2'
-          : fieldType === 'select'
-            ? 'value1, value2'
-            : 'value';
+  const inputType = isNumberInput ? 'number' : 'text';
+  const placeholder = isDayCountInput
+    ? 'days (e.g. 30)'
+    : isNumberInput
+      ? 'number'
+      : fieldType === 'tags' || fieldType === 'multiselect'
+        ? 'tag1, tag2'
+        : fieldType === 'select'
+          ? 'value1, value2'
+          : 'value';
 
   const fieldGroups = useMemo(
     () =>
@@ -877,11 +882,18 @@ function ConditionRow({
         value={condition.operator}
         onChange={(v) => onOperatorChange(v as FilterOperator)}
         options={operatorOptions}
+        searchable={false}
         className="sm:w-[22%] min-w-[130px]"
       />
       {needsValue ? (
-        <div className="flex items-stretch gap-2 flex-1 min-w-[150px]">
-          {isOptionMultiSelect ? (
+        <div className="flex items-stretch gap-2 flex-1 min-w-[150px] flex-wrap">
+          {isDateInput ? (
+            <DateValueInput
+              value={condition.value}
+              onChange={onValueChange}
+              invalid={missingValue}
+            />
+          ) : isOptionMultiSelect ? (
             <OptionMultiSelect
               options={field?.options ?? []}
               value={condition.value}
@@ -919,15 +931,26 @@ function ConditionRow({
             />
           )}
           {needsValue2 && (
-            <>
+            // The joiner travels with the upper bound so a wrapped range
+            // reads "… and <bound>" on the second line rather than
+            // orphaning the word at the end of the first.
+            <div className="flex items-stretch gap-2 flex-1 min-w-[236px]">
               <span className="self-center text-[11px] text-[var(--muted-foreground)]">and</span>
-              <input
-                type={isNumberInput ? 'number' : 'date'}
-                value={condition.value2 ?? ''}
-                onChange={(e) => onValue2Change(e.target.value)}
-                className="flex-1 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
-              />
-            </>
+              {isDateInput ? (
+                <DateValueInput
+                  value={condition.value2 ?? ''}
+                  onChange={onValue2Change}
+                  edge="end"
+                />
+              ) : (
+                <input
+                  type={isNumberInput ? 'number' : 'date'}
+                  value={condition.value2 ?? ''}
+                  onChange={(e) => onValue2Change(e.target.value)}
+                  className="flex-1 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
+                />
+              )}
+            </div>
           )}
         </div>
       ) : (
@@ -1051,185 +1074,6 @@ function OptionMultiSelect({ options, value, onChange, invalid }: OptionMultiSel
         </div>
       )}
     </div>
-  );
-}
-
-// ── LoomiSelect (custom dropdown matching the Loomi design language) ──
-
-interface LoomiSelectOption {
-  value: string;
-  label: string;
-}
-
-interface LoomiSelectGroup {
-  label: string;
-  options: LoomiSelectOption[];
-}
-
-interface LoomiSelectProps {
-  value: string;
-  onChange: (value: string) => void;
-  options?: LoomiSelectOption[];
-  groups?: LoomiSelectGroup[];
-  className?: string;
-  placeholder?: string;
-}
-
-function LoomiSelect({
-  value,
-  onChange,
-  options,
-  groups,
-  className = '',
-  placeholder = 'Select…',
-}: LoomiSelectProps) {
-  const [open, setOpen] = useState(false);
-  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
-  const ref = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  const allOptions = useMemo(() => {
-    if (options) return options;
-    if (groups) return groups.flatMap((g) => g.options);
-    return [];
-  }, [options, groups]);
-
-  const selected = allOptions.find((o) => o.value === value);
-
-  function openDropdown() {
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setDropdownStyle({
-        position: 'fixed',
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width,
-        zIndex: 9999,
-      });
-    }
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    function handleMouseDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    function handleScroll(e: Event) {
-      // Ignore scrolls originating inside the dropdown's own option list —
-      // only an outside/page scroll should dismiss it.
-      if (ref.current && ref.current.contains(e.target as Node)) return;
-      setOpen(false);
-    }
-    document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('keydown', handleKey);
-    document.addEventListener('scroll', handleScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('keydown', handleKey);
-      document.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [open]);
-
-  function pick(next: string) {
-    onChange(next);
-    setOpen(false);
-  }
-
-  const dropdown = open
-    ? createPortal(
-        <div
-          ref={ref}
-          role="listbox"
-          style={dropdownStyle}
-          className="max-h-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl py-1"
-        >
-          {groups
-            ? groups.map((group) => (
-                <div key={group.label}>
-                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                    {group.label}
-                  </p>
-                  {group.options.map((option) => (
-                    <LoomiSelectOptionRow
-                      key={option.value}
-                      option={option}
-                      isSelected={option.value === value}
-                      onSelect={() => pick(option.value)}
-                    />
-                  ))}
-                </div>
-              ))
-            : options?.map((option) => (
-                <LoomiSelectOptionRow
-                  key={option.value}
-                  option={option}
-                  isSelected={option.value === value}
-                  onSelect={() => pick(option.value)}
-                />
-              ))}
-        </div>,
-        document.body,
-      )
-    : null;
-
-  return (
-    <div className={className}>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => (open ? setOpen(false) : openDropdown())}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={`w-full flex items-center justify-between gap-2 pl-3 pr-2 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-          open
-            ? 'border-[var(--primary)]'
-            : 'border-[var(--border)] hover:border-[var(--primary)]/60'
-        }`}
-      >
-        <span className={`truncate text-left ${selected ? '' : 'text-[var(--muted-foreground)]'}`}>
-          {selected?.label ?? placeholder}
-        </span>
-        <ChevronDownIcon
-          className={`w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0 transition-transform ${
-            open ? 'rotate-180' : ''
-          }`}
-        />
-      </button>
-
-      {dropdown}
-    </div>
-  );
-}
-
-function LoomiSelectOptionRow({
-  option,
-  isSelected,
-  onSelect,
-}: {
-  option: LoomiSelectOption;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={isSelected}
-      onClick={onSelect}
-      className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${
-        isSelected
-          ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
-          : 'hover:bg-[var(--sidebar-muted)]'
-      }`}
-    >
-      {option.label}
-    </button>
   );
 }
 

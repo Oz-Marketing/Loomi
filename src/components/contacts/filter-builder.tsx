@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   XMarkIcon,
   PlusIcon,
@@ -10,6 +10,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { Checkbox } from '@/components/ui/checkbox';
 import { HelpTip } from '@/components/ui/help-tip';
+import { LoomiSelect } from '@/components/contacts/loomi-select';
+import { DateValueInput } from '@/components/contacts/date-value-input';
 import type {
   FilterDefinition,
   FilterGroup,
@@ -19,6 +21,7 @@ import type {
   FilterOperator,
 } from '@/lib/smart-list-types';
 import {
+  DAY_COUNT_DATE_OPERATORS,
   FILTERABLE_FIELDS,
   FIELD_CATEGORIES,
   OPERATORS_BY_TYPE,
@@ -503,40 +506,40 @@ function ConditionRow({
     condition.operator !== 'is_not_one_of' &&
     hasOptions;
 
-  const isNumberInput =
-    fieldType === 'number' &&
-    condition.operator !== 'is_empty' &&
-    condition.operator !== 'is_not_empty';
+  // A date field's value is a date for some operators and a day COUNT
+  // for others, so the input follows the operator, not just the type.
+  const isDayCountInput =
+    fieldType === 'date' && DAY_COUNT_DATE_OPERATORS.includes(condition.operator);
+  const isNumberInput = isDayCountInput || fieldType === 'number';
+  const isDateInput = fieldType === 'date' && !isDayCountInput;
 
-  const isDateInput =
-    fieldType === 'date' &&
-    condition.operator !== 'within_days' &&
-    condition.operator !== 'is_empty' &&
-    condition.operator !== 'is_not_empty';
+  const fieldGroups = useMemo(
+    () =>
+      FIELD_CATEGORIES.map((cat) => ({
+        label: cat.label,
+        options: fields
+          .filter((f) => f.category === cat.key)
+          .map((f) => ({ value: f.key, label: f.label })),
+      })).filter((g) => g.options.length > 0),
+    [fields],
+  );
+
+  const operatorOptions = useMemo(
+    () => operators.map((op) => ({ value: op, label: OPERATOR_LABELS[op] })),
+    [operators],
+  );
 
   return (
     <div className="border border-[var(--sidebar-border)] rounded-lg p-2 space-y-1.5">
       {/* Row 1: Field + Remove */}
       <div className="flex items-center gap-1.5">
-        <select
+        <LoomiSelect
           value={condition.field}
-          onChange={(e) => onFieldChange(e.target.value)}
-          className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
-        >
-          {FIELD_CATEGORIES.map((cat) => {
-            const inCategory = fields.filter((f) => f.category === cat.key);
-            if (inCategory.length === 0) return null;
-            return (
-              <optgroup key={cat.key} label={cat.label}>
-                {inCategory.map((f) => (
-                  <option key={f.key} value={f.key}>
-                    {f.label}
-                  </option>
-                ))}
-              </optgroup>
-            );
-          })}
-        </select>
+          onChange={onFieldChange}
+          groups={fieldGroups}
+          size="sm"
+          className="flex-1 min-w-0"
+        />
         {onRemove && (
           <button
             onClick={onRemove}
@@ -548,21 +551,19 @@ function ConditionRow({
       </div>
 
       {/* Row 2: Operator */}
-      <select
+      <LoomiSelect
         value={condition.operator}
-        onChange={(e) => onOperatorChange(e.target.value as FilterOperator)}
-        className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
-      >
-        {operators.map((op) => (
-          <option key={op} value={op}>
-            {OPERATOR_LABELS[op]}
-          </option>
-        ))}
-      </select>
+        onChange={(op) => onOperatorChange(op as FilterOperator)}
+        options={operatorOptions}
+        searchable={false}
+        size="sm"
+      />
 
       {/* Row 3: Value input(s) */}
       {needsValue && (
-        isSingleSelectInput ? (
+        isDateInput ? (
+          <DateValueInput value={condition.value} onChange={onValueChange} size="sm" />
+        ) : isSingleSelectInput ? (
           <select
             value={condition.value}
             onChange={(e) => onValueChange(e.target.value)}
@@ -577,31 +578,40 @@ function ConditionRow({
           </select>
         ) : (
           <input
-            type={isNumberInput ? 'number' : isDateInput ? 'date' : 'text'}
+            type={isNumberInput ? 'number' : 'text'}
             value={condition.value}
             onChange={(e) => onValueChange(e.target.value)}
-            placeholder={placeholderFor(fieldType, condition.operator)}
+            placeholder={placeholderFor(fieldType, isDayCountInput)}
             className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
           />
         )
       )}
       {needsValue2 && (
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-[var(--sidebar-muted-foreground)]">and</span>
-          <input
-            type={fieldType === 'number' ? 'number' : 'date'}
-            value={condition.value2 || ''}
-            onChange={(e) => onValue2Change(e.target.value)}
-            className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
-          />
+        <div className="flex items-start gap-1.5">
+          <span className="text-[10px] text-[var(--sidebar-muted-foreground)] pt-2">and</span>
+          {isDateInput ? (
+            <DateValueInput
+              value={condition.value2 || ''}
+              onChange={onValue2Change}
+              edge="end"
+              size="sm"
+            />
+          ) : (
+            <input
+              type="number"
+              value={condition.value2 || ''}
+              onChange={(e) => onValue2Change(e.target.value)}
+              className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
+            />
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function placeholderFor(type: FieldType, operator: string): string {
-  if (operator === 'within_days') return 'days';
+function placeholderFor(type: FieldType, isDayCount: boolean): string {
+  if (isDayCount) return 'days';
   if (type === 'tags' || type === 'multiselect') return 'tag1, tag2, ...';
   if (type === 'select') return 'value1, value2, ...';
   if (type === 'number') return 'number';

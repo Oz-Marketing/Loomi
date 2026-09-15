@@ -871,7 +871,7 @@ function ConditionRow({
   );
 
   return (
-    <div className="flex items-stretch gap-2 flex-wrap sm:flex-nowrap">
+    <div className="flex items-stretch gap-2 flex-wrap">
       <LoomiSelect
         value={condition.field}
         onChange={onFieldChange}
@@ -886,7 +886,7 @@ function ConditionRow({
         className="sm:w-[22%] min-w-[130px]"
       />
       {needsValue ? (
-        <div className="flex items-stretch gap-2 flex-1 min-w-[150px] flex-wrap">
+        <div className="flex items-stretch gap-2 grow basis-[240px] min-w-[150px] flex-wrap">
           {isDateInput ? (
             <DateValueInput
               value={condition.value}
@@ -934,7 +934,7 @@ function ConditionRow({
             // The joiner travels with the upper bound so a wrapped range
             // reads "… and <bound>" on the second line rather than
             // orphaning the word at the end of the first.
-            <div className="flex items-stretch gap-2 flex-1 min-w-[236px]">
+            <div className="flex items-stretch gap-2 grow basis-[264px] min-w-[264px]">
               <span className="self-center text-[11px] text-[var(--muted-foreground)]">and</span>
               {isDateInput ? (
                 <DateValueInput

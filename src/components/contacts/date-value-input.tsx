@@ -81,7 +81,12 @@ export function DateValueInput({
     // Never wraps internally: a mode toggle stranded on the line above
     // its own input reads as two separate controls. The condition row
     // wraps around WHOLE bounds instead.
-    <div className="flex items-stretch gap-1.5 flex-1 min-w-[236px]">
+    //
+    // basis, not flex-1. Flexbox breaks lines on the flex BASE size, and
+    // flex-1 sets that to 0 — so a row of these never wrapped, it just
+    // pushed past its container to honour min-w. The basis has to state
+    // the real minimum for the wrap to fire.
+    <div className="flex items-stretch gap-1.5 grow basis-[236px] min-w-[236px]">
       <ModeToggle
         relative={!!relative}
         compact={compact}

@@ -330,6 +330,12 @@ Loomi sends campaigns natively — no third-party ESP is involved on either the 
 - **SMS sends:** routed through Twilio. Status callbacks land at `POST /api/webhooks/twilio/status`; inbound replies (including STOP) at `POST /api/webhooks/twilio/inbound`.
 - Aggregate campaign analytics (sent / opened / clicked counts) are derived directly from the event tables — no separate stats store.
 
+**Domain warm-up.** A new sending domain earns its reputation on a 14-day ramp (50 sends on day 1, doubling to 100,000 by day 14). The cap belongs to the *domain*, not the blast, so every blast sending from that domain shares one daily budget. When a blast exhausts the day's budget, the remaining recipients are held and the blast stays **Processing** — that is the entire representation of a warm-up pause, and the send resumes on its own the next day with no duplicates. A blast can therefore sit in Processing for hours or across days and still be perfectly healthy. The Blasts list labels those rows **Warming up · Day N/14** and explains, on hover, how many recipients are waiting and which domain's budget is spent. Note that SendGrid will still show activity for a held blast — it is delivering the batch Loomi already handed it, not receiving more.
+
+**A blast is editable only while it is a draft.** Once it is queued, scheduled, or processing, its audience, template, and send time are committed and the builder is locked — the worker may already be part-way through delivering it. Rows with delivery data open a read-only detail view instead; the row menu shows Edit disabled with a lock.
+
+**The Blasts list's date range filters history, not upcoming work.** A blast that has not gone out yet is dated by when it *will* send, so scheduled blasts stay visible on every range rather than being filtered out for falling after "today."
+
 ---
 
 ## Template Variables

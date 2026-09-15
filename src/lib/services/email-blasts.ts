@@ -6,6 +6,7 @@ import {
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import {
+  getAllowances,
   getCombinedRemaining,
   recordWarmupSends,
   releaseWarmupSends,
@@ -1033,6 +1034,79 @@ export async function listEmailBlasts(options?: {
     })
     .slice(0, limit)
     .map(toSummary);
+}
+
+/** Why a blast is sitting in `processing` without putting mail on the wire. */
+export interface WarmupHold {
+  /** Sending domain whose daily cap is spent. */
+  domain: string;
+  /** 1-based position on the ramp, and the ramp's length. */
+  day: number | null;
+  totalDays: number;
+  /** Today's cap for `domain`. */
+  dailyCap: number | null;
+  /** Recipients still waiting on tomorrow's budget. */
+  pending: number;
+}
+
+/**
+ * For each of `campaignIds` parked by a spent warm-up budget, the domain and
+ * ramp position behind the pause.
+ *
+ * A warm-up pause is deliberately indistinguishable from any other
+ * part-processed blast in the data: `processing` with `pending` recipients is
+ * the entire representation (see processEmailBlast, which reuses the ordinary
+ * sweep rather than inventing scheduling machinery). That keeps the worker
+ * simple, but it left the UI showing a bare "Processing" for hours with no
+ * indication that anything would ever happen — so recompute the reason for
+ * display. Three queries for the whole list, never one per row.
+ */
+export async function getWarmupHolds(
+  campaignIds: string[],
+): Promise<Map<string, WarmupHold>> {
+  const holds = new Map<string, WarmupHold>();
+  if (campaignIds.length === 0) return holds;
+
+  const pending = await prisma.emailBlastRecipient.groupBy({
+    by: ['campaignId', 'accountKey'],
+    where: { campaignId: { in: campaignIds }, status: 'pending' },
+    _count: { _all: true },
+  });
+  if (pending.length === 0) return holds;
+
+  const senders = await buildSenderMap(
+    [...new Set(pending.map((row) => row.accountKey))],
+    '',
+  );
+  const domainByAccount = new Map<string, string>();
+  for (const [accountKey, sender] of senders) {
+    const domain = sendingDomain(sender.senderEmail);
+    if (domain) domainByAccount.set(accountKey, domain);
+  }
+
+  const allowances = await getAllowances([...new Set(domainByAccount.values())]);
+
+  for (const row of pending) {
+    const domain = domainByAccount.get(row.accountKey);
+    if (!domain) continue;
+    const allowance = allowances.get(domain);
+    // Only a spent budget is a hold. A send with headroom left is simply
+    // mid-flight, and an established domain reports no limit at all
+    // (remaining === null), which must never read as "held".
+    if (!allowance || allowance.status !== 'active') continue;
+    if (allowance.remaining === null || allowance.remaining > 0) continue;
+
+    const existing = holds.get(row.campaignId);
+    holds.set(row.campaignId, {
+      domain,
+      day: allowance.day,
+      totalDays: allowance.totalDays,
+      dailyCap: allowance.dailyCap,
+      pending: (existing?.pending ?? 0) + row._count._all,
+    });
+  }
+
+  return holds;
 }
 
 /**

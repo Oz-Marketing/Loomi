@@ -115,16 +115,45 @@ function fallbackContactDefaults(): Record<string, string> {
   };
 }
 
+export interface PreviewVariableOptions {
+  /**
+   * Fill a token the real data doesn't cover with a realistic stand-in
+   * ("Alex", "(801) 555-0100").
+   *
+   * True — the default — for the EDITOR, where the whole point is to see
+   * the layout carrying plausible text. False for anything that LEAVES the
+   * building: a downloaded PNG gets forwarded to a client, and an invented
+   * dealer phone number is indistinguishable from a real one to whoever
+   * receives it. With it off, a token we recognize but have no data for
+   * resolves to nothing — the same thing a recipient with a blank field
+   * gets at send time — while an unrecognized token is still left standing
+   * as `{{…}}` so a typo stays catchable.
+   */
+  sampleFallbacks?: boolean;
+}
+
 export function buildPreviewVariableMap(
   accountData?: PreviewAccountData | null,
   contact?: PreviewContact | null,
+  options: PreviewVariableOptions = {},
 ): Record<string, string> {
+  const sample = options.sampleFallbacks !== false;
+  const or = (value: string) => (sample ? value : '');
+
   const values: Record<string, string> = {
-    '{{unsubscribe_link}}': 'https://example.com/unsubscribe',
-    '{{message.id}}': 'preview-message-id',
+    '{{unsubscribe_link}}': or('https://example.com/unsubscribe'),
+    '{{message.id}}': or('preview-message-id'),
   };
 
-  mergeTokenMap(values, fallbackContactDefaults());
+  if (sample) {
+    mergeTokenMap(values, fallbackContactDefaults());
+  } else {
+    // The key still has to EXIST. mergeTokenMap skips an empty value, and a
+    // key that is absent reads as an unrecognized token — the audit calls it
+    // invalid and the substituter leaves the raw `{{…}}` in the download,
+    // which is the bug this is meant to stop.
+    for (const key of Object.keys(fallbackContactDefaults())) values[key] = '';
+  }
 
   if (contact) {
     mergeTokenMap(values, {
@@ -151,19 +180,21 @@ export function buildPreviewVariableMap(
     });
   }
 
-  const dealerName = resolveAccountDealerName(accountData, 'Preview Dealer');
+  const dealerName = resolveAccountDealerName(accountData, or('Preview Dealer'));
   const brandingColors = accountData?.branding?.colors;
   const brandingFonts = accountData?.branding?.fonts;
-  mergeTokenMap(values, {
+  const locationTokens: Record<string, string> = {
     '{{location.name}}': dealerName,
-    '{{location.email}}': resolveAccountEmail(accountData, 'dealer@example.com'),
-    '{{location.phone}}': resolveAccountPhone(accountData, '(801) 555-0100'),
-    '{{location.address}}': resolveAccountAddress(accountData, '450 N Main St'),
-    '{{location.city}}': resolveAccountCity(accountData, 'Layton'),
-    '{{location.state}}': resolveAccountState(accountData, 'UT'),
-    '{{location.postal_code}}': resolveAccountPostalCode(accountData, '84041'),
+    '{{location.email}}': resolveAccountEmail(accountData, or('dealer@example.com')),
+    '{{location.phone}}': resolveAccountPhone(accountData, or('(801) 555-0100')),
+    '{{location.address}}': resolveAccountAddress(accountData, or('450 N Main St')),
+    '{{location.city}}': resolveAccountCity(accountData, or('Layton')),
+    '{{location.state}}': resolveAccountState(accountData, or('UT')),
+    '{{location.postal_code}}': resolveAccountPostalCode(accountData, or('84041')),
     '{{location.website}}': resolveAccountWebsite(accountData),
-  });
+  };
+  if (sample) mergeTokenMap(values, locationTokens);
+  else Object.assign(values, locationTokens);
 
   // Custom values — from customValues field (dynamic), with static defaults
   if (accountData?.customValues) {
@@ -174,38 +205,48 @@ export function buildPreviewVariableMap(
     }
   }
 
-  // Static defaults for standard custom values
+  // Static defaults for standard custom values. An account customValues
+  // entry always wins — these only fill what it left unset.
   const mainPhone = resolveAccountPhone(accountData);
-  mergeTokenMap(values, {
-    // Phone numbers — only set if not already populated by customValues
-    ...(!values['{{custom_values.sales_phone}}'] ? { '{{custom_values.sales_phone}}': accountData?.phoneSales || accountData?.salesPhone || mainPhone || '(801) 555-0101' } : {}),
-    ...(!values['{{custom_values.service_phone}}'] ? { '{{custom_values.service_phone}}': accountData?.phoneService || accountData?.servicePhone || '(801) 555-0102' } : {}),
-    ...(!values['{{custom_values.parts_phone}}'] ? { '{{custom_values.parts_phone}}': accountData?.phoneParts || accountData?.partsPhone || '(801) 555-0103' } : {}),
+  const customValueDefaults: Record<string, string> = {
+    // Phone numbers
+    '{{custom_values.sales_phone}}':
+      accountData?.phoneSales || accountData?.salesPhone || mainPhone || or('(801) 555-0101'),
+    '{{custom_values.service_phone}}':
+      accountData?.phoneService || accountData?.servicePhone || or('(801) 555-0102'),
+    '{{custom_values.parts_phone}}':
+      accountData?.phoneParts || accountData?.partsPhone || or('(801) 555-0103'),
     // Branding
-    ...(!values['{{custom_values.dealer_name}}'] ? { '{{custom_values.dealer_name}}': dealerName } : {}),
-    ...(!values['{{custom_values.crm_name}}'] ? { '{{custom_values.crm_name}}': dealerName } : {}),
-    ...(!values['{{custom_values.storefront_image}}'] ? { '{{custom_values.storefront_image}}': accountData?.storefrontImage || '' } : {}),
-    ...(!values['{{custom_values.brand_primary_color}}'] ? { '{{custom_values.brand_primary_color}}': brandingColors?.primary || '' } : {}),
-    ...(!values['{{custom_values.brand_secondary_color}}'] ? { '{{custom_values.brand_secondary_color}}': brandingColors?.secondary || '' } : {}),
-    ...(!values['{{custom_values.brand_accent_color}}'] ? { '{{custom_values.brand_accent_color}}': brandingColors?.accent || '' } : {}),
-    ...(!values['{{custom_values.brand_background_color}}'] ? { '{{custom_values.brand_background_color}}': brandingColors?.background || '' } : {}),
-    ...(!values['{{custom_values.brand_text_color}}'] ? { '{{custom_values.brand_text_color}}': brandingColors?.text || '' } : {}),
-    ...(!values['{{custom_values.brand_heading_font}}'] ? { '{{custom_values.brand_heading_font}}': brandingFonts?.heading || '' } : {}),
-    ...(!values['{{custom_values.brand_body_font}}'] ? { '{{custom_values.brand_body_font}}': brandingFonts?.body || '' } : {}),
+    '{{custom_values.dealer_name}}': dealerName,
+    '{{custom_values.crm_name}}': dealerName,
+    '{{custom_values.storefront_image}}': accountData?.storefrontImage || '',
+    '{{custom_values.brand_primary_color}}': brandingColors?.primary || '',
+    '{{custom_values.brand_secondary_color}}': brandingColors?.secondary || '',
+    '{{custom_values.brand_accent_color}}': brandingColors?.accent || '',
+    '{{custom_values.brand_background_color}}': brandingColors?.background || '',
+    '{{custom_values.brand_text_color}}': brandingColors?.text || '',
+    '{{custom_values.brand_heading_font}}': brandingFonts?.heading || '',
+    '{{custom_values.brand_body_font}}': brandingFonts?.body || '',
     // URLs
-    ...(!values['{{custom_values.website_url}}'] ? { '{{custom_values.website_url}}': resolveAccountWebsite(accountData) } : {}),
-    ...(!values['{{custom_values.service_scheduler_url}}'] ? { '{{custom_values.service_scheduler_url}}': '' } : {}),
-    ...(!values['{{custom_values.logo_url}}'] ? { '{{custom_values.logo_url}}': accountData?.logos?.light || accountData?.logos?.dark || '' } : {}),
-    ...(!values['{{custom_values.review_link}}'] ? { '{{custom_values.review_link}}': '' } : {}),
-    ...(!values['{{custom_values.trade_in_url}}'] ? { '{{custom_values.trade_in_url}}': '' } : {}),
-    ...(!values['{{custom_values.specials_url}}'] ? { '{{custom_values.specials_url}}': '' } : {}),
+    '{{custom_values.website_url}}': resolveAccountWebsite(accountData),
+    '{{custom_values.service_scheduler_url}}': '',
+    '{{custom_values.logo_url}}': accountData?.logos?.light || accountData?.logos?.dark || '',
+    '{{custom_values.review_link}}': '',
+    '{{custom_values.trade_in_url}}': '',
+    '{{custom_values.specials_url}}': '',
     // Socials
-    ...(!values['{{custom_values.facebook}}'] ? { '{{custom_values.facebook}}': '' } : {}),
-    ...(!values['{{custom_values.instagram}}'] ? { '{{custom_values.instagram}}': '' } : {}),
-    ...(!values['{{custom_values.tiktok}}'] ? { '{{custom_values.tiktok}}': '' } : {}),
-    ...(!values['{{custom_values.x}}'] ? { '{{custom_values.x}}': '' } : {}),
-    ...(!values['{{custom_values.youtube}}'] ? { '{{custom_values.youtube}}': '' } : {}),
-  });
+    '{{custom_values.facebook}}': '',
+    '{{custom_values.instagram}}': '',
+    '{{custom_values.tiktok}}': '',
+    '{{custom_values.x}}': '',
+    '{{custom_values.youtube}}': '',
+  };
+  for (const [key, value] of Object.entries(customValueDefaults)) {
+    if (values[key]) continue;
+    // In sample mode an empty default is left OUT, exactly as it always was.
+    if (sample && !value) continue;
+    values[key] = value;
+  }
 
   mergeTokenMap(values, accountData?.previewValues);
 

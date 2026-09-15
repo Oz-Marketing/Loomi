@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { canAccessAccount, getAccountScope, getAuthSession } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as templateService from '@/lib/services/templates';
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
 import { isV2Template, parseV2Template } from '@/lib/email/types';
 import { renderEmailTemplate } from '@/lib/email/render';
+import {
+  loadPreviewAccountData,
+  resolvePreviewTokens,
+} from '@/lib/email/preview-substitute';
 
 /**
  * Compile any supported template format to email-safe HTML.
@@ -29,9 +34,13 @@ function sanitizeFileName(value: string): string {
 }
 
 /**
- * GET /api/templates/screenshot?design=slug
+ * GET /api/templates/screenshot?design=slug&accountKey=youngMazda
  *
  * Compile a library template and download a high-resolution PNG screenshot.
+ *
+ * `accountKey` is optional and only decides whose data the mergetags resolve
+ * to. Without it the PNG carries the same sample values the preview shows
+ * for an unscoped viewer, which is still better than shipping raw `{{…}}`.
  */
 export async function GET(req: NextRequest) {
   const { error } = await requirePermission('studio.templates.view');
@@ -47,11 +56,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Template not found' }, { status: 404 });
   }
 
+  // Whose values the mergetags resolve to. An accountKey outside the
+  // viewer's scope is ignored rather than refused — it changes nothing but
+  // the sample data, and the template itself was already authorized above.
+  const session = await getAuthSession();
+  const requestedAccountKey = req.nextUrl.searchParams.get('accountKey');
+  const accountKey =
+    requestedAccountKey &&
+    session?.user &&
+    canAccessAccount(getAccountScope(session), requestedAccountKey)
+      ? requestedAccountKey
+      : null;
+
   try {
     const compiledHtml = await compileToHtml(template.content);
+    const accountData = accountKey ? await loadPreviewAccountData(accountKey) : null;
 
     const screenshot = await renderCampaignScreenshotFromHtml({
-      html: compiledHtml,
+      html: resolvePreviewTokens(compiledHtml, accountData),
       filename: `${sanitizeFileName(template.title || design)}.png`,
     });
 

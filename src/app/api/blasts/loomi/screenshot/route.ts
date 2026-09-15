@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuth } from '@/lib/api-auth';
+import { canAccessAccount, getAccountScope, requireAuth } from '@/lib/api-auth';
 import { getEmailBlast } from '@/lib/services/email-blasts';
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
+import {
+  loadPreviewAccountData,
+  resolvePreviewTokens,
+} from '@/lib/email/preview-substitute';
 
 /**
  * GET /api/blasts/loomi/screenshot?campaignId=xxx
@@ -43,8 +47,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // The stored htmlContent still carries its mergetags — substitution is a
+    // per-recipient step that happens inside the send loop. One PNG can't be
+    // per-recipient, so it resolves against the campaign's account the same
+    // way the on-screen preview does. A campaign spanning several accounts
+    // renders as the first one the viewer is scoped to see.
+    const scope = getAccountScope(session!);
+    const accountKey =
+      campaign.accountKeys.find((key) => canAccessAccount(scope, key)) ??
+      campaign.accountKeys[0];
+    const accountData = accountKey ? await loadPreviewAccountData(accountKey) : null;
+
     const screenshot = await renderCampaignScreenshotFromHtml({
-      html: campaign.htmlContent,
+      html: resolvePreviewTokens(campaign.htmlContent, accountData),
       filename: `${campaign.name || 'campaign'}.png`,
     });
 

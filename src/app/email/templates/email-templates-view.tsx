@@ -136,8 +136,12 @@ function downloadBlob(blob: Blob, filename: string): void {
 async function downloadLibraryTemplateScreenshot(
   design: string,
   fileBaseName: string,
+  accountKey?: string | null,
 ): Promise<void> {
+  // accountKey is what resolves {{location.*}} / {{custom_values.*}} to the
+  // open account's real data instead of the generic sample set.
   const params = new URLSearchParams({ design });
+  if (accountKey) params.set('accountKey', accountKey);
   const res = await fetch(`/api/templates/screenshot?${params.toString()}`);
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
@@ -437,7 +441,7 @@ function ManagementView({
 }) {
   const router = useRouter();
   const { confirm } = useLoomiDialog();
-  const { accounts } = useAccount();
+  const { accounts, accountKey: activeAccountKey } = useAccount();
   const scoped = Boolean(accountKey);
   // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
   const accountLabels = useMemo(
@@ -860,6 +864,7 @@ function ManagementView({
       await downloadLibraryTemplateScreenshot(
         template.design,
         template.name || formatDesign(template.design),
+        accountKey || activeAccountKey,
       );
       toast.success('Template screenshot downloaded');
     } catch (err) {

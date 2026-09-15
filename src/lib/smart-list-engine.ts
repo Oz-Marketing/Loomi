@@ -1,12 +1,14 @@
 import {
   NO_VALUE_OPERATORS,
   RANGE_OPERATORS,
+  parseRelativeDate,
   type FieldDefinition,
   type FieldType,
   type FilterCondition,
   type FilterDefinition,
   type FilterGroup,
   type FilterOperator,
+  type RelativeDateValue,
 } from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
 
@@ -413,9 +415,16 @@ function evaluateDateCondition(
   value2?: string,
 ): boolean {
   const parsedDate = parseDateValue(fieldValue);
-  const parsedValue = parseDateValue(value);
-  const parsedValue2 = parseDateValue(value2);
-  const todayStart = startOfDay(new Date());
+  // One `now` for the whole condition: a range whose two relative bounds
+  // each read the clock separately can straddle midnight and resolve to
+  // two different days.
+  const now = new Date();
+  const todayStart = startOfDay(now);
+  // The COMPARISON bounds go through resolveDateBound, which understands
+  // relative tokens; the ROW's own value never does — a contact's
+  // purchaseDate is always a real date.
+  const parsedValue = resolveDateBound(value, 'start', now);
+  const parsedValue2 = resolveDateBound(value2, 'end', now);
 
   switch (operator) {
     case 'is_empty':
@@ -482,7 +491,72 @@ export {
   startOfDay as startOfFilterDay,
   endOfDay as endOfFilterDay,
   addCalendarDays as addFilterDays,
+  resolveDateBound as resolveFilterDateBound,
 };
+
+/**
+ * One comparison bound for a date operator, from either a literal date
+ * or a relative token ("6 months ago"). THE single entry point both
+ * engines resolve bounds through — the SQL translator imports it rather
+ * than reimplementing the arithmetic, because a fast path that computes
+ * "6 months ago" a day differently from the preview is the exact class
+ * of bug this module's DST note was written about.
+ *
+ * `edge` only bites on relative tokens, and only to answer "does 'in 90
+ * days' include the whole of that day?". An upper bound says yes
+ * (end of day), everything else anchors to midnight — the same midnight
+ * `within_last_days` already uses, which is what lets SQL compare the
+ * raw timestamp without flooring it first.
+ *
+ * A literal value is passed through to `parseDateValue` untouched, so
+ * every segment saved before relative values existed resolves to exactly
+ * the instant it always did.
+ */
+function resolveDateBound(
+  value: string | undefined,
+  edge: 'start' | 'end',
+  now: Date = new Date(),
+): Date | null {
+  const relative = parseRelativeDate(value);
+  if (!relative) return parseDateValue(value);
+  const shifted = shiftByUnit(startOfDay(now), relative);
+  return edge === 'end' ? endOfDay(shifted) : shifted;
+}
+
+/**
+ * Shift a midnight-anchored date by whole calendar units.
+ *
+ * Months and years go through `addCalendarMonths` rather than a day
+ * count, because "6 months ago" from the 31st has to land on the last
+ * day of a 30-day month, not spill forward into the next one — JS's
+ * `setMonth` alone turns 31 Mar − 1 month into 3 Mar (or 2 Mar in a leap
+ * year), which would quietly shift a lapse window by three days for
+ * everyone who filtered on a month end.
+ */
+function shiftByUnit(from: Date, relative: RelativeDateValue): Date {
+  switch (relative.unit) {
+    case 'day':
+      return addCalendarDays(from, relative.amount);
+    case 'week':
+      return addCalendarDays(from, relative.amount * 7);
+    case 'month':
+      return addCalendarMonths(from, relative.amount);
+    case 'year':
+      return addCalendarMonths(from, relative.amount * 12);
+  }
+}
+
+function addCalendarMonths(from: Date, months: number): Date {
+  const d = new Date(from);
+  const dayOfMonth = d.getDate();
+  // Park on the 1st before shifting so the month arithmetic can't
+  // overflow, then clamp back to the shortest of the two months.
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  const lastDayOfTarget = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(dayOfMonth, lastDayOfTarget));
+  return d;
+}
 
 /**
  * Shift a date by whole CALENDAR days, not by N × 24h.

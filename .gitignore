@@ -38,3 +38,9 @@ public/tmp-jellybeans/
 # Throwaway seed/diagnostic scripts written during a session. Real seeds are
 # named `seed-*` / `backfill-*` and are wired into deploy:prepare.
 scripts/tmp-*.ts
+
+# Cypress run artifacts. Failures replay from Cypress Cloud, which is where
+# these get uploaded — a committed video is just a large stale binary.
+cypress/screenshots/
+cypress/videos/
+cypress/downloads/

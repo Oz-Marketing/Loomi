@@ -16,10 +16,14 @@
 // against built-ins + that account's custom fields.
 
 import {
+  MAX_RELATIVE_DATE_AMOUNT,
   NO_VALUE_OPERATORS,
   OPERATORS_BY_TYPE,
   OPERATOR_LABELS,
   RANGE_OPERATORS,
+  RELATIVE_DATE_OPERATORS,
+  looksRelativeDate,
+  parseRelativeDate,
   type FieldDefinition,
   type FilterCondition,
   type FilterDefinition,
@@ -206,6 +210,32 @@ function validateCondition(
   }
   if (value.length > MAX_VALUE_LENGTH || value2.length > MAX_VALUE_LENGTH) {
     errors.push({ path: `${path}.value`, message: `Value too long (max ${MAX_VALUE_LENGTH})` });
+  }
+
+  // Relative date tokens ("6 months ago") are only meaningful on the
+  // date operators that compare against a point in time. Anywhere else
+  // the engine would parse `rel:-6:month` as a date, fail, and match
+  // nobody — an empty segment with nothing on screen explaining why.
+  for (const [slot, raw] of [['value', value], ['value2', value2]] as const) {
+    if (!looksRelativeDate(raw)) continue;
+    // Field first, then operator — otherwise a text field's `contains`
+    // gets told it "takes a number", which is both wrong and unhelpful.
+    if (def && def.type !== 'date') {
+      errors.push({
+        path: `${path}.${slot}`,
+        message: `${def.label} is not a date, so it can't take a relative date`,
+      });
+    } else if (!RELATIVE_DATE_OPERATORS.includes(op)) {
+      errors.push({
+        path: `${path}.${slot}`,
+        message: `"${OPERATOR_LABELS[op]}" takes a number of days, not a relative date`,
+      });
+    } else if (!parseRelativeDate(raw)) {
+      errors.push({
+        path: `${path}.${slot}`,
+        message: `"${raw}" is not a valid relative date (max ${MAX_RELATIVE_DATE_AMOUNT} days, weeks, months or years)`,
+      });
+    }
   }
 
   // A select condition naming an option that doesn't exist can never

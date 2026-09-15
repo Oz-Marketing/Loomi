@@ -8297,9 +8297,19 @@ export default function TemplateEditorPage() {
         if (data.hint) toast.info(data.hint);
         return;
       }
+      // Name the provider and the From address: a test send that "works"
+      // but never arrives is almost always an identity or reputation
+      // problem, and neither is visible without these two.
       toast.success(
         `Test email sent to ${data.recipients} recipient${data.recipients === 1 ? "" : "s"}`,
+        {
+          description: `From ${data.from} via ${data.provider === "sendgrid" ? "SendGrid" : "SMTP"}`,
+        },
       );
+      if (data.rejected?.length) {
+        toast.warning(`Refused by the mail server: ${data.rejected.join(", ")}`);
+      }
+      if (data.footerNote) toast.info(data.footerNote);
       setShowSendTest(false);
     } catch (err: any) {
       toast.error(err.message || "Failed to send test email");
@@ -11006,8 +11016,9 @@ export default function TemplateEditorPage() {
                 />
               </div>
               <p className="text-[10px] text-[var(--muted-foreground)]">
-                Sends the compiled preview HTML with current preview data.
-                Subject will be prefixed with [TEST].
+                Sends the compiled preview HTML with current preview data,
+                including this account&apos;s email footer. Identical to what a
+                recipient receives.
               </p>
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-[var(--border)] bg-[var(--muted)]/30">

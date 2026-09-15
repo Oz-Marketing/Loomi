@@ -291,6 +291,17 @@ describe.skipIf(!RUN)('segment resolution: SQL path == JS engine', () => {
     ['date within_days', def([{ field: 'nextServiceDate', operator: 'within_days', value: '30' }])],
     ['date within_last_days', def([{ field: 'purchaseDate', operator: 'within_last_days', value: '30' }])],
     ['date more_than_days_ago', def([{ field: 'lastServiceDate', operator: 'more_than_days_ago', value: '180' }])],
+    // ── Relative date VALUES (`rel:-N:unit`) ──
+    // These are the cases that matter most here: the bound is computed,
+    // not literal, so the SQL translator and the JS engine each have to
+    // arrive at the same instant for the segment to mean one thing.
+    ['before N months ago', def([{ field: 'purchaseDate', operator: 'before', value: 'rel:-6:month' }])],
+    ['after N years ago', def([{ field: 'purchaseDate', operator: 'after', value: 'rel:-3:year' }])],
+    ['between two relative bounds', def([{ field: 'purchaseDate', operator: 'between', value: 'rel:-3:year', value2: 'rel:-1:year' }])],
+    ['between a fixed and a relative bound', def([{ field: 'purchaseDate', operator: 'between', value: daysAgo(500).toISOString(), value2: 'rel:-1:month' }])],
+    ['between today and N days out', def([{ field: 'nextServiceDate', operator: 'between', value: 'rel:0:day', value2: 'rel:90:day' }])],
+    ['relative weeks', def([{ field: 'lastServiceDate', operator: 'after', value: 'rel:-8:week' }])],
+    ['a relative bound nobody can satisfy still agrees', def([{ field: 'purchaseDate', operator: 'after', value: 'rel:1:day' }])],
     ['date is_empty', def([{ field: 'nextServiceDate', operator: 'is_empty' }])],
     ['date is_not_empty', def([{ field: 'nextServiceDate', operator: 'is_not_empty' }])],
     ['tags includes_any is case-insensitive', def([{ field: 'tags', operator: 'includes_any', value: 'VIP' }])],

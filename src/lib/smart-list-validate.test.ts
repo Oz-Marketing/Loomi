@@ -174,3 +174,65 @@ describe('parseAndValidateFilterDefinition', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+// A relative token that reaches the engine somewhere it doesn't belong
+// fails closed — the segment matches nobody and nothing on screen says
+// why. These are the checks that turn that into a save-time error.
+describe('relative date values', () => {
+  it('accepts a relative bound on the operators that take a date', () => {
+    for (const [operator, extra] of [
+      ['before', {}],
+      ['after', {}],
+      ['between', { value2: 'rel:-1:year' }],
+    ] as const) {
+      const result = validateFilterDefinition(
+        def([{ id: 'r', field: 'purchaseDate', operator, value: 'rel:-3:year', ...extra }]),
+        fields,
+      );
+      expect(result.ok, operator).toBe(true);
+    }
+  });
+
+  it('accepts a mix of a fixed lower bound and a relative upper one', () => {
+    const result = validateFilterDefinition(
+      def([
+        { id: 'r', field: 'purchaseDate', operator: 'between', value: '2024-01-01', value2: 'rel:-1:month' },
+      ]),
+      fields,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a relative bound on a day-count operator', () => {
+    expect(
+      errorPaths(
+        def([{ id: 'r', field: 'purchaseDate', operator: 'within_last_days', value: 'rel:-30:day' }]),
+      ),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('rejects a relative bound on a field that is not a date', () => {
+    expect(
+      errorPaths(def([{ id: 'r', field: 'city', operator: 'contains', value: 'rel:-30:day' }])),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('rejects a malformed or out-of-range token', () => {
+    expect(
+      errorPaths(def([{ id: 'r', field: 'purchaseDate', operator: 'before', value: 'rel:-6:fortnight' }])),
+    ).toContain('groups[0].conditions[0].value');
+    expect(
+      errorPaths(def([{ id: 'r', field: 'purchaseDate', operator: 'before', value: 'rel:99999:day' }])),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('flags a bad upper bound on its own path, not the lower one', () => {
+    const paths = errorPaths(
+      def([
+        { id: 'r', field: 'purchaseDate', operator: 'between', value: 'rel:-3:year', value2: 'rel:bad:year' },
+      ]),
+    );
+    expect(paths).toContain('groups[0].conditions[0].value2');
+    expect(paths).not.toContain('groups[0].conditions[0].value');
+  });
+});

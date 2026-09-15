@@ -276,11 +276,23 @@ export function injectUnsubscribeFooter(input: {
   account: UnsubscribeFooterInput;
   /** Per-account styling; omit for the default appearance. */
   config?: Partial<UnsubscribeFooterConfig> | null;
+  /**
+   * Force the unsubscribe line off.
+   *
+   * Only for transports that cannot turn [%unsubscribe_url%] into a real
+   * URL. SendGrid does it with subscription_tracking's substitution_tag;
+   * the SMTP fallback has no equivalent, so the link would reach the inbox
+   * as literal token text. The postal address still ships either way.
+   *
+   * Omit for the default, which is what blasts and flows want: render the
+   * link unless the designer already placed their own.
+   */
+  includeUnsubscribeLink?: boolean;
 }): { html: string; text: string } {
   const alreadyLinked =
     hasUnsubscribeToken(input.html) || hasUnsubscribeToken(input.text);
   const footer = buildUnsubscribeFooter(input.account, {
-    includeUnsubscribeLink: !alreadyLinked,
+    includeUnsubscribeLink: input.includeUnsubscribeLink ?? !alreadyLinked,
     config: input.config,
   });
 

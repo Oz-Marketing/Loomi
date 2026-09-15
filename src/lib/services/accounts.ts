@@ -200,6 +200,24 @@ export async function getAncestorAccountKeys(accountKey: string): Promise<string
 }
 
 /**
+ * The union of every ancestor of every key given — ONE hierarchy query for
+ * the whole set.
+ *
+ * Calling `getAncestorAccountKeys` per account re-reads the same edge list
+ * once per rooftop, which on a 33-account tenant is 33 identical queries to
+ * answer a single "what can this user see" question.
+ */
+export async function getAncestorAccountKeysForAll(keys: string[]): Promise<string[]> {
+  if (keys.length === 0) return [];
+  const edges = await hierarchyEdges();
+  const out = new Set<string>();
+  for (const key of keys) {
+    for (const ancestor of ancestorKeys(edges, key)) out.add(ancestor);
+  }
+  return [...out];
+}
+
+/**
  * Every OTHER account grouped with `accountKey` — the set a suppression must
  * cascade to, so an opt-out at one rooftop silences the whole group.
  *

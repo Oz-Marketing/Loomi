@@ -59,8 +59,36 @@ describe('resolvePreviewTokens', () => {
     expect(resolvePreviewTokens('{{  location.city  }}', ACCOUNT)).toBe('Missoula');
   });
 
-  it('fills contact tokens with the sample person the editor previews with', () => {
-    expect(resolvePreviewTokens('Hi {{contact.first_name}},', ACCOUNT)).toBe('Hi Alex,');
+  it('empties a blank account field instead of inventing one', () => {
+    // The editor would show "(801) 555-0100" here so the layout can be
+    // judged. A PNG gets forwarded, and nobody downstream can tell an
+    // invented dealership phone number from a real one.
+    const { phone, ...noPhone } = ACCOUNT;
+    expect(phone).toBeTruthy();
+    expect(resolvePreviewTokens('<p>Call {{location.phone}}</p>', noPhone)).toBe(
+      '<p>Call </p>',
+    );
+  });
+
+  it('empties every location token when there is no account at all', () => {
+    const html = resolvePreviewTokens(
+      '{{location.name}}|{{location.email}}|{{location.phone}}|{{location.address}}'
+      + '|{{location.city}}|{{location.state}}|{{location.postal_code}}|{{location.website}}',
+      null,
+    );
+    expect(html).toBe('|||||||');
+  });
+
+  it('empties the standard custom values the account has not set', () => {
+    expect(
+      resolvePreviewTokens('[{{custom_values.sales_phone}}][{{custom_values.review_link}}]', {
+        dealer: 'Young Mazda',
+      }),
+    ).toBe('[][]');
+  });
+
+  it('empties contact tokens — a download is addressed to nobody', () => {
+    expect(resolvePreviewTokens('Hi {{contact.first_name}},', ACCOUNT)).toBe('Hi ,');
   });
 
   it('leaves an unknown token intact so a typo stays visible', () => {

@@ -12,6 +12,49 @@ const MAP = buildPreviewVariableMap();
 // blank fields. Model that explicitly rather than leaning on the fixture.
 const MAP_WITH_BLANKS = { ...MAP, '{{location.name}}': '' };
 
+describe('buildPreviewVariableMap sampleFallbacks', () => {
+  const STRICT = buildPreviewVariableMap(null, null, { sampleFallbacks: false });
+
+  it('defaults to sample values, which is what the editor wants', () => {
+    expect(MAP['{{location.phone}}']).toBe('(801) 555-0100');
+    expect(MAP['{{contact.first_name}}']).toBe('Alex');
+  });
+
+  it('empties every sample when fallbacks are off', () => {
+    expect(STRICT['{{location.phone}}']).toBe('');
+    expect(STRICT['{{contact.first_name}}']).toBe('');
+    expect(STRICT['{{custom_values.sales_phone}}']).toBe('');
+    expect(STRICT['{{unsubscribe_link}}']).toBe('');
+  });
+
+  it('still DEFINES every token it knows, so none reads as unrecognized', () => {
+    // An absent key is an unknown token: the audit calls it invalid and the
+    // substituter leaves the raw {{…}} standing. Emptied is not the same as
+    // missing, and the download depends on the difference.
+    for (const key of Object.keys(MAP)) {
+      expect(STRICT, `missing ${key}`).toHaveProperty(key);
+    }
+    const { invalid, blank } = auditPreviewVariables(
+      '{{location.phone}} {{contact.first_name}}',
+      STRICT,
+    );
+    expect(invalid).toHaveLength(0);
+    expect(blank).toEqual(['contact.first_name', 'location.phone']);
+  });
+
+  it('keeps real account data — only the invented values go', () => {
+    const map = buildPreviewVariableMap(
+      { dealer: 'Young Mazda', phone: '(406) 555-0143' },
+      null,
+      { sampleFallbacks: false },
+    );
+    expect(map['{{location.name}}']).toBe('Young Mazda');
+    expect(map['{{location.phone}}']).toBe('(406) 555-0143');
+    expect(map['{{custom_values.sales_phone}}']).toBe('(406) 555-0143');
+    expect(map['{{location.city}}']).toBe('');
+  });
+});
+
 describe('auditPreviewVariables', () => {
   // The report this split exists for: the editor showed
   // {{email.unsubscribe_link}} under "Missing Preview Data" with advice to

@@ -170,12 +170,16 @@ export function toMergetagContext(
 }
 
 /**
- * Substitute every mergetag in `html` with the values the on-screen preview
- * would show for this account.
+ * Substitute every mergetag in `html` with this account's REAL data.
  *
- * Contact tokens resolve to the same sample person the editor previews with
- * ("Alex Customer") — a download is not addressed to anybody, and a sample
- * name reads far better than a raw `{{contact.first_name}}`.
+ * Sample fallbacks are deliberately off. The editor fills a gap with a
+ * plausible stand-in so the layout can be judged, but a PNG leaves the
+ * building — nobody downstream can tell an invented "(801) 555-0100" from
+ * the dealership's actual number. A recognized token with nothing behind it
+ * therefore renders as nothing, which is also what a recipient whose own
+ * field is blank gets at send time. That extends to contact tokens: a
+ * download is addressed to no one, so `Hi {{contact.first_name}},` comes out
+ * as `Hi ,` rather than naming a person who does not exist.
  */
 export function resolvePreviewTokens(
   html: string,
@@ -183,6 +187,8 @@ export function resolvePreviewTokens(
   contact?: PreviewContact | null,
 ): string {
   if (!html) return '';
-  const ctx = toMergetagContext(buildPreviewVariableMap(accountData, contact));
+  const ctx = toMergetagContext(
+    buildPreviewVariableMap(accountData, contact, { sampleFallbacks: false }),
+  );
   return applyBlastMergetags(html, ctx, { escape: true });
 }

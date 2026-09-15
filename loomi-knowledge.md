@@ -37,7 +37,7 @@ A shared cross-subdomain cookie (`loomi-active-account`) keeps the active-accoun
 ## Sectors / Features
 
 ### Audiences & CRM
-Native contact database (not ESP-synced). Full CRUD with extensible per-account **custom fields** (blueprint inheritance by industry), tags, vehicle data, and materialized engagement flags. Admins get a cross-account deduped view (merge by email/phone). Contact hygiene normalizes phones to E.164 and filters disposable emails. **Smart Lists / Segments** are nested AND/OR filter definitions evaluated across text/number/date/tag/boolean/select fields; saved filters become named **Audiences** that feed campaigns and flows.
+Native contact database (not ESP-synced). Full CRUD with extensible per-account **custom fields** (blueprint inheritance by industry), tags, vehicle data, and materialized engagement flags. Admins get a cross-account deduped view (merge by email/phone). Contact hygiene normalizes phones to E.164 and filters disposable emails. **Smart Lists / Segments** are nested AND/OR filter definitions evaluated across text/number/date/tag/boolean/select fields; saved filters become named **Audiences** that feed campaigns and flows. The field picker is searchable. Date conditions take either a fixed calendar date or a **relative** one — "3 years ago", "in 90 days" — which re-resolves every time the segment runs, so a cohort like "bought more than three years ago" stays current without anyone retyping dates.
 
 ### Email & SMS Campaigns
 - **Email** sends through **SendGrid** (direct v3 API) with auto-injected CAN-SPAM unsubscribe footers, RFC 8058 one-click unsubscribe, and open/click tracking. Engagement events return via webhook (`POST /api/webhooks/sendgrid/events`) into `EmailEvent` and drive suppression lists.

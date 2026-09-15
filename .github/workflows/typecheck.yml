@@ -48,6 +48,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
+        env:
+          # Types are all this job needs from cypress; skipping the
+          # browser download keeps the required `verify` check fast.
+          CYPRESS_INSTALL_BINARY: "0"
 
       - name: Generate Prisma client
         run: npx prisma generate

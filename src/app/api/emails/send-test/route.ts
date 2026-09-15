@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
+import { resolveAccountFooter } from '@/lib/sending/account-footer';
+import {
+  injectUnsubscribeFooter,
+  UNSUBSCRIBE_TOKEN,
+  type UnsubscribeFooterConfig,
+  type UnsubscribeFooterInput,
+} from '@/lib/sending/unsubscribe-footer';
 import {
   resolveSendGridConfig,
   sendEmailViaSendGrid,
@@ -19,6 +26,16 @@ interface SendTestBody {
 
 const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Same shape as the blast worker's: enough for a readable text/plain part. */
+function stripHtml(value: string): string {
+  return value
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function POST(req: NextRequest) {
   const { error } = await requireAuth();
   if (error) return error;
@@ -26,6 +43,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as SendTestBody;
     const to = body.to?.trim() || '';
+    // Sent verbatim. This used to prefix "[TEST] ", which is a spam-filter
+    // trigger token in its own right — so the one send whose job is to
+    // predict a blast's inbox placement was scored on a subject line no
+    // blast would ever carry.
     const subject = body.subject?.trim() || 'Test Email from Loomi Studio';
     const html = body.html;
     const accountKey = typeof body.accountKey === 'string' ? body.accountKey.trim() : '';
@@ -43,17 +64,80 @@ export async function POST(req: NextRequest) {
     // ── Resolve sending identity ──
     // Prefer per-sub-account SendGrid config when present; fall back to
     // global SMTP env vars. Either path needs a usable "from" address,
-    // so we pull senderEmail/senderName from the account too.
+    // so we pull senderEmail/senderName from the account too. The address
+    // fields come along for the CAN-SPAM footer below.
     const account = accountKey
       ? await prisma.account.findUnique({
           where: { key: accountKey },
-          select: { senderEmail: true, senderName: true, replyToEmail: true, dealer: true },
+          select: {
+            senderEmail: true,
+            senderName: true,
+            replyToEmail: true,
+            dealer: true,
+            address: true,
+            city: true,
+            state: true,
+            postalCode: true,
+          },
         })
       : null;
 
     const sendgrid = accountKey ? await resolveSendGridConfig(accountKey) : null;
+    const useSendGrid = Boolean(sendgrid && account?.senderEmail);
 
-    if (sendgrid && account?.senderEmail) {
+    // ── CAN-SPAM footer ──
+    // The editor hands us the raw design: no opt-in line, no postal
+    // address, no unsubscribe link. Blasts and flows get all three from
+    // injectUnsubscribeFooter(), so a test send that skips it is showing
+    // the user a message no recipient will ever receive — which defeats
+    // the point of testing. Styling resolves through the account chain
+    // (rooftop → group → built-in default), same as a blast.
+    //
+    // The LINK is a SendGrid-only capability. buildUnsubscribeFooter emits
+    // [%unsubscribe_url%] and only subscription_tracking's substitution_tag
+    // turns it into a real URL; there is no Loomi-hosted unsubscribe page
+    // to point at instead. On the SMTP fallback the token would arrive as
+    // literal text, so we ship the address without the link and say so in
+    // the response rather than mailing a broken one.
+    const footerAccount: UnsubscribeFooterInput | null = account
+      ? {
+          dealer: account.dealer || '',
+          address: account.address,
+          city: account.city,
+          state: account.state,
+          postalCode: account.postalCode,
+        }
+      : null;
+
+    let footerConfig: UnsubscribeFooterConfig | null = null;
+    if (accountKey && footerAccount) {
+      footerConfig = (await resolveAccountFooter(accountKey)).config;
+    }
+
+    // A text/plain part is what the footer's text half attaches to, and
+    // its absence is an independent spam signal — blasts always send one.
+    const baseText = stripHtml(html);
+
+    const composed = footerAccount
+      ? injectUnsubscribeFooter({
+          html,
+          text: baseText,
+          account: footerAccount,
+          config: footerConfig,
+          // Only ever force the link OFF. Left undefined, the injector
+          // keeps its own rule: skip the link when the designer already
+          // placed one, so a template with its own doesn't get two.
+          ...(useSendGrid ? {} : { includeUnsubscribeLink: false }),
+        })
+      : { html, text: baseText };
+
+    const footerNote = !footerAccount
+      ? 'No account was in scope, so no compliance footer was added. Open the template from an account to include it.'
+      : useSendGrid
+        ? null
+        : 'Footer added without the unsubscribe link: this account has no SendGrid key, and the hosted unsubscribe URL only exists on the SendGrid path.';
+
+    if (useSendGrid && sendgrid && account?.senderEmail) {
       // SendGrid path
       let lastMessageId = '';
       try {
@@ -63,9 +147,17 @@ export async function POST(req: NextRequest) {
             from: { email: account.senderEmail, name: account.senderName || account.dealer || undefined },
             replyTo: account.replyToEmail ? { email: account.replyToEmail } : undefined,
             to: { email: recipient },
-            subject: `[TEST] ${subject}`,
-            html,
+            subject,
+            html: composed.html,
+            text: composed.text,
             categories: ['loomi', 'send-test'],
+            // Swaps the token for a real hosted URL and sets the
+            // List-Unsubscribe headers — the identical mechanism a blast
+            // uses. The link is LIVE: clicking it suppresses that address
+            // in SendGrid, exactly as it would for a real recipient.
+            ...(footerAccount
+              ? { unsubscribe: { substitutionTag: UNSUBSCRIBE_TOKEN } }
+              : {}),
           });
           lastMessageId = result.messageId || lastMessageId;
         }
@@ -76,8 +168,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         provider: 'sendgrid',
+        from: account.senderEmail,
         messageId: lastMessageId,
         recipients: recipients.length,
+        footerNote,
       });
     }
 
@@ -116,15 +210,24 @@ export async function POST(req: NextRequest) {
       from: smtpFrom,
       ...(account?.replyToEmail ? { replyTo: account.replyToEmail } : {}),
       to: recipients.join(', '),
-      subject: `[TEST] ${subject}`,
-      html,
+      subject,
+      html: composed.html,
+      text: composed.text,
     });
+
+    // nodemailer only throws when EVERY recipient is refused; a partial
+    // refusal resolves with the rest in `rejected`. Surfacing it keeps a
+    // multi-address test from reporting a clean success for half a send.
+    const rejected = (info.rejected || []).map(String);
 
     return NextResponse.json({
       success: true,
       provider: 'smtp',
+      from: smtpFrom,
       messageId: info.messageId,
-      recipients: recipients.length,
+      recipients: recipients.length - rejected.length,
+      rejected,
+      footerNote,
     });
   } catch (err) {
     console.error('Send test email error:', err);

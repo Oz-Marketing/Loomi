@@ -870,6 +870,67 @@ function ConditionRow({
     [operators],
   );
 
+  // Both bounds are built once and placed by whichever layout applies, so
+  // the range and single-value branches can never drift apart.
+  const valueControl = isDateInput ? (
+    <DateValueInput
+      value={condition.value}
+      onChange={onValueChange}
+      invalid={missingValue}
+    />
+  ) : isOptionMultiSelect ? (
+    <OptionMultiSelect
+      options={field?.options ?? []}
+      value={condition.value}
+      onChange={onValueChange}
+      invalid={missingValue}
+    />
+  ) : isSingleSelectInput ? (
+    <select
+      value={condition.value}
+      onChange={(e) => onValueChange(e.target.value)}
+      className={`flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+        missingValue
+          ? 'border-amber-500/50 focus:border-amber-500'
+          : 'border-[var(--border)] focus:border-[var(--primary)]'
+      }`}
+    >
+      <option value="">Select…</option>
+      {field?.options?.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      type={inputType}
+      value={condition.value}
+      onChange={(e) => onValueChange(e.target.value)}
+      placeholder={placeholder}
+      className={`flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+        missingValue
+          ? 'border-amber-500/50 focus:border-amber-500'
+          : 'border-[var(--border)] focus:border-[var(--primary)]'
+      }`}
+    />
+  );
+
+  const value2Control = isDateInput ? (
+    <DateValueInput
+      value={condition.value2 ?? ''}
+      onChange={onValue2Change}
+      edge="end"
+    />
+  ) : (
+    <input
+      type={isNumberInput ? 'number' : 'date'}
+      value={condition.value2 ?? ''}
+      onChange={(e) => onValue2Change(e.target.value)}
+      className="flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
+    />
+  );
+
   return (
     <div className="flex items-stretch gap-2 flex-wrap">
       <LoomiSelect
@@ -886,73 +947,26 @@ function ConditionRow({
         className="sm:w-[22%] min-w-[130px]"
       />
       {needsValue ? (
-        <div className="flex items-stretch gap-2 grow basis-[240px] min-w-[150px] flex-wrap">
-          {isDateInput ? (
-            <DateValueInput
-              value={condition.value}
-              onChange={onValueChange}
-              invalid={missingValue}
-            />
-          ) : isOptionMultiSelect ? (
-            <OptionMultiSelect
-              options={field?.options ?? []}
-              value={condition.value}
-              onChange={onValueChange}
-              invalid={missingValue}
-            />
-          ) : isSingleSelectInput ? (
-            <select
-              value={condition.value}
-              onChange={(e) => onValueChange(e.target.value)}
-              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-                missingValue
-                  ? 'border-amber-500/50 focus:border-amber-500'
-                  : 'border-[var(--border)] focus:border-[var(--primary)]'
-              }`}
-            >
-              <option value="">Select…</option>
-              {field?.options?.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              type={inputType}
-              value={condition.value}
-              onChange={(e) => onValueChange(e.target.value)}
-              placeholder={placeholder}
-              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-                missingValue
-                  ? 'border-amber-500/50 focus:border-amber-500'
-                  : 'border-[var(--border)] focus:border-[var(--primary)]'
-              }`}
-            />
-          )}
-          {needsValue2 && (
-            // The joiner travels with the upper bound so a wrapped range
-            // reads "… and <bound>" on the second line rather than
-            // orphaning the word at the end of the first.
-            <div className="flex items-stretch gap-2 grow basis-[264px] min-w-[264px]">
-              <span className="self-center text-[11px] text-[var(--muted-foreground)]">and</span>
-              {isDateInput ? (
-                <DateValueInput
-                  value={condition.value2 ?? ''}
-                  onChange={onValue2Change}
-                  edge="end"
-                />
-              ) : (
-                <input
-                  type={isNumberInput ? 'number' : 'date'}
-                  value={condition.value2 ?? ''}
-                  onChange={(e) => onValue2Change(e.target.value)}
-                  className="flex-1 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
-                />
-              )}
-            </div>
-          )}
-        </div>
+        needsValue2 ? (
+          // A range STACKS, with the joiner in its own left gutter, so both
+          // bounds line up in one column. Inline, the lower bound sat an
+          // "and"-width to the right of the upper and the two mode toggles
+          // never agreed — which reads as a rendering fault rather than as
+          // two ends of one range. Each cell is its own flex line, so the
+          // controls' flex-1 still fills the column.
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-2 grow basis-[240px] min-w-[150px]">
+            <span aria-hidden="true" />
+            <div className="flex items-stretch min-w-0">{valueControl}</div>
+            <span className="justify-self-end text-[11px] text-[var(--muted-foreground)]">
+              and
+            </span>
+            <div className="flex items-stretch min-w-0">{value2Control}</div>
+          </div>
+        ) : (
+          <div className="flex items-stretch gap-2 grow basis-[240px] min-w-[150px]">
+            {valueControl}
+          </div>
+        )
       ) : (
         <div className="flex-1 min-w-[150px] flex items-center px-3 h-9 text-xs text-[var(--muted-foreground)] italic">
           no value needed

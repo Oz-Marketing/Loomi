@@ -342,6 +342,22 @@ select[class*="bg-[var(--background)]"] {
   --pill-ink-sky: #7dd3fc;
 }
 
+/* Native date/time controls paint their picker glyph — and the whole
+   dropdown behind it — from the OS, not from our tokens, so under the dark
+   theme they render a black calendar icon on a dark field. `color-scheme` is
+   the only hook a browser gives us for that chrome: restyling
+   ::-webkit-calendar-picker-indicator alone recolors the glyph and leaves the
+   dropdown itself blinding white. One rule covers every native date control
+   in the app, including the manual-entry field inside our own DatePicker
+   popover. */
+[data-theme='dark'] input[type='date'],
+[data-theme='dark'] input[type='datetime-local'],
+[data-theme='dark'] input[type='month'],
+[data-theme='dark'] input[type='time'],
+[data-theme='dark'] input[type='week'] {
+  color-scheme: dark;
+}
+
 /* Light mode warning color tuning (keeps dark mode unchanged) */
 [data-theme='light'] .text-amber-500,
 [data-theme='light'] .text-amber-400,

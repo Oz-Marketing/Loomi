@@ -24,6 +24,17 @@ export const CONTACT_CSV_COLUMNS: { key: string; label: string }[] = [
   { key: 'vehicleYear', label: 'Vehicle Year' },
   { key: 'vehicleMake', label: 'Vehicle Make' },
   { key: 'vehicleModel', label: 'Vehicle Model' },
+  // Appended rather than filed with the other lifecycle data so the
+  // existing column order is untouched — these files get opened in
+  // spreadsheets built against the old layout.
+  //
+  // Labels match the segment builder's ('Purchase Date', 'Last Service
+  // Date'), so someone checking a date-filtered segment against its
+  // export is reading the same words in both places. Both are the CRM
+  // snapshot columns, NOT the ContactEvent rollups the builder offers
+  // alongside them as '… (from history)' — see FILTERABLE_FIELDS.
+  { key: 'purchaseDate', label: 'Purchase Date' },
+  { key: 'lastServiceDate', label: 'Last Service Date' },
 ];
 
 /** The columns the CSV needs, as a Prisma select. */
@@ -44,6 +55,8 @@ export const CONTACT_CSV_SELECT = {
   vehicleYear: true,
   vehicleMake: true,
   vehicleModel: true,
+  purchaseDate: true,
+  lastServiceDate: true,
   tags: true,
 } as const;
 

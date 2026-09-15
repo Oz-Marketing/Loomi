@@ -236,3 +236,38 @@ describe('relative date values', () => {
     expect(paths).not.toContain('groups[0].conditions[0].value');
   });
 });
+
+describe('duration values (the day-count operators)', () => {
+  const check = (operator: string, value: string) =>
+    validateFilterDefinition(
+      def([{ id: 'r', field: 'purchaseDate', operator, value }]),
+      fields,
+    );
+
+  it('accepts the legacy bare integer and a unit token alike', () => {
+    // Back-compat is the design constraint: every segment saved before
+    // units holds a bare integer, and it still means days.
+    for (const value of ['180', '6:month', '3:year', '2:week', '45:day']) {
+      const result = check('more_than_days_ago', value);
+      expect(result.ok, `${value} was rejected`).toBe(true);
+    }
+  });
+
+  it('rejects a malformed duration instead of saving a segment that matches nobody', () => {
+    // parseDuration returns null and every caller fails closed, so without
+    // this the definition persists and the segment is silently empty —
+    // the exact failure this module exists to convert into an error.
+    for (const value of ['6:fortnight', '-6:month', 'abc', '6 months']) {
+      const result = check('more_than_days_ago', value);
+      expect(result.ok, `${value} was accepted`).toBe(false);
+      if (!result.ok) {
+        expect(result.errors[0].message).toContain('not a valid length of time');
+      }
+    }
+  });
+
+  it('still rejects a relative date token on a day-count operator', () => {
+    const result = check('within_last_days', 'rel:-6:month');
+    expect(result.ok).toBe(false);
+  });
+});

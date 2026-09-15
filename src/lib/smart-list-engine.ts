@@ -1,6 +1,7 @@
 import {
   NO_VALUE_OPERATORS,
   RANGE_OPERATORS,
+  parseDuration,
   parseRelativeDate,
   type FieldDefinition,
   type FieldType,
@@ -449,32 +450,34 @@ function evaluateDateCondition(
       return parsedDate.getTime() >= parsedValue.getTime() && parsedDate.getTime() <= parsedValue2.getTime();
     }
     case 'within_days': {
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const future = endOfDay(addCalendarDays(todayStart, days));
-      // within_days: date is between start of today and end of Nth day.
+      // Future-only despite the name: [start of today .. end of the Nth
+      // unit ahead]. The duration carries its own unit; a bare integer
+      // still means days, which is every segment saved before units.
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const future = endOfDay(shiftByUnit(todayStart, { amount: span.amount, unit: span.unit }));
       return parsedDate.getTime() >= todayStart.getTime() && parsedDate.getTime() <= future.getTime();
     }
     case 'within_last_days': {
-      // Past-only: the date falls in [N days ago 00:00 .. end of today].
+      // Past-only: the date falls in [N units ago 00:00 .. end of today].
       // This is what "Last X Date is After N Days" means in the lifecycle
-      // specs — the event happened within the last N days.
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const lower = addCalendarDays(todayStart, -days).getTime();
+      // specs — the event happened within the last N units.
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const lower = shiftByUnit(todayStart, { amount: -span.amount, unit: span.unit }).getTime();
       const upper = endOfDay(new Date(todayStart)).getTime();
       return parsedDate.getTime() >= lower && parsedDate.getTime() <= upper;
     }
     case 'more_than_days_ago': {
-      // Past-only, beyond N: the date is strictly older than N days ago
-      // (calendar-day comparison). Powers lapse gates ("lapsed more than
+      // Past-only, beyond N: the date is strictly older than N units ago
+      // (calendar comparison). Powers lapse gates ("lapsed more than
       // 6 months"). Future dates never match.
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const cutoff = addCalendarDays(todayStart, -days).getTime();
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const cutoff = shiftByUnit(todayStart, { amount: -span.amount, unit: span.unit }).getTime();
       return startOfDay(parsedDate).getTime() < cutoff;
     }
     // Operator doesn't belong to this field type — no match.
@@ -491,6 +494,11 @@ export {
   startOfDay as startOfFilterDay,
   endOfDay as endOfFilterDay,
   addCalendarDays as addFilterDays,
+  // The SQL translator MUST build its bounds with this same function:
+  // month and year offsets are calendar math, and a second
+  // implementation is a preview that disagrees with the query it
+  // previews.
+  shiftByUnit as shiftFilterByUnit,
   resolveDateBound as resolveFilterDateBound,
 };
 

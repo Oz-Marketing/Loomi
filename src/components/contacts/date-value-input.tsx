@@ -10,6 +10,7 @@ import {
   type RelativeDateValue,
 } from '@/lib/smart-list-types';
 import { resolveFilterDateBound } from '@/lib/smart-list-engine';
+import { DatePicker } from '@/components/ui/date-picker';
 import { LoomiSelect } from './loomi-select';
 
 // One bound of a date condition, as either a fixed calendar date or a
@@ -81,7 +82,12 @@ export function DateValueInput({
     // Never wraps internally: a mode toggle stranded on the line above
     // its own input reads as two separate controls. The condition row
     // wraps around WHOLE bounds instead.
-    <div className="flex items-stretch gap-1.5 flex-1 min-w-[236px]">
+    //
+    // basis, not flex-1. Flexbox breaks lines on the flex BASE size, and
+    // flex-1 sets that to 0 — so a row of these never wrapped, it just
+    // pushed past its container to honour min-w. The basis has to state
+    // the real minimum for the wrap to fire.
+    <div className="flex items-stretch gap-1.5 grow basis-[236px] min-w-0 w-full">
       <ModeToggle
         relative={!!relative}
         compact={compact}
@@ -123,17 +129,19 @@ export function DateValueInput({
             options={UNIT_OPTIONS}
             searchable={false}
             size={size}
-            className="flex-1 min-w-[110px]"
+            className="flex-1 min-w-[96px]"
           />
         </>
       ) : (
-        <input
-          type="date"
-          value={toDateInputValue(value)}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label={edge === 'end' ? 'End date' : 'Date'}
-          className={`flex-1 min-w-0 px-3 rounded-lg border bg-transparent focus:outline-none transition-colors ${height} ${borderClass}`}
-        />
+        <div className="flex-1 min-w-0">
+          <DatePicker
+            mode="single"
+            value={toDateInputValue(value) || null}
+            onChange={(next) => onChange(next ?? '')}
+            placeholder={edge === 'end' ? 'End date' : 'Start date'}
+            className={`group w-full inline-flex items-center justify-between gap-2 px-3 text-left rounded-lg border bg-transparent focus:outline-none transition-colors ${height} ${borderClass}`}
+          />
+        </div>
       )}
     </div>
   );

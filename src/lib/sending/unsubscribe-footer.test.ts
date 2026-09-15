@@ -267,3 +267,42 @@ describe('buildUnsubscribeFooter — styling', () => {
     expect(out.html).toContain('text-align:right');
   });
 });
+
+describe('injectUnsubscribeFooter — includeUnsubscribeLink override', () => {
+  // The SMTP fallback cannot swap [%unsubscribe_url%] for a real URL —
+  // only SendGrid's substitution_tag does that, and there is no
+  // Loomi-hosted unsubscribe page to point at instead. Without this
+  // override the raw token ships to the inbox as visible text.
+  it('drops the link but keeps the postal address when forced off', () => {
+    const out = injectUnsubscribeFooter({
+      html: '<html><body><p>Deals!</p></body></html>',
+      text: 'Deals!',
+      account: ACCOUNT,
+      includeUnsubscribeLink: false,
+    });
+    expect(out.html).not.toContain(UNSUBSCRIBE_TOKEN);
+    expect(out.text).not.toContain(UNSUBSCRIBE_TOKEN);
+    expect(out.html).toContain('1080 W Riverdale Rd');
+    expect(out.text).toContain('1080 W Riverdale Rd');
+  });
+
+  it('leaves the default alone when omitted', () => {
+    const out = injectUnsubscribeFooter({
+      html: '<html><body><p>Deals!</p></body></html>',
+      text: 'Deals!',
+      account: ACCOUNT,
+    });
+    expect(out.html).toContain(UNSUBSCRIBE_TOKEN);
+  });
+
+  it('still emits one link when the body already carries the designer\'s', () => {
+    // Forcing the link ON would double it up; blasts rely on the
+    // already-linked rule, so the override must never be able to add one.
+    const out = injectUnsubscribeFooter({
+      html: `<html><body><a href="${UNSUBSCRIBE_TOKEN}">Opt out</a></body></html>`,
+      text: '',
+      account: ACCOUNT,
+    });
+    expect(out.html.split(UNSUBSCRIBE_TOKEN).length - 1).toBe(1);
+  });
+});

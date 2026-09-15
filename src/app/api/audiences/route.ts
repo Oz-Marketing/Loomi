@@ -2,6 +2,7 @@ import { withRouteErrors } from '@/lib/api-errors';
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as audienceService from '@/lib/services/audiences';
+import { prisma } from '@/lib/prisma';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import {
   formatFilterErrors,
@@ -37,6 +38,7 @@ async function handlePost(req: Request) {
 
   const body = await req.json();
   const { name, description, accountKey, filters, icon, color } = body;
+  const shareWithChildren = body.sharedWithChildren === true;
 
   if (!name || !filters) {
     return NextResponse.json({ error: 'name and filters are required' }, { status: 400 });
@@ -66,6 +68,27 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
+  // Sharing DOWN to the group's accounts. Needs a group to share FROM:
+  // platform-wide already reaches everyone, and a leaf has nothing
+  // beneath it, so in both cases the flag is a switch that does nothing.
+  if (shareWithChildren) {
+    if (!scopedAccountKey) {
+      return NextResponse.json(
+        { error: 'A platform-wide segment is already visible to every account.' },
+        { status: 400 },
+      );
+    }
+    const childCount = await prisma.account.count({
+      where: { parentAccountKey: scopedAccountKey },
+    });
+    if (childCount === 0) {
+      return NextResponse.json(
+        { error: 'Only a group account can share a segment with the accounts beneath it.' },
+        { status: 400 },
+      );
+    }
+  }
+
   // Validate the filter definition against the same field catalogue the
   // builder offered, so an unknown field, a mistyped operator, or a
   // valueless condition is a 400 here rather than a segment that quietly
@@ -83,6 +106,7 @@ async function handlePost(req: Request) {
     name,
     description,
     accountKey: scopedAccountKey,
+    sharedWithChildren: shareWithChildren,
     createdByUserId: session!.user.id,
     filters,
     icon,

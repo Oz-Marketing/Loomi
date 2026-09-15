@@ -37,6 +37,7 @@ export default function EditSegmentPage({
           name: a.name,
           description: a.description,
           accountKey: a.accountKey,
+          sharedWithChildren: a.sharedWithChildren,
           color: a.color,
           filters: a.filters,
         });

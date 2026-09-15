@@ -6,6 +6,7 @@
 // excluded.
 
 import { NextResponse } from 'next/server';
+import { getAncestorAccountKeysForAll } from '@/lib/services/accounts';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { KNOWN_PROVIDERS } from '@/lib/segments/sync/destination';
@@ -68,7 +69,7 @@ export async function POST(req: Request, { params }: RouteContext) {
 
   const audience = await prisma.audience.findUnique({
     where: { id },
-    select: { id: true, accountKey: true },
+    select: { id: true, accountKey: true, sharedWithChildren: true },
   });
   if (!audience) {
     return NextResponse.json({ error: 'Segment not found' }, { status: 404 });
@@ -83,13 +84,21 @@ export async function POST(req: Request, { params }: RouteContext) {
   if (allowed && !allowed.includes(accountKey)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
-  // An account-scoped segment can only be synced for its own account;
-  // an org-wide one can be synced for any account it's visible in.
+  // An account-scoped segment can only be synced for its own account; an
+  // org-wide one for any account it's visible in; a group's shared segment
+  // for any account beneath it. The sync is per-account by design — the
+  // filter resolves against that rooftop's own contacts — so a shared
+  // segment syncing for a rooftop is the intended use, not a leak.
   if (audience.accountKey && audience.accountKey !== accountKey) {
-    return NextResponse.json(
-      { error: 'This segment belongs to a different account' },
-      { status: 400 },
-    );
+    const ancestors = await getAncestorAccountKeysForAll([accountKey]);
+    const inherited =
+      audience.sharedWithChildren === true && ancestors.includes(audience.accountKey);
+    if (!inherited) {
+      return NextResponse.json(
+        { error: 'This segment belongs to a different account' },
+        { status: 400 },
+      );
+    }
   }
 
   const provider = typeof body.provider === 'string' ? body.provider.trim() : '';

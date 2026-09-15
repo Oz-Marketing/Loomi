@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { addFilterDays, evaluateFilter, resolveFilterDateBound } from './smart-list-engine';
 import {
+  describeDuration,
   describeRelativeDate,
+  formatDuration,
   formatRelativeDate,
   getFilterableFields,
+  parseDuration,
   parseRelativeDate,
   type FilterDefinition,
 } from './smart-list-types';
@@ -131,6 +134,61 @@ describe('relative-date operators (the new ones)', () => {
       customFields: { last_purchase_date: new Date(Date.now() + 5 * 86_400_000).toISOString() },
     } as unknown as Contact;
     expect(matches(def('last_purchase_date', 'within_last_days', '30'), future)).toBe(false);
+  });
+
+  // ── Units ──
+  //
+  // These operators took a bare count of DAYS, so "lapsed more than 3
+  // years ago" had to be written 1095 — which is not three years across a
+  // leap year. The value carries its own unit now.
+
+  it('a bare integer still means days, for every segment saved before units', () => {
+    // The whole back-compat contract in one assertion: seeded lifecycle
+    // presets and the flow builder both still write bare integers.
+    expect(parseDuration('30')).toEqual({ amount: 30, unit: 'day' });
+    expect(matches(def('last_purchase_date', 'within_last_days', '30'))).toBe(true);
+    expect(matches(def('last_purchase_date', 'within_last_days', '5'))).toBe(false);
+  });
+
+  it('reads a unit token', () => {
+    expect(parseDuration('6:month')).toEqual({ amount: 6, unit: 'month' });
+    expect(parseDuration('3:year')).toEqual({ amount: 3, unit: 'year' });
+    expect(formatDuration({ amount: 6, unit: 'month' })).toBe('6:month');
+    expect(describeDuration({ amount: 1, unit: 'month' })).toBe('1 month');
+    expect(describeDuration({ amount: 6, unit: 'month' })).toBe('6 months');
+  });
+
+  it('refuses a malformed duration rather than guessing', () => {
+    // Every caller turns null into "matches nobody"; the alternative is
+    // parseInt('6:month') === 6, silently reading months as days.
+    expect(parseDuration('6:fortnight')).toBeNull();
+    expect(parseDuration('-6:month')).toBeNull();
+    expect(parseDuration('')).toBeNull();
+    expect(parseDuration('abc')).toBeNull();
+    expect(parseDuration(null)).toBeNull();
+    expect(matches(def('last_service_date', 'more_than_days_ago', '6:fortnight'))).toBe(false);
+  });
+
+  it('a month is a calendar month, not thirty days', () => {
+    // last_service_date is 200 days ago. 6 calendar months back is ~182
+    // days, so it IS more than 6 months ago; 7 months (~212 days) is not.
+    expect(matches(def('last_service_date', 'more_than_days_ago', '6:month'))).toBe(true);
+    expect(matches(def('last_service_date', 'more_than_days_ago', '7:month'))).toBe(false);
+  });
+
+  it('a year is a calendar year, so a leap day cannot shift the boundary', () => {
+    // last_purchase_date is 10 days ago: inside a year either way, and
+    // outside "more than a year ago" regardless of leap years.
+    expect(matches(def('last_purchase_date', 'within_last_days', '1:year'))).toBe(true);
+    expect(matches(def('last_purchase_date', 'more_than_days_ago', '1:year'))).toBe(false);
+    // 200 days ago is more than 6 months but less than a year.
+    expect(matches(def('last_service_date', 'within_last_days', '1:year'))).toBe(true);
+    expect(matches(def('last_service_date', 'more_than_days_ago', '1:year'))).toBe(false);
+  });
+
+  it('weeks are seven calendar days', () => {
+    expect(matches(def('last_purchase_date', 'within_last_days', '2:week'))).toBe(true);
+    expect(matches(def('last_purchase_date', 'within_last_days', '1:week'))).toBe(false);
   });
 });
 

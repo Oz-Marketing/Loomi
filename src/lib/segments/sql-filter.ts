@@ -29,7 +29,7 @@
 
 import { Prisma } from '@prisma/client';
 import {
-  addFilterDays,
+  shiftFilterByUnit,
   endOfFilterDay,
   resolveFilterDateBound,
   startOfFilterDay,
@@ -40,6 +40,7 @@ import {
   type FieldDefinition,
   type FilterCondition,
   type FilterDefinition,
+  parseDuration,
 } from '@/lib/smart-list-types';
 
 const TRUE = Prisma.sql`TRUE`;
@@ -520,35 +521,34 @@ function translateDate(
       if (!lower || !upper) return FALSE;
       return Prisma.sql`(${col} >= ${lower} AND ${col} <= ${upper})`;
     }
+    // Bounds come from shiftFilterByUnit, the SAME function the in-memory
+    // engine uses. A month is not 30 days and a year is not 365, so a
+    // second implementation here would be a preview that disagrees with
+    // the query it previews.
     case 'within_days': {
-      const days = parseDays(value);
-      if (days === null) return FALSE;
-      const upper = endOfFilterDay(addFilterDays(todayStart, days));
+      const span = parseDuration(value);
+      if (!span) return FALSE;
+      const upper = endOfFilterDay(shiftFilterByUnit(todayStart, { amount: span.amount, unit: span.unit }));
       return Prisma.sql`(${col} >= ${todayStart} AND ${col} <= ${upper})`;
     }
     case 'within_last_days': {
-      const days = parseDays(value);
-      if (days === null) return FALSE;
-      const lower = addFilterDays(todayStart, -days);
+      const span = parseDuration(value);
+      if (!span) return FALSE;
+      const lower = shiftFilterByUnit(todayStart, { amount: -span.amount, unit: span.unit });
       const upper = endOfFilterDay(todayStart);
       return Prisma.sql`(${col} >= ${lower} AND ${col} <= ${upper})`;
     }
     case 'more_than_days_ago': {
-      const days = parseDays(value);
-      if (days === null) return FALSE;
+      const span = parseDuration(value);
+      if (!span) return FALSE;
       // The engine compares startOfDay(row) < cutoff where cutoff is a
       // midnight boundary; for a midnight cutoff that's equivalent to
       // comparing the raw timestamp.
-      return Prisma.sql`${col} < ${addFilterDays(todayStart, -days)}`;
+      return Prisma.sql`${col} < ${shiftFilterByUnit(todayStart, { amount: -span.amount, unit: span.unit })}`;
     }
     default:
       return null;
   }
-}
-
-function parseDays(value: string): number | null {
-  const n = parseInt(value, 10);
-  return Number.isNaN(n) ? null : n;
 }
 
 

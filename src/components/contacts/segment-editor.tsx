@@ -25,6 +25,7 @@ import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
+import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 import type {
@@ -872,7 +873,14 @@ function ConditionRow({
 
   // Both bounds are built once and placed by whichever layout applies, so
   // the range and single-value branches can never drift apart.
-  const valueControl = isDateInput ? (
+  const valueControl = isDayCountInput ? (
+    <DurationValueInput
+      value={condition.value}
+      onChange={onValueChange}
+      suffix={condition.operator === 'more_than_days_ago' ? 'ago' : undefined}
+      invalid={missingValue}
+    />
+  ) : isDateInput ? (
     <DateValueInput
       value={condition.value}
       onChange={onValueChange}

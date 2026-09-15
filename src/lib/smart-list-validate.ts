@@ -16,6 +16,7 @@
 // against built-ins + that account's custom fields.
 
 import {
+  DAY_COUNT_DATE_OPERATORS,
   MAX_RELATIVE_DATE_AMOUNT,
   NO_VALUE_OPERATORS,
   OPERATORS_BY_TYPE,
@@ -23,6 +24,7 @@ import {
   RANGE_OPERATORS,
   RELATIVE_DATE_OPERATORS,
   looksRelativeDate,
+  parseDuration,
   parseRelativeDate,
   type FieldDefinition,
   type FilterCondition,
@@ -228,7 +230,7 @@ function validateCondition(
     } else if (!RELATIVE_DATE_OPERATORS.includes(op)) {
       errors.push({
         path: `${path}.${slot}`,
-        message: `"${OPERATOR_LABELS[op]}" takes a number of days, not a relative date`,
+        message: `"${OPERATOR_LABELS[op]}" takes a length of time, not a relative date`,
       });
     } else if (!parseRelativeDate(raw)) {
       errors.push({
@@ -236,6 +238,18 @@ function validateCondition(
         message: `"${raw}" is not a valid relative date (max ${MAX_RELATIVE_DATE_AMOUNT} days, weeks, months or years)`,
       });
     }
+  }
+
+  // The day-count operators take a duration — a bare integer (days, the
+  // legacy shape) or `<amount>:<unit>`. Anything else makes parseDuration
+  // return null, and every caller turns that into "matches nobody": an
+  // empty segment with nothing on screen saying why, which is the exact
+  // failure this module exists to convert into an error.
+  if (DAY_COUNT_DATE_OPERATORS.includes(op) && value.trim() && !parseDuration(value)) {
+    errors.push({
+      path: `${path}.value`,
+      message: `"${value}" is not a valid length of time (a number of days, or e.g. "6:month", max ${MAX_RELATIVE_DATE_AMOUNT})`,
+    });
   }
 
   // A select condition naming an option that doesn't exist can never

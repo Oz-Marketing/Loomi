@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { HelpTip } from '@/components/ui/help-tip';
 import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
+import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import type {
   FilterDefinition,
   FilterGroup,
@@ -561,7 +562,14 @@ function ConditionRow({
 
       {/* Row 3: Value input(s) */}
       {needsValue && (
-        isDateInput ? (
+        isDayCountInput ? (
+          <DurationValueInput
+            value={condition.value}
+            onChange={onValueChange}
+            suffix={condition.operator === 'more_than_days_ago' ? 'ago' : undefined}
+            size="sm"
+          />
+        ) : isDateInput ? (
           <DateValueInput value={condition.value} onChange={onValueChange} size="sm" />
         ) : isSingleSelectInput ? (
           <select

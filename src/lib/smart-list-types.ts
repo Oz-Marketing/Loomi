@@ -113,9 +113,12 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   before: 'is before',
   after: 'is after',
   between: 'is between',
-  within_days: 'is within (days)',
-  within_last_days: 'is within the last (days)',
-  more_than_days_ago: 'is more than (days) ago',
+  // The unit is picked beside the amount now, so it is no longer baked
+  // into the label. `within_days` says "the next" because that is what
+  // the engine does — it matches [today .. +N] and never looks backwards.
+  within_days: 'is within the next',
+  within_last_days: 'is within the last',
+  more_than_days_ago: 'is more than',
   overdue: 'is overdue',
   includes_any: 'includes any of',
   includes_all: 'includes all of',
@@ -213,6 +216,69 @@ export const DAY_COUNT_DATE_OPERATORS: FilterOperator[] = [
 ];
 
 export type RelativeDateUnit = 'day' | 'week' | 'month' | 'year';
+
+// ── Durations (the day-count operators' value) ──────────────────
+//
+// `within_days` and friends used to take a bare count of DAYS, which
+// made "lapsed more than 3 years ago" a segment you had to write as
+// 1095 — and then be wrong about, because 1095 days is not 3 years
+// across a leap year. The value now carries its own unit.
+//
+// Backward compatibility is the whole design constraint: every saved
+// segment, every seeded lifecycle preset, and the flow builder all
+// store a bare integer today. A bare integer therefore still parses,
+// and still means DAYS, forever. New values are written `6:month`.
+//
+// Deliberately NOT the `rel:` token: that one is signed, because it
+// names a point in time on either side of today. A duration's direction
+// comes from its operator ("within the last" vs "more than ... ago"),
+// so a sign here would be a second, contradictory source of truth.
+export interface DurationValue {
+  /** Whole units, always positive. Direction belongs to the operator. */
+  amount: number;
+  unit: RelativeDateUnit;
+}
+
+const DURATION_PATTERN = /^(\d{1,4}):(day|week|month|year)$/;
+
+/**
+ * Parse a day-count operator's value. Accepts both the legacy bare
+ * integer (days) and the `<amount>:<unit>` token. Returns null for
+ * anything else, which every caller turns into "matches nobody" rather
+ * than guessing.
+ */
+export function parseDuration(
+  value: string | null | undefined,
+): DurationValue | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const match = DURATION_PATTERN.exec(trimmed);
+  if (match) {
+    const amount = Number(match[1]);
+    if (!Number.isInteger(amount) || amount < 0) return null;
+    if (amount > MAX_RELATIVE_DATE_AMOUNT) return null;
+    return { amount, unit: match[2] as RelativeDateUnit };
+  }
+
+  // Legacy: a bare integer has always meant days.
+  if (!/^\d{1,4}$/.test(trimmed)) return null;
+  const amount = Number(trimmed);
+  if (!Number.isInteger(amount) || amount < 0) return null;
+  if (amount > MAX_RELATIVE_DATE_AMOUNT) return null;
+  return { amount, unit: 'day' };
+}
+
+export function formatDuration(value: DurationValue): string {
+  return `${value.amount}:${value.unit}`;
+}
+
+/** `3 months`, `1 day` — for summaries and the segment description. */
+export function describeDuration(value: DurationValue): string {
+  const unit = value.amount === 1 ? value.unit : `${value.unit}s`;
+  return `${value.amount} ${unit}`;
+}
 
 export const RELATIVE_DATE_UNITS: RelativeDateUnit[] = ['day', 'week', 'month', 'year'];
 

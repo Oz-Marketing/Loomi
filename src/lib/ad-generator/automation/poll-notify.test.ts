@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   makesWithNewOffers,
   modelsWithNewOffers,
+  offersDigestHeading,
+  offersLandedIntro,
   offersLandedTitle,
   summariseModels,
 } from './poll-offers';
@@ -89,5 +91,38 @@ describe('offersLandedTitle', () => {
 
   it('falls back to the generic wording rather than an empty dash', () => {
     expect(offersLandedTitle([], 5)).toBe('5 new manufacturer offers published');
+  });
+});
+
+describe('offersDigestHeading', () => {
+  it('reuses the single-account title so a digest and the bell agree', () => {
+    expect(offersDigestHeading(['Hyundai', 'Ford', 'Chrysler'], 10)).toBe(
+      '10 new offers published — Hyundai, Ford, Chrysler',
+    );
+  });
+
+  it('collapses a make sold by several rooftops', () => {
+    // A group with three Chevrolet stores contributes "Chevrolet" three times;
+    // "Chevrolet, Chevrolet, Chevrolet" is how a digest loses its reader.
+    expect(offersDigestHeading(['Chevrolet', 'Chevrolet', 'Buick'], 9)).toBe(
+      '9 new offers published — Chevrolet, Buick',
+    );
+  });
+
+  it('reads as the plain single-make title when a sweep only turned up one', () => {
+    expect(offersDigestHeading(['Hyundai', 'Hyundai'], 8)).toBe('8 new Hyundai offers published');
+  });
+});
+
+describe('offersLandedIntro', () => {
+  it('names the account count, which is the thing the old email stack conveyed', () => {
+    expect(offersLandedIntro(3)).toBe(
+      'New manufacturer offers landed on 3 accounts. ' +
+        'Ads build on the next run; nothing publishes until a person approves it.',
+    );
+  });
+
+  it('agrees in number', () => {
+    expect(offersLandedIntro(1)).toContain('on 1 account.');
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
@@ -180,12 +180,27 @@ export function AccountAccessModal({
   selected,
   onChange,
   onClose,
+  title,
+  description,
+  showLibraryWarning = true,
 }: {
   name: string;
   ownerKey: string | null;
   selected: string[];
   onChange: (keys: string[]) => void;
   onClose: () => void;
+  /**
+   * Override the heading and blurb. The defaults describe ONE template that
+   * several accounts share, which is this picker's original job — and the
+   * exact opposite of what a caller creating independent per-account copies
+   * needs to say. A picker that promises "your edits reach every one of them"
+   * over something that copies is worse than no picker at all, so the copy
+   * travels with the caller rather than being assumed here.
+   */
+  title?: string;
+  description?: ReactNode;
+  /** The clear-the-list-to-widen note only makes sense for library sharing. */
+  showLibraryWarning?: boolean;
 }) {
   if (typeof document === 'undefined') return null;
   return createPortal(
@@ -196,10 +211,16 @@ export function AccountAccessModal({
       >
         <div className="mb-3 flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-sm font-bold text-[var(--foreground)]">Who can use it</h2>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">
+              {title ?? 'Who can use it'}
+            </h2>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-              Pick which accounts can use &ldquo;{name}&rdquo;. They all use this one template, so
-              your edits reach every one of them. Saved with the template.
+              {description ?? (
+                <>
+                  Pick which accounts can use &ldquo;{name}&rdquo;. They all use this one
+                  template, so your edits reach every one of them. Saved with the template.
+                </>
+              )}
             </p>
           </div>
           <button
@@ -214,7 +235,7 @@ export function AccountAccessModal({
 
         {/* Clearing the list on a library template widens it back to everyone, which
             is not what "I unticked some accounts" usually means. Say so. */}
-        {!ownerKey && selected.length > 0 && (
+        {showLibraryWarning && !ownerKey && selected.length > 0 && (
           <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-500">
             Naming accounts here limits this template to them. Clear the list to offer it to
             everyone again.

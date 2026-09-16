@@ -4,6 +4,8 @@ import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { renderEmailTemplate } from '@/lib/email/render';
 import { createDraftEmailBlast, updateEmailBlastDraft } from '@/lib/services/email-blasts';
 import { upsertCampaignEmailTemplate } from '@/lib/services/campaigns';
+import { getAncestorAccountKeys } from '@/lib/services/accounts';
+import { isSegmentVisibleTo } from '@/lib/segments/visibility';
 import type { AdData } from '../types';
 import { assembleOffer } from '../offer-text';
 import type { GeneratedAd } from './generate-ads';
@@ -404,14 +406,24 @@ export async function generateOfferEmail(
   if (config.emailAudienceId) {
     const audience = await prisma.audience.findUnique({
       where: { id: config.emailAudienceId },
-      select: { id: true, accountKey: true, filters: true },
+      select: { id: true, accountKey: true, sharedWithChildren: true, filters: true },
     });
-    if (audience && audience.accountKey === config.accountKey) {
+    // Ask the shared rule rather than comparing keys. Strict equality was
+    // right when a segment belonged to exactly one account, and it silently
+    // stopped being right twice: a platform-wide segment (accountKey null)
+    // has never matched it, and since group-owned segments shipped, neither
+    // does a group's segment shared down to this rooftop. Both are segments
+    // this account can legitimately see and send to, and both landed the
+    // draft untargeted with a warning that said the opposite of what was
+    // wrong. lib/segments/visibility.ts is the one definition the list page,
+    // the read scope and the write gate already use.
+    const ancestors = audience ? await getAncestorAccountKeys(config.accountKey) : [];
+    if (audience && isSegmentVisibleTo(audience, { accountKey: config.accountKey, ancestors })) {
       sourceAudienceId = audience.id;
       sourceFilter = audience.filters;
     } else {
-      // Wrong-account or deleted audience: leave the draft untargeted rather
-      // than silently mailing another rooftop's list.
+      // Deleted, or owned by an account this one cannot see: leave the draft
+      // untargeted rather than silently mailing another rooftop's list.
       base.warnings.push('Configured audience is missing or belongs to another account.');
     }
   }

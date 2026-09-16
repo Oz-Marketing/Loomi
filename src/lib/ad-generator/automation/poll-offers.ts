@@ -12,6 +12,12 @@ import {
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import { currentNewStock } from './sync-inventory';
 import { createNotification } from '@/lib/notifications/service';
+import { loadChannelMap } from '@/lib/notifications/types';
+import {
+  sendDigestNotificationEmail,
+  sendImmediateNotificationEmail,
+  type NotificationEmailItem,
+} from '@/lib/notifications/email';
 import { resolveReviewers } from './generate-ads';
 
 /**
@@ -159,7 +165,16 @@ export interface PollResult {
  */
 export async function pollAccountOffers(
   config: AutomationConfigRow,
-  opts: { fallbackMakes?: string[]; now?: Date } = {},
+  opts: {
+    fallbackMakes?: string[];
+    now?: Date;
+    /**
+     * Collect this account's email instead of sending it, so a sweep over
+     * several accounts arrives as one message. Omitted (a single manual poll)
+     * means send before returning — there is nothing else to wait for.
+     */
+    outbox?: OfferMailOutbox;
+  } = {},
 ): Promise<PollResult> {
   const now = opts.now ?? new Date();
   const started = new Date();
@@ -292,7 +307,15 @@ export async function pollAccountOffers(
   const result: PollResult = {
     accountKey: config.accountKey, runId, window, scopes: reports, offersSeen, offersNew, offersEnded,
   };
-  await notifyOffersLanded({ accountKey: config.accountKey, notifyUserIds: config.notifyUserIds ?? null }, result);
+  const outbox = opts.outbox ?? createOfferMailOutbox();
+  await notifyOffersLanded(
+    { accountKey: config.accountKey, notifyUserIds: config.notifyUserIds ?? null },
+    result,
+    outbox,
+  );
+  // Only flush an outbox we own. A caller that passed one is sweeping several
+  // accounts and flushes once at the end.
+  if (!opts.outbox) await flushOfferMail(outbox);
   return result;
 }
 
@@ -367,6 +390,7 @@ export function summariseModels(models: string[], max = 3): string {
 async function notifyOffersLanded(
   config: { accountKey: string; notifyUserIds: string | null },
   result: PollResult,
+  outbox: OfferMailOutbox,
 ): Promise<void> {
   if (result.offersNew === 0) return;
 
@@ -383,13 +407,37 @@ async function notifyOffersLanded(
   }
   if (recipients.length === 0) return;
 
+  // Which rooftop this is. The bell already sits inside an account, but an
+  // email that batches several of them has to say whose book turned over —
+  // "8 new Hyundai offers published" names a make, and two rooftops can share
+  // one. Best-effort: an unreadable account just loses the prefix.
+  let dealer: string | null = null;
+  try {
+    const account = await prisma.account.findUnique({
+      where: { key: config.accountKey },
+      select: { dealer: true },
+    });
+    dealer = account?.dealer ?? null;
+  } catch {
+    // keep the bare title
+  }
+
   const n = result.offersNew;
   const title = offersLandedTitle(makes, n);
   const body = `New offers landed for ${vehicles}. Ads build on the next run; nothing publishes until a person approves it.`;
 
+  // One query for the whole recipient list, because the email channel is now
+  // decided here rather than inside `createNotification`.
+  let channels: Awaited<ReturnType<typeof loadChannelMap>>;
+  try {
+    channels = await loadChannelMap(recipients, 'incentive_offers_landed');
+  } catch {
+    channels = new Map();
+  }
+
   for (const userId of recipients) {
     try {
-      await createNotification({
+      const created = await createNotification({
         userId,
         type: 'incentive_offers_landed',
         severity: 'info',
@@ -401,10 +449,146 @@ async function notifyOffersLanded(
         // sweep, and that is one piece of news, not six.
         dedupeKey: `adgen-offers:${config.accountKey}:${result.runId ?? new Date().toISOString().slice(0, 10)}`,
         dedupeWindowHours: 12,
-        sendEmailNow: true,
+        // Deliberately NOT `sendEmailNow`. The bell is per-account and stays
+        // that way; the email is queued so one sweep across N accounts is one
+        // message. See `flushOfferMail`.
       });
+      // Null means deduped, or the bell is muted — either way there is no news
+      // to mail. That matches the old `sendEmailNow` path, which `createNotification`
+      // also skipped when in-app was off.
+      if (!created) continue;
+      if (!channels.get(userId)?.email) continue;
+
+      const pending = outbox.get(userId) ?? { notificationIds: [], items: [], makes: [], offers: 0 };
+      pending.notificationIds.push(created.id);
+      pending.items.push({
+        title: dealer ? `${dealer} · ${title}` : title,
+        body,
+        link: OFFERS_LINK,
+        severity: 'info',
+      });
+      pending.makes.push(...makes);
+      pending.offers += n;
+      outbox.set(userId, pending);
     } catch (err) {
       console.warn('[poll-offers] notification failed:', err);
+    }
+  }
+}
+
+// ── one email per sweep ──────────────────────────────────────────────────────
+
+export interface PendingOfferMail {
+  /** Rows to stamp `emailedAt` on, but only once the message really goes out. */
+  notificationIds: string[];
+  items: NotificationEmailItem[];
+  /** Every make across every account in this sweep, for the digest heading. */
+  makes: string[];
+  offers: number;
+}
+
+/**
+ * One recipient's pending offer mail, keyed by user id.
+ *
+ * WHY THIS EXISTS. A reviewer is on several rooftops, each of which is a
+ * separate `AdAutomationConfig` polled in its own pass, and each pass used to
+ * send its own email the moment it finished. A morning sweep therefore arrived
+ * as a stack of near-identical messages — "8 new Hyundai offers published",
+ * "1 new Ford offer published", "1 new Chrysler offer published" — which is the
+ * shape people mute. The in-app notifications stay per-account, because the bell
+ * is where you act on one rooftop; the mail is collected here and sent once.
+ */
+export type OfferMailOutbox = Map<string, PendingOfferMail>;
+
+export function createOfferMailOutbox(): OfferMailOutbox {
+  return new Map();
+}
+
+/** Footer for offer mail — the shell's default talks about the Meta Ads Planner. */
+const OFFERS_EMAIL_FOOTER =
+  "Loomi Studio · You're receiving this because you review OEM offers for these accounts.";
+
+/**
+ * Heading for a batched offer email.
+ *
+ * Reuses the single-account title so the digest and the bell describe a cycle
+ * the same way. The makes arrive once per account and several rooftops can sell
+ * the same brand, so they are deduped first — otherwise a group with three
+ * Chevrolet stores gets "Chevrolet, Chevrolet, Chevrolet".
+ */
+export function offersDigestHeading(makes: string[], offers: number): string {
+  return offersLandedTitle([...new Set(makes)], offers);
+}
+
+/**
+ * Intro for a batched offer email.
+ *
+ * Names the account count up front, because the one thing the old stack of
+ * emails did convey was "this happened on more than one rooftop" and a digest
+ * has to say so explicitly.
+ */
+export function offersLandedIntro(accounts: number): string {
+  return (
+    `New manufacturer offers landed on ${accounts} account${accounts === 1 ? '' : 's'}. ` +
+    'Ads build on the next run; nothing publishes until a person approves it.'
+  );
+}
+
+/**
+ * Send each recipient their single email for this sweep.
+ *
+ * One account's worth of news keeps the original single-item email — a digest
+ * shell wrapped around one card is just a card with a redundant heading.
+ *
+ * Best-effort per recipient: a sweep that recorded its snapshots and wrote its
+ * notifications has done its job, and one bad address must not cost the rest
+ * their mail.
+ */
+export async function flushOfferMail(outbox: OfferMailOutbox): Promise<void> {
+  for (const [userId, pending] of outbox) {
+    if (pending.items.length === 0) continue;
+
+    let user: { email: string; name: string } | null = null;
+    try {
+      user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { email: true, name: true },
+      });
+    } catch {
+      continue;
+    }
+    if (!user?.email) continue;
+
+    try {
+      const heading = offersDigestHeading(pending.makes, pending.offers);
+      const sent =
+        pending.items.length === 1
+          ? await sendImmediateNotificationEmail({
+              to: user.email,
+              recipientName: user.name,
+              item: pending.items[0],
+              footer: OFFERS_EMAIL_FOOTER,
+            })
+          : await sendDigestNotificationEmail({
+              to: user.email,
+              recipientName: user.name,
+              items: pending.items,
+              subject: `[Loomi Studio] ${heading}`,
+              heading,
+              intro: offersLandedIntro(pending.items.length),
+              cta: { href: OFFERS_LINK, text: 'Open the Ad Generator' },
+              footer: OFFERS_EMAIL_FOOTER,
+            });
+      // Stamp only on a real send: `emailedAt` is the field an audit trusts,
+      // and the senders no-op when SMTP is unconfigured.
+      if (sent) {
+        await prisma.notification.updateMany({
+          where: { id: { in: pending.notificationIds } },
+          data: { emailedAt: new Date() },
+        });
+      }
+    } catch (err) {
+      console.warn('[poll-offers] offer email failed:', err);
     }
   }
 }
@@ -440,6 +624,8 @@ export async function pollAllAccounts(now = new Date()): Promise<PollResult[]> {
   }
 
   const out: PollResult[] = [];
+  // One mailbox for the whole sweep — see `OfferMailOutbox`.
+  const outbox = createOfferMailOutbox();
   for (const config of configs) {
     // Fall back to the sub-account's own OEM + postal code when unset, so a
     // freshly-enabled row needs no extra typing.
@@ -459,10 +645,14 @@ export async function pollAllAccounts(now = new Date()): Promise<PollResult[]> {
       // Non-fatal: an unreadable account just means no fallbacks.
     }
     try {
-      out.push(await pollAccountOffers(cfg, { fallbackMakes, now }));
+      out.push(await pollAccountOffers(cfg, { fallbackMakes, now, outbox }));
     } catch (err) {
       console.error(`[poll-offers] ${config.accountKey} failed:`, err);
     }
   }
+  // After every account, so a reviewer on six rooftops gets one email. Outside
+  // the loop's try/catch on purpose: an account that threw mid-sweep still
+  // leaves the accounts that succeeded with mail to send.
+  await flushOfferMail(outbox);
   return out;
 }

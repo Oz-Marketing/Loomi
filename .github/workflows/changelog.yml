@@ -1,8 +1,31 @@
 name: Import Changelog from Merged PR
 
 # Files a draft changelog entry whenever a PR with a `## Changelog` block merges
-# into main. Drafts only — the entry is invisible and nobody is notified until
-# somebody presses Publish in Loomi.
+# into `staging` or `main`. Drafts only — the entry is invisible and nobody is
+# notified until somebody presses Publish in Loomi.
+#
+# WHY BOTH BRANCHES. Work reaches production as feature -> staging -> main, and
+# the `staging -> main` promotion is a merge of merges: its own description is a
+# release summary, and it does NOT carry the feature PRs' bodies. Listening on
+# `main` alone therefore read the ONE body that never has the note in it, and
+# every block an author wrote in their own feature PR was silently dropped.
+# That is not hypothetical — PRs #461 and #462 both had good blocks and both
+# produced nothing.
+#
+# So each PR is imported on ITS OWN merge: a feature PR when it lands on
+# staging, a hotfix or promotion when it lands on main. Every PR is seen
+# exactly once, which is also why this is a trigger change and not a crawl of
+# the promotion's commits — importing a promotion's contained PRs on top of
+# their own imports would double-file each entry under a second sourceKey.
+#
+# COROLLARY: a `staging -> main` promotion should NOT restate entries that its
+# feature PRs already declared. They are filed already. Write the block once,
+# in the PR that does the work.
+#
+# An entry therefore becomes a DRAFT when the work hits staging, which is
+# earlier than it reaches production — deliberately. Drafts are invisible, so
+# the only effect is that the wording can be reviewed and edited while the
+# change is still on staging, and Publish stays the moment it goes public.
 #
 # Deliberately NOT part of deploy.yml: this must not be able to fail a
 # production deploy, and it wants the PR description, which the push event
@@ -12,6 +35,7 @@ on:
     types: [closed]
     branches:
       - main
+      - staging
   # Backfill a PR whose block was added or fixed after the merge.
   workflow_dispatch:
     inputs:
@@ -80,4 +104,18 @@ jobs:
             exit 0
           fi
 
-          echo "::notice::Changelog drafts filed from PR #${PR_NUMBER} — publish them in Loomi."
+          # A block that parses to NOTHING used to look identical to a clean
+          # import: HTTP 200, no entries, no complaint. The usual cause is a
+          # missing `title:` line, which parseChunk rejects outright — so a
+          # perfectly good paragraph under `## Changelog` silently produced no
+          # release note at all. Say so.
+          created=$(jq -r '.created // 0' /tmp/changelog-response.json)
+          skipped=$(jq -r '.skipped // 0' /tmp/changelog-response.json)
+          block_present=$(jq -r '.blockPresent // false' /tmp/changelog-response.json)
+
+          if [ "${block_present}" = "true" ] && [ "${created}" = "0" ] && [ "${skipped}" = "0" ]; then
+            echo "::warning::PR #${PR_NUMBER} has a '## Changelog' block but no complete entry came out of it. Every entry needs a 'title:' line and a body beneath it."
+            exit 0
+          fi
+
+          echo "::notice::Changelog: ${created} draft(s) filed from PR #${PR_NUMBER}, ${skipped} already present — publish them in Loomi."

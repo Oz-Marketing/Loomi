@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireInternalJobAuth } from '@/lib/internal-jobs';
 import { prisma } from '@/lib/prisma';
-import { parseChangelogFromPrBody } from '@/lib/changelog-pr';
+import { hasChangelogBlock, parseChangelogFromPrBody } from '@/lib/changelog-pr';
 
 /**
  * POST /api/internal/changelog/import
@@ -42,10 +42,22 @@ export async function POST(req: NextRequest) {
   const prBody = typeof body.prBody === 'string' ? body.prBody : '';
   const author = typeof body.author === 'string' && body.author.trim() ? body.author.trim() : null;
 
+  // `blockPresent` separates "no note wanted" from "a note was written and
+  // did not parse". Both yield zero entries, and the second used to be
+  // indistinguishable from success — the workflow now warns on it.
+  const blockPresent = hasChangelogBlock(prBody);
   const parsed = parseChangelogFromPrBody(prBody);
   if (parsed.length === 0) {
-    // Not an error. Most PRs are plumbing and shouldn't produce a release note.
-    return NextResponse.json({ created: 0, skipped: 0, reason: 'no changelog block' });
+    // Not an error either way. Most PRs are plumbing and shouldn't produce a
+    // release note.
+    return NextResponse.json({
+      created: 0,
+      skipped: 0,
+      blockPresent,
+      reason: blockPresent
+        ? 'changelog block present but no complete entry (each needs a title: line and a body)'
+        : 'no changelog block',
+    });
   }
 
   let created = 0;
@@ -79,5 +91,5 @@ export async function POST(req: NextRequest) {
     created += 1;
   }
 
-  return NextResponse.json({ created, skipped, prNumber });
+  return NextResponse.json({ created, skipped, blockPresent, prNumber });
 }

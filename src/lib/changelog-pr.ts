@@ -110,6 +110,21 @@ function parseChunk(chunk: string): ParsedEntry | null {
 }
 
 /**
+ * Did the author write a `## Changelog` block at all?
+ *
+ * Distinguishes the two reasons `parseChangelogFromPrBody` returns nothing,
+ * which used to look identical from outside: "this PR is plumbing and wants no
+ * release note" (fine, the common case) versus "someone wrote a note and it
+ * did not survive parsing" (a silent loss worth shouting about — almost always
+ * a missing `title:` line).
+ */
+export function hasChangelogBlock(prBody: string | null | undefined): boolean {
+  if (!prBody) return false;
+  const block = extractBlock(prBody);
+  return block !== null && block.trim() !== '';
+}
+
+/**
  * Extract every changelog entry declared in a PR body. Returns an empty array
  * when the PR has no `## Changelog` block, or the block is empty / unfilled.
  */

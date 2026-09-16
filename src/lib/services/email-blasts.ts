@@ -27,6 +27,10 @@ import {
   type BlastAccountData,
   type BlastContactData,
 } from '@/lib/sending/blast-mergetags';
+import {
+  BLAST_CANCELED_ERROR,
+  createCancelGate,
+} from '@/lib/sending/blast-cancellation';
 
 /**
  * Run async tasks with a concurrency limit. Inlined here (was previously
@@ -823,6 +827,77 @@ export async function deleteEmailBlast(campaignId: string): Promise<void> {
 }
 
 /**
+ * Stop a blast that is scheduled, queued, or already sending.
+ *
+ * Three things have to happen together or the sweep undoes the cancel:
+ *  1. the row leaves PROCESSABLE_STATUSES, so `processDueEmailBlasts` stops
+ *     picking it up;
+ *  2. every still-`pending` recipient becomes `skipped`, so the counts on the
+ *     row describe what actually went out rather than what was planned; and
+ *  3. an in-flight `processEmailBlast` notices — it polls this status through
+ *     a cancel gate between sends (see ./sending/blast-cancellation.ts).
+ *
+ * Recipients already marked `sent` stay sent. Mail that has left cannot be
+ * recalled, and pretending otherwise in the numbers would be worse than
+ * useless — someone reading a canceled blast needs to know exactly how many
+ * people did receive it.
+ *
+ * Idempotent on an already-canceled row so a double-click is not an error.
+ */
+export async function cancelEmailBlast(
+  campaignId: string,
+): Promise<EmailBlastSummary> {
+  const existing = await prisma.emailBlast.findUnique({
+    where: { id: campaignId },
+    select: { id: true, status: true },
+  });
+  if (!existing) throw new Error('Campaign not found');
+
+  if (existing.status === 'canceled') {
+    const row = await prisma.emailBlast.findUniqueOrThrow({
+      where: { id: campaignId },
+      select: emailCampaignSummarySelect,
+    });
+    return toSummary(row);
+  }
+  if (TERMINAL_STATUSES.includes(existing.status as EmailBlastStatus)) {
+    throw new Error(
+      'This blast has already finished sending — there is nothing to cancel.',
+    );
+  }
+  if (existing.status === 'draft') {
+    throw new Error(
+      'This blast is still a draft and is not scheduled to send. Delete it instead.',
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.emailBlastRecipient.updateMany({
+      where: { campaignId, status: 'pending' },
+      data: { status: 'skipped', error: BLAST_CANCELED_ERROR },
+    });
+    await tx.emailBlast.update({
+      where: { id: campaignId },
+      data: { status: 'canceled', completedAt: new Date() },
+    });
+  });
+
+  // Counts are recomputed AFTER the transaction so they reflect anything an
+  // in-flight send landed while it was open.
+  const counts = await summarizeCampaign(campaignId);
+  const updated = await prisma.emailBlast.update({
+    where: { id: campaignId },
+    data: {
+      totalRecipients: counts.total,
+      sentCount: counts.sent,
+      failedCount: counts.failed,
+    },
+    select: emailCampaignSummarySelect,
+  });
+  return toSummary(updated);
+}
+
+/**
  * Toggle the archive state on a campaign. Stores the archive flag in
  * two places for back-compat during the migration to a dedicated
  * column: the existing `metadata.archived` flag (legacy callers) and
@@ -1250,6 +1325,29 @@ function resolveBlastStatus(counts: BlastCounts): EmailBlastStatus {
   return 'completed';
 }
 
+/**
+ * Apply a status/counts write unless the row has been canceled underneath us,
+ * then return the row as it now stands.
+ *
+ * `resolveBlastStatus` derives its answer from recipient counts, and a cancel
+ * leaves zero pending rows — so an unguarded write at the end of a send would
+ * resolve a canceled blast to 'completed' and erase the fact that someone
+ * stopped it.
+ */
+async function updateUnlessCanceled(
+  campaignId: string,
+  data: Parameters<typeof prisma.emailBlast.updateMany>[0]['data'],
+) {
+  await prisma.emailBlast.updateMany({
+    where: { id: campaignId, status: { not: 'canceled' } },
+    data,
+  });
+  return prisma.emailBlast.findUniqueOrThrow({
+    where: { id: campaignId },
+    select: emailCampaignSummarySelect,
+  });
+}
+
 async function summarizeCampaign(campaignId: string) {
   const recipients = await prisma.emailBlastRecipient.findMany({
     where: { campaignId },
@@ -1551,28 +1649,47 @@ export async function processEmailBlast(
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
     const status = resolveBlastStatus(counts);
-    const updated = await prisma.emailBlast.update({
-      where: { id: campaign.id },
-      data: {
-        status,
-        totalRecipients: counts.total,
-        sentCount: counts.sent,
-        failedCount: counts.failed,
-        completedAt: status === 'processing' ? null : new Date(),
-        error: counts.firstError || null,
-      },
+    const updated = await updateUnlessCanceled(campaign.id, {
+      status,
+      totalRecipients: counts.total,
+      sentCount: counts.sent,
+      failedCount: counts.failed,
+      completedAt: status === 'processing' ? null : new Date(),
+      error: counts.firstError || null,
     });
     return toSummary(updated);
   }
 
-  await prisma.emailBlast.update({
-    where: { id: campaign.id },
+  // Claim the blast. `updateMany` with a status guard rather than `update`,
+  // because a cancel can land in the window between the read above and this
+  // write — an unguarded write would put a canceled blast straight back into
+  // 'processing' and the sweep would happily finish sending it.
+  const claimed = await prisma.emailBlast.updateMany({
+    where: { id: campaign.id, status: { notIn: TERMINAL_STATUSES } },
     data: {
       status: 'processing',
       startedAt: campaign.startedAt || new Date(),
       completedAt: null,
       error: null,
     },
+  });
+  if (claimed.count === 0) {
+    return toSummary(
+      await prisma.emailBlast.findUniqueOrThrow({
+        where: { id: campaign.id },
+        select: emailCampaignSummarySelect,
+      }),
+    );
+  }
+
+  // Polled between sends so a cancel stops the loop rather than only the next
+  // sweep. One query per second at most, shared across the concurrent tasks.
+  const isCanceled = createCancelGate(async () => {
+    const row = await prisma.emailBlast.findUnique({
+      where: { id: campaign.id },
+      select: { status: true },
+    });
+    return row?.status === 'canceled';
   });
 
   // ── Apply the warm-up budget ──
@@ -1589,9 +1706,9 @@ export async function processEmailBlast(
         `${campaign.recipients.length} recipient(s) held for the next day`,
     );
     return toSummary(
-      await prisma.emailBlast.update({
-        where: { id: campaign.id },
-        data: { status: 'processing', completedAt: null },
+      await updateUnlessCanceled(campaign.id, {
+        status: 'processing',
+        completedAt: null,
       }),
     );
   }
@@ -1660,6 +1777,11 @@ export async function processEmailBlast(
   let dispatched = 0;
 
   const tasks = recipients.map((recipient) => async () => {
+    // Stop the remaining tasks the moment someone cancels. The row itself is
+    // left alone — cancelEmailBlast already flipped every pending recipient to
+    // 'skipped', and re-writing it here would race that transaction.
+    if (await isCanceled()) return;
+
     const recipientEmail = normalizeEmailAddress(recipient.email || '');
     if (!isLikelyDeliverableEmail(recipientEmail)) {
       await prisma.emailBlastRecipient.update({
@@ -1858,23 +1980,25 @@ export async function processEmailBlast(
   const counts = await summarizeCampaign(campaign.id);
   const nextStatus = resolveBlastStatus(counts);
 
-  const updated = await prisma.emailBlast.update({
-    where: { id: campaign.id },
-    data: {
-      sourceType: metadata.sourceType,
-      status: nextStatus,
-      totalRecipients: counts.total,
-      sentCount: counts.sent,
-      failedCount: counts.failed,
-      completedAt: nextStatus === 'processing' ? null : new Date(),
-      error: counts.firstError || null,
-    },
+  const updated = await updateUnlessCanceled(campaign.id, {
+    sourceType: metadata.sourceType,
+    status: nextStatus,
+    totalRecipients: counts.total,
+    sentCount: counts.sent,
+    failedCount: counts.failed,
+    completedAt: nextStatus === 'processing' ? null : new Date(),
+    error: counts.firstError || null,
   });
 
   // Queue the follow-up now that the initial send has finished. Must come
   // after the status update: scheduleResendIfDue reads sent counts to decide
   // whether there's anything to follow up on.
-  if (nextStatus !== 'processing') {
+  //
+  // A canceled blast gets no follow-up. It can still have a non-zero sent
+  // count — cancelling halfway leaves real deliveries behind — and
+  // scheduleResendIfDue looks only at that count, so without this guard
+  // stopping a blast would quietly schedule a second one.
+  if (nextStatus !== 'processing' && updated.status !== 'canceled') {
     await scheduleResendIfDue(campaign.id);
   }
 

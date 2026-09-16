@@ -338,6 +338,8 @@ Loomi sends campaigns natively — no third-party ESP is involved on either the 
 
 **A blast is editable only while it is a draft.** Once it is queued, scheduled, or processing, its audience, template, and send time are committed and the builder is locked — the worker may already be part-way through delivering it. Rows with delivery data open a read-only detail view instead; the row menu shows Edit disabled with a lock.
 
+**A committed blast can be canceled, which is the only way to stop one.** *Cancel Send* appears in the row menu for exactly the blasts Edit, Archive and Delete refuse — queued, scheduled, and processing — and covers email, text, and multi-channel sends, including a blast parked on the warm-up cap or on a text's quiet-hours hold. Cancelling stops the send within roughly the next 25 messages: everyone not yet reached is marked skipped, the blast goes to **Canceled**, and the worker stops picking it up. **Anyone already sent to stays sent** — mail and texts that have left cannot be recalled, so the counts on a canceled blast report what genuinely went out and the confirmation says how many that is before you commit. Cancelling a multi-channel blast stops both halves, because the list shows the pair as a single row. A canceled blast schedules no follow-up, even one that was configured, and it cannot be resumed — send it again by duplicating it.
+
 **The Blasts list's date range filters history, not upcoming work.** A blast that has not gone out yet is dated by when it *will* send, so scheduled blasts stay visible on every range rather than being filtered out for falling after "today."
 
 ---

@@ -29,6 +29,7 @@ import {
   BoltIcon,
   ExclamationTriangleIcon,
   LockClosedIcon,
+  NoSymbolIcon,
 } from '@heroicons/react/24/outline';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 
@@ -189,7 +190,7 @@ const STATUS_BADGE: Record<string, string> = {
   scheduled:  'bg-blue-500/10 text-blue-400',
   draft:      'bg-zinc-500/10 text-zinc-400',
   paused:     'bg-orange-500/10 text-orange-400',
-  cancelled:  'bg-red-500/10 text-red-400',
+  canceled:   'bg-red-500/10 text-red-400',
 };
 
 const STATUS_ICON: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
@@ -199,7 +200,7 @@ const STATUS_ICON: Record<string, React.ComponentType<React.SVGProps<SVGSVGEleme
   scheduled:  ClockIcon,
   draft:      DocumentTextIcon,
   paused:     PauseCircleIcon,
-  cancelled:  XCircleIcon,
+  canceled:   XCircleIcon,
 };
 
 const PAGE_SIZE = 10;
@@ -214,7 +215,7 @@ function normalizeStatus(status: string): string {
   if (s.includes('active') || s.includes('sched') || s.includes('queue') || s.includes('start') || s.includes('running') || s.includes('progress')) return 'scheduled';
   if (s.includes('draft')) return 'draft';
   if (s.includes('pause')) return 'paused';
-  if (s.includes('stop') || s.includes('cancel') || s.includes('inactive')) return 'cancelled';
+  if (s.includes('stop') || s.includes('cancel') || s.includes('inactive')) return 'canceled';
   return s;
 }
 
@@ -296,7 +297,7 @@ type CampaignSortField = 'status' | 'send' | 'updated';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_ORDER: Record<string, number> = {
-  sent: 0, partial: 1, failed: 2, scheduled: 3, draft: 4, paused: 5, cancelled: 6,
+  sent: 0, partial: 1, failed: 2, scheduled: 3, draft: 4, paused: 5, canceled: 6,
 };
 
 function compareCampaigns(a: Campaign, b: Campaign, field: CampaignSortField, dir: SortDir): number {
@@ -546,6 +547,7 @@ function CampaignTableRow({
   onRestore,
   onDelete,
   onDuplicate,
+  onCancel,
   onOpenSentDetail,
   showRestore,
 }: {
@@ -568,6 +570,7 @@ function CampaignTableRow({
   onRestore: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
   onDuplicate: (item: Campaign) => void;
+  onCancel: (item: Campaign) => void;
   onOpenSentDetail: (item: Campaign) => void;
   /** When true, the row sits in the archived view — show Restore in
    *  the menu instead of Archive. */
@@ -594,6 +597,25 @@ function CampaignTableRow({
     normalizedStatus !== 'scheduled' &&
     item.status !== 'queued' &&
     item.status !== 'processing';
+  // Cancel is the exact inverse of canMutate: it applies to the rows Archive
+  // and Delete refuse, because those are the ones with a send still ahead of
+  // them. Written out as the same three conditions rather than derived from
+  // normalizedStatus — 'processing' does NOT normalize to 'scheduled' (none of
+  // that function's substrings match it), so a single normalized check silently
+  // dropped Cancel from a blast that was actively sending, which is the case
+  // this exists for.
+  //
+  // 'processing' covers both an in-flight send and one parked on the warm-up
+  // cap or a text's quiet-hours hold — all three need a way to stop.
+  //
+  // Flow wrappers are excluded for the same reason they can't be archived —
+  // the flow owns them, and the next enrollment would recreate the send.
+  const canCancel =
+    isLoomi &&
+    !item.isFlow &&
+    (normalizedStatus === 'scheduled' ||
+      item.status === 'queued' ||
+      item.status === 'processing');
   // A blast that went out — cleanly ('sent'/'completed'), with some
   // recipients erroring ('partial'), or erroring outright ('failed').
   // All three are past the point of editing, so all three open the
@@ -802,6 +824,17 @@ function CampaignTableRow({
                 )}
 
                 {isLoomi && <div className="my-1 border-t border-[var(--border)] " />}
+
+                {canCancel && (
+                  <button
+                    type="button"
+                    onClick={() => onCancel(item)}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-red-400 hover:bg-red-500/10 transition-colors"
+                  >
+                    Cancel Send
+                    <NoSymbolIcon className="w-3.5 h-3.5" />
+                  </button>
+                )}
 
                 {isLoomi && (
                   showRestore ? (
@@ -1423,6 +1456,62 @@ export function BlastPageList({
     if (typeof window !== 'undefined') window.location.reload();
   }
 
+  async function handleCancelCampaign(campaign: Campaign) {
+    setOpenMenuId(null);
+    if (!isLoomiCampaign(campaign)) return;
+    const isEmail = isLoomiEmail(campaign);
+    const sentSoFar = campaign.sentCount ?? 0;
+    // A 'multi' row is two blasts collapsed into one — say so, because the
+    // cancel stops both and the user should know that is what they're doing.
+    const isMulti = campaign.channel === 'multi';
+    const noun = isMulti ? 'message' : isEmail ? 'email' : 'text';
+    const scope = isMulti ? ' Both the email and the text will stop.' : '';
+    // Say plainly that a send already under way can't be un-sent. Someone
+    // hitting this on a blast that is halfway through its audience needs to
+    // know the first half is gone before they confirm, not after.
+    const alreadyOut =
+      sentSoFar > 0
+        ? ` ${formatNum(sentSoFar)} ${noun}${sentSoFar === 1 ? '' : 's'} already went out and cannot be recalled.`
+        : '';
+    const confirmed = await confirm({
+      title: 'Cancel this send?',
+      message: `"${campaign.name || '(Untitled)'}" will stop and no one else will receive it.${scope}${alreadyOut} This cannot be undone — you would need to duplicate the blast to send it again.`,
+      destructive: true,
+      confirmLabel: 'Cancel Send',
+      cancelLabel: 'Keep Sending',
+    });
+    if (!confirmed) return;
+    const id = campaign.campaignId || campaign.id;
+    const path = isEmail ? 'email' : 'sms';
+    let partnerError: string | null = null;
+    try {
+      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/cancel`, {
+        method: 'POST',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
+      }
+      // The blast itself is canceled, but its linked half isn't — a partial
+      // stop the user has to know about, since the other channel is still
+      // going out and this row is the only place it surfaces.
+      if (typeof data?.partnerError === 'string') partnerError = data.partnerError;
+    } catch (err) {
+      await alert({
+        title: 'Cancel failed',
+        message: err instanceof Error ? err.message : 'Failed to cancel blast.',
+      });
+      return;
+    }
+    if (partnerError) {
+      await alert({
+        title: 'Partly canceled',
+        message: `The ${isEmail ? 'email' : 'text'} blast was canceled, but its linked ${isEmail ? 'text' : 'email'} blast was not: ${partnerError}`,
+      });
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
   async function handleArchiveCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
@@ -1956,6 +2045,7 @@ export function BlastPageList({
                           onRestore={handleRestoreCampaign}
                           onDelete={handleDeleteCampaign}
                           onDuplicate={handleDuplicateCampaign}
+                          onCancel={handleCancelCampaign}
                           onOpenSentDetail={openSentDetail}
                           showRestore={statusFilter === 'archived'}
                         />

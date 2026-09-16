@@ -43,7 +43,7 @@ const STATUS_BADGE: Record<string, string> = {
   scheduled:  'bg-blue-500/10 text-blue-400',
   draft:      'bg-zinc-500/10 text-zinc-400',
   paused:     'bg-orange-500/10 text-orange-400',
-  cancelled:  'bg-red-500/10 text-red-400',
+  canceled:   'bg-red-500/10 text-red-400',
 };
 
 function normalizeStatus(status: string): string {
@@ -52,7 +52,7 @@ function normalizeStatus(status: string): string {
   if (s.includes('active') || s.includes('sched') || s.includes('queue') || s.includes('start') || s.includes('running') || s.includes('progress')) return 'scheduled';
   if (s.includes('draft')) return 'draft';
   if (s.includes('pause')) return 'paused';
-  if (s.includes('stop') || s.includes('cancel') || s.includes('inactive')) return 'cancelled';
+  if (s.includes('stop') || s.includes('cancel') || s.includes('inactive')) return 'canceled';
   return s;
 }
 

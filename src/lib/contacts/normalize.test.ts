@@ -5,9 +5,11 @@ import {
   autoMapHeaders,
   isAmbiguousEmailCell,
   isPlaceholderEmail,
+  mergeTags,
   normaliseEmail,
   normaliseRow,
   parseEmailCell,
+  readTagsArray,
 } from './normalize';
 
 describe('parseEmailCell', () => {
@@ -150,5 +152,48 @@ describe('normaliseRow email handling', () => {
     const { row, issue } = normaliseRow({ Email: 'none', 'First Name': 'Nobody' }, mapping, 2);
     expect(row).toBeNull();
     expect(issue?.reason).toContain('no usable email or phone');
+  });
+});
+
+describe('readTagsArray', () => {
+  it('reads a string array back off the JSON column', () => {
+    expect(readTagsArray(['vip', 'q4'])).toEqual(['vip', 'q4']);
+  });
+
+  it('treats a non-array column as no tags rather than throwing', () => {
+    // The column is `Json @default("[]")`, but a row written before that
+    // default — or by hand — can hold null or an object.
+    expect(readTagsArray(null)).toEqual([]);
+    expect(readTagsArray(undefined)).toEqual([]);
+    expect(readTagsArray({ vip: true })).toEqual([]);
+    expect(readTagsArray('vip')).toEqual([]);
+  });
+
+  it('drops non-string entries instead of leaking them downstream', () => {
+    expect(readTagsArray(['vip', 3, null, 'q4'])).toEqual(['vip', 'q4']);
+  });
+});
+
+describe('mergeTags', () => {
+  it('unions the groups in order', () => {
+    expect(mergeTags(['vip'], ['q4'], ['lease'])).toEqual(['vip', 'q4', 'lease']);
+  });
+
+  it('dedups case-insensitively, keeping the first spelling', () => {
+    // A set holding both "Q4" and "q4" reads as two tags and filters as
+    // two tags, which is never what typing the second one meant.
+    expect(mergeTags(['Q4'], ['q4', 'VIP'], ['vip'])).toEqual(['Q4', 'VIP']);
+  });
+
+  it('trims and drops empties', () => {
+    expect(mergeTags([' vip ', '', '   '], undefined, null)).toEqual(['vip']);
+  });
+
+  it('is a superset of its first group, so an import can never drop a tag', () => {
+    // importContacts relies on this: it compares merged.length against the
+    // existing tags' length to decide whether a write is needed at all.
+    const existing = ['vip', 'q4'];
+    const merged = mergeTags(existing, [], []);
+    expect(merged).toEqual(existing);
   });
 });

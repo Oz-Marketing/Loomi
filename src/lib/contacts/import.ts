@@ -26,8 +26,10 @@ import {
   type ParsedContact,
   type RowIssue,
   autoMapHeaders,
+  mergeTags,
   normaliseRow,
   parseDateCell,
+  readTagsArray,
 } from './normalize';
 
 // ── Phase 1: parse ──
@@ -97,6 +99,25 @@ interface ImportContactsOptions {
    * skipped, so re-uploading the same CSV against the same list is safe.
    */
   listId?: string;
+  /**
+   * Tags applied to every contact this import touches, on top of
+   * whatever a mapped `tags` column carried. Always MERGED with the
+   * contact's existing tags — an import never clears a tag someone set
+   * elsewhere. Ignored on dry-runs.
+   */
+  applyTags?: string[];
+  /**
+   * When true, a matched contact keeps every existing field value and
+   * only its tags (and list membership) change. This is the
+   * "upload to a list" flow: the CSV is an identity roster naming who
+   * belongs, not a data update.
+   *
+   * Defaults to false — a plain import writes the CSV's values over the
+   * matched record. Note this is deliberately NOT inferred from
+   * `listId`: choosing to also file an import into a list shouldn't
+   * silently turn off field updates.
+   */
+  preserveExistingOnMatch?: boolean;
 }
 
 const MAX_ISSUES_RETURNED = 50;
@@ -107,7 +128,10 @@ export async function importContacts({
   mapping,
   dryRun = false,
   listId,
+  applyTags,
+  preserveExistingOnMatch = false,
 }: ImportContactsOptions): Promise<ImportSummary> {
+  const tagsToApply = mergeTags(applyTags);
   const parsed = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: 'greedy',
@@ -197,11 +221,9 @@ export async function importContacts({
     }
 
     try {
-      // List-targeted imports preserve existing data (match-only), so the
-      // existing contact record's fields aren't clobbered by re-uploads.
-      // Standalone imports keep the original write-on-match behavior.
       const result = await upsertContact(accountKey, parsedRow, {
-        overwriteOnMatch: !listId,
+        overwriteOnMatch: !preserveExistingOnMatch,
+        applyTags: tagsToApply,
       });
       if (result.action === 'created') imported += 1;
       else updated += 1;
@@ -229,6 +251,36 @@ export async function importContacts({
 
 type UpsertResult = { action: 'created' | 'updated'; id: string };
 
+/** The fields we need off an already-existing contact to decide what to write. */
+type MatchedContact = { id: string; tags: unknown };
+
+/**
+ * Find the contact this row refers to, preferring an email match and
+ * falling back to phone. Returns null when the row names someone new.
+ */
+async function findMatch(
+  accountKey: string,
+  row: ParsedContact,
+): Promise<MatchedContact | null> {
+  if (row.email) {
+    const byEmail = await prisma.contact.findUnique({
+      where: { accountKey_email: { accountKey, email: row.email } },
+      select: { id: true, tags: true },
+    });
+    if (byEmail) return byEmail;
+  }
+
+  if (row.phone) {
+    const byPhone = await prisma.contact.findUnique({
+      where: { accountKey_phone: { accountKey, phone: row.phone } },
+      select: { id: true, tags: true },
+    });
+    if (byPhone) return byPhone;
+  }
+
+  return null;
+}
+
 /**
  * Upsert a single contact, preferring email-match for identity and
  * falling back to phone-match. Falls through to a create when
@@ -236,46 +288,50 @@ type UpsertResult = { action: 'created' | 'updated'; id: string };
  *
  * `overwriteOnMatch` controls what happens when an existing contact
  * is matched: true rewrites it with the CSV data (standalone import
- * page semantics), false leaves it untouched (list-targeted import
- * semantics — we just want the identity link, not the fields).
+ * page semantics), false leaves its fields untouched (list-targeted
+ * import semantics — we just want the identity link).
+ *
+ * Tags are the exception to both modes: they are always the UNION of
+ * what the contact already had, what a mapped `tags` column carried,
+ * and `applyTags`. An import adds tags; it never takes one away. (It
+ * used to: `toPrismaData` wrote the parsed `tags` array unconditionally,
+ * and that array is `[]` whenever no column is mapped to it, so every
+ * overwrite-on-match import silently cleared the tags of every contact
+ * it matched.)
  */
 async function upsertContact(
   accountKey: string,
   row: ParsedContact,
-  { overwriteOnMatch }: { overwriteOnMatch: boolean },
+  { overwriteOnMatch, applyTags }: { overwriteOnMatch: boolean; applyTags: string[] },
 ): Promise<UpsertResult> {
-  const writeData = toPrismaData(row);
+  const matched = await findMatch(accountKey, row);
 
-  // Match by email first if present.
-  if (row.email) {
-    const existing = await prisma.contact.findUnique({
-      where: { accountKey_email: { accountKey, email: row.email } },
-      select: { id: true },
-    });
-    if (existing) {
-      if (overwriteOnMatch) {
-        await prisma.contact.update({ where: { id: existing.id }, data: writeData });
-      }
-      return { action: 'updated', id: existing.id };
-    }
-  }
+  if (matched) {
+    const existingTags = readTagsArray(matched.tags);
+    const tags = mergeTags(existingTags, row.tags, applyTags);
 
-  // Fall back to phone match.
-  if (row.phone) {
-    const existing = await prisma.contact.findUnique({
-      where: { accountKey_phone: { accountKey, phone: row.phone } },
-      select: { id: true },
-    });
-    if (existing) {
-      if (overwriteOnMatch) {
-        await prisma.contact.update({ where: { id: existing.id }, data: writeData });
-      }
-      return { action: 'updated', id: existing.id };
+    if (overwriteOnMatch) {
+      await prisma.contact.update({
+        where: { id: matched.id },
+        data: { ...toPrismaData(row), tags },
+      });
+    } else if (tags.length !== existingTags.length) {
+      // Match-only import. The merge is a superset of what was there, so
+      // an unchanged length means nothing to write — skip it rather than
+      // bump updatedAt across the whole roster on a re-upload.
+      await prisma.contact.update({ where: { id: matched.id }, data: { tags } });
     }
+
+    return { action: 'updated', id: matched.id };
   }
 
   const created = await prisma.contact.create({
-    data: { accountKey, dateAdded: new Date(), ...writeData },
+    data: {
+      accountKey,
+      dateAdded: new Date(),
+      ...toPrismaData(row),
+      tags: mergeTags(row.tags, applyTags),
+    },
     select: { id: true },
   });
   return { action: 'created', id: created.id };
@@ -290,13 +346,10 @@ function toPrismaData(row: ParsedContact): Record<string, unknown> {
   const data: Record<string, unknown> = {};
 
   for (const field of CONTACT_FIELDS) {
+    // tags are merged by the caller, never replaced from here.
+    if (field === 'tags') continue;
     const value = row[field];
     if (value === null) continue;
-    if (Array.isArray(value)) {
-      // tags — empty array is meaningful (clear tags); keep it
-      data[field] = value;
-      continue;
-    }
     if (value instanceof Date) {
       data[field] = value;
       continue;

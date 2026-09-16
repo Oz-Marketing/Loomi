@@ -16,8 +16,18 @@ import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
 // The client re-uploads the CSV on each call. Stateless on purpose:
 // stashing the parsed file server-side would need Redis or a temp
 // table, and dealer CSVs are small (low single-digit MB).
+//
+// `listId` and `tags` are commit-only — they file the imported contacts
+// into a list and tag them. Neither changes the create/update/skip
+// counts, so a dry-run ignores both.
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB safety ceiling
+
+// Applied to every row, so a pasted blob here would bloat the whole
+// import. The UI offers a pill field, not a paste target; these are a
+// backstop, not a design constraint anyone should hit.
+const MAX_APPLIED_TAGS = 25;
+const MAX_TAG_LENGTH = 64;
 
 type ImportMode = 'parse' | 'dryRun' | 'commit';
 
@@ -139,15 +149,75 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Tags applied to every imported row, on top of a mapped tags column.
+  let applyTags: string[];
+  try {
+    applyTags = parseAppliedTags(form.get('tags'));
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Invalid tags payload' },
+      { status: 400 },
+    );
+  }
+
+  // Whether a matched contact keeps its existing field values. The
+  // list-upload flow sets this; a plain import that happens to also file
+  // into a list does not. Absent, we fall back to the old coupling so an
+  // older client keeps its current behavior.
+  const preserveRaw = form.get('preserveExisting');
+  const preserveExistingOnMatch =
+    typeof preserveRaw === 'string' ? preserveRaw === 'true' : Boolean(listId);
+
   const summary = await importContacts({
     accountKey,
     csvText,
     mapping,
     dryRun: mode === 'dryRun',
     listId: mode === 'commit' ? listId : undefined,
+    applyTags: mode === 'commit' ? applyTags : undefined,
+    preserveExistingOnMatch,
   });
 
   return NextResponse.json({ summary });
+}
+
+// ── Applied tags ──
+
+/**
+ * Read the optional `tags` form field — a JSON string[] of tags to put
+ * on every contact the import touches. Absent / empty means none.
+ */
+function parseAppliedTags(raw: FormDataEntryValue | null): string[] {
+  if (typeof raw !== 'string' || raw.trim() === '') return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("'tags' must be a JSON array of strings");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("'tags' must be a JSON array of strings");
+  }
+
+  const tags: string[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== 'string') {
+      throw new Error("'tags' must be a JSON array of strings");
+    }
+    const tag = entry.trim();
+    if (!tag) continue;
+    if (tag.length > MAX_TAG_LENGTH) {
+      throw new Error(`Tag "${tag.slice(0, 20)}…" exceeds ${MAX_TAG_LENGTH} characters`);
+    }
+    tags.push(tag);
+  }
+
+  if (tags.length > MAX_APPLIED_TAGS) {
+    throw new Error(`At most ${MAX_APPLIED_TAGS} tags can be applied in one import`);
+  }
+
+  return tags;
 }
 
 // ── Mapping validation ──

@@ -295,6 +295,8 @@ interface AccountContextValue {
    *   - admin mode   → every account the user can see
    */
   scopedAccountKeys: string[];
+  /** Accounts above the given one, nearest first. Empty for a root. */
+  ancestorsOf: (accountKey: string) => string[];
   /**
    * True when the active account has accounts beneath it — i.e. it's a group
    * (Young Automotive Group) rather than a single rooftop. Roll-up pages use
@@ -564,6 +566,26 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     [accounts, childrenByParent],
   );
 
+  /**
+   * The accounts ABOVE this one, nearest first. The mirror of
+   * `descendantsOf`, and the direction inheritance travels: a rooftop sees
+   * what its group shared down, never the other way round.
+   */
+  const ancestorsOf = useCallback(
+    (leafKey: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>([leafKey]);
+      let cursor = accounts[leafKey]?.parentAccountKey ?? null;
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor); // guards a malformed parent cycle
+        out.push(cursor);
+        cursor = accounts[cursor]?.parentAccountKey ?? null;
+      }
+      return out;
+    },
+    [accounts],
+  );
+
   // Client-side analog of the server's getAccountScope: the account keys the
   // current selection fans out to.
   const scopedAccountKeys = useMemo<string[]>(() => {
@@ -696,6 +718,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         initialized,
         refreshAccounts,
         scopedAccountKeys,
+        ancestorsOf,
         isGroup,
         childCounts,
         userRole,

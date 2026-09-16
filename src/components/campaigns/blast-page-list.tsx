@@ -28,7 +28,9 @@ import {
   ArrowUturnLeftIcon,
   BoltIcon,
   ExclamationTriangleIcon,
+  LockClosedIcon,
 } from '@heroicons/react/24/outline';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 
 // ── Engagement helpers ──
 
@@ -74,6 +76,16 @@ interface Campaign {
   failedCount?: number;
   /** Audience size at send time — the denominator for sent/failed. */
   totalRecipients?: number;
+  /** Set when the blast is parked by its sending domain's daily warm-up
+   *  cap. 'processing' alone gives no hint that the send is paused rather
+   *  than broken, or that it resumes on its own. */
+  warmupHold?: {
+    domain: string;
+    day: number | null;
+    totalDays: number;
+    dailyCap: number | null;
+    pending: number;
+  };
   locationId?: string;
   accountKey?: string;
   dealer?: string;
@@ -204,6 +216,21 @@ function normalizeStatus(status: string): string {
   if (s.includes('pause')) return 'paused';
   if (s.includes('stop') || s.includes('cancel') || s.includes('inactive')) return 'cancelled';
   return s;
+}
+
+/**
+ * Plain-language reason a blast is paused. The daily cap is the sending
+ * domain's, not the blast's, so two blasts on one domain share a budget.
+ */
+function warmupHoldLabel(hold: NonNullable<Campaign['warmupHold']>): string {
+  const waiting = `${formatNum(hold.pending)} recipient${hold.pending === 1 ? '' : 's'}`;
+  const cap =
+    hold.dailyCap !== null
+      ? ` Today's cap for ${hold.domain} is ${formatNum(hold.dailyCap)} and it is spent.`
+      : ` Today's budget for ${hold.domain} is spent.`;
+  const day =
+    hold.day !== null ? ` The domain is on day ${hold.day} of ${hold.totalDays} of its warm-up.` : '';
+  return `${waiting} are held for tomorrow.${cap}${day} The send resumes on its own — nothing is stuck, and no one gets a duplicate.`;
 }
 
 function statusBadgeClass(status: string): string {
@@ -363,14 +390,14 @@ function getVisiblePages(currentPage: number, totalPages: number, maxVisible = 5
 function getLoomiEditUrl(c: Campaign): string | null {
   const provider = (c.provider || '').toLowerCase();
   if (provider !== 'loomi-email' && provider !== 'loomi-sms') return null;
+  // ONLY a draft is editable. The moment a blast is queued, scheduled or
+  // processing, its audience, template and send time are committed and the
+  // worker may already be part-way through delivering it — reopening the
+  // builder there would edit a send in flight. This used to allow every
+  // non-terminal status through, so a scheduled or actively-sending blast
+  // opened the full editor.
   const status = c.status?.toLowerCase() || '';
-  const isTerminal =
-    status === 'completed' ||
-    status === 'partial' ||
-    status === 'failed' ||
-    status === 'sent' ||
-    status === 'canceled';
-  if (isTerminal) return null;
+  if (status !== 'draft') return null;
   const id = encodeURIComponent(c.campaignId || c.id);
   const channel = c.channel;
   if (channel === 'multi') return `/messaging/blasts/multi/${id}/recipients`;
@@ -574,11 +601,22 @@ function CampaignTableRow({
   // leave partial/failed rows dead: no metrics, no drawer, no way to
   // find out which recipients failed or why.
   const isSent = isLoomi && normalizedStatus === 'sent';
+  // A blast that is still working through its audience has real numbers to
+  // show. 'processing' covers both an in-flight send and one parked by the
+  // daily warm-up cap, and both can sit here for hours — blanking their
+  // metric cells hid the delivery data exactly when someone was watching
+  // for it. Anything that has actually put mail on the wire counts.
   const hasSendResult =
-    isLoomi && (isSent || normalizedStatus === 'partial' || normalizedStatus === 'failed');
-  // Sent rows open the read-only detail drawer instead of the editor;
-  // draft/scheduled rows keep navigating to the builder.
+    isLoomi &&
+    (isSent ||
+      normalizedStatus === 'partial' ||
+      normalizedStatus === 'failed' ||
+      (item.sentCount ?? 0) > 0);
+  // Only a draft opens the builder. Rows with delivery data open the
+  // read-only drawer; a scheduled or queued blast has neither, so it is
+  // locked outright rather than pretending to be editable.
   const rowClickable = Boolean(loomiEditUrl) || hasSendResult;
+  const isLocked = isLoomi && !loomiEditUrl && !hasSendResult;
   const failedCount = item.failedCount ?? 0;
   const failedNote = failedCount > 0 ? `${formatNum(failedCount)} failed` : null;
 
@@ -625,10 +663,22 @@ function CampaignTableRow({
         <ChannelBadge channel={getCampaignChannel(item)} />
       </td>
       <td className="px-3 py-2.5 align-middle">
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadgeClass(item.status)}`}>
-          {StatusIcon && <StatusIcon className="w-3 h-3" />}
-          {statusLabel(item.status)}
-        </span>
+        <div className="flex flex-col items-start gap-1">
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadgeClass(item.status)}`}>
+            {StatusIcon && <StatusIcon className="w-3 h-3" />}
+            {statusLabel(item.status)}
+          </span>
+          {item.warmupHold && (
+            <Tooltip label={warmupHoldLabel(item.warmupHold)}>
+              <span className="inline-flex items-center gap-1 text-[10px] text-[var(--muted-foreground)] cursor-help">
+                <ClockIcon className="w-3 h-3" />
+                Warming up
+                {item.warmupHold.day !== null &&
+                  ` · Day ${item.warmupHold.day}/${item.warmupHold.totalDays}`}
+              </span>
+            </Tooltip>
+          )}
+        </div>
       </td>
       <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
         {sendParts ? (
@@ -695,7 +745,7 @@ function CampaignTableRow({
                     Edit
                     <PencilSquareIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                   </button>
-                ) : isSent ? (
+                ) : hasSendResult ? (
                   <button
                     type="button"
                     onClick={() => onOpenSentDetail(item)}
@@ -708,9 +758,15 @@ function CampaignTableRow({
                   <button
                     type="button"
                     disabled
+                    title={
+                      isLocked
+                        ? 'Locked — this blast is already scheduled to send. Cancel it to make changes.'
+                        : 'This blast can no longer be edited.'
+                    }
                     className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--muted-foreground)] opacity-50 cursor-not-allowed"
                   >
                     Edit
+                    <LockClosedIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                   </button>
                 )}
 

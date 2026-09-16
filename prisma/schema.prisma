@@ -623,6 +623,18 @@ model Audience {
   description      String?
   accountKey       String?
   account          Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  /**
+   * Visible to the accounts BENEATH `accountKey` as well as the account
+   * itself. Only meaningful on a group (an account with children): a leaf
+   * has nothing below it to share with.
+   *
+   * This is the middle tier `accountKey` alone cannot express. Null
+   * accountKey is platform-wide and privileged; a key with this flag off
+   * is that one account only; a group key with it on is that group and
+   * its rooftops. Shared-down segments are READ-ONLY to the rooftops that
+   * receive them — see `canWriteSegment` in lib/segments/visibility.ts.
+   */
+  sharedWithChildren Boolean @default(false)
   createdByUserId  String?
   filters          String // JSON: FilterDefinition
   icon             String?

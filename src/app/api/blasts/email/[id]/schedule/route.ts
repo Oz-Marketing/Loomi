@@ -114,6 +114,12 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     htmlContent: existing.htmlContent || '',
     textContent: existing.textContent,
     accountKeys: [...new Set(recipients.map((r) => r.accountKey))],
+    // The audience is only knowable here — the draft has no recipient rows
+    // until scheduleEmailBlastDraft writes them below. This is what lets
+    // preflight judge list quality, not just account configuration.
+    recipients: recipients.flatMap((r) =>
+      r.email ? [{ accountKey: r.accountKey, email: r.email }] : [],
+    ),
   });
   if (!preflight.ok) {
     return NextResponse.json(

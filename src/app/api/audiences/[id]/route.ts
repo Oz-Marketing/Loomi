@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
+import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeysForAll } from '@/lib/services/accounts';
 import * as audienceService from '@/lib/services/audiences';
+import { canWriteSegment } from '@/lib/segments/visibility';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import {
   formatFilterErrors,
@@ -10,24 +13,26 @@ import {
 type RouteContext = { params: Promise<{ id: string }> };
 
 function assertWriteAccess(
-  existing: { accountKey: string | null },
+  existing: { accountKey: string | null; sharedWithChildren?: boolean | null },
   userRole: string,
   userAccountKeys: string[],
 ): NextResponse | null {
-  const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
-  if (isPrivileged) return null;
-
-  if (!existing.accountKey) {
-    // Org-wide segments are only editable by developers/super_admins.
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  // One rule, shared with the list page and the read scope — see
+  // lib/segments/visibility.ts. The messages differ per refusal because
+  // "you can't edit this" and "this belongs to the group" send the user
+  // to very different next actions.
+  const refusal = canWriteSegment(existing, { role: userRole, accountKeys: userAccountKeys });
+  if (!refusal) return null;
+  if (refusal === 'inherited_read_only') {
+    return NextResponse.json(
+      {
+        error:
+          'This segment is shared from the group and is read-only here. Duplicate it to make a version you can edit.',
+      },
+      { status: 403 },
+    );
   }
-  if (userRole === 'admin' && userAccountKeys.length > 0 && !userAccountKeys.includes(existing.accountKey)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  if (userRole === 'client' && !userAccountKeys.includes(existing.accountKey)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-  return null;
+  return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
 }
 
 /**
@@ -44,13 +49,22 @@ export async function GET(_req: Request, { params }: RouteContext) {
     return NextResponse.json({ error: 'Segment not found' }, { status: 404 });
   }
 
-  // Read-side visibility: org-wide segments are visible to all; account-scoped
-  // segments are visible to users assigned to that account or to privileged roles.
+  // Read-side visibility: org-wide is visible to all; account-scoped is
+  // visible to users assigned to that account; a group's shared segment is
+  // visible to users of the accounts beneath it.
+  //
+  // That last case is load-bearing for Duplicate — it opens the segment by
+  // id to seed the copy, so without it the one action a rooftop is given
+  // for an inherited segment 403s.
   const userRole = session!.user.role;
   const userAccountKeys: string[] = session!.user.accountKeys ?? [];
   const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
   if (!isPrivileged && existing.accountKey && !userAccountKeys.includes(existing.accountKey)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    const ancestors = await getAncestorAccountKeysForAll(userAccountKeys);
+    const inherited = existing.sharedWithChildren === true && ancestors.includes(existing.accountKey);
+    if (!inherited) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
   }
 
   return NextResponse.json({ audience: existing });
@@ -115,6 +129,38 @@ export async function PATCH(req: Request, { params }: RouteContext) {
       );
     }
     updates.filters = body.filters;
+  }
+
+  if ('sharedWithChildren' in body) {
+    const share = body.sharedWithChildren;
+    if (typeof share !== 'boolean') {
+      return NextResponse.json(
+        { error: 'sharedWithChildren must be a boolean' },
+        { status: 400 },
+      );
+    }
+    // Sharing DOWN needs something below to share with. A platform-wide
+    // segment already reaches everyone, and a leaf account has no
+    // children — in both cases the flag would be a switch that does
+    // nothing, which is worse than a refusal.
+    if (share) {
+      if (!existing.accountKey) {
+        return NextResponse.json(
+          { error: 'A platform-wide segment is already visible to every account.' },
+          { status: 400 },
+        );
+      }
+      const childCount = await prisma.account.count({
+        where: { parentAccountKey: existing.accountKey },
+      });
+      if (childCount === 0) {
+        return NextResponse.json(
+          { error: 'Only a group account can share a segment with the accounts beneath it.' },
+          { status: 400 },
+        );
+      }
+    }
+    updates.sharedWithChildren = share;
   }
 
   if ('color' in body) {

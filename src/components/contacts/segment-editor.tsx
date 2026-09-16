@@ -22,6 +22,8 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
+import { Checkbox } from '@/components/ui/checkbox';
+import { HelpTip } from '@/components/ui/help-tip';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
@@ -136,6 +138,7 @@ export interface SegmentEditorProps {
     name: string;
     description?: string | null;
     accountKey?: string | null;
+    sharedWithChildren?: boolean | null;
     color?: string | null;
     filters: string;
   };
@@ -145,7 +148,7 @@ export interface SegmentEditorProps {
 
 export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const router = useRouter();
-  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys } =
+  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys, accounts } =
     useAccount();
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
@@ -157,6 +160,30 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
   const isOrgWideScope = !initial?.accountKey && !(isAccount && accountKey);
   const canSave = isPrivileged || !isOrgWideScope;
+
+  // ── Availability ─────────────────────────────────────────────────
+  //
+  // The third scope tier: a segment owned by a GROUP can be shared down to
+  // the accounts beneath it. Offered only where it means something — the
+  // owning account must actually have children, or the control is a switch
+  // that changes nothing (the API refuses it for the same reason).
+  //
+  // One control, and the audience it advertises is computed from the same
+  // predicate the visibility gate uses, so the sentence under the toggle
+  // cannot claim a reach the gate does not grant.
+  const owningKey = initial?.accountKey ?? (isAccount && accountKey ? accountKey : null);
+  const childCount = useMemo(
+    () =>
+      owningKey
+        ? Object.values(accounts).filter((a) => a.parentAccountKey === owningKey).length
+        : 0,
+    [accounts, owningKey],
+  );
+  const canShareDown = childCount > 0;
+  const [sharedWithChildren, setSharedWithChildren] = useState(
+    initial?.sharedWithChildren === true,
+  );
+  const owningDealer = owningKey ? accounts[owningKey]?.dealer ?? owningKey : null;
 
   // Sub-account custom fields are only meaningful inside a single
   // account. Admin / org-wide mode keeps just the built-ins (custom
@@ -484,6 +511,9 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         filters,
         description: trimmedDesc || null,
       };
+      // Only send it where it is meaningful — an org-wide segment already
+      // reaches everyone and the API 400s the combination.
+      if (canShareDown) body.sharedWithChildren = sharedWithChildren;
 
       if (mode === 'edit' && initial?.id) {
         const res = await fetch(`/api/audiences/${encodeURIComponent(initial.id)}`, {
@@ -570,7 +600,9 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]"
               title={
                 initial?.accountKey || (isAccount && accountKey)
-                  ? 'Visible only to this account'
+                  ? canShareDown && sharedWithChildren
+                    ? 'Visible to this group and every account beneath it'
+                    : 'Visible only to this account'
                   : 'Visible to all accounts'
               }
             >
@@ -586,6 +618,23 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                 numbers on this screen change with it, so the control belongs
                 on it (see docs/account-scope.md). */}
             <AccountScopeToggle />
+            {canShareDown && (
+              <span className="flex items-center gap-1">
+                <Checkbox
+                  size="sm"
+                  checked={sharedWithChildren}
+                  onChange={setSharedWithChildren}
+                  label={`Share with the ${childCount} account${childCount === 1 ? '' : 's'} in this group`}
+                  className="text-[11px] text-[var(--muted-foreground)]"
+                />
+                <HelpTip title="Sharing down" iconClassName="w-3 h-3">
+                  Every account under {owningDealer} sees this segment and can use it
+                  for sends and exports, but cannot change it — a segment is a filter,
+                  so it resolves to each account&apos;s own contacts. They can duplicate
+                  it to build their own version.
+                </HelpTip>
+              </span>
+            )}
             <button
               type="button"
               onClick={handleExport}

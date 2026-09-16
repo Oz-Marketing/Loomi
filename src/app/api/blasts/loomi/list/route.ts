@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import {
+  getWarmupHolds,
   listEmailBlasts,
   type BlastSourceFilter,
   type EmailBlastSummary,
+  type WarmupHold,
 } from '@/lib/services/email-blasts';
 import { listSmsBlasts, type SmsBlastSummary } from '@/lib/services/sms-blasts';
 // Shared with the engagement aggregation so the number of rows this can return
@@ -88,6 +90,13 @@ export async function GET(req: NextRequest) {
       s === 'completed' || s === 'partial' || s === 'sent';
   }
 
+  // A blast parked by its sending domain's daily warm-up cap sits in
+  // 'processing' with no outward sign it will ever move. Resolve the reason
+  // for those rows so the list can say so instead of showing a bare badge.
+  const warmupHolds = await getWarmupHolds(
+    emails.filter((c) => c.status === 'processing').map((c) => c.id),
+  );
+
   // Collapse multi-channel pairs into a single row anchored on the email
   // campaign. The SMS half is dropped from the list so we don't show two
   // entries for one logical campaign — the channel badge reads "Email + SMS"
@@ -111,7 +120,7 @@ export async function GET(req: NextRequest) {
       .filter((c) => matchesAccount(c.accountKeys))
       .filter((c) => matchesStatusForRole(c.status))
       .filter((c) => statusFilter === 'archived' || !isArchived(c.metadata))
-      .map((c) => mapEmail(c)),
+      .map((c) => mapEmail(c, warmupHolds.get(c.id))),
     ...sms
       .filter((c) => matchesAccount(c.accountKeys))
       .filter((c) => matchesStatusForRole(c.status))
@@ -148,10 +157,11 @@ function flowIdFromKey(flowNodeKey: string): string | undefined {
   return match ? match[1] : undefined;
 }
 
-function mapEmail(c: EmailBlastSummary) {
+function mapEmail(c: EmailBlastSummary, warmupHold?: WarmupHold) {
   const meta = parseMeta(c.metadata);
   const isMulti = Boolean(meta?.multiChannel && meta?.linkedSmsBlastId);
   return {
+    warmupHold,
     id: c.id,
     campaignId: c.id,
     isFlow: Boolean(c.flowNodeKey),

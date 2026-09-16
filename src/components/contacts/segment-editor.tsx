@@ -14,6 +14,7 @@ import {
   ExclamationTriangleIcon,
   FunnelIcon,
   GlobeAltIcon,
+  Squares2X2Icon,
   PlusIcon,
   TrashIcon,
   UsersIcon,
@@ -27,6 +28,8 @@ import { HelpTip } from '@/components/ui/help-tip';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
+import { AccountAccessModal } from '@/components/ad-generator/account-access-picker';
+import { summarizeFanOut } from '@/lib/segments/fan-out';
 import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
@@ -183,6 +186,22 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [sharedWithChildren, setSharedWithChildren] = useState(
     initial?.sharedWithChildren === true,
   );
+
+  // ── The same segment in accounts that share no group ──────────────
+  //
+  // Sharing DOWN is the right tool whenever the accounts have a group in
+  // common: one row, one edit, and the rooftops receive it. This is what
+  // that cannot reach — accounts with no common parent, and the case where
+  // an account needs its OWN editable segment rather than a read-only copy
+  // of the group's. It creates one segment per account, so they are
+  // independent from the moment they exist.
+  //
+  // Create only: an existing segment's account is fixed (PATCH carries no
+  // accountKey), because moving one changes whose contacts it resolves
+  // against, which is a different segment.
+  const [alsoAccounts, setAlsoAccounts] = useState<string[]>([]);
+  const [showAccountPicker, setShowAccountPicker] = useState(false);
+  const isFanOut = mode === 'create' && alsoAccounts.length > 0;
   const owningDealer = owningKey ? accounts[owningKey]?.dealer ?? owningKey : null;
 
   // Sub-account custom fields are only meaningful inside a single
@@ -512,8 +531,10 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         description: trimmedDesc || null,
       };
       // Only send it where it is meaningful — an org-wide segment already
-      // reaches everyone and the API 400s the combination.
-      if (canShareDown) body.sharedWithChildren = sharedWithChildren;
+      // reaches everyone and the API 400s the combination. A fan-out creates
+      // independent per-account segments, so there is no group row for the
+      // flag to hang off; the control is disabled in that state to say so.
+      if (canShareDown && !isFanOut) body.sharedWithChildren = sharedWithChildren;
 
       if (mode === 'edit' && initial?.id) {
         const res = await fetch(`/api/audiences/${encodeURIComponent(initial.id)}`, {
@@ -527,7 +548,14 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         }
         toast.success(`Segment "${trimmedName}" updated.`);
       } else {
-        body.accountKey = isAccount && accountKey ? accountKey : undefined;
+        if (isFanOut) {
+          body.accountKeys = [
+            ...(isAccount && accountKey ? [accountKey] : []),
+            ...alsoAccounts,
+          ];
+        } else {
+          body.accountKey = isAccount && accountKey ? accountKey : undefined;
+        }
         const res = await fetch('/api/audiences', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -537,7 +565,29 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           const data = await res.json().catch(() => ({}));
           throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
         }
-        toast.success(`Segment "${trimmedName}" created.`);
+        if (isFanOut) {
+          // Three branches, the same shape the flow and form deploy modals
+          // use: a partial result must not read as a clean success.
+          const result = await res.json().catch(() => null);
+          const { tone, message } = summarizeFanOut(
+            {
+              created: result?.created ?? [],
+              failures: result?.failures ?? [],
+            },
+            (key) => accounts[key]?.dealer ?? key,
+          );
+          if (tone === 'success') toast.success(message);
+          else if (tone === 'warning') toast.warning(message);
+          else {
+            // Nothing was written. Leaving the page here would strand the
+            // user on a list that does not contain the segment they just
+            // built, with no way back to the filter they spent time on.
+            toast.error(message);
+            return;
+          }
+        } else {
+          toast.success(`Segment "${trimmedName}" created.`);
+        }
       }
       router.push(segmentsHref);
     } catch (err) {
@@ -579,7 +629,12 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         </div>
         <div className="flex items-start gap-3 flex-wrap">
           <FunnelIcon className="w-7 h-7 text-[var(--primary)] mt-1.5 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
+          {/* A real minimum, not min-w-0. The controls beside this don't
+              shrink, so with min-w-0 the name field absorbed every pixel they
+              needed and the segment's own name truncated to "Segm…". The row
+              already wraps; a basis lets it, because flexbox breaks lines on
+              the flex BASE size and a basis of 0 never triggers the wrap. */}
+          <div className="flex-1 basis-[280px] min-w-[240px]">
             <input
               type="text"
               value={name}
@@ -595,7 +650,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               className="w-full text-sm text-[var(--muted-foreground)] bg-transparent border-0 focus:outline-none placeholder:text-[var(--muted-foreground)]/40 mt-1 px-0"
             />
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]"
               title={
@@ -622,8 +677,9 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               <span className="flex items-center gap-1">
                 <Checkbox
                   size="sm"
-                  checked={sharedWithChildren}
+                  checked={sharedWithChildren && !isFanOut}
                   onChange={setSharedWithChildren}
+                  disabled={isFanOut}
                   label={`Share with the ${childCount} account${childCount === 1 ? '' : 's'} in this group`}
                   className="text-[11px] text-[var(--muted-foreground)]"
                 />
@@ -632,6 +688,26 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                   for sends and exports, but cannot change it — a segment is a filter,
                   so it resolves to each account&apos;s own contacts. They can duplicate
                   it to build their own version.
+                </HelpTip>
+              </span>
+            )}
+            {mode === 'create' && (
+              <span className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAccountPicker(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
+                >
+                  <Squares2X2Icon className="w-3 h-3" />
+                  {alsoAccounts.length > 0
+                    ? `Also creating in ${alsoAccounts.length} more`
+                    : 'Also create in\u2026'}
+                </button>
+                <HelpTip title="Creating in several accounts" iconClassName="w-3 h-3">
+                  Creates a separate copy of this segment in each account you pick, so
+                  each one can change theirs. For accounts that share a group, sharing
+                  down from the group is usually better \u2014 that is one segment
+                  everyone sees, so editing it once updates them all.
                 </HelpTip>
               </span>
             )}
@@ -735,6 +811,24 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           <PreviewPanel preview={preview} eligibility={eligibility} />
         </aside>
       </div>
+          {showAccountPicker && (
+        <AccountAccessModal
+          name={name.trim() || 'this segment'}
+          ownerKey={isAccount && accountKey ? accountKey : null}
+          selected={alsoAccounts}
+          onChange={setAlsoAccounts}
+          onClose={() => setShowAccountPicker(false)}
+          title="Create this segment in other accounts"
+          showLibraryWarning={false}
+          description={
+            <>
+              Each account gets its own copy of &ldquo;{name.trim() || 'this segment'}&rdquo;
+              to change as they like &mdash; they do not stay in step afterwards. For
+              accounts that share a group, sharing down from the group keeps them as one.
+            </>
+          }
+        />
+      )}
     </div>
   );
 }

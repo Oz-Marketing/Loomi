@@ -19,6 +19,10 @@ import {
   MAX_DEFERRAL_MS,
   QUIET_HOURS_START_HOUR,
 } from '@/lib/sending/sms-quiet-hours';
+import {
+  BLAST_CANCELED_ERROR,
+  createCancelGate,
+} from '@/lib/sending/blast-cancellation';
 
 type OutboundMessageChannel = 'SMS' | 'MMS';
 
@@ -604,6 +608,70 @@ export async function deleteSmsBlast(campaignId: string): Promise<void> {
 }
 
 /**
+ * Stop an SMS blast that is scheduled, queued, or already sending.
+ *
+ * Mirror of cancelEmailBlast — see that function for why the row has to leave
+ * PROCESSABLE_STATUSES and every pending recipient has to be resolved in the
+ * same breath.
+ *
+ * Texts held by TCPA quiet hours are the case this matters most for: they sit
+ * `pending` with a "holding until 8am local" note, sometimes overnight, and
+ * until now there was no way to call one back before its window opened.
+ *
+ * Idempotent on an already-canceled row.
+ */
+export async function cancelSmsBlast(
+  campaignId: string,
+): Promise<SmsBlastSummary> {
+  const existing = await prisma.smsBlast.findUnique({
+    where: { id: campaignId },
+    select: { id: true, status: true },
+  });
+  if (!existing) throw new Error('Campaign not found');
+
+  if (existing.status === 'canceled') {
+    const row = await prisma.smsBlast.findUniqueOrThrow({
+      where: { id: campaignId },
+      select: smsCampaignSummarySelect,
+    });
+    return toSummary(row);
+  }
+  if (TERMINAL_STATUSES.includes(existing.status as SmsBlastStatus)) {
+    throw new Error(
+      'This blast has already finished sending — there is nothing to cancel.',
+    );
+  }
+  if (existing.status === 'draft') {
+    throw new Error(
+      'This blast is still a draft and is not scheduled to send. Delete it instead.',
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.smsBlastRecipient.updateMany({
+      where: { campaignId, status: 'pending' },
+      data: { status: 'skipped', error: BLAST_CANCELED_ERROR },
+    });
+    await tx.smsBlast.update({
+      where: { id: campaignId },
+      data: { status: 'canceled', completedAt: new Date() },
+    });
+  });
+
+  const counts = await summarizeCampaign(campaignId);
+  const updated = await prisma.smsBlast.update({
+    where: { id: campaignId },
+    data: {
+      totalRecipients: counts.total,
+      sentCount: counts.sent,
+      failedCount: counts.failed,
+    },
+    select: smsCampaignSummarySelect,
+  });
+  return toSummary(updated);
+}
+
+/**
  * Toggle archive state on an SMS campaign. Same back-compat pattern
  * as email campaigns: writes both the legacy `metadata.archived` flag
  * and the new `archivedAt` timestamp. The timestamp drives the daily
@@ -773,6 +841,26 @@ export async function listSmsBlasts(options?: {
     .map(toSummary);
 
   return summaries;
+}
+
+/**
+ * Apply a status/counts write unless the row has been canceled underneath us,
+ * then return the row as it now stands. See the email twin for the reasoning:
+ * a cancel leaves zero pending rows, so an unguarded write would resolve a
+ * canceled blast to 'completed'.
+ */
+async function updateUnlessCanceled(
+  campaignId: string,
+  data: Parameters<typeof prisma.smsBlast.updateMany>[0]['data'],
+) {
+  await prisma.smsBlast.updateMany({
+    where: { id: campaignId, status: { not: 'canceled' } },
+    data,
+  });
+  return prisma.smsBlast.findUniqueOrThrow({
+    where: { id: campaignId },
+    select: smsCampaignSummarySelect,
+  });
 }
 
 async function summarizeCampaign(campaignId: string) {
@@ -956,28 +1044,45 @@ export async function processSmsBlast(
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
     const status = resolveSmsBlastStatus(counts);
-    const updated = await prisma.smsBlast.update({
-      where: { id: campaign.id },
-      data: {
-        status,
-        totalRecipients: counts.total,
-        sentCount: counts.sent,
-        failedCount: counts.failed,
-        completedAt: status === 'processing' ? null : new Date(),
-        error: counts.firstError || null,
-      },
+    const updated = await updateUnlessCanceled(campaign.id, {
+      status,
+      totalRecipients: counts.total,
+      sentCount: counts.sent,
+      failedCount: counts.failed,
+      completedAt: status === 'processing' ? null : new Date(),
+      error: counts.firstError || null,
     });
     return toSummary(updated);
   }
 
-  await prisma.smsBlast.update({
-    where: { id: campaign.id },
+  // Claim the blast. Guarded so a cancel landing between the read above and
+  // this write isn't put straight back into 'processing' — see the email twin.
+  const claimed = await prisma.smsBlast.updateMany({
+    where: { id: campaign.id, status: { notIn: TERMINAL_STATUSES } },
     data: {
       status: 'processing',
       startedAt: campaign.startedAt || new Date(),
       completedAt: null,
       error: null,
     },
+  });
+  if (claimed.count === 0) {
+    return toSummary(
+      await prisma.smsBlast.findUniqueOrThrow({
+        where: { id: campaign.id },
+        select: smsCampaignSummarySelect,
+      }),
+    );
+  }
+
+  // Polled between sends so a cancel stops the loop rather than only the next
+  // sweep. One query per second at most, shared across the concurrent tasks.
+  const isCanceled = createCancelGate(async () => {
+    const row = await prisma.smsBlast.findUnique({
+      where: { id: campaign.id },
+      select: { status: true },
+    });
+    return row?.status === 'canceled';
   });
 
   const campaignMessageOptions = parseCampaignMetadata(campaign.metadata);
@@ -1048,6 +1153,11 @@ export async function processSmsBlast(
   }
 
   const tasks = campaign.recipients.map((recipient) => async () => {
+    // Stop the remaining tasks the moment someone cancels. The row itself is
+    // left alone — cancelSmsBlast already flipped every pending recipient to
+    // 'skipped', and re-writing it here would race that transaction.
+    if (await isCanceled()) return;
+
     const { id, accountKey } = recipient;
 
     // ── Opt-out re-checks, as of NOW ──
@@ -1204,16 +1314,13 @@ export async function processSmsBlast(
   const counts = await summarizeCampaign(campaign.id);
   const nextStatus = resolveSmsBlastStatus(counts);
 
-  const updated = await prisma.smsBlast.update({
-    where: { id: campaign.id },
-    data: {
-      status: nextStatus,
-      totalRecipients: counts.total,
-      sentCount: counts.sent,
-      failedCount: counts.failed,
-      completedAt: nextStatus === 'processing' ? null : new Date(),
-      error: counts.firstError || null,
-    },
+  const updated = await updateUnlessCanceled(campaign.id, {
+    status: nextStatus,
+    totalRecipients: counts.total,
+    sentCount: counts.sent,
+    failedCount: counts.failed,
+    completedAt: nextStatus === 'processing' ? null : new Date(),
+    error: counts.firstError || null,
   });
 
   return toSummary(updated);

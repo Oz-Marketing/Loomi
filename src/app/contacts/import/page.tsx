@@ -10,6 +10,7 @@ import {
   CloudArrowUpIcon,
   ExclamationTriangleIcon,
   ListBulletIcon,
+  PlusIcon,
   UserGroupIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
@@ -17,6 +18,9 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { Select } from '@/components/select';
+import { TagInput, tagColorClass } from '@/components/ui/tag-input';
+import { HelpTip } from '@/components/ui/help-tip';
 import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
 import { consumePendingImportFile } from '@/lib/contacts/pending-import';
 import type { CustomFieldDto } from '@/lib/contacts/custom-field-types';
@@ -50,6 +54,16 @@ interface ListTarget {
   name: string;
   accountKey: string;
 }
+
+interface ListSummary {
+  id: string;
+  name: string;
+  accountKey: string;
+  memberCount: number;
+}
+
+/** Sentinel for the "no list" choice in the picker. */
+const NO_LIST = '';
 
 const CANONICAL_FIELD_SET: ReadonlySet<string> = new Set(CONTACT_FIELDS);
 
@@ -173,6 +187,21 @@ export default function ContactsImportPage() {
     if (listTarget) setSelectedAccountKey(listTarget.accountKey);
   }, [listTarget]);
 
+  // `accounts` arrives from a client fetch, so on the first render it is
+  // usually still empty and the useState initializer above settles on ''.
+  // Left there, the page looks fine — a controlled <select> whose value
+  // matches no option just displays the first one — while every guard
+  // reading `selectedAccountKey` fails: picking a CSV set the filename and
+  // then returned before parsing it, with no error anywhere. Seed the key
+  // as soon as the options exist.
+  useEffect(() => {
+    if (listTarget) return;
+    setSelectedAccountKey((current) => {
+      if (current && accountOptions.some((opt) => opt.key === current)) return current;
+      return accountOptions[0]?.key ?? current;
+    });
+  }, [accountOptions, listTarget]);
+
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState<ParseResponse | null>(null);
@@ -181,6 +210,94 @@ export default function ContactsImportPage() {
   const [dryRunning, setDryRunning] = useState(false);
   const [dryRun, setDryRun] = useState<ImportSummary | null>(null);
   const [committing, setCommitting] = useState(false);
+
+  // ── Step 3: file the batch ──
+  //
+  // A list and a tag set applied to everything this import touches.
+  // Neither changes the row counts, so picking one doesn't invalidate a
+  // dry-run the way a mapping change does.
+  const [lists, setLists] = useState<ListSummary[]>([]);
+  const [listsLoading, setListsLoading] = useState(false);
+  const [selectedListId, setSelectedListId] = useState<string>(NO_LIST);
+  const [creatingList, setCreatingList] = useState(false);
+  const [newListName, setNewListName] = useState('');
+  const [createListError, setCreateListError] = useState<string | null>(null);
+  const [savingList, setSavingList] = useState(false);
+  const [applyTags, setApplyTags] = useState<string[]>([]);
+
+  // Load the pickable lists for whichever account we're importing into.
+  // Skipped when a list target came in on the URL — that flow has its
+  // list already and hides the picker.
+  useEffect(() => {
+    if (listIdParam || !selectedAccountKey) {
+      setLists([]);
+      return;
+    }
+    let cancelled = false;
+    setListsLoading(true);
+    fetch('/api/contacts/lists')
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load lists');
+        }
+        return data as { lists: ListSummary[] };
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setLists((data.lists ?? []).filter((l) => l.accountKey === selectedAccountKey));
+      })
+      .catch(() => {
+        // A failed load just means no picker options — the import itself
+        // is unaffected, so this stays quiet rather than throwing a toast
+        // at someone who may not want a list at all.
+        if (!cancelled) setLists([]);
+      })
+      .finally(() => {
+        if (!cancelled) setListsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [listIdParam, selectedAccountKey]);
+
+  // A list belongs to one account, so a selection can't survive an
+  // account switch.
+  useEffect(() => {
+    setSelectedListId(NO_LIST);
+    setCreatingList(false);
+    setNewListName('');
+    setCreateListError(null);
+  }, [selectedAccountKey]);
+
+  /** Create the typed-in list and select it. Errors stay inline so the
+   *  name can be corrected without losing the rest of the setup. */
+  async function createAndSelectList() {
+    const name = newListName.trim();
+    if (!name || !selectedAccountKey) return;
+    setSavingList(true);
+    setCreateListError(null);
+    try {
+      const res = await fetch('/api/contacts/lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, accountKey: selectedAccountKey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to create list');
+      }
+      const created = data.list as { id: string; name: string; accountKey: string };
+      setLists((prev) => [{ ...created, memberCount: 0 }, ...prev]);
+      setSelectedListId(created.id);
+      setCreatingList(false);
+      setNewListName('');
+    } catch (err) {
+      setCreateListError(err instanceof Error ? err.message : 'Failed to create list');
+    } finally {
+      setSavingList(false);
+    }
+  }
 
   // Pick up the file handed off by the New List modal once the account
   // key is settled (immediately when standalone, after listTarget load
@@ -304,7 +421,12 @@ export default function ContactsImportPage() {
       form.append('file', file);
       form.append('accountKey', selectedAccountKey);
       form.append('mapping', JSON.stringify(mapping));
-      if (listTarget) form.append('listId', listTarget.id);
+      if (targetListId) form.append('listId', targetListId);
+      if (applyTags.length > 0) form.append('tags', JSON.stringify(applyTags));
+      // Only the upload-to-a-list flow treats the CSV as a roster rather
+      // than a data update. Picking a list on a normal import still
+      // writes the CSV's values over a matched contact.
+      form.append('preserveExisting', listTarget ? 'true' : 'false');
 
       const res = await fetch('/api/contacts/import?mode=commit', {
         method: 'POST',
@@ -315,17 +437,25 @@ export default function ContactsImportPage() {
         throw new Error(data?.error || 'Import failed');
       }
       const summary = data.summary as ImportSummary;
+      const tagNote =
+        applyTags.length > 0
+          ? ` Tagged ${applyTags.map((t) => `"${t}"`).join(', ')}.`
+          : '';
+
       if (listTarget) {
         const added = summary.listMembershipsAdded ?? 0;
         toast.success(
-          `Added ${added.toLocaleString()} contact${added === 1 ? '' : 's'} to "${listTarget.name}".`,
+          `Added ${added.toLocaleString()} contact${added === 1 ? '' : 's'} to "${listTarget.name}".${tagNote}`,
         );
         router.push(subHref(`/contacts/lists/${listTarget.id}`));
       } else {
+        const listNote = selectedList
+          ? ` Added to "${selectedList.name}".`
+          : '';
         toast.success(
-          `Imported ${summary.imported.toLocaleString()} new, updated ${summary.updated.toLocaleString()} existing.`,
+          `Imported ${summary.imported.toLocaleString()} new, updated ${summary.updated.toLocaleString()} existing.${listNote}${tagNote}`,
         );
-        router.push(subHref('/contacts'));
+        router.push(targetListId ? subHref(`/contacts/lists/${targetListId}`) : subHref('/contacts'));
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed');
@@ -333,6 +463,15 @@ export default function ContactsImportPage() {
       setCommitting(false);
     }
   }
+
+  // The list this import files into: pinned by the URL in the
+  // upload-to-a-list flow, otherwise whatever step 3 picked.
+  const selectedList = useMemo(
+    () => lists.find((l) => l.id === selectedListId) ?? null,
+    [lists, selectedListId],
+  );
+  const targetListId = listTarget ? listTarget.id : selectedListId || undefined;
+  const targetListName = listTarget ? listTarget.name : selectedList?.name ?? null;
 
   const hasEmailMapping = useMemo(
     () => Object.values(mapping).some((target) => target === 'email'),
@@ -520,11 +659,131 @@ export default function ContactsImportPage() {
         </section>
       )}
 
-      {/* Step 3: preview + commit */}
+      {/* Step 3: file the batch into a list / tag it */}
       {parsed && (
         <section className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
           <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-4">
-            3. Preview &amp; Import
+            3. List &amp; Tags{' '}
+            <span className="normal-case tracking-normal font-normal text-[var(--muted-foreground)]/70">
+              (optional)
+            </span>
+          </p>
+
+          <div className="grid gap-5 md:grid-cols-2">
+            {/* List */}
+            <div>
+              <span className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                Add to list
+                <HelpTip title="Add to list" iconClassName="w-3.5 h-3.5">
+                  <p>
+                    Every contact in this file joins the list — the ones being created and the
+                    existing ones being matched. Contacts already on the list aren&apos;t added
+                    twice, so re-uploading the same file is safe.
+                  </p>
+                </HelpTip>
+              </span>
+
+              {listTarget ? (
+                <div className="flex items-center gap-2 rounded-lg border border-[var(--primary)]/35 bg-[var(--primary)]/5 px-3 py-2.5 text-sm">
+                  <ListBulletIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
+                  <span className="truncate">{listTarget.name}</span>
+                </div>
+              ) : creatingList ? (
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={newListName}
+                    onChange={(e) => setNewListName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void createAndSelectList();
+                      }
+                    }}
+                    placeholder="e.g. Q4 Service Customers"
+                    autoFocus
+                    maxLength={120}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void createAndSelectList()}
+                      disabled={!newListName.trim() || savingList}
+                      className="px-3 h-9 text-xs rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {savingList ? 'Creating…' : 'Create list'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCreatingList(false);
+                        setNewListName('');
+                        setCreateListError(null);
+                      }}
+                      disabled={savingList}
+                      className="px-3 h-9 text-xs rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--muted-foreground)] disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {createListError && (
+                    <p className="text-xs text-red-400">{createListError}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <Select
+                    value={selectedListId}
+                    onChange={setSelectedListId}
+                    ariaLabel="Add imported contacts to list"
+                    options={[
+                      { value: NO_LIST, label: listsLoading ? 'Loading lists…' : '— No list —' },
+                      ...lists.map((list) => ({
+                        value: list.id,
+                        label: `${list.name} (${list.memberCount.toLocaleString()})`,
+                      })),
+                    ]}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCreatingList(true)}
+                    className="inline-flex items-center gap-1.5 text-xs text-[var(--primary)] hover:underline"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" />
+                    Create a new list
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Tags */}
+            <div>
+              <span className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                Tag every contact
+                <HelpTip title="Tag every contact" iconClassName="w-3.5 h-3.5">
+                  <p>
+                    These tags go on every contact in the file, on top of anything a mapped Tags
+                    column carries. They are added to what a matched contact already has — an
+                    import never removes a tag.
+                  </p>
+                </HelpTip>
+              </span>
+              <TagInput
+                value={applyTags}
+                onChange={setApplyTags}
+                placeholder="Add a tag and press Enter"
+              />
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Step 4: preview + commit */}
+      {parsed && (
+        <section className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
+          <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-4">
+            4. Preview &amp; Import
           </p>
 
           <div className="flex items-center gap-3 mb-4">
@@ -549,6 +808,33 @@ export default function ContactsImportPage() {
               {committing ? 'Importing…' : `Import ${dryRun ? `${dryRun.totalRows - dryRun.skipped} contacts` : ''}`}
             </PrimaryButton>
           </div>
+
+          {/* Restate what step 3 set up, so the list and tags are visible
+              at the moment of committing rather than a scroll away. */}
+          {(targetListName || applyTags.length > 0) && (
+            <p className="text-xs text-[var(--muted-foreground)] mb-4 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+              {targetListName && (
+                <span className="inline-flex items-center gap-1">
+                  <ListBulletIcon className="w-3.5 h-3.5" />
+                  Adding to <span className="text-[var(--foreground)]">{targetListName}</span>
+                </span>
+              )}
+              {targetListName && applyTags.length > 0 && <span>·</span>}
+              {applyTags.length > 0 && (
+                <span className="inline-flex flex-wrap items-center gap-1">
+                  Tagging
+                  {applyTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${tagColorClass(tag)}`}
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </p>
+          )}
 
           {dryRun && (
             <div className="grid gap-3 sm:grid-cols-3 mb-4">

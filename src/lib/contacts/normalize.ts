@@ -317,6 +317,39 @@ export function parseTagsCell(raw: string): string[] {
     .filter(Boolean);
 }
 
+/** Read a Contact.tags JSON column into a string[]. The column is
+ *  `Json @default("[]")`, so anything non-array (or a stray non-string
+ *  entry) is treated as absent rather than thrown on. */
+export function readTagsArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * Union of several tag groups, trimmed, empties dropped, dedup'd
+ * case-insensitively with the first spelling winning.
+ *
+ * Case-insensitive because a tag set holding both "Q4" and "q4" reads as
+ * two tags and filters as two tags, which is never what someone typing the
+ * second one meant — the same rule TagInput applies in the UI.
+ */
+export function mergeTags(...groups: (readonly string[] | undefined | null)[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const group of groups) {
+    if (!group) continue;
+    for (const raw of group) {
+      const tag = typeof raw === 'string' ? raw.trim() : '';
+      if (!tag) continue;
+      const key = tag.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(tag);
+    }
+  }
+  return out;
+}
+
 // ── Row → ParsedContact ──
 
 export interface ParsedContact {

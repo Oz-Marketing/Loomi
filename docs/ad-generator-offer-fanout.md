@@ -55,6 +55,32 @@ feature becomes a complaint. Per-user `NotificationPreference` still applies.
 explicit assignment in `accountKeys` counts, or one all-scope client would hear
 about every account's offers.
 
+**The offer POLL does email staff, and sends ONE message per sweep** (changed
+2026-09-16). `notifyOffersLanded` in `poll-offers.ts` tells reviewers a new OEM
+cycle landed — see its comment for why that is a separate event from generation
+half an hour later. Each rooftop is its own `AdAutomationConfig` polled in its
+own pass, so sending at the end of each pass produced a stack of near-identical
+emails in one minute — "8 new Hyundai offers published", "1 new Ford offer
+published", "1 new Chrysler offer published" — which is the shape people mute.
+
+The bell stays per-account, because that is where you act on one rooftop. The
+MAIL is collected in an `OfferMailOutbox` (user id → pending items) that
+`pollAllAccounts` owns for the whole sweep and flushes once at the end, outside
+the per-account try/catch so an account that throws does not cost the others
+their mail. One account's worth of news still sends the original single-item
+email; two or more send a digest headed `offersDigestHeading` — the same
+`offersLandedTitle` wording as the bell, over the sweep's deduped makes — with
+one card per rooftop prefixed by its dealer name, since two rooftops can sell
+the same brand. A manual poll through `/api/ad-generator/automation/shadow`
+passes no outbox, so `pollAccountOffers` makes one and flushes it itself.
+
+Two consequences worth knowing. `sendEmailNow` is no longer used here, so the
+email channel is resolved in `notifyOffersLanded` via `loadChannelMap` and
+`emailedAt` is stamped by `flushOfferMail` after a real send — never on a
+`false` return, which is what SMTP-unconfigured looks like. And the shell's
+footer, which claimed the reader was "tagged on a Meta Ads Planner item", is now
+a parameter on both senders; offer mail passes its own.
+
 **One pill per card.** The chip row had grown to five — status, offer kind,
 stage, Auto, Edited — and at 9px uppercase they read as a wall rather than as
 five facts. Stage is the only one that changes what you do next, so it keeps the

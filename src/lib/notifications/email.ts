@@ -82,6 +82,17 @@ function renderItemBlock(item: NotificationEmailItem, baseUrl: string): string {
     </tr>`;
 }
 
+/**
+ * Why a recipient is holding this email.
+ *
+ * The Meta Ads Planner wording is the historical default because the planner
+ * was the only thing that sent notification mail. It is wrong on every other
+ * type — an OEM offer email told people they were tagged on a planner item —
+ * so a sender with a different reason passes its own.
+ */
+const DEFAULT_EMAIL_FOOTER =
+  "Loomi Studio · You're receiving this because you're tagged on a Meta Ads Planner item.";
+
 function renderShellHtml(opts: {
   preheader: string;
   heading: string;
@@ -89,6 +100,7 @@ function renderShellHtml(opts: {
   itemsHtml: string;
   ctaHref?: string;
   ctaText?: string;
+  footer?: string;
 }): string {
   // Absolute, because a mail client cannot resolve a root-relative path — and
   // self-hosted, because this used to hotlink a GoHighLevel CDN asset on a
@@ -137,7 +149,7 @@ function renderShellHtml(opts: {
             <tr>
               <td style="padding:14px 6px 0 6px;text-align:center;">
                 <p style="margin:0;font-size:11px;line-height:1.5;color:#64748b;">
-                  Loomi Studio · You're receiving this because you're tagged on a Meta Ads Planner item.
+                  ${escapeHtml(opts.footer ?? DEFAULT_EMAIL_FOOTER)}
                 </p>
               </td>
             </tr>
@@ -166,6 +178,8 @@ export async function sendImmediateNotificationEmail(input: {
   to: string;
   recipientName: string;
   item: NotificationEmailItem;
+  /** Overrides the "tagged on a Meta Ads Planner item" line. */
+  footer?: string;
 }): Promise<boolean> {
   const setup = getTransporter();
   if (!setup) {
@@ -182,6 +196,7 @@ export async function sendImmediateNotificationEmail(input: {
     heading,
     intro,
     itemsHtml: renderItemBlock(input.item, baseUrl),
+    footer: input.footer,
   });
   const subject = `[Loomi Studio] ${heading}`;
   const textParts = [
@@ -209,6 +224,17 @@ export async function sendDigestNotificationEmail(input: {
   to: string;
   recipientName: string;
   items: NotificationEmailItem[];
+  /**
+   * Copy for a digest that is not the Meta Ads Planner daily one. Every field
+   * defaults to the planner wording, so an existing caller is unchanged; a
+   * different sender passes its own rather than growing a second digest shell.
+   * `cta: null` drops the button; a `cta.href` is app-relative like an item link.
+   */
+  subject?: string;
+  heading?: string;
+  intro?: string;
+  cta?: { href: string; text: string } | null;
+  footer?: string;
 }): Promise<boolean> {
   if (input.items.length === 0) return false;
   const setup = getTransporter();
@@ -220,18 +246,24 @@ export async function sendDigestNotificationEmail(input: {
 
   const baseUrl = getAppBaseUrl();
   const count = input.items.length;
-  const heading = `${count} update${count !== 1 ? 's' : ''} for you in Loomi Studio`;
-  const intro = `Here's what's new on your Meta Ads Planner items today.`;
+  const heading = input.heading ?? `${count} update${count !== 1 ? 's' : ''} for you in Loomi Studio`;
+  const intro = input.intro ?? `Here's what's new on your Meta Ads Planner items today.`;
+  const cta =
+    input.cta === undefined
+      ? { href: '/tools/meta-ads-pacer', text: 'Open Meta Ads Planner' }
+      : input.cta;
   const itemsHtml = input.items.map((it) => renderItemBlock(it, baseUrl)).join('\n');
   const html = renderShellHtml({
     preheader: heading,
     heading,
     intro,
     itemsHtml,
-    ctaHref: `${baseUrl}/tools/meta-ads-pacer`,
-    ctaText: 'Open Meta Ads Planner',
+    ctaHref: cta ? `${baseUrl}${cta.href}` : undefined,
+    ctaText: cta?.text,
+    footer: input.footer,
   });
-  const subject = `[Loomi Studio] Daily digest — ${count} update${count !== 1 ? 's' : ''}`;
+  const subject =
+    input.subject ?? `[Loomi Studio] Daily digest — ${count} update${count !== 1 ? 's' : ''}`;
   const text = [
     `Hi ${input.recipientName.trim() || input.to},`,
     '',

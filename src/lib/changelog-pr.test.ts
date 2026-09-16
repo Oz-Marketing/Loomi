@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseChangelogFromPrBody } from './changelog-pr';
+import { hasChangelogBlock, parseChangelogFromPrBody } from './changelog-pr';
 
 describe('parseChangelogFromPrBody', () => {
   it('parses a complete block', () => {
@@ -110,5 +110,40 @@ Real description.`;
     expect(parseChangelogFromPrBody(body)).toEqual([
       { type: 'fix', audience: 'everyone', title: 'T', content: 'Body line.' },
     ]);
+  });
+});
+
+describe('hasChangelogBlock', () => {
+  // The point of this function is to tell the two zero-entry cases apart, so
+  // the import can warn about a note that was written and lost instead of
+  // treating it like a PR that never wanted one.
+  it('is false when the PR has no block', () => {
+    expect(hasChangelogBlock('## What changed\nJust implementation notes.')).toBe(false);
+    expect(hasChangelogBlock('')).toBe(false);
+    expect(hasChangelogBlock(null)).toBe(false);
+    expect(hasChangelogBlock(undefined)).toBe(false);
+  });
+
+  it('is false for an empty block', () => {
+    expect(hasChangelogBlock('## Changelog\n\n')).toBe(false);
+  });
+
+  it('is TRUE for a block that parses to nothing', () => {
+    // This is the whole reason it exists — PR #461's real body: prose under
+    // the heading, no `title:` line, so parseChunk rejects it and the author
+    // gets no release note and no warning.
+    const body = '## Changelog\n\nSegments can now be created at a group and shared.';
+    expect(parseChangelogFromPrBody(body)).toEqual([]);
+    expect(hasChangelogBlock(body)).toBe(true);
+  });
+
+  it('is true for a complete block', () => {
+    expect(
+      hasChangelogBlock('## Changelog\ntitle: A real entry\n\nWith a body.'),
+    ).toBe(true);
+  });
+
+  it('ignores a block inside an HTML comment, like the parser does', () => {
+    expect(hasChangelogBlock('<!--\n## Changelog\ntitle: Example\n\nBody.\n-->')).toBe(false);
   });
 });

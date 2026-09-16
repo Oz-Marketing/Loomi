@@ -26,6 +26,7 @@ import {
   findUnknownMergetags,
   suggestMergetag,
 } from '@/lib/sending/blast-mergetags';
+import { assessAudienceRisk, audienceRiskIssues } from '@/lib/sending/audience-risk';
 
 export type PreflightSeverity = 'blocker' | 'warning';
 
@@ -81,6 +82,14 @@ export interface PreflightInput {
   textContent?: string | null;
   /** Every sub-account this blast sends on behalf of. */
   accountKeys: string[];
+  /**
+   * The resolved audience, when the caller has one. Omitted by the advisory
+   * GET preflight — a draft has no recipients until it is scheduled — and
+   * passed by the schedule gate, which receives the full list. Without it the
+   * audience-quality checks simply don't run; they never invent a verdict
+   * from a missing audience.
+   */
+  recipients?: { accountKey: string; email: string }[];
 }
 
 /**
@@ -278,6 +287,22 @@ export async function preflightEmailBlast(
         message: `${label} has no complete mailing address, which CAN-SPAM requires in the footer of every commercial email.`,
         remedy: `Add street, city, state, and ZIP under Settings → Email & Texts → Sending Config for ${label}.`,
       });
+    }
+  }
+
+  // ── Audience quality, per sending account ──
+  //
+  // Runs last because it is the only part that needs the recipient list, and
+  // the only part that reads history rather than configuration.
+  const recipients = input.recipients ?? [];
+  if (recipients.length > 0) {
+    for (const key of accountKeys) {
+      const emails = recipients
+        .filter((r) => r.accountKey === key && r.email)
+        .map((r) => r.email);
+      if (emails.length === 0) continue;
+      const risk = await assessAudienceRisk(key, emails);
+      issues.push(...audienceRiskIssues(risk, key));
     }
   }
 

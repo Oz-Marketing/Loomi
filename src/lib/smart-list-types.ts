@@ -113,9 +113,12 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   before: 'is before',
   after: 'is after',
   between: 'is between',
-  within_days: 'is within (days)',
-  within_last_days: 'is within the last (days)',
-  more_than_days_ago: 'is more than (days) ago',
+  // The unit is picked beside the amount now, so it is no longer baked
+  // into the label. `within_days` says "the next" because that is what
+  // the engine does — it matches [today .. +N] and never looks backwards.
+  within_days: 'is within the next',
+  within_last_days: 'is within the last',
+  more_than_days_ago: 'is more than',
   overdue: 'is overdue',
   includes_any: 'includes any of',
   includes_all: 'includes all of',
@@ -182,6 +185,149 @@ export const NO_VALUE_OPERATORS: FilterOperator[] = ['is_empty', 'is_not_empty',
 // and the validator both treat it as a non-match / an error rather
 // than silently comparing against one side.
 export const RANGE_OPERATORS: FilterOperator[] = ['between', 'num_between'];
+
+// ── Relative date values ────────────────────────────────────────
+//
+// The three date operators that compare against a POINT IN TIME accept
+// either a literal date or a relative token ("6 months ago"). The
+// remaining date operators (within_days / within_last_days /
+// more_than_days_ago) already take a day COUNT, so a relative token
+// there would be nonsense — the validator rejects it rather than
+// letting it fall through to `new Date('rel:-6:month')` → Invalid Date
+// → matches nobody, silently.
+//
+// Putting the relativeness in the VALUE rather than in a new operator
+// is what makes this additive: every saved segment keeps its operator,
+// `FilterCondition` keeps its shape, and "more than 6 months ago" is
+// expressible as `before` + `rel:-6:month` without a unit column that
+// both engines and the stored JSON would have to learn about.
+export const RELATIVE_DATE_OPERATORS: FilterOperator[] = ['before', 'after', 'between'];
+
+// The other half: date operators whose value is a COUNT OF DAYS, not a
+// date. The builders need this to decide which input to render — for a
+// while `within_last_days` and `more_than_days_ago` (both added after
+// the original check, which named only `within_days`) drew a date
+// PICKER, so picking "is within the last (days)" and choosing a date
+// stored `2026-03-01`, which the engine read as 2026 days.
+export const DAY_COUNT_DATE_OPERATORS: FilterOperator[] = [
+  'within_days',
+  'within_last_days',
+  'more_than_days_ago',
+];
+
+export type RelativeDateUnit = 'day' | 'week' | 'month' | 'year';
+
+// ── Durations (the day-count operators' value) ──────────────────
+//
+// `within_days` and friends used to take a bare count of DAYS, which
+// made "lapsed more than 3 years ago" a segment you had to write as
+// 1095 — and then be wrong about, because 1095 days is not 3 years
+// across a leap year. The value now carries its own unit.
+//
+// Backward compatibility is the whole design constraint: every saved
+// segment, every seeded lifecycle preset, and the flow builder all
+// store a bare integer today. A bare integer therefore still parses,
+// and still means DAYS, forever. New values are written `6:month`.
+//
+// Deliberately NOT the `rel:` token: that one is signed, because it
+// names a point in time on either side of today. A duration's direction
+// comes from its operator ("within the last" vs "more than ... ago"),
+// so a sign here would be a second, contradictory source of truth.
+export interface DurationValue {
+  /** Whole units, always positive. Direction belongs to the operator. */
+  amount: number;
+  unit: RelativeDateUnit;
+}
+
+const DURATION_PATTERN = /^(\d{1,4}):(day|week|month|year)$/;
+
+/**
+ * Parse a day-count operator's value. Accepts both the legacy bare
+ * integer (days) and the `<amount>:<unit>` token. Returns null for
+ * anything else, which every caller turns into "matches nobody" rather
+ * than guessing.
+ */
+export function parseDuration(
+  value: string | null | undefined,
+): DurationValue | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const match = DURATION_PATTERN.exec(trimmed);
+  if (match) {
+    const amount = Number(match[1]);
+    if (!Number.isInteger(amount) || amount < 0) return null;
+    if (amount > MAX_RELATIVE_DATE_AMOUNT) return null;
+    return { amount, unit: match[2] as RelativeDateUnit };
+  }
+
+  // Legacy: a bare integer has always meant days.
+  if (!/^\d{1,4}$/.test(trimmed)) return null;
+  const amount = Number(trimmed);
+  if (!Number.isInteger(amount) || amount < 0) return null;
+  if (amount > MAX_RELATIVE_DATE_AMOUNT) return null;
+  return { amount, unit: 'day' };
+}
+
+export function formatDuration(value: DurationValue): string {
+  return `${value.amount}:${value.unit}`;
+}
+
+/** `3 months`, `1 day` — for summaries and the segment description. */
+export function describeDuration(value: DurationValue): string {
+  const unit = value.amount === 1 ? value.unit : `${value.unit}s`;
+  return `${value.amount} ${unit}`;
+}
+
+export const RELATIVE_DATE_UNITS: RelativeDateUnit[] = ['day', 'week', 'month', 'year'];
+
+export interface RelativeDateValue {
+  /** Whole units offset from today. Negative is the past, positive the
+   *  future, zero is today. */
+  amount: number;
+  unit: RelativeDateUnit;
+}
+
+/** Upper bound on the offset, so a pasted token can't ask for a date
+ *  200,000 years out. 1000 units covers every real segment — the
+ *  longest thing a dealer filters on is a lease term. */
+export const MAX_RELATIVE_DATE_AMOUNT = 1000;
+
+// Deliberately prefixed: `rel:` can never be parsed as a date by
+// `new Date()`, so an absolute value and a relative one can't be
+// confused for one another, and stored filter JSON stays greppable.
+const RELATIVE_DATE_PATTERN = /^rel:(-?\d{1,4}):(day|week|month|year)$/;
+
+/** True for anything CLAIMING to be a relative token, valid or not —
+ *  so the validator can tell a malformed token from a stray string. */
+export function looksRelativeDate(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().startsWith('rel:');
+}
+
+export function parseRelativeDate(
+  value: string | null | undefined,
+): RelativeDateValue | null {
+  if (typeof value !== 'string') return null;
+  const match = RELATIVE_DATE_PATTERN.exec(value.trim());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isInteger(amount)) return null;
+  if (Math.abs(amount) > MAX_RELATIVE_DATE_AMOUNT) return null;
+  return { amount, unit: match[2] as RelativeDateUnit };
+}
+
+export function formatRelativeDate(value: RelativeDateValue): string {
+  return `rel:${value.amount}:${value.unit}`;
+}
+
+/** A relative token in words: `6 months ago`, `in 90 days`, `today`. */
+export function describeRelativeDate(value: RelativeDateValue): string {
+  if (value.amount === 0) return 'today';
+  const magnitude = Math.abs(value.amount);
+  const unit = magnitude === 1 ? value.unit : `${value.unit}s`;
+  return value.amount < 0 ? `${magnitude} ${unit} ago` : `in ${magnitude} ${unit}`;
+}
 
 // ── Filter Definition (stored as JSON in DB) ──
 

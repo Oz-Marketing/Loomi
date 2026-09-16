@@ -233,6 +233,20 @@ async function maybeUpdateRecipientStatus(
   if (eventType === 'bounce' || eventType === 'dropped') {
     const bounceType = typeof ev.type === 'string' ? ev.type : null;
     const isHard = bounceType ? HARD_BOUNCE_TYPES.has(bounceType) : eventType === 'bounce';
+
+    // Read the current state first, so the parent campaign's counters can be
+    // moved with the row. Those counters are written once when the send runs
+    // and were never touched again, while bounces arrive minutes to hours
+    // later — so a campaign drifted away from its own recipients as its
+    // bounces landed. One production blast read sentCount=3581/failedCount=414
+    // against recipients that actually said 2968 sent / 1027 failed: the
+    // 613-row gap was exactly its async bounces.
+    const existing = await prisma.emailBlastRecipient.findUnique({
+      where: { id: recipientId },
+      select: { status: true, campaignId: true },
+    });
+    if (!existing) return;
+
     await prisma.emailBlastRecipient.update({
       where: { id: recipientId },
       data: {
@@ -240,6 +254,18 @@ async function maybeUpdateRecipientStatus(
         error: `${eventType}${ev.reason ? ': ' + ev.reason : isHard ? ' (hard)' : ''}`,
       },
     });
+
+    // Only on a real transition. SendGrid retries webhook deliveries, and a
+    // duplicate event must not decrement sentCount a second time.
+    if (existing.status !== 'failed') {
+      await prisma.emailBlast.update({
+        where: { id: existing.campaignId },
+        data: {
+          failedCount: { increment: 1 },
+          ...(existing.status === 'sent' ? { sentCount: { decrement: 1 } } : {}),
+        },
+      });
+    }
     return;
   }
   // 'delivered' and 'processed' are informational — we already mark

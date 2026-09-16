@@ -11,6 +11,8 @@ import {
   NO_VALUE_OPERATORS,
   OPERATOR_LABELS,
   RANGE_OPERATORS,
+  describeRelativeDate,
+  parseRelativeDate,
   type FieldDefinition,
   type FilterCondition,
   type FilterDefinition,
@@ -32,6 +34,11 @@ function labelForValue(
   const field = fields.find((f) => f.key === condition.field);
   const raw = (condition.value ?? '').trim();
   if (!raw) return '';
+
+  // A relative bound is stored as `rel:-6:month`; nobody should ever
+  // read that off the filter bar.
+  const relative = parseRelativeDate(raw);
+  if (relative) return describeRelativeDate(relative);
 
   if (field?.options?.length) {
     // Multi-value operators store a comma list; map each part.
@@ -57,7 +64,9 @@ export function describeCondition(
   }
   const value = labelForValue(condition, fields);
   if (RANGE_OPERATORS.includes(condition.operator)) {
-    const upper = (condition.value2 ?? '').trim();
+    const rawUpper = (condition.value2 ?? '').trim();
+    const relativeUpper = parseRelativeDate(rawUpper);
+    const upper = relativeUpper ? describeRelativeDate(relativeUpper) : rawUpper;
     return `${field} ${operator} ${value} and ${upper}`.trim();
   }
   return `${field} ${operator} ${value}`.trim();

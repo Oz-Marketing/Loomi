@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as audienceService from '@/lib/services/audiences';
+import { getAncestorAccountKeysForAll } from '@/lib/services/accounts';
 import { resolveRequestedAccountKeys } from '@/lib/segments/api-scope';
 import { countSegmentForAccounts } from '@/lib/segments/lookup';
 import { type SegmentStrategy } from '@/lib/segments/resolve';
@@ -62,6 +63,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
   const inScope = new Set(selected);
+  // A segment shared DOWN by a group is readable from the accounts beneath
+  // it, so the set of keys a segment may belong to is wider than the set of
+  // accounts being counted. Resolved once for the whole batch.
+  const ancestorsInScope = new Set(await getAncestorAccountKeysForAll(selected));
 
   const counts: CountEntry[] = [];
   for (const id of ids) {
@@ -70,10 +75,17 @@ export async function POST(req: Request) {
       counts.push({ id, count: null, strategy: null, error: 'Segment not found' });
       continue;
     }
-    // Visibility: org-wide segments are readable everywhere; scoped ones
-    // only from an account in scope — which for a group includes each of
-    // its rooftops, so a rooftop's segment still counts from the group.
-    if (audience.accountKey && !inScope.has(audience.accountKey)) {
+    // Visibility, by the same rule as the list and the read scope
+    // (lib/segments/visibility.ts): org-wide is readable everywhere, own
+    // is readable from the account itself, and a group's shared segment is
+    // readable from the accounts beneath it. Without that last case an
+    // inherited segment renders on the rooftop's page with its count
+    // blanked — visible, and apparently broken.
+    const readable =
+      !audience.accountKey ||
+      inScope.has(audience.accountKey) ||
+      (audience.sharedWithChildren === true && ancestorsInScope.has(audience.accountKey));
+    if (!readable) {
       counts.push({ id, count: null, strategy: null, error: 'Forbidden' });
       continue;
     }

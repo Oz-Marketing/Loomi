@@ -174,3 +174,100 @@ describe('parseAndValidateFilterDefinition', () => {
     expect(result.ok).toBe(true);
   });
 });
+
+// A relative token that reaches the engine somewhere it doesn't belong
+// fails closed — the segment matches nobody and nothing on screen says
+// why. These are the checks that turn that into a save-time error.
+describe('relative date values', () => {
+  it('accepts a relative bound on the operators that take a date', () => {
+    for (const [operator, extra] of [
+      ['before', {}],
+      ['after', {}],
+      ['between', { value2: 'rel:-1:year' }],
+    ] as const) {
+      const result = validateFilterDefinition(
+        def([{ id: 'r', field: 'purchaseDate', operator, value: 'rel:-3:year', ...extra }]),
+        fields,
+      );
+      expect(result.ok, operator).toBe(true);
+    }
+  });
+
+  it('accepts a mix of a fixed lower bound and a relative upper one', () => {
+    const result = validateFilterDefinition(
+      def([
+        { id: 'r', field: 'purchaseDate', operator: 'between', value: '2024-01-01', value2: 'rel:-1:month' },
+      ]),
+      fields,
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects a relative bound on a day-count operator', () => {
+    expect(
+      errorPaths(
+        def([{ id: 'r', field: 'purchaseDate', operator: 'within_last_days', value: 'rel:-30:day' }]),
+      ),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('rejects a relative bound on a field that is not a date', () => {
+    expect(
+      errorPaths(def([{ id: 'r', field: 'city', operator: 'contains', value: 'rel:-30:day' }])),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('rejects a malformed or out-of-range token', () => {
+    expect(
+      errorPaths(def([{ id: 'r', field: 'purchaseDate', operator: 'before', value: 'rel:-6:fortnight' }])),
+    ).toContain('groups[0].conditions[0].value');
+    expect(
+      errorPaths(def([{ id: 'r', field: 'purchaseDate', operator: 'before', value: 'rel:99999:day' }])),
+    ).toContain('groups[0].conditions[0].value');
+  });
+
+  it('flags a bad upper bound on its own path, not the lower one', () => {
+    const paths = errorPaths(
+      def([
+        { id: 'r', field: 'purchaseDate', operator: 'between', value: 'rel:-3:year', value2: 'rel:bad:year' },
+      ]),
+    );
+    expect(paths).toContain('groups[0].conditions[0].value2');
+    expect(paths).not.toContain('groups[0].conditions[0].value');
+  });
+});
+
+describe('duration values (the day-count operators)', () => {
+  const check = (operator: string, value: string) =>
+    validateFilterDefinition(
+      def([{ id: 'r', field: 'purchaseDate', operator, value }]),
+      fields,
+    );
+
+  it('accepts the legacy bare integer and a unit token alike', () => {
+    // Back-compat is the design constraint: every segment saved before
+    // units holds a bare integer, and it still means days.
+    for (const value of ['180', '6:month', '3:year', '2:week', '45:day']) {
+      const result = check('more_than_days_ago', value);
+      expect(result.ok, `${value} was rejected`).toBe(true);
+    }
+  });
+
+  it('rejects a malformed duration instead of saving a segment that matches nobody', () => {
+    // parseDuration returns null and every caller fails closed, so without
+    // this the definition persists and the segment is silently empty —
+    // the exact failure this module exists to convert into an error.
+    for (const value of ['6:fortnight', '-6:month', 'abc', '6 months']) {
+      const result = check('more_than_days_ago', value);
+      expect(result.ok, `${value} was accepted`).toBe(false);
+      if (!result.ok) {
+        expect(result.errors[0].message).toContain('not a valid length of time');
+      }
+    }
+  });
+
+  it('still rejects a relative date token on a day-count operator', () => {
+    const result = check('within_last_days', 'rel:-6:month');
+    expect(result.ok).toBe(false);
+  });
+});

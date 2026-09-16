@@ -5,10 +5,23 @@ in, to their inbox.
 
 ## The short version
 
-1. Put a `## Changelog` block in your PR description.
-2. Merge to `main`. A workflow files the entry as a **draft**.
+1. Put a `## Changelog` block in your PR description — **the PR that does the
+   work**, whichever branch it targets.
+2. Merge it. A workflow files the entry as a **draft** when the PR lands on
+   `staging` or on `main`.
 3. Someone opens `/changelog`, reads it, presses **Publish & notify**.
 4. Only then is it visible to anyone else, and only then does anything send.
+
+**Write the block once, in the feature PR.** A `staging -> main` promotion must
+not restate entries its feature PRs already declared — they were filed when
+those PRs merged, and repeating them files a second copy under a different
+`sourceKey`. The promotion's own block is for notes about the release itself,
+if any.
+
+> Until 2026-09-16 the workflow listened on `main` only. Since work reaches
+> production as feature -> staging -> main, the only body it ever read was the
+> promotion's — which does not carry the feature PRs' descriptions — so blocks
+> written in feature PRs were silently dropped.
 
 Nothing publishes itself. The gap between step 2 and 3 is deliberate: a release
 note is customer-facing copy, and "it merged" is not the same claim as "this is
@@ -40,6 +53,17 @@ selections stream as they're built, so there's no wait on a progress bar.
 - An unrecognized `type` or `audience` falls back to the default rather than
   dropping the entry. A typo shouldn't silently lose the release note.
 - **No block, no entry.** Most PRs are plumbing and shouldn't produce one.
+- **`title:` and a body are both required, and a block missing either produces
+  nothing.** That is deliberate — a half-filled template should file nothing
+  rather than an empty entry someone has to notice and delete — but it means a
+  perfectly good paragraph written straight under the heading, with no `title:`
+  line, yields no release note. The import workflow now leaves a **warning
+  annotation** on its run when a block is present and no complete entry came
+  out of it, so this fails loudly instead of silently. If you wrote a note and
+  no draft appeared, check that run first.
+- The block ends at the next markdown heading, so a trailing attribution or
+  sign-off line gets absorbed into the last entry's body unless a heading
+  follows it.
 
 ### `audience` is the important field
 
@@ -121,7 +145,7 @@ deliberately backdated entry can't be eaten by a later deploy.
 
 | Path                                             | What it does                                     |
 | ------------------------------------------------ | ------------------------------------------------ |
-| `.github/workflows/changelog.yml`                | On merge to main, POSTs the PR body              |
+| `.github/workflows/changelog.yml`                | On merge to staging or main, POSTs the PR body   |
 | `.github/pull_request_template.md`               | Carries the block format                         |
 | `src/lib/changelog-pr.ts`                        | Parses the block (unit-tested, no DB)            |
 | `src/app/api/internal/changelog/import/route.ts` | Files drafts, idempotent on `sourceKey`          |

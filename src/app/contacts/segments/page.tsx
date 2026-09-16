@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { isSegmentVisibleTo, isInheritedFromGroup } from '@/lib/segments/visibility';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -10,9 +11,11 @@ import {
   EllipsisHorizontalIcon,
   FunnelIcon,
   GlobeAltIcon,
+  LockClosedIcon,
   MagnifyingGlassIcon,
   PencilSquareIcon,
   PlusIcon,
+  ShareIcon,
   TrashIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
@@ -28,6 +31,7 @@ interface SavedSegment {
   description?: string | null;
   filters: string;
   accountKey?: string | null;
+  sharedWithChildren?: boolean | null;
   color?: string | null;
   updatedAt?: string;
 }
@@ -59,7 +63,8 @@ function describeFilter(definition: FilterDefinition | null): string {
 
 export default function SegmentsPage() {
   const router = useRouter();
-  const { isAccount, isRollup, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
+  const { isAccount, isRollup, accountKey, accounts, scopedAccountKeys, accountData, ancestorsOf } =
+    useAccount();
   const subHref = useScopedHref();
 
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
@@ -136,26 +141,31 @@ export default function SegmentsPage() {
   // ── Scope ────────────────────────────────────────────────────────
   //
   // /api/audiences returns everything the USER may see (by role/assignment),
-  // which is not the same as the currently-selected scope — so a roll-up would
-  // otherwise surface segments from outside it. Segments with no accountKey are
-  // shared/global and always show.
+  // which is not the same as the currently-selected scope, so the selection
+  // is applied here — by the SAME rule the server's read scope and write gate
+  // use (lib/segments/visibility.ts).
   //
-  // Group is checked FIRST: a group account is also `isAccount`, so the
-  // single-account branch would otherwise win and never roll up.
+  // Visibility travels DOWN only: own + platform-wide + anything a group
+  // above shared down. A group deliberately does NOT list its rooftops'
+  // segments. It used to — `scopedAccountKeys` is self + descendants — and
+  // the group's list became every rooftop's working drafts, which is not a
+  // group-level view of anything.
   //
   // Deliberately separate from the search filter below: the counts request
   // keys off this, and refetching every batch on each keystroke would be a
   // request storm.
-  const scopedSegments = useMemo(() => {
-    if (isRollup) {
-      const allowed = new Set(scopedAccountKeys);
-      return savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
-    }
-    if (isAccount && accountKey) {
-      return savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
-    }
-    return savedSegments;
-  }, [savedSegments, isAccount, isRollup, accountKey, scopedAccountKeys]);
+  const viewer = useMemo(
+    () =>
+      isAccount && accountKey
+        ? { accountKey, ancestors: ancestorsOf(accountKey) }
+        : { accountKey: null, ancestors: [] },
+    [isAccount, accountKey, ancestorsOf],
+  );
+
+  const scopedSegments = useMemo(
+    () => savedSegments.filter((s) => isSegmentVisibleTo(s, viewer)),
+    [savedSegments, viewer],
+  );
 
   // Name for the current scope, used by the empty state so it can say WHICH
   // account has no segments rather than blaming the (empty) search box.
@@ -421,6 +431,7 @@ export default function SegmentsPage() {
               const dealer = segment.accountKey
                 ? accounts[segment.accountKey]?.dealer ?? segment.accountKey
                 : null;
+              const inherited = isInheritedFromGroup(segment, viewer);
               const isMenuOpen = openMenuId === segment.id;
               return (
                 <div
@@ -469,13 +480,23 @@ export default function SegmentsPage() {
                           className="glass-dropdown absolute right-0 top-7 z-40 w-44 bg-[var(--card)] py-1 text-xs"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <Link
-                            href={`${subHref('/contacts/segments')}/${encodeURIComponent(segment.id)}`}
-                            className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)]"
-                          >
-                            <PencilSquareIcon className="w-3.5 h-3.5" />
-                            Edit
-                          </Link>
+                          {inherited ? (
+                            <span
+                              className="flex items-center gap-2 px-3 py-1.5 text-[var(--muted-foreground)] cursor-default"
+                              title={`${dealer} owns this segment. Duplicate it to make a version you can edit.`}
+                            >
+                              <LockClosedIcon className="w-3.5 h-3.5" />
+                              Read-only
+                            </span>
+                          ) : (
+                            <Link
+                              href={`${subHref('/contacts/segments')}/${encodeURIComponent(segment.id)}`}
+                              className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)]"
+                            >
+                              <PencilSquareIcon className="w-3.5 h-3.5" />
+                              Edit
+                            </Link>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -515,18 +536,22 @@ export default function SegmentsPage() {
                             <ArrowDownTrayIcon className="w-3.5 h-3.5" />
                             {exportingId === segment.id ? 'Exporting…' : 'Export CSV'}
                           </button>
-                          <div className="my-1 border-t border-[var(--border)]/60" />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              handleDelete(segment);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/10 text-red-400 text-left"
-                          >
-                            <TrashIcon className="w-3.5 h-3.5" />
-                            Delete
-                          </button>
+                          {!inherited && (
+                            <>
+                              <div className="my-1 border-t border-[var(--border)]/60" />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenMenuId(null);
+                                  handleDelete(segment);
+                                }}
+                                className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/10 text-red-400 text-left"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                                Delete
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
@@ -550,14 +575,24 @@ export default function SegmentsPage() {
                     </span>
                     <span
                       className="inline-flex items-center gap-1 text-[10px] text-[var(--muted-foreground)] px-1.5 py-0.5 rounded border border-[var(--border)]/60"
-                      title={dealer ? `Visible only to ${dealer}` : 'Visible to all accounts'}
+                      title={
+                        inherited
+                          ? `Shared by ${dealer} — read-only here. Duplicate it to make a version you can edit.`
+                          : dealer
+                            ? segment.sharedWithChildren
+                              ? `Shared with every account in ${dealer}`
+                              : `Visible only to ${dealer}`
+                            : 'Visible to all accounts'
+                      }
                     >
-                      {dealer ? (
-                        <UsersIcon className="w-2.5 h-2.5" />
-                      ) : (
+                      {!dealer ? (
                         <GlobeAltIcon className="w-2.5 h-2.5" />
+                      ) : inherited || segment.sharedWithChildren ? (
+                        <ShareIcon className="w-2.5 h-2.5" />
+                      ) : (
+                        <UsersIcon className="w-2.5 h-2.5" />
                       )}
-                      {dealer ?? 'Org-wide'}
+                      {inherited ? `Shared from ${dealer}` : (dealer ?? 'Org-wide')}
                     </span>
                   </div>
                 </div>

@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -11,11 +10,11 @@ import {
   BookmarkSquareIcon,
   ChartBarIcon,
   CheckCircleIcon,
-  ChevronDownIcon,
   EnvelopeIcon,
   ExclamationTriangleIcon,
   FunnelIcon,
   GlobeAltIcon,
+  Squares2X2Icon,
   PlusIcon,
   TrashIcon,
   UsersIcon,
@@ -24,7 +23,14 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
+import { Checkbox } from '@/components/ui/checkbox';
+import { HelpTip } from '@/components/ui/help-tip';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
+import { LoomiSelect } from '@/components/contacts/loomi-select';
+import { DateValueInput } from '@/components/contacts/date-value-input';
+import { AccountAccessModal } from '@/components/ad-generator/account-access-picker';
+import { summarizeFanOut } from '@/lib/segments/fan-out';
+import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
 import type {
@@ -36,6 +42,7 @@ import type {
   FilterOperator,
 } from '@/lib/smart-list-types';
 import {
+  DAY_COUNT_DATE_OPERATORS,
   FIELD_CATEGORIES,
   FILTERABLE_FIELDS,
   NO_VALUE_OPERATORS,
@@ -134,6 +141,7 @@ export interface SegmentEditorProps {
     name: string;
     description?: string | null;
     accountKey?: string | null;
+    sharedWithChildren?: boolean | null;
     color?: string | null;
     filters: string;
   };
@@ -143,7 +151,7 @@ export interface SegmentEditorProps {
 
 export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const router = useRouter();
-  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys } =
+  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys, accounts } =
     useAccount();
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
@@ -155,6 +163,46 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
   const isOrgWideScope = !initial?.accountKey && !(isAccount && accountKey);
   const canSave = isPrivileged || !isOrgWideScope;
+
+  // ── Availability ─────────────────────────────────────────────────
+  //
+  // The third scope tier: a segment owned by a GROUP can be shared down to
+  // the accounts beneath it. Offered only where it means something — the
+  // owning account must actually have children, or the control is a switch
+  // that changes nothing (the API refuses it for the same reason).
+  //
+  // One control, and the audience it advertises is computed from the same
+  // predicate the visibility gate uses, so the sentence under the toggle
+  // cannot claim a reach the gate does not grant.
+  const owningKey = initial?.accountKey ?? (isAccount && accountKey ? accountKey : null);
+  const childCount = useMemo(
+    () =>
+      owningKey
+        ? Object.values(accounts).filter((a) => a.parentAccountKey === owningKey).length
+        : 0,
+    [accounts, owningKey],
+  );
+  const canShareDown = childCount > 0;
+  const [sharedWithChildren, setSharedWithChildren] = useState(
+    initial?.sharedWithChildren === true,
+  );
+
+  // ── The same segment in accounts that share no group ──────────────
+  //
+  // Sharing DOWN is the right tool whenever the accounts have a group in
+  // common: one row, one edit, and the rooftops receive it. This is what
+  // that cannot reach — accounts with no common parent, and the case where
+  // an account needs its OWN editable segment rather than a read-only copy
+  // of the group's. It creates one segment per account, so they are
+  // independent from the moment they exist.
+  //
+  // Create only: an existing segment's account is fixed (PATCH carries no
+  // accountKey), because moving one changes whose contacts it resolves
+  // against, which is a different segment.
+  const [alsoAccounts, setAlsoAccounts] = useState<string[]>([]);
+  const [showAccountPicker, setShowAccountPicker] = useState(false);
+  const isFanOut = mode === 'create' && alsoAccounts.length > 0;
+  const owningDealer = owningKey ? accounts[owningKey]?.dealer ?? owningKey : null;
 
   // Sub-account custom fields are only meaningful inside a single
   // account. Admin / org-wide mode keeps just the built-ins (custom
@@ -482,6 +530,11 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         filters,
         description: trimmedDesc || null,
       };
+      // Only send it where it is meaningful — an org-wide segment already
+      // reaches everyone and the API 400s the combination. A fan-out creates
+      // independent per-account segments, so there is no group row for the
+      // flag to hang off; the control is disabled in that state to say so.
+      if (canShareDown && !isFanOut) body.sharedWithChildren = sharedWithChildren;
 
       if (mode === 'edit' && initial?.id) {
         const res = await fetch(`/api/audiences/${encodeURIComponent(initial.id)}`, {
@@ -495,7 +548,14 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         }
         toast.success(`Segment "${trimmedName}" updated.`);
       } else {
-        body.accountKey = isAccount && accountKey ? accountKey : undefined;
+        if (isFanOut) {
+          body.accountKeys = [
+            ...(isAccount && accountKey ? [accountKey] : []),
+            ...alsoAccounts,
+          ];
+        } else {
+          body.accountKey = isAccount && accountKey ? accountKey : undefined;
+        }
         const res = await fetch('/api/audiences', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -505,7 +565,29 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           const data = await res.json().catch(() => ({}));
           throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
         }
-        toast.success(`Segment "${trimmedName}" created.`);
+        if (isFanOut) {
+          // Three branches, the same shape the flow and form deploy modals
+          // use: a partial result must not read as a clean success.
+          const result = await res.json().catch(() => null);
+          const { tone, message } = summarizeFanOut(
+            {
+              created: result?.created ?? [],
+              failures: result?.failures ?? [],
+            },
+            (key) => accounts[key]?.dealer ?? key,
+          );
+          if (tone === 'success') toast.success(message);
+          else if (tone === 'warning') toast.warning(message);
+          else {
+            // Nothing was written. Leaving the page here would strand the
+            // user on a list that does not contain the segment they just
+            // built, with no way back to the filter they spent time on.
+            toast.error(message);
+            return;
+          }
+        } else {
+          toast.success(`Segment "${trimmedName}" created.`);
+        }
       }
       router.push(segmentsHref);
     } catch (err) {
@@ -547,7 +629,12 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         </div>
         <div className="flex items-start gap-3 flex-wrap">
           <FunnelIcon className="w-7 h-7 text-[var(--primary)] mt-1.5 flex-shrink-0" />
-          <div className="flex-1 min-w-0">
+          {/* A real minimum, not min-w-0. The controls beside this don't
+              shrink, so with min-w-0 the name field absorbed every pixel they
+              needed and the segment's own name truncated to "Segm…". The row
+              already wraps; a basis lets it, because flexbox breaks lines on
+              the flex BASE size and a basis of 0 never triggers the wrap. */}
+          <div className="flex-1 basis-[280px] min-w-[240px]">
             <input
               type="text"
               value={name}
@@ -563,12 +650,14 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               className="w-full text-sm text-[var(--muted-foreground)] bg-transparent border-0 focus:outline-none placeholder:text-[var(--muted-foreground)]/40 mt-1 px-0"
             />
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]"
               title={
                 initial?.accountKey || (isAccount && accountKey)
-                  ? 'Visible only to this account'
+                  ? canShareDown && sharedWithChildren
+                    ? 'Visible to this group and every account beneath it'
+                    : 'Visible only to this account'
                   : 'Visible to all accounts'
               }
             >
@@ -584,6 +673,44 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                 numbers on this screen change with it, so the control belongs
                 on it (see docs/account-scope.md). */}
             <AccountScopeToggle />
+            {canShareDown && (
+              <span className="flex items-center gap-1">
+                <Checkbox
+                  size="sm"
+                  checked={sharedWithChildren && !isFanOut}
+                  onChange={setSharedWithChildren}
+                  disabled={isFanOut}
+                  label={`Share with the ${childCount} account${childCount === 1 ? '' : 's'} in this group`}
+                  className="text-[11px] text-[var(--muted-foreground)]"
+                />
+                <HelpTip title="Sharing down" iconClassName="w-3 h-3">
+                  Every account under {owningDealer} sees this segment and can use it
+                  for sends and exports, but cannot change it — a segment is a filter,
+                  so it resolves to each account&apos;s own contacts. They can duplicate
+                  it to build their own version.
+                </HelpTip>
+              </span>
+            )}
+            {mode === 'create' && (
+              <span className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAccountPicker(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
+                >
+                  <Squares2X2Icon className="w-3 h-3" />
+                  {alsoAccounts.length > 0
+                    ? `Also creating in ${alsoAccounts.length} more`
+                    : 'Also create in\u2026'}
+                </button>
+                <HelpTip title="Creating in several accounts" iconClassName="w-3 h-3">
+                  Creates a separate copy of this segment in each account you pick, so
+                  each one can change theirs. For accounts that share a group, sharing
+                  down from the group is usually better \u2014 that is one segment
+                  everyone sees, so editing it once updates them all.
+                </HelpTip>
+              </span>
+            )}
             <button
               type="button"
               onClick={handleExport}
@@ -684,6 +811,24 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           <PreviewPanel preview={preview} eligibility={eligibility} />
         </aside>
       </div>
+          {showAccountPicker && (
+        <AccountAccessModal
+          name={name.trim() || 'this segment'}
+          ownerKey={isAccount && accountKey ? accountKey : null}
+          selected={alsoAccounts}
+          onChange={setAlsoAccounts}
+          onClose={() => setShowAccountPicker(false)}
+          title="Create this segment in other accounts"
+          showLibraryWarning={false}
+          description={
+            <>
+              Each account gets its own copy of &ldquo;{name.trim() || 'this segment'}&rdquo;
+              to change as they like &mdash; they do not stay in step afterwards. For
+              accounts that share a group, sharing down from the group keeps them as one.
+            </>
+          }
+        />
+      )}
     </div>
   );
 }
@@ -832,22 +977,26 @@ function ConditionRow({
   // checkbox picker rather than the comma-separated text box — the
   // stored values are opaque ids, so typing them isn't a real option.
   const isOptionMultiSelect = fieldType === 'multiselect' && hasOptions;
+  // A date field's value is a date for some operators and a day COUNT
+  // for others, so the input follows the operator, not just the type.
+  const isDayCountInput =
+    fieldType === 'date' && DAY_COUNT_DATE_OPERATORS.includes(condition.operator);
   const isNumberInput =
+    isDayCountInput ||
     fieldType === 'number' ||
     (fieldType === 'numeric_text' && condition.operator.startsWith('num_'));
-  const isDateInput = fieldType === 'date' && condition.operator !== 'within_days';
+  const isDateInput = fieldType === 'date' && !isDayCountInput;
 
-  const inputType = isNumberInput ? 'number' : isDateInput ? 'date' : 'text';
-  const placeholder =
-    condition.operator === 'within_days'
-      ? 'days (e.g. 30)'
-      : isNumberInput
-        ? 'number'
-        : fieldType === 'tags' || fieldType === 'multiselect'
-          ? 'tag1, tag2'
-          : fieldType === 'select'
-            ? 'value1, value2'
-            : 'value';
+  const inputType = isNumberInput ? 'number' : 'text';
+  const placeholder = isDayCountInput
+    ? 'days (e.g. 30)'
+    : isNumberInput
+      ? 'number'
+      : fieldType === 'tags' || fieldType === 'multiselect'
+        ? 'tag1, tag2'
+        : fieldType === 'select'
+          ? 'value1, value2'
+          : 'value';
 
   const fieldGroups = useMemo(
     () =>
@@ -865,8 +1014,76 @@ function ConditionRow({
     [operators],
   );
 
+  // Both bounds are built once and placed by whichever layout applies, so
+  // the range and single-value branches can never drift apart.
+  const valueControl = isDayCountInput ? (
+    <DurationValueInput
+      value={condition.value}
+      onChange={onValueChange}
+      suffix={condition.operator === 'more_than_days_ago' ? 'ago' : undefined}
+      invalid={missingValue}
+    />
+  ) : isDateInput ? (
+    <DateValueInput
+      value={condition.value}
+      onChange={onValueChange}
+      invalid={missingValue}
+    />
+  ) : isOptionMultiSelect ? (
+    <OptionMultiSelect
+      options={field?.options ?? []}
+      value={condition.value}
+      onChange={onValueChange}
+      invalid={missingValue}
+    />
+  ) : isSingleSelectInput ? (
+    <select
+      value={condition.value}
+      onChange={(e) => onValueChange(e.target.value)}
+      className={`flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+        missingValue
+          ? 'border-amber-500/50 focus:border-amber-500'
+          : 'border-[var(--border)] focus:border-[var(--primary)]'
+      }`}
+    >
+      <option value="">Select…</option>
+      {field?.options?.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  ) : (
+    <input
+      type={inputType}
+      value={condition.value}
+      onChange={(e) => onValueChange(e.target.value)}
+      placeholder={placeholder}
+      className={`flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+        missingValue
+          ? 'border-amber-500/50 focus:border-amber-500'
+          : 'border-[var(--border)] focus:border-[var(--primary)]'
+      }`}
+    />
+  );
+
+  const value2Control = isDateInput ? (
+    <DateValueInput
+      value={condition.value2 ?? ''}
+      onChange={onValue2Change}
+      edge="end"
+    />
+  ) : (
+    <input
+      type={isNumberInput ? 'number' : 'date'}
+      value={condition.value2 ?? ''}
+      onChange={(e) => onValue2Change(e.target.value)}
+      className="flex-1 min-w-0 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
+    />
+  );
+
   return (
-    <div className="flex items-stretch gap-2 flex-wrap sm:flex-nowrap">
+    <div className="flex items-stretch gap-2 flex-wrap">
       <LoomiSelect
         value={condition.field}
         onChange={onFieldChange}
@@ -877,59 +1094,30 @@ function ConditionRow({
         value={condition.operator}
         onChange={(v) => onOperatorChange(v as FilterOperator)}
         options={operatorOptions}
+        searchable={false}
         className="sm:w-[22%] min-w-[130px]"
       />
       {needsValue ? (
-        <div className="flex items-stretch gap-2 flex-1 min-w-[150px]">
-          {isOptionMultiSelect ? (
-            <OptionMultiSelect
-              options={field?.options ?? []}
-              value={condition.value}
-              onChange={onValueChange}
-              invalid={missingValue}
-            />
-          ) : isSingleSelectInput ? (
-            <select
-              value={condition.value}
-              onChange={(e) => onValueChange(e.target.value)}
-              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-                missingValue
-                  ? 'border-amber-500/50 focus:border-amber-500'
-                  : 'border-[var(--border)] focus:border-[var(--primary)]'
-              }`}
-            >
-              <option value="">Select…</option>
-              {field?.options?.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              type={inputType}
-              value={condition.value}
-              onChange={(e) => onValueChange(e.target.value)}
-              placeholder={placeholder}
-              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-                missingValue
-                  ? 'border-amber-500/50 focus:border-amber-500'
-                  : 'border-[var(--border)] focus:border-[var(--primary)]'
-              }`}
-            />
-          )}
-          {needsValue2 && (
-            <>
-              <span className="self-center text-[11px] text-[var(--muted-foreground)]">and</span>
-              <input
-                type={isNumberInput ? 'number' : 'date'}
-                value={condition.value2 ?? ''}
-                onChange={(e) => onValue2Change(e.target.value)}
-                className="flex-1 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"
-              />
-            </>
-          )}
-        </div>
+        needsValue2 ? (
+          // A range STACKS, with the joiner in its own left gutter, so both
+          // bounds line up in one column. Inline, the lower bound sat an
+          // "and"-width to the right of the upper and the two mode toggles
+          // never agreed — which reads as a rendering fault rather than as
+          // two ends of one range. Each cell is its own flex line, so the
+          // controls' flex-1 still fills the column.
+          <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 gap-y-2 grow basis-[240px] min-w-[150px]">
+            <span aria-hidden="true" />
+            <div className="flex items-stretch min-w-0">{valueControl}</div>
+            <span className="justify-self-end text-[11px] text-[var(--muted-foreground)]">
+              and
+            </span>
+            <div className="flex items-stretch min-w-0">{value2Control}</div>
+          </div>
+        ) : (
+          <div className="flex items-stretch gap-2 grow basis-[240px] min-w-[150px]">
+            {valueControl}
+          </div>
+        )
       ) : (
         <div className="flex-1 min-w-[150px] flex items-center px-3 h-9 text-xs text-[var(--muted-foreground)] italic">
           no value needed
@@ -1051,185 +1239,6 @@ function OptionMultiSelect({ options, value, onChange, invalid }: OptionMultiSel
         </div>
       )}
     </div>
-  );
-}
-
-// ── LoomiSelect (custom dropdown matching the Loomi design language) ──
-
-interface LoomiSelectOption {
-  value: string;
-  label: string;
-}
-
-interface LoomiSelectGroup {
-  label: string;
-  options: LoomiSelectOption[];
-}
-
-interface LoomiSelectProps {
-  value: string;
-  onChange: (value: string) => void;
-  options?: LoomiSelectOption[];
-  groups?: LoomiSelectGroup[];
-  className?: string;
-  placeholder?: string;
-}
-
-function LoomiSelect({
-  value,
-  onChange,
-  options,
-  groups,
-  className = '',
-  placeholder = 'Select…',
-}: LoomiSelectProps) {
-  const [open, setOpen] = useState(false);
-  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
-  const ref = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  const allOptions = useMemo(() => {
-    if (options) return options;
-    if (groups) return groups.flatMap((g) => g.options);
-    return [];
-  }, [options, groups]);
-
-  const selected = allOptions.find((o) => o.value === value);
-
-  function openDropdown() {
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setDropdownStyle({
-        position: 'fixed',
-        top: rect.bottom + 4,
-        left: rect.left,
-        width: rect.width,
-        zIndex: 9999,
-      });
-    }
-    setOpen(true);
-  }
-
-  useEffect(() => {
-    if (!open) return;
-    function handleMouseDown(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    function handleScroll(e: Event) {
-      // Ignore scrolls originating inside the dropdown's own option list —
-      // only an outside/page scroll should dismiss it.
-      if (ref.current && ref.current.contains(e.target as Node)) return;
-      setOpen(false);
-    }
-    document.addEventListener('mousedown', handleMouseDown);
-    document.addEventListener('keydown', handleKey);
-    document.addEventListener('scroll', handleScroll, true);
-    return () => {
-      document.removeEventListener('mousedown', handleMouseDown);
-      document.removeEventListener('keydown', handleKey);
-      document.removeEventListener('scroll', handleScroll, true);
-    };
-  }, [open]);
-
-  function pick(next: string) {
-    onChange(next);
-    setOpen(false);
-  }
-
-  const dropdown = open
-    ? createPortal(
-        <div
-          ref={ref}
-          role="listbox"
-          style={dropdownStyle}
-          className="max-h-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl py-1"
-        >
-          {groups
-            ? groups.map((group) => (
-                <div key={group.label}>
-                  <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                    {group.label}
-                  </p>
-                  {group.options.map((option) => (
-                    <LoomiSelectOptionRow
-                      key={option.value}
-                      option={option}
-                      isSelected={option.value === value}
-                      onSelect={() => pick(option.value)}
-                    />
-                  ))}
-                </div>
-              ))
-            : options?.map((option) => (
-                <LoomiSelectOptionRow
-                  key={option.value}
-                  option={option}
-                  isSelected={option.value === value}
-                  onSelect={() => pick(option.value)}
-                />
-              ))}
-        </div>,
-        document.body,
-      )
-    : null;
-
-  return (
-    <div className={className}>
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => (open ? setOpen(false) : openDropdown())}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={`w-full flex items-center justify-between gap-2 pl-3 pr-2 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-          open
-            ? 'border-[var(--primary)]'
-            : 'border-[var(--border)] hover:border-[var(--primary)]/60'
-        }`}
-      >
-        <span className={`truncate text-left ${selected ? '' : 'text-[var(--muted-foreground)]'}`}>
-          {selected?.label ?? placeholder}
-        </span>
-        <ChevronDownIcon
-          className={`w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0 transition-transform ${
-            open ? 'rotate-180' : ''
-          }`}
-        />
-      </button>
-
-      {dropdown}
-    </div>
-  );
-}
-
-function LoomiSelectOptionRow({
-  option,
-  isSelected,
-  onSelect,
-}: {
-  option: LoomiSelectOption;
-  isSelected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="option"
-      aria-selected={isSelected}
-      onClick={onSelect}
-      className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${
-        isSelected
-          ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
-          : 'hover:bg-[var(--sidebar-muted)]'
-      }`}
-    >
-      {option.label}
-    </button>
   );
 }
 

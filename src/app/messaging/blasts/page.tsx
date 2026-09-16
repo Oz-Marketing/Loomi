@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { BlastPageList, type AccountMeta } from '@/components/campaigns/blast-page-list';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
+import { withinDateWindow } from '@/lib/campaigns/blast-date-window';
 import { ListToolbar } from '@/components/list-toolbar';
 import type {
   StatusFilterOption,
@@ -63,26 +64,6 @@ function toBlastsView(next: StatusFilterValue): BlastsView {
 
 // ── Helpers ──
 
-function getCampaignDate(campaign: Campaign): Date | null {
-  const raw =
-    campaign.sentAt ||
-    campaign.scheduledAt ||
-    campaign.updatedAt ||
-    campaign.createdAt;
-
-  if (!raw) return null;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
-}
-
-function inRange(campaign: Campaign, start: Date, end: Date): boolean {
-  const date = getCampaignDate(campaign);
-  if (!date) return false;
-  const value = date.getTime();
-  return value >= start.getTime() && value <= end.getTime();
-}
-
 function normalizeCampaignStatus(status: string): string {
   const s = status.toLowerCase().trim();
   if (s.includes('complete') || s.includes('deliver') || s.includes('finish') || s.includes('sent')) return 'sent';
@@ -125,8 +106,34 @@ function AccountCampaignsPage() {
   // from the same value.
   const [campaignsSearch, setCampaignsSearch] = useState('');
 
+  // The account whose rows `campaigns` currently holds. Compared against
+  // the active account so a switch can tell "we already have this one's
+  // rows" from "we are still fetching them".
+  const loadedKeyRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (!accountKey) return;
+    if (!accountKey) {
+      // No resolved account yet (this happens mid-switch). Drop the old
+      // account's rows rather than leaving them on screen under the new
+      // account's header.
+      loadedKeyRef.current = null;
+      setCampaigns([]);
+      setLoading(true);
+      return;
+    }
+
+    // Switching accounts has to fall back to the loading state. Nothing
+    // here used to reset `loading`, so after the first load it stayed
+    // false forever: the switch rendered whatever `campaigns` still held,
+    // and once a fetch had resolved to [] that was the "No blasts yet"
+    // empty state — which is why the list only came right after a manual
+    // refresh. Filter changes deliberately DON'T clear, so toggling
+    // archived/flows doesn't flash the table away.
+    if (loadedKeyRef.current !== accountKey) {
+      setCampaigns([]);
+      setApiError(null);
+      setLoading(true);
+    }
 
     let cancelled = false;
     async function load() {
@@ -141,6 +148,7 @@ function AccountCampaignsPage() {
         if (res.ok && Array.isArray(data.campaigns)) {
           setCampaigns(data.campaigns as Campaign[]);
           setApiError(null);
+          loadedKeyRef.current = accountKey;
         } else {
           setCampaigns([]);
           setApiError(
@@ -188,11 +196,9 @@ function AccountCampaignsPage() {
   );
 
   const dateFiltered = useMemo(() => {
-    let result = visibleCampaigns;
-    if (bounds.start) {
-      result = result.filter(c => inRange(c, bounds.start!, bounds.end));
-    }
-    return result;
+    return visibleCampaigns.filter((c) =>
+      withinDateWindow(c, bounds.start, bounds.end),
+    );
   }, [visibleCampaigns, bounds]);
 
   const accountEmptyTitle =

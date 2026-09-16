@@ -15,6 +15,7 @@
 // same way the counts do.
 
 import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeysForAll } from '@/lib/services/accounts';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import {
@@ -94,13 +95,29 @@ export async function resolveSegmentSource(
   if (segmentId) {
     const audience = await prisma.audience.findUnique({
       where: { id: segmentId },
-      select: { id: true, name: true, accountKey: true, filters: true },
+      select: {
+        id: true,
+        name: true,
+        accountKey: true,
+        sharedWithChildren: true,
+        filters: true,
+      },
     });
     if (!audience) {
       throw new SegmentLookupError('Segment not found', 404);
     }
+    // A group's shared segment resolves from the accounts beneath it. This
+    // is the path behind both the CSV export and the Contacts page's
+    // segment filter, i.e. exactly the "use it, don't edit it" the sharing
+    // model grants a rooftop — without this it can see the segment and do
+    // nothing with it.
     if (audience.accountKey && !allowedAccountKeys.includes(audience.accountKey)) {
-      throw new SegmentLookupError('Forbidden', 403);
+      const ancestors = await getAncestorAccountKeysForAll(allowedAccountKeys);
+      const inherited =
+        audience.sharedWithChildren === true && ancestors.includes(audience.accountKey);
+      if (!inherited) {
+        throw new SegmentLookupError('Forbidden', 403);
+      }
     }
     let parsed: FilterDefinition;
     try {

@@ -1,12 +1,15 @@
 import {
   NO_VALUE_OPERATORS,
   RANGE_OPERATORS,
+  parseDuration,
+  parseRelativeDate,
   type FieldDefinition,
   type FieldType,
   type FilterCondition,
   type FilterDefinition,
   type FilterGroup,
   type FilterOperator,
+  type RelativeDateValue,
 } from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
 
@@ -413,9 +416,16 @@ function evaluateDateCondition(
   value2?: string,
 ): boolean {
   const parsedDate = parseDateValue(fieldValue);
-  const parsedValue = parseDateValue(value);
-  const parsedValue2 = parseDateValue(value2);
-  const todayStart = startOfDay(new Date());
+  // One `now` for the whole condition: a range whose two relative bounds
+  // each read the clock separately can straddle midnight and resolve to
+  // two different days.
+  const now = new Date();
+  const todayStart = startOfDay(now);
+  // The COMPARISON bounds go through resolveDateBound, which understands
+  // relative tokens; the ROW's own value never does — a contact's
+  // purchaseDate is always a real date.
+  const parsedValue = resolveDateBound(value, 'start', now);
+  const parsedValue2 = resolveDateBound(value2, 'end', now);
 
   switch (operator) {
     case 'is_empty':
@@ -440,32 +450,34 @@ function evaluateDateCondition(
       return parsedDate.getTime() >= parsedValue.getTime() && parsedDate.getTime() <= parsedValue2.getTime();
     }
     case 'within_days': {
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const future = endOfDay(addCalendarDays(todayStart, days));
-      // within_days: date is between start of today and end of Nth day.
+      // Future-only despite the name: [start of today .. end of the Nth
+      // unit ahead]. The duration carries its own unit; a bare integer
+      // still means days, which is every segment saved before units.
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const future = endOfDay(shiftByUnit(todayStart, { amount: span.amount, unit: span.unit }));
       return parsedDate.getTime() >= todayStart.getTime() && parsedDate.getTime() <= future.getTime();
     }
     case 'within_last_days': {
-      // Past-only: the date falls in [N days ago 00:00 .. end of today].
+      // Past-only: the date falls in [N units ago 00:00 .. end of today].
       // This is what "Last X Date is After N Days" means in the lifecycle
-      // specs — the event happened within the last N days.
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const lower = addCalendarDays(todayStart, -days).getTime();
+      // specs — the event happened within the last N units.
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const lower = shiftByUnit(todayStart, { amount: -span.amount, unit: span.unit }).getTime();
       const upper = endOfDay(new Date(todayStart)).getTime();
       return parsedDate.getTime() >= lower && parsedDate.getTime() <= upper;
     }
     case 'more_than_days_ago': {
-      // Past-only, beyond N: the date is strictly older than N days ago
-      // (calendar-day comparison). Powers lapse gates ("lapsed more than
+      // Past-only, beyond N: the date is strictly older than N units ago
+      // (calendar comparison). Powers lapse gates ("lapsed more than
       // 6 months"). Future dates never match.
-      if (!parsedDate || !value) return false;
-      const days = parseInt(value, 10);
-      if (isNaN(days)) return false;
-      const cutoff = addCalendarDays(todayStart, -days).getTime();
+      if (!parsedDate) return false;
+      const span = parseDuration(value);
+      if (!span) return false;
+      const cutoff = shiftByUnit(todayStart, { amount: -span.amount, unit: span.unit }).getTime();
       return startOfDay(parsedDate).getTime() < cutoff;
     }
     // Operator doesn't belong to this field type — no match.
@@ -482,7 +494,77 @@ export {
   startOfDay as startOfFilterDay,
   endOfDay as endOfFilterDay,
   addCalendarDays as addFilterDays,
+  // The SQL translator MUST build its bounds with this same function:
+  // month and year offsets are calendar math, and a second
+  // implementation is a preview that disagrees with the query it
+  // previews.
+  shiftByUnit as shiftFilterByUnit,
+  resolveDateBound as resolveFilterDateBound,
 };
+
+/**
+ * One comparison bound for a date operator, from either a literal date
+ * or a relative token ("6 months ago"). THE single entry point both
+ * engines resolve bounds through — the SQL translator imports it rather
+ * than reimplementing the arithmetic, because a fast path that computes
+ * "6 months ago" a day differently from the preview is the exact class
+ * of bug this module's DST note was written about.
+ *
+ * `edge` only bites on relative tokens, and only to answer "does 'in 90
+ * days' include the whole of that day?". An upper bound says yes
+ * (end of day), everything else anchors to midnight — the same midnight
+ * `within_last_days` already uses, which is what lets SQL compare the
+ * raw timestamp without flooring it first.
+ *
+ * A literal value is passed through to `parseDateValue` untouched, so
+ * every segment saved before relative values existed resolves to exactly
+ * the instant it always did.
+ */
+function resolveDateBound(
+  value: string | undefined,
+  edge: 'start' | 'end',
+  now: Date = new Date(),
+): Date | null {
+  const relative = parseRelativeDate(value);
+  if (!relative) return parseDateValue(value);
+  const shifted = shiftByUnit(startOfDay(now), relative);
+  return edge === 'end' ? endOfDay(shifted) : shifted;
+}
+
+/**
+ * Shift a midnight-anchored date by whole calendar units.
+ *
+ * Months and years go through `addCalendarMonths` rather than a day
+ * count, because "6 months ago" from the 31st has to land on the last
+ * day of a 30-day month, not spill forward into the next one — JS's
+ * `setMonth` alone turns 31 Mar − 1 month into 3 Mar (or 2 Mar in a leap
+ * year), which would quietly shift a lapse window by three days for
+ * everyone who filtered on a month end.
+ */
+function shiftByUnit(from: Date, relative: RelativeDateValue): Date {
+  switch (relative.unit) {
+    case 'day':
+      return addCalendarDays(from, relative.amount);
+    case 'week':
+      return addCalendarDays(from, relative.amount * 7);
+    case 'month':
+      return addCalendarMonths(from, relative.amount);
+    case 'year':
+      return addCalendarMonths(from, relative.amount * 12);
+  }
+}
+
+function addCalendarMonths(from: Date, months: number): Date {
+  const d = new Date(from);
+  const dayOfMonth = d.getDate();
+  // Park on the 1st before shifting so the month arithmetic can't
+  // overflow, then clamp back to the shortest of the two months.
+  d.setDate(1);
+  d.setMonth(d.getMonth() + months);
+  const lastDayOfTarget = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(dayOfMonth, lastDayOfTarget));
+  return d;
+}
 
 /**
  * Shift a date by whole CALENDAR days, not by N × 24h.

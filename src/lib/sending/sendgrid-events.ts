@@ -247,21 +247,33 @@ async function maybeUpdateRecipientStatus(
     });
     if (!existing) return;
 
+    // `bounced`, not `failed`. Nothing went wrong with the SEND: SendGrid
+    // accepted the message and we recorded it 'sent' at the time. What
+    // happened afterwards is that a mailbox refused it — which is a fact
+    // about the address, not about the blast.
+    //
+    // The distinction is the whole point. A blast whose only "errors" are
+    // bounces used to resolve to 'partial' and render as "Sent with errors",
+    // which is how a healthy send to an old list looked like a malfunction to
+    // the client reading it. Genuine dispatch failures still say 'failed' and
+    // still raise that flag, because those are the ones somebody can fix.
     await prisma.emailBlastRecipient.update({
       where: { id: recipientId },
       data: {
-        status: 'failed',
+        status: 'bounced',
         error: `${eventType}${ev.reason ? ': ' + ev.reason : isHard ? ' (hard)' : ''}`,
       },
     });
 
     // Only on a real transition. SendGrid retries webhook deliveries, and a
-    // duplicate event must not decrement sentCount a second time.
-    if (existing.status !== 'failed') {
+    // duplicate event must not decrement sentCount a second time. Rows still
+    // carrying the pre-split 'failed' status are treated as already counted,
+    // so the backfill and a replayed webhook can't double-count each other.
+    if (existing.status !== 'bounced' && existing.status !== 'failed') {
       await prisma.emailBlast.update({
         where: { id: existing.campaignId },
         data: {
-          failedCount: { increment: 1 },
+          bouncedCount: { increment: 1 },
           ...(existing.status === 'sent' ? { sentCount: { decrement: 1 } } : {}),
         },
       });

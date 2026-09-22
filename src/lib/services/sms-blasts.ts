@@ -127,6 +127,8 @@ export interface SmsBlastSummary {
   totalRecipients: number;
   sentCount: number;
   failedCount: number;
+  /** Twilio took it, a carrier refused it. Not a send failure. */
+  undeliveredCount: number;
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
@@ -286,6 +288,8 @@ function toSummary(row: {
   totalRecipients: number;
   sentCount: number;
   failedCount: number;
+  /** Twilio took it, a carrier refused it. Not a send failure. */
+  undeliveredCount: number;
   accountKeys: string;
   sourceAudienceId: string | null;
   sourceFilter: string | null;
@@ -308,6 +312,7 @@ function toSummary(row: {
     totalRecipients: row.totalRecipients,
     sentCount: row.sentCount,
     failedCount: row.failedCount,
+    undeliveredCount: row.undeliveredCount,
     accountKeys: parseAccountKeys(row.accountKeys),
     sourceAudienceId: row.sourceAudienceId || '',
     sourceFilter: row.sourceFilter || '',
@@ -332,6 +337,7 @@ const smsCampaignSummarySelect = {
   totalRecipients: true,
   sentCount: true,
   failedCount: true,
+  undeliveredCount: true,
   accountKeys: true,
   sourceAudienceId: true,
   sourceFilter: true,
@@ -665,6 +671,7 @@ export async function cancelSmsBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
+      undeliveredCount: counts.undelivered,
     },
     select: smsCampaignSummarySelect,
   });
@@ -872,12 +879,18 @@ async function summarizeCampaign(campaignId: string) {
   let pending = 0;
   let sent = 0;
   let failed = 0;
+  let undelivered = 0;
   let skipped = 0;
   let firstError = '';
 
   for (const row of recipients) {
     if (row.status === 'sent') sent += 1;
-    else if (row.status === 'failed') {
+    else if (row.status === 'undelivered') {
+      // Kept out of firstError: that string is the blast's `error` column and
+      // the failure banner's headline, and "unknown number" about one stale
+      // contact should not headline a send that otherwise worked.
+      undelivered += 1;
+    } else if (row.status === 'failed') {
       failed += 1;
       if (!firstError && row.error) firstError = row.error;
     } else if (row.status === 'skipped') {
@@ -895,16 +908,20 @@ async function summarizeCampaign(campaignId: string) {
     pending,
     sent,
     failed,
+    undelivered,
     skipped,
     firstError,
   };
 }
 
-interface SmsBlastCounts {
+export interface SmsBlastCounts {
   total: number;
   pending: number;
   sent: number;
+  /** Messages Loomi could not hand to Twilio. The only kind anyone can act on. */
   failed: number;
+  /** Twilio took it; a carrier refused it afterwards. A hygiene number. */
+  undelivered: number;
   skipped: number;
   firstError: string;
 }
@@ -917,11 +934,16 @@ interface SmsBlastCounts {
  * windows open. `skipped` counts as work DONE, so an all-opted-out blast
  * completes with zero sends instead of looping.
  */
-function resolveSmsBlastStatus(counts: SmsBlastCounts): SmsBlastStatus {
+export function resolveSmsBlastStatus(counts: SmsBlastCounts): SmsBlastStatus {
   if (counts.pending > 0) return 'processing';
   if (counts.sent > 0 && counts.failed > 0) return 'partial';
   if (counts.sent > 0) return 'completed';
   if (counts.failed > 0) return 'failed';
+  // Carrier refusals are absent from the tests above on purpose — the mirror
+  // of the bounce rule in email-blasts.ts. Twilio accepted the message, so the
+  // blast did its job; a dead handset is a fact about the number, it
+  // auto-suppresses, and it must not render the send as "Sent with errors".
+  if (counts.undelivered > 0) return 'completed';
   if (counts.skipped > 0) return 'completed';
   return 'completed';
 }
@@ -1049,6 +1071,7 @@ export async function processSmsBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
+      undeliveredCount: counts.undelivered,
       completedAt: status === 'processing' ? null : new Date(),
       error: counts.firstError || null,
     });
@@ -1319,6 +1342,7 @@ export async function processSmsBlast(
     totalRecipients: counts.total,
     sentCount: counts.sent,
     failedCount: counts.failed,
+    undeliveredCount: counts.undelivered,
     completedAt: nextStatus === 'processing' ? null : new Date(),
     error: counts.firstError || null,
   });

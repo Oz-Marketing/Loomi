@@ -7,11 +7,16 @@
  * and `ziprider.con` fail here without needing to be enumerated anywhere.
  *
  * ── WHERE THIS BELONGS, AND WHERE IT DOESN'T ────────────────────────────────
- * At IMPORT and on demand — never in the per-recipient send loop. A DNS
- * round-trip per recipient would add minutes to a large blast and make sending
- * depend on a resolver being reachable, turning a transient DNS blip into
- * failed sends. The send path keeps using the synchronous domain list; this is
- * the slower, more thorough pass that runs when contacts arrive.
+ * Per DOMAIN, never per recipient. A DNS round-trip inside the send loop would
+ * add minutes to a large blast and make sending depend on a resolver being
+ * reachable, turning a transient DNS blip into failed sends.
+ *
+ * `resolveDomainMx` below is the shape that is safe: a blast resolves the
+ * distinct domains of its audience ONCE, before the loop, in parallel and
+ * bounded — a few hundred lookups for thousands of recipients, most of them
+ * gmail/yahoo/outlook answered from the cache on the first hit. The loop then
+ * does a map read. Anything that still wants a per-address answer at import
+ * time uses `checkEmailMx` as before.
  *
  * ── FAIL OPEN, ALWAYS ───────────────────────────────────────────────────────
  * A lookup that errors or times out returns `unknown`, never `invalid`. A
@@ -135,4 +140,46 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
       },
     );
   });
+}
+
+/**
+ * MX verdicts for every distinct domain in a list of addresses, resolved
+ * concurrently.
+ *
+ * This is the send path's entry point: a blast calls it once with its whole
+ * audience and then reads the map per recipient, so the DNS cost is per
+ * domain rather than per person and never sits inside the send loop.
+ *
+ * Returns a domain → verdict map. Addresses with no parseable domain simply
+ * have no entry; a caller reading a missing key gets `undefined`, which must
+ * be treated as `unknown` — the fail-open rule at the top of this file is not
+ * negotiable, and a dead resolver has to look like "carry on and send".
+ */
+export async function resolveDomainMx(
+  emails: Iterable<string | null | undefined>,
+  options?: { concurrency?: number },
+): Promise<Map<string, MxVerdict>> {
+  const domains = new Set<string>();
+  for (const email of emails) {
+    const domain = domainOf(email);
+    if (domain) domains.add(domain);
+  }
+
+  const out = new Map<string, MxVerdict>();
+  const queue = [...domains];
+  // Bounded fan-out: a resolver will start dropping answers under an
+  // unbounded burst, and a dropped answer is an `unknown` we'd rather not
+  // manufacture ourselves.
+  const concurrency = Math.max(1, options?.concurrency ?? 16);
+
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    for (;;) {
+      const domain = queue.pop();
+      if (domain === undefined) return;
+      out.set(domain, await checkMx(domain));
+    }
+  });
+  await Promise.all(workers);
+
+  return out;
 }

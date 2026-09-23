@@ -5,9 +5,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: cypress-io/github-action@v6
+          - uses: cypress-io/github-action@v6
         with:
-          component: true
+          build: npm run build
+          start: npm start
+          wait-on: 'http://localhost:3000'
       - name: Notify Slack
         if: failure() && github.ref == 'refs/heads/main'
         uses: slackapi/slack-github-action@v2

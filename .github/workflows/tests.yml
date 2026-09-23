@@ -62,11 +62,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Build Slack message
+        id: slack
+        if: failure() && github.ref == 'refs/heads/main'
+        env:
+          SUMMARY: cypress/results/component-summary.json
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Slack mrkdwn treats &, < and > as markup, and test titles contain
+          # them — `<Collapse>` would otherwise vanish from the message.
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+
+          subject="$(git log -1 --format=%s | esc)"
+          commit="Commit <$COMMIT_URL|\`${GITHUB_SHA::7}\`> \"$subject\" by $GITHUB_ACTOR · <$RUN_URL|view run>"
+
+          # cypress.config.ts writes the summary after the run. No file means
+          # the job failed before any test ran (install, typecheck, bundling).
+          if [ -f "$SUMMARY" ]; then
+            counts="$(jq -r '"(\(.totalFailed) of \(.totalTests))"' "$SUMMARY")"
+            # Capped at 10 so a mass failure stays readable; the run has the rest.
+            failures="$(jq -r '.failures[:10][] | "• `\(.spec)` — \(.title)"' "$SUMMARY" | esc)"
+            extra="$(jq -r '.failures | length - 10' "$SUMMARY")"
+            if [ "$extra" -gt 0 ]; then failures="$failures"$'\n'"…and $extra more"; fi
+          else
+            counts=""
+            failures="• Failed before any test ran — see the run log"
+          fi
+
+          {
+            echo 'text<<SLACK_EOF'
+            echo "❌ *Component tests failed on \`$GITHUB_REF_NAME\`* $counts"
+            echo "$failures"
+            echo "$commit"
+            echo 'SLACK_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Notify Slack
         if: failure() && github.ref == 'refs/heads/main'
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
+          # toJSON quotes the multi-line text into one valid YAML scalar.
           payload: |
-            text: "❌ Component tests failed on `${{ github.ref_name }}` by ${{ github.actor }} — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>"
+            text: ${{ toJSON(steps.slack.outputs.text) }}

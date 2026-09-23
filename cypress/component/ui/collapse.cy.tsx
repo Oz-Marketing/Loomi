@@ -33,8 +33,8 @@ describe('<Collapse>', () => {
 
     cy.contains('Toggle').click();
     wrapper().should('have.attr', 'data-open', 'true');
-    // Waits out the 250ms transition — should() retries until it lands.
-    wrapper().invoke('outerHeight').should('equal', 120);
+    // TEMP: deliberately wrong, to fail CI and test the Slack notification.
+    wrapper().invoke('outerHeight').should('equal', 999);
   });
 
   it('closes back to zero height', () => {

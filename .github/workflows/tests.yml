@@ -10,7 +10,7 @@ on:
   pull_request:
   # Pushes to main run too, so a regression that lands there reaches Slack.
   push:
-    branches: [main]
+    branches: [main, chloe/slack-notify-test]  # TEMP: Slack notify test, never merge
   workflow_dispatch:
 
 concurrency:
@@ -64,7 +64,7 @@ jobs:
 
       - name: Build Slack message
         id: slack
-        if: failure() && github.ref == 'refs/heads/main'
+        if: failure() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/chloe/slack-notify-test')  # TEMP
         env:
           SUMMARY: cypress/results/component-summary.json
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
@@ -99,7 +99,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: failure() && github.ref == 'refs/heads/main'
+        if: failure() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/chloe/slack-notify-test')  # TEMP
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

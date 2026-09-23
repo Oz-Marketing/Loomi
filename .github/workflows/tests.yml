@@ -1,15 +1,67 @@
 name: Component tests
-on: [push, pull_request]
+
+# Cypress component suite — one React component at a time, in real Chrome.
+# Runbook: docs/component-testing.md.
+#
+# Deliberately NOT a deploy gate, for the same reason as e2e.yml: branch
+# protection requires `verify` (typecheck.yml) and nothing else. No server,
+# no database, no build — the suite bundles only the components it mounts.
+on:
+  pull_request:
+  # Pushes to main run too, so a regression that lands there reaches Slack.
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: component-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cypress:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-          - uses: cypress-io/github-action@v6
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          build: npm run build
-          start: npm start
-          wait-on: 'http://localhost:3000'
+          node-version: 20
+          cache: npm
+
+      # Installs dependencies AND caches the Cypress browser binary. Like
+      # e2e.yml, this is one of the only jobs that needs the binary, so it
+      # does NOT set CYPRESS_INSTALL_BINARY=0.
+      - name: Install dependencies
+        uses: cypress-io/github-action@v6
+        with:
+          runTests: false
+          # The repo's peer tree needs this flag — a bare `npm ci` fails.
+          install-command: npm ci --legacy-peer-deps
+
+      - name: Typecheck the Cypress suites
+        # cypress/ is outside the root tsconfig, so `npm run verify` never
+        # sees these specs.
+        run: npm run verify:e2e
+
+      - name: Run the suite
+        uses: cypress-io/github-action@v6
+        with:
+          install: false
+          component: true
+          browser: chrome
+
+      - name: Upload failure screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-test-screenshots
+          path: cypress/screenshots
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Notify Slack
         if: failure() && github.ref == 'refs/heads/main'
         uses: slackapi/slack-github-action@v2
@@ -17,4 +69,4 @@ jobs:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
           payload: |
-            text: "${{ job.status == 'success' && '✅' || '❌' }} Component tests ${{ job.status }} on `${{ github.ref_name }}` by ${{ github.actor }} — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>"
+            text: "❌ Component tests failed on `${{ github.ref_name }}` by ${{ github.actor }} — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>"

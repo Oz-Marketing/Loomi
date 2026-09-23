@@ -64,6 +64,10 @@ updates the relevant section **in the same change**.
   the UI there is `npm run e2e` — Cypress against an already-running server
   (it starts nothing; always pass `CYPRESS_BASE_URL`). It is deliberately NOT
   a deploy gate. See `docs/e2e-testing.md`.
+- Component tests are `npm run ct` — Cypress mounting one component in Chrome,
+  no server. Specs go in `cypress/component/`, **never beside the component**:
+  a `*.cy.tsx` under `src/` lands in the root tsconfig and breaks `verify`.
+  Not a deploy gate. See `docs/component-testing.md`.
 
 ## Branches, deploys, and authorization
 

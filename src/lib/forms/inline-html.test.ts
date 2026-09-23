@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { sanitizeInlineHtml } from './sanitize-inline';
+import { sanitizeInlineHtml, filterInlineStyle } from './sanitize-inline';
 import { FieldConsent } from './components/fields';
 import { ColumnsBlock } from './components/Columns';
 
@@ -39,6 +39,49 @@ describe('sanitizeInlineHtml', () => {
     expect(out).not.toContain('<iframe');
     expect(out).not.toContain('<div');
     expect(out).toContain('keep me');
+  });
+
+  it('keeps an authored link color', () => {
+    const out = sanitizeInlineHtml('<a style="color:#197cc2" href="https://ex.com/privacy">Privacy</a>');
+    expect(out).toContain('color: #197cc2');
+    expect(out).toContain('href="https://ex.com/privacy"');
+  });
+
+  it('underlines links by default so they read as links under the CSS reset', () => {
+    expect(sanitizeInlineHtml('<a href="https://ex.com">x</a>')).toContain('text-decoration: underline');
+    expect(sanitizeInlineHtml('<a style="text-decoration: none" href="https://ex.com">x</a>')).not.toContain(
+      'underline',
+    );
+  });
+
+  it('opens web links in a new tab so a half-filled form survives the click', () => {
+    const out = sanitizeInlineHtml('<a href="https://ex.com">x</a>');
+    expect(out).toContain('target="_blank"');
+    expect(out).toContain('rel="noopener noreferrer"');
+    expect(sanitizeInlineHtml('<a href="https://ex.com" target="_self">x</a>')).toContain('target="_self"');
+    expect(sanitizeInlineHtml('<a href="tel:+15551234567">x</a>')).not.toContain('target=');
+  });
+
+  it('does not leak its hooks into other DOMPurify callers', async () => {
+    sanitizeInlineHtml('<a href="https://ex.com">x</a>');
+    const { sanitizeBlockHtml } = await import('./components/Html');
+    expect(sanitizeBlockHtml('<a href="https://ex.com">x</a>')).not.toContain('target=');
+  });
+});
+
+describe('filterInlineStyle', () => {
+  it('keeps text properties and drops everything else', () => {
+    expect(filterInlineStyle('color: red; position: fixed; font-weight: 700')).toBe('color: red; font-weight: 700');
+  });
+
+  it('drops url() and other functions that could beacon out', () => {
+    expect(filterInlineStyle('background-color: url(https://evil/x)')).toBe('');
+    expect(filterInlineStyle('color: expression(alert(1))')).toBe('');
+    expect(filterInlineStyle('color: rgb(25, 124, 194)')).toBe('color: rgb(25, 124, 194)');
+  });
+
+  it('ignores malformed declarations like color=#hex', () => {
+    expect(filterInlineStyle('color=#197cc2')).toBe('');
   });
 });
 

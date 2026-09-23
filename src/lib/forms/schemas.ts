@@ -41,6 +41,12 @@ export interface PropSchema {
   slider?: boolean;
   sliderMin?: number;
   sliderMax?: number;
+  /**
+   * Textarea holds inline HTML: edit it in a Text (visual) / Code view.
+   * `true` always; a string names the toggle prop that turns HTML on
+   * (the Text block's `allowHtml`) — plain-text blocks keep the textarea.
+   */
+  richText?: true | string;
 }
 
 export interface BlockSchema {
@@ -223,7 +229,7 @@ export const TEXT_SCHEMA: BlockSchema = {
   category: 'layout',
   defaults: { text: 'Your message goes here.', color: '#3a3a3a', fontSize: 15, lineHeight: 1.6, align: 'left', marginBottom: 16 },
   props: [
-    { key: 'text', label: 'Text', type: 'textarea', group: 'content' },
+    { key: 'text', label: 'Text', type: 'textarea', group: 'content', richText: 'allowHtml' },
     { key: 'allowHtml', label: 'Allow HTML', type: 'toggle', default: false, group: 'content' },
     { key: 'align', label: 'Align', type: 'select', options: ALIGN_OPTIONS, default: 'left', group: 'content' },
     { key: 'color', label: 'Color', type: 'color', default: '#3a3a3a', group: 'typography' },
@@ -447,7 +453,7 @@ export const FIELD_CONSENT_SCHEMA: BlockSchema = {
     labelFontWeight: 400,
   },
   props: [
-    { key: 'label', label: 'Consent Text', type: 'textarea', group: 'content' },
+    { key: 'label', label: 'Consent Text', type: 'textarea', group: 'content', richText: true },
     { key: 'required', label: 'Required', type: 'toggle', default: true, group: 'content' },
     { key: 'name', label: 'Field Name', type: 'text', default: 'consent', group: 'advanced' },
     { key: 'labelColor', label: 'Text Color', type: 'color', default: '#3a3a3a', half: true, group: 'label-style' },

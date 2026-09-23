@@ -128,10 +128,16 @@ export default defineConfig({
         const failures = results.runs.flatMap((run) =>
           run.tests
             .filter((test) => test.state === 'failed')
-            .map((test) => ({
-              spec: run.spec.relative.replace(/^cypress\/component\//, ''),
-              title: test.title.join(' › '),
-            })),
+            .map((test) => {
+              // Specs name their suite after the component (`<Collapse>`);
+              // the brackets are code, not prose, so Slack shows `Collapse`.
+              const parts = test.title.map((t) => t.replace(/^<(.+)>$/, '$1'));
+              return {
+                spec: run.spec.relative.replace(/^cypress\/component\//, ''),
+                suite: parts.slice(0, -1).join(' › '),
+                test: parts[parts.length - 1] ?? '',
+              };
+            }),
         );
         mkdirSync('cypress/results', { recursive: true });
         writeFileSync(

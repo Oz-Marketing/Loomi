@@ -63,40 +63,56 @@ jobs:
           retention-days: 7
 
       - name: Build Slack message
-        id: slack
         if: failure() && github.ref == 'refs/heads/main'
         env:
           SUMMARY: cypress/results/component-summary.json
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # Slack mrkdwn treats &, < and > as markup, and test titles contain
-          # them — `<Collapse>` would otherwise vanish from the message.
-          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-
-          subject="$(git log -1 --format=%s | esc)"
-          commit="Commit <$COMMIT_URL|\`${GITHUB_SHA::7}\`> \"$subject\" by $GITHUB_ACTOR · <$RUN_URL|view run>"
-
           # cypress.config.ts writes the summary after the run. No file means
           # the job failed before any test ran (install, typecheck, bundling).
-          if [ -f "$SUMMARY" ]; then
-            counts="$(jq -r '"(\(.totalFailed) of \(.totalTests))"' "$SUMMARY")"
-            # Capped at 10 so a mass failure stays readable; the run has the rest.
-            failures="$(jq -r '.failures[:10][] | "• `\(.spec)` — \(.title)"' "$SUMMARY" | esc)"
-            extra="$(jq -r '.failures | length - 10' "$SUMMARY")"
-            if [ "$extra" -gt 0 ]; then failures="$failures"$'\n'"…and $extra more"; fi
-          else
-            counts=""
-            failures="• Failed before any test ran — see the run log"
-          fi
+          summary=null
+          if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
 
-          {
-            echo 'text<<SLACK_EOF'
-            echo "❌ *Component tests failed on \`$GITHUB_REF_NAME\`* $counts"
-            echo "$failures"
-            echo "$commit"
-            echo 'SLACK_EOF'
-          } >> "$GITHUB_OUTPUT"
+          # Block Kit: a header, one block pair per failed test (name first,
+          # file path small underneath), and a commit footer with a button.
+          # `text` is the plain fallback that notifications and previews show.
+          jq -n \
+            --argjson s "$summary" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg sha "${GITHUB_SHA::7}" \
+            --arg subject "$(git log -1 --format=%s)" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg commit_url "$COMMIT_URL" \
+            --arg run_url "$RUN_URL" '
+            # mrkdwn treats &, < and > as markup.
+            def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+            def section(t): {type: "section", text: {type: "mrkdwn", text: t}};
+            def context(t): {type: "context", elements: [{type: "mrkdwn", text: t}]};
+            def failure: if .suite == "" then "*\(.test | esc)*"
+                         else "*\(.suite | esc)* — \(.test | esc)" end;
+
+            (if $s == null then "The job failed before any test ran"
+             else "\($s.totalFailed) of \($s.totalTests) tests failed" end) as $status
+            | ($s.failures // []) as $f
+            | {
+                text: "❌ Component tests failed on \($ref): \($status)",
+                blocks: (
+                  [ {type: "header", text: {type: "plain_text", text: "❌ Component tests failed on \($ref)", emoji: true}},
+                    context($status),
+                    {type: "divider"} ]
+                  + (if ($f | length) > 0
+                     # Capped at 10 so a mass failure stays readable.
+                     then ($f[:10] | map(section(failure), context("`\(.spec)`")))
+                          + (if ($f | length) > 10 then [context("…and \(($f | length) - 10) more in the run")] else [] end)
+                     else [section("No test results. Install, typecheck or bundling failed. See the run log.")]
+                     end)
+                  + [ {type: "divider"},
+                      {type: "section",
+                       text: {type: "mrkdwn", text: "<\($commit_url)|`\($sha)`> · \($subject | esc) · \($actor)"},
+                       accessory: {type: "button", text: {type: "plain_text", text: "View run"}, url: $run_url}} ]
+                )
+              }' > slack-payload.json
 
       - name: Notify Slack
         if: failure() && github.ref == 'refs/heads/main'
@@ -104,6 +120,4 @@ jobs:
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
-          # toJSON quotes the multi-line text into one valid YAML scalar.
-          payload: |
-            text: ${{ toJSON(steps.slack.outputs.text) }}
+          payload-file-path: slack-payload.json

@@ -24,7 +24,9 @@
     "e2e:open": "cypress open --browser chrome",
     "e2e:record": "cypress run --browser chrome --record",
     "e2e:dev": "start-server-and-test dev http://localhost:3000/login e2e",
-    "verify:e2e": "tsc -p cypress/tsconfig.json"
+    "verify:e2e": "tsc -p cypress/tsconfig.json",
+    "ct": "cypress run --component --browser chrome",
+    "ct:open": "cypress open --component --browser chrome"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

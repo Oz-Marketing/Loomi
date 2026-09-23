@@ -1,7 +1,8 @@
 import { defineConfig } from 'cypress';
 
 /**
- * End-to-end suite. Runbook: docs/e2e-testing.md.
+ * End-to-end suite (`e2e`) and component suite (`component`).
+ * Runbooks: docs/e2e-testing.md, docs/component-testing.md.
  *
  * `baseUrl` is env-driven on purpose. Many worktrees live under
  * `.claude/worktrees/` and all point `npm run dev` at port 3000, so whoever
@@ -80,5 +81,33 @@ export default defineConfig({
       CLIENT_EMAIL: 'alex.client@ozmktg.com',
       CLIENT_PASSWORD: 'client123',
     },
+  },
+
+  /**
+   * Component suite: mounts one React component at a time in real Chrome —
+   * no server, no database, no sign-in.
+   *
+   * `framework: 'next'` makes Cypress build specs with Next's own webpack
+   * config, so the `@/` alias, `'use client'` modules and the Tailwind PostCSS
+   * pipeline behave exactly as they do in the app.
+   *
+   * Specs live under cypress/component/, NOT beside the component. The root
+   * tsconfig includes every `*.tsx` outside cypress/, so a co-located spec
+   * would be typechecked by `npm run verify` without mocha/chai globals and
+   * fail the deploy gate. `npm run verify:e2e` typechecks them here instead.
+   */
+  component: {
+    devServer: { framework: 'next', bundler: 'webpack' },
+    specPattern: 'cypress/component/**/*.cy.tsx',
+    supportFile: 'cypress/support/component.tsx',
+    indexHtmlFile: 'cypress/support/component-index.html',
+    screenshotsFolder: 'cypress/screenshots',
+    videosFolder: 'cypress/videos',
+    // No compile-time ceilings needed here: the bundle is one component, not
+    // a Next route, and it is built once before the first spec runs.
+    retries: { runMode: 2, openMode: 0 },
+    video: false,
+    viewportWidth: 800,
+    viewportHeight: 600,
   },
 });

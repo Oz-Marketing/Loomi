@@ -44,3 +44,4 @@ scripts/tmp-*.ts
 cypress/screenshots/
 cypress/videos/
 cypress/downloads/
+cypress/results/

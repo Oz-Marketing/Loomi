@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { defineConfig } from 'cypress';
 
 /**
@@ -19,6 +20,13 @@ import { defineConfig } from 'cypress';
  * in needs a registrable wildcard parent domain, not a second `cy.visit`.
  */
 const baseUrl = process.env.CYPRESS_BASE_URL ?? 'http://localhost:3000';
+
+/**
+ * Where a component run leaves its summary. `.github/workflows/tests.yml`
+ * reads it to say WHICH tests failed in the Slack alert, rather than just
+ * that something did.
+ */
+const COMPONENT_SUMMARY = 'cypress/results/component-summary.json';
 
 export default defineConfig({
   /**
@@ -109,5 +117,32 @@ export default defineConfig({
     video: false,
     viewportWidth: 800,
     viewportHeight: 600,
+    setupNodeEvents(on) {
+      // `after:run` fires once per `cypress run` (never in `cypress open`).
+      // A test only lands in `failures` if every retry failed — one that
+      // passed on attempt 2 is a flake, not a failure, and stays out of Slack.
+      on('after:run', (results) => {
+        // A run Cypress couldn't start has no per-test results. With no file,
+        // the workflow falls back to "failed before any test ran".
+        if (!results || !('runs' in results)) return;
+        const failures = results.runs.flatMap((run) =>
+          run.tests
+            .filter((test) => test.state === 'failed')
+            .map((test) => ({
+              spec: run.spec.relative.replace(/^cypress\/component\//, ''),
+              title: test.title.join(' › '),
+            })),
+        );
+        mkdirSync('cypress/results', { recursive: true });
+        writeFileSync(
+          COMPONENT_SUMMARY,
+          JSON.stringify(
+            { totalTests: results.totalTests, totalFailed: results.totalFailed, failures },
+            null,
+            2,
+          ),
+        );
+      });
+    },
   },
 });

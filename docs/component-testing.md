@@ -56,7 +56,7 @@ env -u ELECTRON_RUN_AS_NODE npm run ct
 ## CI
 
 `.github/workflows/tests.yml` runs the suite on every PR and on pushes to
-`main`, and posts to Slack when a `main` run fails. The alert is a Block Kit
+`main`, and posts to Slack when a `main` run fails. The alert is a red-striped Block Kit
 message listing each failed test (up to 10) with its file, the count, the
 commit, and a View run button. It gets those from
 `cypress/results/component-summary.json`, which `cypress.config.ts` writes after

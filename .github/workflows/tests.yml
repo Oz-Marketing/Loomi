@@ -74,8 +74,9 @@ jobs:
           summary=null
           if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
 
-          # Block Kit: a header, one block pair per failed test (name first,
-          # file path small underneath), and a commit footer with a button.
+          # Block Kit. The header sits above a card whose red stripe marks
+          # the failure; inside it, a two-column grid (branch, count, author,
+          # commit), each failed test with its file beneath, and two buttons.
           # `text` is the plain fallback that notifications and previews show.
           jq -n \
             --argjson s "$summary" \
@@ -87,31 +88,42 @@ jobs:
             --arg run_url "$RUN_URL" '
             # mrkdwn treats &, < and > as markup.
             def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-            def section(t): {type: "section", text: {type: "mrkdwn", text: t}};
-            def context(t): {type: "context", elements: [{type: "mrkdwn", text: t}]};
-            def failure: if .suite == "" then "*\(.test | esc)*"
-                         else "*\(.suite | esc)* — \(.test | esc)" end;
+            # A half-width grid column wraps fast; keep the subject short.
+            def clip(n): if length > n then .[:n] + "…" else . end;
+            def field(name; value): {type: "mrkdwn", text: "*\(name)*\n\(value)"};
+            def button(name; url): {type: "button", text: {type: "plain_text", text: name}, url: url};
+            def failure: if .suite == "" then "• *\(.test | esc)*"
+                         else "• *\(.suite | esc)* — \(.test | esc)" end;
 
-            (if $s == null then "The job failed before any test ran"
-             else "\($s.totalFailed) of \($s.totalTests) tests failed" end) as $status
-            | ($s.failures // []) as $f
+            ($s.failures // []) as $f
+            | (if $s == null then "Before any test ran"
+               else "\($s.totalFailed) of \($s.totalTests)" end) as $count
             | {
-                text: "❌ Component tests failed on \($ref): \($status)",
-                blocks: (
-                  [ {type: "header", text: {type: "plain_text", text: "❌ Component tests failed on \($ref)", emoji: true}},
-                    context($status),
-                    {type: "divider"} ]
-                  + (if ($f | length) > 0
-                     # Capped at 10 so a mass failure stays readable.
-                     then ($f[:10] | map(section(failure), context("`\(.spec)`")))
-                          + (if ($f | length) > 10 then [context("…and \(($f | length) - 10) more in the run")] else [] end)
-                     else [section("No test results. Install, typecheck or bundling failed. See the run log.")]
-                     end)
-                  + [ {type: "divider"},
-                      {type: "section",
-                       text: {type: "mrkdwn", text: "<\($commit_url)|`\($sha)`> · \($subject | esc) · \($actor)"},
-                       accessory: {type: "button", text: {type: "plain_text", text: "View run"}, url: $run_url}} ]
-                )
+                text: "❌ Component tests failed on \($ref): \($count)",
+                blocks: [
+                  {type: "header", text: {type: "plain_text", text: "❌ Component tests failed", emoji: true}}
+                ],
+                attachments: [{
+                  color: "#E01E5A",
+                  blocks: (
+                    [ {type: "section", fields: [
+                        field("Branch"; "`\($ref)`"),
+                        field("Failed"; $count),
+                        field("Author"; $actor),
+                        field("Commit"; "<\($commit_url)|`\($sha)`> \($subject | clip(40) | esc)")
+                      ]},
+                      {type: "divider"} ]
+                    + (if ($f | length) > 0
+                       # Capped at 10 so a mass failure stays readable.
+                       then ($f[:10] | map(
+                              {type: "section", text: {type: "mrkdwn", text: failure}},
+                              {type: "context", elements: [{type: "mrkdwn", text: "      \(.spec)"}]}))
+                            + (if ($f | length) > 10 then [{type: "context", elements: [{type: "mrkdwn", text: "…and \(($f | length) - 10) more in the run"}]}] else [] end)
+                       else [{type: "section", text: {type: "mrkdwn", text: "No test results. Install, typecheck or bundling failed. See the run log."}}]
+                       end)
+                    + [ {type: "actions", elements: [button("View run"; $run_url), button("View commit"; $commit_url)]} ]
+                  )
+                }]
               }' > slack-payload.json
 
       - name: Notify Slack

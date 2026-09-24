@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { defineConfig } from 'cypress';
+import { listStaticPages, removeClientCampaigns, seedClientCampaigns } from './cypress/tasks';
 
 /**
  * End-to-end suite (`e2e`) and component suite (`component`).
@@ -22,11 +23,56 @@ import { defineConfig } from 'cypress';
 const baseUrl = process.env.CYPRESS_BASE_URL ?? 'http://localhost:3000';
 
 /**
- * Where a component run leaves its summary. `.github/workflows/tests.yml`
- * reads it to say WHICH tests failed in the Slack alert, rather than just
- * that something did.
+ * After every `cypress run`, write a small JSON summary — totals, the tests
+ * that failed, and the flaky ones — for the Slack alert in the workflows
+ * (`.github/scripts/test-alert.sh`) to read. One file per suite.
  */
-const COMPONENT_SUMMARY = 'cypress/results/component-summary.json';
+function writeRunSummary(on: Cypress.PluginEvents, file: string, specRoot: string) {
+  // `after:run` fires once per `cypress run` (never in `cypress open`).
+  on('after:run', (results) => {
+    // A run Cypress couldn't start has no per-test results. With no file,
+    // the alert falls back to "didn't run".
+    if (!results || !('runs' in results)) return;
+    const tests = results.runs.flatMap((run) =>
+      run.tests.map((test) => {
+        // Component specs name their suite after the component
+        // (`<Collapse>`); the brackets are code, not prose, so Slack shows
+        // `Collapse`.
+        const parts = test.title.map((t) => t.replace(/^<(.+)>$/, '$1'));
+        return {
+          state: test.state,
+          attempts: test.attempts.length,
+          spec: run.spec.relative.replace(specRoot, ''),
+          suite: parts.slice(0, -1).join(' › '),
+          test: parts[parts.length - 1] ?? '',
+        };
+      }),
+    );
+    const brief = ({ spec, suite, test }: (typeof tests)[number]) => ({ spec, suite, test });
+    // Failed on every attempt: a real failure.
+    const failures = tests.filter((t) => t.state === 'failed').map(brief);
+    // Failed at least once, then passed on a retry. Green today, but the test
+    // is unreliable, and the Slack alert flags it before it goes red.
+    const flaky = tests
+      .filter((t) => t.state === 'passed' && t.attempts > 1)
+      .map((t) => ({ ...brief(t), attempts: t.attempts }));
+    mkdirSync('cypress/results', { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify(
+        {
+          totalTests: results.totalTests,
+          totalPassed: results.totalPassed,
+          totalFailed: results.totalFailed,
+          failures,
+          flaky,
+        },
+        null,
+        2,
+      ),
+    );
+  });
+}
 
 export default defineConfig({
   /**
@@ -73,6 +119,16 @@ export default defineConfig({
     viewportWidth: 1440,
     viewportHeight: 900,
 
+    setupNodeEvents(on) {
+      writeRunSummary(on, 'cypress/results/e2e-summary.json', 'cypress/e2e/');
+      // Node-side helpers, in cypress/tasks.ts.
+      on('task', {
+        listStaticPages,
+        seedClientCampaigns,
+        removeClientCampaigns,
+      });
+    },
+
     env: {
       // The dev seed identity (prisma/seed.ts), same pair CLAUDE.md documents.
       // Override anywhere real with CYPRESS_LOGIN_EMAIL / CYPRESS_LOGIN_PASSWORD.
@@ -118,49 +174,7 @@ export default defineConfig({
     viewportWidth: 800,
     viewportHeight: 600,
     setupNodeEvents(on) {
-      // `after:run` fires once per `cypress run` (never in `cypress open`).
-      on('after:run', (results) => {
-        // A run Cypress couldn't start has no per-test results. With no file,
-        // the workflow falls back to "failed before any test ran".
-        if (!results || !('runs' in results)) return;
-        const tests = results.runs.flatMap((run) =>
-          run.tests.map((test) => {
-            // Specs name their suite after the component (`<Collapse>`);
-            // the brackets are code, not prose, so Slack shows `Collapse`.
-            const parts = test.title.map((t) => t.replace(/^<(.+)>$/, '$1'));
-            return {
-              state: test.state,
-              attempts: test.attempts.length,
-              spec: run.spec.relative.replace(/^cypress\/component\//, ''),
-              suite: parts.slice(0, -1).join(' › '),
-              test: parts[parts.length - 1] ?? '',
-            };
-          }),
-        );
-        const brief = ({ spec, suite, test }: (typeof tests)[number]) => ({ spec, suite, test });
-        // Failed on every attempt: a real failure.
-        const failures = tests.filter((t) => t.state === 'failed').map(brief);
-        // Failed at least once, then passed on a retry. Green today, but the
-        // test is unreliable, and the Slack alert flags it before it goes red.
-        const flaky = tests
-          .filter((t) => t.state === 'passed' && t.attempts > 1)
-          .map((t) => ({ ...brief(t), attempts: t.attempts }));
-        mkdirSync('cypress/results', { recursive: true });
-        writeFileSync(
-          COMPONENT_SUMMARY,
-          JSON.stringify(
-            {
-              totalTests: results.totalTests,
-              totalPassed: results.totalPassed,
-              totalFailed: results.totalFailed,
-              failures,
-              flaky,
-            },
-            null,
-            2,
-          ),
-        );
-      });
+      writeRunSummary(on, 'cypress/results/component-summary.json', 'cypress/component/');
     },
   },
 });

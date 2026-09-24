@@ -65,3 +65,12 @@ after every `cypress run`. A test that fails and then passes on a retry is
 a yellow card listing them (and a red card lists them too). A clean pass posts
 nothing. Like `e2e.yml`, it is **not a deploy gate**. The only required check is still
 `verify`.
+
+### Previewing the Slack alert
+
+To see what an alert looks like without breaking a test: **Actions →
+Component tests → Run workflow**, pick a branch, and set **test_alert** to
+`failed`, `flaky` or `didnt-run`. The tests are skipped and a sample card built
+from made-up results posts to Slack from that branch. It's marked
+**🧪 Test alert** in the card and "[Test]" in the notification, so nobody
+mistakes it for a real failure. Use it after any change to the alert's layout.

@@ -12,6 +12,14 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      test_alert:
+        # Preview the Slack alert from any branch without breaking a test.
+        # Skips the suite and sends a sample card built from made-up results.
+        description: Send a sample Slack alert instead of running the tests
+        type: choice
+        options: [none, failed, flaky, didnt-run]
+        default: none
 
 concurrency:
   group: component-${{ github.ref }}
@@ -21,11 +29,15 @@ jobs:
   cypress:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Empty unless this is a manual run with a sample alert picked.
+      TEST_ALERT: ${{ github.event_name == 'workflow_dispatch' && inputs.test_alert != 'none' && inputs.test_alert || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
+        if: env.TEST_ALERT == ''
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -35,6 +47,7 @@ jobs:
       # e2e.yml, this is one of the only jobs that needs the binary, so it
       # does NOT set CYPRESS_INSTALL_BINARY=0.
       - name: Install dependencies
+        if: env.TEST_ALERT == ''
         uses: cypress-io/github-action@v6
         with:
           runTests: false
@@ -42,11 +55,13 @@ jobs:
           install-command: npm ci --legacy-peer-deps
 
       - name: Typecheck the Cypress suites
+        if: env.TEST_ALERT == ''
         # cypress/ is outside the root tsconfig, so `npm run verify` never
         # sees these specs.
         run: npm run verify:e2e
 
       - name: Run the suite
+        if: env.TEST_ALERT == ''
         uses: cypress-io/github-action@v6
         with:
           install: false
@@ -54,7 +69,7 @@ jobs:
           browser: chrome
 
       - name: Upload failure screenshots
-        if: failure()
+        if: failure() && env.TEST_ALERT == ''
         uses: actions/upload-artifact@v4
         with:
           name: component-test-screenshots
@@ -65,7 +80,7 @@ jobs:
       - name: Build Slack message
         id: slack
         # Runs after passing runs too: a green run can still have flaky tests.
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || env.TEST_ALERT != '') }}
         env:
           STATUS: ${{ job.status }}
           SUMMARY: cypress/results/component-summary.json
@@ -76,6 +91,23 @@ jobs:
           # the job failed before any test ran (install, typecheck, bundling).
           summary=null
           if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
+
+          # A sample alert replaces the run result with made-up data.
+          case "$TEST_ALERT" in
+            failed)
+              STATUS=failure
+              summary='{"totalTests": 46, "totalPassed": 44, "totalFailed": 2, "flaky": [], "failures": [
+                {"spec": "ui/collapse.cy.tsx", "suite": "Collapse", "test": "opens from zero to full height"},
+                {"spec": "ui/tag-input.cy.tsx", "suite": "TagInput", "test": "removes the last tag on Backspace"}]}' ;;
+            flaky)
+              STATUS=success
+              summary='{"totalTests": 46, "totalPassed": 46, "totalFailed": 0, "failures": [], "flaky": [
+                {"spec": "select.cy.tsx", "suite": "Select", "test": "closes when clicking outside", "attempts": 2},
+                {"spec": "ui/date-picker.cy.tsx", "suite": "DatePicker", "test": "picks a range in either click order", "attempts": 3}]}' ;;
+            didnt-run)
+              STATUS=failure
+              summary=null ;;
+          esac
 
           # Failed → red card. Passed with flaky tests → yellow card.
           # Passed cleanly → nothing, so the channel only ever needs reading.
@@ -98,7 +130,8 @@ jobs:
             --arg subject "$(git log -1 --format=%s)" \
             --arg actor "$GITHUB_ACTOR" \
             --arg commit_url "$COMMIT_URL" \
-            --arg run_url "$RUN_URL" '
+            --arg run_url "$RUN_URL" \
+            --arg sample "$TEST_ALERT" '
             # mrkdwn treats &, < and > as markup.
             def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
             def clip(n): if length > n then .[:n] + "…" else . end;
@@ -125,11 +158,15 @@ jobs:
                else "⚠️ Component tests: \($k | length) flaky" end) as $title
             | {
                 attachments: [{
-                  fallback: "\($title) · \($ref)",
+                  fallback: "\(if $sample != "" then "[Test] " else "" end)\($title) · \($ref)",
                   # The red and yellow Slack uses for its own alerts.
                   color: (if $failed then "#E01E5A" else "#ECB22E" end),
                   blocks: (
                     [ {type: "header", text: {type: "plain_text", text: $title, emoji: true}} ]
+                    + (if $sample != ""
+                       then [{type: "context", elements: [{type: "mrkdwn",
+                              text: "🧪 *Test alert* with sample data, sent from the Run workflow button. Nothing failed."}]}]
+                       else [] end)
                     + (if $s == null
                      then [section("Branch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
                      elif $failed
@@ -150,7 +187,7 @@ jobs:
           echo "send=true" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.slack.outputs.send == 'true' }}
+        if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || env.TEST_ALERT != '') && steps.slack.outputs.send == 'true' }}
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

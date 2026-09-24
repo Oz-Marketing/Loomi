@@ -117,20 +117,24 @@ jobs:
             | (if $s == null then []
                else ["Branch: `\($ref)`", "Triggered by: \($actor)", "Total tests: \($s.totalTests)",
                      "Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"] end) as $stats
-            | (if $failed then "❌ Component tests failed" else "⚠️ Flaky component tests" end) as $title
+            # Same prefix on every card so they scan as one family, with the
+            # count up front: it is what notifications and the channel show.
+            # (A curly apostrophe: an ASCII one would end this shell quote.)
+            | (if $s == null then "❌ Component tests: didn’t run"
+               elif $failed then "❌ Component tests: \($s.totalFailed) failed"
+               else "⚠️ Component tests: \($k | length) flaky" end) as $title
             | {
                 attachments: [{
-                  fallback: "\($title) on \($ref)",
+                  fallback: "\($title) · \($ref)",
                   # The red and yellow Slack uses for its own alerts.
                   color: (if $failed then "#E01E5A" else "#ECB22E" end),
                   blocks: (
                     [ {type: "header", text: {type: "plain_text", text: $title, emoji: true}} ]
                     + (if $s == null
-                     then [section("*No tests ran*\nBranch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
+                     then [section("Branch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
                      elif $failed
-                     then [section((["*Total failed: \($s.totalFailed)*"] + $stats
-                                    + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]
-                     else [section((["*Flaky tests: \($k | length)*"] + $stats) | join("\n"))]
+                     then [section(($stats + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]
+                     else [section($stats | join("\n"))]
                      end)
                     + ($f | list("Failed tests"; "\(name)  _(\(.spec))_"))
                     # A flaky test passed on its last attempt, so `attempts` is

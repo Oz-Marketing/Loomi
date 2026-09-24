@@ -14,6 +14,8 @@ function runLoader(options: {
   slug?: string | null;
   params?: string | null;
   src?: string;
+  /** Extra attributes on the embed's <script> (e.g. `data-gcl-prefix`). */
+  attrs?: Record<string, string>;
 }): HTMLIFrameElement | null {
   window.history.replaceState(null, '', options.hostUrl ?? '/tp-value-your-trade.htm');
   document.body.innerHTML = '';
@@ -23,6 +25,7 @@ function runLoader(options: {
   script.setAttribute('src', options.src ?? `${ORIGIN}/loomi-form.js`);
   if (options.slug !== null) script.setAttribute('data-form', options.slug ?? 'appraisal-form');
   if (options.params) script.setAttribute('data-params', options.params);
+  for (const [name, value] of Object.entries(options.attrs ?? {})) script.setAttribute(name, value);
   holder.appendChild(script);
   document.body.appendChild(holder);
 
@@ -37,8 +40,26 @@ function srcParams(iframe: HTMLIFrameElement | null): Record<string, string> {
   return Object.fromEntries(url.searchParams.entries());
 }
 
+/** Paths the tests set cookies on — clearing needs the same path. */
+const COOKIE_PATHS = ['/', '/trade'];
+
+function setCookie(cookie: string) {
+  document.cookie = cookie;
+}
+
+function clearCookies() {
+  for (const part of document.cookie.split(';')) {
+    const name = part.split('=')[0]?.trim();
+    if (!name) continue;
+    for (const path of COOKIE_PATHS) {
+      document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${path}`;
+    }
+  }
+}
+
 beforeEach(() => {
   document.body.innerHTML = '';
+  clearCookies();
 });
 
 describe('embed loader — mounting', () => {
@@ -129,6 +150,162 @@ describe('embed loader — campaign attribution', () => {
   it('sends only embed=1 when there is nothing to attribute', () => {
     const iframe = runLoader({ hostUrl: '/trade.htm' });
     expect(new URL(iframe!.src).search).toBe('?embed=1');
+  });
+});
+
+describe('embed loader — ad click ids', () => {
+  // Cookie values below are what gtag.js actually wrote in a live session
+  // (Sept 2026) for ?gclid= / ?gbraid= / ?wbraid= landings — see the
+  // format notes in embed-loader.ts.
+  const AW = '_gcl_aw=GCL.1790219680.Probe_Gclid-001; path=/';
+  const AG = '_gcl_ag=2.1.kProbe_Gbraid-002$i1790219695; path=/';
+  const GB = '_gcl_gb=GCL.1790219714.Probe_Wbraid-003; path=/';
+  const AU = '_gcl_au=1.1.139790349.1790219680; path=/';
+
+  it('forwards gbraid and wbraid from the host URL', () => {
+    const iframe = runLoader({ hostUrl: '/trade.htm?gbraid=abc_123&wbraid=wb-456' });
+    expect(srcParams(iframe)).toMatchObject({ gbraid: 'abc_123', wbraid: 'wb-456' });
+  });
+
+  it('falls back to the gclid Google remembered in _gcl_aw', () => {
+    setCookie('_gcl_aw=GCL.1700000000.XYZ; path=/');
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm' })).gclid).toBe('XYZ');
+  });
+
+  it('reads gbraid from _gcl_ag and wbraid from _gcl_gb, as gtag writes them', () => {
+    setCookie(AW);
+    setCookie(AG);
+    setCookie(GB);
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm' }))).toMatchObject({
+      gclid: 'Probe_Gclid-001',
+      gbraid: 'Probe_Gbraid-002',
+      wbraid: 'Probe_Wbraid-003',
+    });
+  });
+
+  it('lets a click on the URL beat the remembered one', () => {
+    setCookie('_gcl_aw=GCL.1700000000.FROM_COOKIE; path=/');
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm?gclid=FROM_URL' })).gclid).toBe('FROM_URL');
+  });
+
+  it('never pairs a URL click with an older cookie click', () => {
+    // A gbraid on the URL is this visit's click; the cookie gclid is an
+    // earlier one, and sending both would blur which produced the lead.
+    setCookie('_gcl_aw=GCL.1700000000.OLD_GCLID; path=/');
+    const params = srcParams(runLoader({ hostUrl: '/trade.htm?gbraid=URL_BRAID' }));
+    expect(params.gbraid).toBe('URL_BRAID');
+    expect(params.gclid).toBeUndefined();
+  });
+
+  it('never treats _gcl_au as a click id', () => {
+    setCookie(AU);
+    expect(new URL(runLoader({ hostUrl: '/trade.htm' })!.src).search).toBe('?embed=1');
+  });
+
+  it('ignores malformed cookies instead of guessing', () => {
+    setCookie('_gcl_aw=GCL.notanumber.XYZ; path=/');
+    setCookie('_gcl_gb=GCL.1700000000; path=/');
+    setCookie('_gcl_ag=3.1.kWRONG_VERSION$i1700000000; path=/');
+    const iframe = runLoader({ hostUrl: '/trade.htm' });
+    expect(iframe).not.toBeNull();
+    expect(new URL(iframe!.src).search).toBe('?embed=1');
+  });
+
+  it('rejects cookie ids with characters a click id never has', () => {
+    setCookie('_gcl_aw=GCL.1700000000.abc%def; path=/');
+    setCookie('_gcl_ag=2.1.k%3Cscript%3E$i1700000000; path=/');
+    expect(new URL(runLoader({ hostUrl: '/trade.htm' })!.src).search).toBe('?embed=1');
+  });
+
+  it('takes the newest click when the cookie is set on two paths', () => {
+    setCookie('_gcl_aw=GCL.1800000000.NEWER; path=/');
+    setCookie('_gcl_aw=GCL.1700000000.OLDER; path=/trade');
+    // document.cookie lists the /trade copy first; the timestamp decides.
+    expect(srcParams(runLoader({ hostUrl: '/trade/value.htm' })).gclid).toBe('NEWER');
+  });
+
+  it('reads a custom Conversion Linker prefix from data-gcl-prefix', () => {
+    setCookie('_gcl2_aw=GCL.1700000000.CUSTOM; path=/');
+    expect(
+      srcParams(runLoader({ hostUrl: '/trade.htm', attrs: { 'data-gcl-prefix': '_gcl2' } })).gclid,
+    ).toBe('CUSTOM');
+    // Not read under the default prefix.
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm' })).gclid).toBeUndefined();
+  });
+
+  it('falls back to _gcl when data-gcl-prefix is not a plain name', () => {
+    setCookie('_gcl_aw=GCL.1700000000.DEFAULT; path=/');
+    expect(
+      srcParams(runLoader({ hostUrl: '/trade.htm', attrs: { 'data-gcl-prefix': 'a b;c' } })).gclid,
+    ).toBe('DEFAULT');
+  });
+
+  it('drops an empty or malformed ?gclid= and uses the remembered click', () => {
+    setCookie('_gcl_aw=GCL.1700000000.XYZ; path=/');
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm?gclid=' })).gclid).toBe('XYZ');
+    expect(srcParams(runLoader({ hostUrl: '/trade.htm?gclid=abc%20def' })).gclid).toBe('XYZ');
+  });
+
+  it('sends click params lowercase, however the host URL spells them', () => {
+    const params = srcParams(runLoader({ hostUrl: '/trade.htm?GCLID=UPPER_OK' }));
+    expect(params.gclid).toBe('UPPER_OK');
+    expect(params.GCLID).toBeUndefined();
+  });
+
+  it('still mounts when the host page blocks cookie access', () => {
+    Object.defineProperty(document, 'cookie', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    try {
+      const iframe = runLoader({ hostUrl: '/trade.htm?utm_source=google' });
+      expect(srcParams(iframe)).toEqual({ embed: '1', utm_source: 'google' });
+    } finally {
+      // Drop the instance override; Document.prototype's accessor is back.
+      delete (document as unknown as { cookie?: string }).cookie;
+    }
+  });
+
+  it('keeps UTMs and data-params exactly as before alongside a cookie click', () => {
+    setCookie('_gcl_aw=GCL.1700000000.XYZ; path=/');
+    const params = srcParams(
+      runLoader({
+        hostUrl: '/trade.htm?utm_source=google&utm_campaign=real-click',
+        params: 'utm_campaign=hardcoded&utm_medium=web&meta_vin=1FT123',
+      }),
+    );
+    expect(params).toEqual({
+      embed: '1',
+      utm_source: 'google',
+      utm_campaign: 'real-click',
+      gclid: 'XYZ',
+      utm_medium: 'web',
+      meta_vin: '1FT123',
+    });
+  });
+});
+
+describe('embed loader — host page events', () => {
+  it('fires loomi-form-submitted with exactly { slug }', () => {
+    // GTM containers on dealer sites listen for this — name and shape are
+    // a public contract.
+    const received: unknown[] = [];
+    const listener = (event: Event) => received.push((event as CustomEvent).detail);
+    window.addEventListener('loomi-form-submitted', listener);
+    try {
+      runLoader({});
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: { type: 'loomi-form-submitted', slug: 'appraisal-form', submissionId: 'sub_1' },
+        }),
+      );
+      expect(received.length).toBeGreaterThan(0);
+      for (const detail of received) expect(detail).toEqual({ slug: 'appraisal-form' });
+    } finally {
+      window.removeEventListener('loomi-form-submitted', listener);
+    }
   });
 });
 

@@ -5,6 +5,13 @@ import { formContentMaxWidth, type FormTemplate } from '@/lib/forms/types';
 import { FormRenderer } from '@/lib/forms/render';
 import { FormInteractiveContext } from '@/lib/forms/components/FieldFileInput';
 import { META_FIELD_PREFIX, UTM_KEYS, type UtmParams } from '@/lib/forms/embed-params';
+import {
+  CLICK_ID_FIELD_PREFIX,
+  CLICK_ID_KEYS,
+  mergeClickIds,
+  readLpClickCookie,
+  type ClickIds,
+} from '@/lib/forms/click-ids';
 
 interface FormPublicProps {
   slug: string;
@@ -55,6 +62,13 @@ interface FormPublicProps {
    * where the cookie may be left over from an earlier landing-page visit.
    */
   utm?: UtmParams;
+  /**
+   * Ad-click ids (gclid, gbraid, wbraid, fbclid, msclkid) read off this
+   * page's own URL — for an embed, what the loader forwarded from the host
+   * page. Sent as `__loomi_click_*` fields; per network, these win over
+   * the `loomi_lp_click` cookie a Loomi landing page leaves.
+   */
+  clickIds?: ClickIds;
 }
 
 const TURNSTILE_API_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -132,6 +146,7 @@ export function FormPublic({
   helpTextOverrides,
   metadata,
   utm,
+  clickIds,
 }: FormPublicProps) {
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
@@ -304,6 +319,14 @@ export function FormPublic({
     for (const key of UTM_KEYS) {
       const value = utm?.[key] ?? cookieUtms?.[key];
       if (value) formData.set(`__loomi_utm_${key}`, value);
+    }
+
+    // Ad-click ids, same precedence: this page's URL, then the landing-page
+    // cookie for any network the URL has nothing for.
+    const clicks = mergeClickIds(clickIds, readLpClickCookie());
+    for (const key of CLICK_ID_KEYS) {
+      const value = clicks[key];
+      if (value) formData.set(`${CLICK_ID_FIELD_PREFIX}${key}`, value);
     }
 
     let res: Response;

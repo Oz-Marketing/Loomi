@@ -64,46 +64,95 @@ jobs:
 
       - name: Build Slack message
         id: slack
-        if: failure() && github.ref == 'refs/heads/main'
+        # Runs after passing runs too: a green run can still have flaky tests.
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         env:
+          STATUS: ${{ job.status }}
           SUMMARY: cypress/results/component-summary.json
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          # Slack mrkdwn treats &, < and > as markup, and test titles contain
-          # them — `<Collapse>` would otherwise vanish from the message.
-          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-
-          subject="$(git log -1 --format=%s | esc)"
-          commit="Commit <$COMMIT_URL|\`${GITHUB_SHA::7}\`> \"$subject\" by $GITHUB_ACTOR · <$RUN_URL|view run>"
-
           # cypress.config.ts writes the summary after the run. No file means
           # the job failed before any test ran (install, typecheck, bundling).
-          if [ -f "$SUMMARY" ]; then
-            counts="$(jq -r '"(\(.totalFailed) of \(.totalTests))"' "$SUMMARY")"
-            # Capped at 10 so a mass failure stays readable; the run has the rest.
-            failures="$(jq -r '.failures[:10][] | "• `\(.spec)` — \(.title)"' "$SUMMARY" | esc)"
-            extra="$(jq -r '.failures | length - 10' "$SUMMARY")"
-            if [ "$extra" -gt 0 ]; then failures="$failures"$'\n'"…and $extra more"; fi
-          else
-            counts=""
-            failures="• Failed before any test ran — see the run log"
+          summary=null
+          if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
+
+          # Failed → red card. Passed with flaky tests → yellow card.
+          # Passed cleanly → nothing, so the channel only ever needs reading.
+          flaky="$(jq -n --argjson s "$summary" '$s.flaky // [] | length')"
+          if [ "$STATUS" != "failure" ] && [ "$flaky" -eq 0 ]; then
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          {
-            echo 'text<<SLACK_EOF'
-            echo "❌ *Component tests failed on \`$GITHUB_REF_NAME\`* $counts"
-            echo "$failures"
-            echo "$commit"
-            echo 'SLACK_EOF'
-          } >> "$GITHUB_OUTPUT"
+          # Everything sits inside the colored card: a large title, stacked
+          # "Label: value" lines, the tests as lists, a Test report button and
+          # the commit. There is deliberately no top-level `text`, which Slack
+          # would render as a line above the card; `fallback` covers
+          # notifications instead.
+          jq -n \
+            --argjson s "$summary" \
+            --arg status "$STATUS" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg sha "${GITHUB_SHA::7}" \
+            --arg subject "$(git log -1 --format=%s)" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg commit_url "$COMMIT_URL" \
+            --arg run_url "$RUN_URL" '
+            # mrkdwn treats &, < and > as markup.
+            def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
+            def clip(n): if length > n then .[:n] + "…" else . end;
+            def section(t): {type: "section", text: {type: "mrkdwn", text: t}};
+            def name: (if .suite == "" then "" else "*\(.suite | esc)* — " end) + (.test | esc);
+            # Capped at 10 so a mass failure stays readable.
+            def list(heading; line):
+              if length == 0 then []
+              else [section("*\(heading)*\n" + (.[:10] | map("- " + line) | join("\n"))
+                      + (if length > 10 then "\n…and \(length - 10) more in the report" else "" end))]
+              end;
+
+            ($status == "failure") as $failed
+            | ($s.failures // []) as $f
+            | ($s.flaky // []) as $k
+            | (if $s == null then []
+               else ["Branch: `\($ref)`", "Triggered by: \($actor)", "Total tests: \($s.totalTests)",
+                     "Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"] end) as $stats
+            # Same prefix on every card so they scan as one family, with the
+            # count up front: it is what notifications and the channel show.
+            # (A curly apostrophe: an ASCII one would end this shell quote.)
+            | (if $s == null then "❌ Component tests: didn’t run"
+               elif $failed then "❌ Component tests: \($s.totalFailed) failed"
+               else "⚠️ Component tests: \($k | length) flaky" end) as $title
+            | {
+                attachments: [{
+                  fallback: "\($title) · \($ref)",
+                  # The red and yellow Slack uses for its own alerts.
+                  color: (if $failed then "#E01E5A" else "#ECB22E" end),
+                  blocks: (
+                    [ {type: "header", text: {type: "plain_text", text: $title, emoji: true}} ]
+                    + (if $s == null
+                     then [section("Branch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
+                     elif $failed
+                     then [section(($stats + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]
+                     else [section($stats | join("\n"))]
+                     end)
+                    + ($f | list("Failed tests"; "\(name)  _(\(.spec))_"))
+                    # A flaky test passed on its last attempt, so `attempts` is
+                    # the attempt it passed on.
+                    + ($k | list("Flaky tests"; "\(name)  _(\(.spec) · passed on attempt \(.attempts))_"))
+                    + [ {type: "actions", elements: [
+                          {type: "button", text: {type: "plain_text", text: "Test report"}, url: $run_url}]},
+                        {type: "context", elements: [
+                          {type: "mrkdwn", text: "Commit <\($commit_url)|`\($sha)`> \($subject | clip(60) | esc)"}]} ]
+                  )
+                }]
+              }' > slack-payload.json
+          echo "send=true" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: failure() && github.ref == 'refs/heads/main'
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.slack.outputs.send == 'true' }}
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           webhook-type: incoming-webhook
-          # toJSON quotes the multi-line text into one valid YAML scalar.
-          payload: |
-            text: ${{ toJSON(steps.slack.outputs.text) }}
+          payload-file-path: slack-payload.json

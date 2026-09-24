@@ -119,25 +119,43 @@ export default defineConfig({
     viewportHeight: 600,
     setupNodeEvents(on) {
       // `after:run` fires once per `cypress run` (never in `cypress open`).
-      // A test only lands in `failures` if every retry failed — one that
-      // passed on attempt 2 is a flake, not a failure, and stays out of Slack.
       on('after:run', (results) => {
         // A run Cypress couldn't start has no per-test results. With no file,
         // the workflow falls back to "failed before any test ran".
         if (!results || !('runs' in results)) return;
-        const failures = results.runs.flatMap((run) =>
-          run.tests
-            .filter((test) => test.state === 'failed')
-            .map((test) => ({
+        const tests = results.runs.flatMap((run) =>
+          run.tests.map((test) => {
+            // Specs name their suite after the component (`<Collapse>`);
+            // the brackets are code, not prose, so Slack shows `Collapse`.
+            const parts = test.title.map((t) => t.replace(/^<(.+)>$/, '$1'));
+            return {
+              state: test.state,
+              attempts: test.attempts.length,
               spec: run.spec.relative.replace(/^cypress\/component\//, ''),
-              title: test.title.join(' › '),
-            })),
+              suite: parts.slice(0, -1).join(' › '),
+              test: parts[parts.length - 1] ?? '',
+            };
+          }),
         );
+        const brief = ({ spec, suite, test }: (typeof tests)[number]) => ({ spec, suite, test });
+        // Failed on every attempt: a real failure.
+        const failures = tests.filter((t) => t.state === 'failed').map(brief);
+        // Failed at least once, then passed on a retry. Green today, but the
+        // test is unreliable, and the Slack alert flags it before it goes red.
+        const flaky = tests
+          .filter((t) => t.state === 'passed' && t.attempts > 1)
+          .map((t) => ({ ...brief(t), attempts: t.attempts }));
         mkdirSync('cypress/results', { recursive: true });
         writeFileSync(
           COMPONENT_SUMMARY,
           JSON.stringify(
-            { totalTests: results.totalTests, totalFailed: results.totalFailed, failures },
+            {
+              totalTests: results.totalTests,
+              totalPassed: results.totalPassed,
+              totalFailed: results.totalFailed,
+              failures,
+              flaky,
+            },
             null,
             2,
           ),

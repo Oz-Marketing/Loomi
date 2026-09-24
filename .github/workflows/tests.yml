@@ -74,10 +74,11 @@ jobs:
           summary=null
           if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
 
-          # Block Kit. The header sits above a card whose red stripe marks
-          # the failure; inside it, a two-column grid (branch, count, author,
-          # commit), each failed test with its file beneath, and two buttons.
-          # `text` is the plain fallback that notifications and previews show.
+          # Laid out like Cypress's own Slack reporter: one plain line above
+          # the card saying what happened and who triggered it, then a red
+          # card with stacked "Label: value" lines, the failed tests as a
+          # list, and a Test report button. The line above doubles as the
+          # notification text.
           jq -n \
             --argjson s "$summary" \
             --arg ref "$GITHUB_REF_NAME" \
@@ -88,40 +89,30 @@ jobs:
             --arg run_url "$RUN_URL" '
             # mrkdwn treats &, < and > as markup.
             def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
-            # A half-width grid column wraps fast; keep the subject short.
             def clip(n): if length > n then .[:n] + "…" else . end;
-            def field(name; value): {type: "mrkdwn", text: "*\(name)*\n\(value)"};
-            def button(name; url): {type: "button", text: {type: "plain_text", text: name}, url: url};
-            def failure: if .suite == "" then "• *\(.test | esc)*"
-                         else "• *\(.suite | esc)* — \(.test | esc)" end;
+            def section(t): {type: "section", text: {type: "mrkdwn", text: t}};
+            def failure: (if .suite == "" then "" else "*\(.suite | esc)* — " end)
+                         + "\(.test | esc)  _(\(.spec))_";
 
             ($s.failures // []) as $f
-            | (if $s == null then "Before any test ran"
-               else "\($s.totalFailed) of \($s.totalTests)" end) as $count
             | {
-                text: "❌ Component tests failed on \($ref): \($count)",
-                blocks: [
-                  {type: "header", text: {type: "plain_text", text: "❌ Component tests failed", emoji: true}}
-                ],
+                text: "*Component tests failed* on `\($ref)`. This run was triggered by \($actor).",
                 attachments: [{
                   color: "#E01E5A",
                   blocks: (
-                    [ {type: "section", fields: [
-                        field("Branch"; "`\($ref)`"),
-                        field("Failed"; $count),
-                        field("Author"; $actor),
-                        field("Commit"; "<\($commit_url)|`\($sha)`> \($subject | clip(40) | esc)")
-                      ]},
-                      {type: "divider"} ]
+                    (if $s == null
+                     then [section("*No tests ran*\nBranch: `\($ref)`\nInstall, typecheck or bundling failed before the suite started.")]
+                     else [section("*Total failed: \($s.totalFailed)*\nBranch: `\($ref)`\nTotal tests: \($s.totalTests)\nTotal passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))")]
+                     end)
                     + (if ($f | length) > 0
                        # Capped at 10 so a mass failure stays readable.
-                       then ($f[:10] | map(
-                              {type: "section", text: {type: "mrkdwn", text: failure}},
-                              {type: "context", elements: [{type: "mrkdwn", text: "      \(.spec)"}]}))
-                            + (if ($f | length) > 10 then [{type: "context", elements: [{type: "mrkdwn", text: "…and \(($f | length) - 10) more in the run"}]}] else [] end)
-                       else [{type: "section", text: {type: "mrkdwn", text: "No test results. Install, typecheck or bundling failed. See the run log."}}]
-                       end)
-                    + [ {type: "actions", elements: [button("View run"; $run_url), button("View commit"; $commit_url)]} ]
+                       then [section("*Failed tests*\n" + ($f[:10] | map("- " + failure) | join("\n"))
+                               + (if ($f | length) > 10 then "\n…and \(($f | length) - 10) more in the report" else "" end))]
+                       else [] end)
+                    + [ {type: "actions", elements: [
+                          {type: "button", text: {type: "plain_text", text: "Test report"}, url: $run_url}]},
+                        {type: "context", elements: [
+                          {type: "mrkdwn", text: "Commit <\($commit_url)|`\($sha)`> \($subject | clip(60) | esc)"}]} ]
                   )
                 }]
               }' > slack-payload.json

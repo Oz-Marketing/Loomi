@@ -56,9 +56,10 @@ env -u ELECTRON_RUN_AS_NODE npm run ct
 ## CI
 
 `.github/workflows/tests.yml` runs the suite on every PR and on pushes to
-`main`, and posts to Slack when a `main` run fails. The alert is a red-striped Block Kit
-message listing each failed test (up to 10) with its file, the count, the
-commit, and a View run button. It gets those from
-`cypress/results/component-summary.json`, which `cypress.config.ts` writes after
-every `cypress run`. A test that passes on a retry isn't listed. Like `e2e.yml`, it is
-**not a deploy gate**. The only required check is still `verify`.
+`main`, and posts to Slack when a `main` run fails. The alert is a red card
+with the failed, total and passed counts, the branch, each failed test (up to
+10) with its file, a Test report button and the commit. It gets those from
+`cypress/results/component-summary.json`, which `cypress.config.ts` writes
+after every `cypress run`. A test that passes on a retry isn't listed. Like
+`e2e.yml`, it is **not a deploy gate**. The only required check is still
+`verify`.

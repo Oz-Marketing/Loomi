@@ -143,7 +143,12 @@ export default defineConfig({
         writeFileSync(
           COMPONENT_SUMMARY,
           JSON.stringify(
-            { totalTests: results.totalTests, totalFailed: results.totalFailed, failures },
+            {
+              totalTests: results.totalTests,
+              totalPassed: results.totalPassed,
+              totalFailed: results.totalFailed,
+              failures,
+            },
             null,
             2,
           ),

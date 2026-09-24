@@ -24,8 +24,8 @@ import { LinkDialog, type LinkValue } from './LinkDialog';
 type View = 'text' | 'code';
 
 const VIEW_OPTIONS: { value: View; label: React.ReactNode; title: string }[] = [
-  { value: 'text', label: <DocumentTextIcon className="w-4 h-4" />, title: 'Text view' },
-  { value: 'code', label: <CodeBracketIcon className="w-4 h-4" />, title: 'Code view' },
+  { value: 'text', label: <DocumentTextIcon className="w-3.5 h-3.5" />, title: 'Text view' },
+  { value: 'code', label: <CodeBracketIcon className="w-3.5 h-3.5" />, title: 'Code view' },
 ];
 
 function escapeHtml(s: string): string {
@@ -303,7 +303,7 @@ export function RichTextInput({
             <LinkIcon className="w-3.5 h-3.5" />
           </button>
         </div>
-        <div className="w-[72px] flex-shrink-0">
+        <div className="w-[52px] flex-shrink-0">
           <ToggleGroup
             value={view}
             onChange={(v) => {
@@ -313,7 +313,7 @@ export function RichTextInput({
               setView(v);
             }}
             options={VIEW_OPTIONS}
-            size="sm"
+            size="xs"
           />
         </div>
       </div>

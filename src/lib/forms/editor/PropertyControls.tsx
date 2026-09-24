@@ -158,8 +158,15 @@ export interface ToggleGroupProps<T extends string | number> {
   value: T;
   onChange: (value: T) => void;
   options: Array<{ label: React.ReactNode; value: T; title?: string }>;
-  size?: 'sm' | 'md';
+  /** `xs` sits beside a compact icon toolbar (the rich text view switch). */
+  size?: 'xs' | 'sm' | 'md';
 }
+
+const TOGGLE_CELL_CLASS = {
+  xs: 'flex-1 inline-flex items-center justify-center h-6 text-[11px] font-medium transition-colors',
+  sm: 'flex-1 inline-flex items-center justify-center h-8 text-xs font-medium transition-colors',
+  md: 'flex-1 inline-flex items-center justify-center h-9 text-sm font-medium transition-colors',
+};
 
 export function ToggleGroup<T extends string | number>({
   value,
@@ -167,10 +174,7 @@ export function ToggleGroup<T extends string | number>({
   options,
   size = 'md',
 }: ToggleGroupProps<T>) {
-  const cellClass =
-    size === 'sm'
-      ? 'flex-1 inline-flex items-center justify-center h-8 text-xs font-medium transition-colors'
-      : 'flex-1 inline-flex items-center justify-center h-9 text-sm font-medium transition-colors';
+  const cellClass = TOGGLE_CELL_CLASS[size];
 
   return (
     <div className="flex rounded-md border border-[var(--border)] overflow-hidden bg-transparent">

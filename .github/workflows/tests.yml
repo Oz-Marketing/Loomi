@@ -85,10 +85,11 @@ jobs:
             exit 0
           fi
 
-          # Laid out like Cypress's own Slack reporter: one plain line above
-          # the card saying what happened and who triggered it (it doubles as
-          # the notification text), then stacked "Label: value" lines, the
-          # tests as lists, a Test report button, and the commit.
+          # Everything sits inside the colored card: a large title, stacked
+          # "Label: value" lines, the tests as lists, a Test report button and
+          # the commit. There is deliberately no top-level `text`, which Slack
+          # would render as a line above the card; `fallback` covers
+          # notifications instead.
           jq -n \
             --argjson s "$summary" \
             --arg status "$STATUS" \
@@ -114,18 +115,18 @@ jobs:
             | ($s.failures // []) as $f
             | ($s.flaky // []) as $k
             | (if $s == null then []
-               else ["Branch: `\($ref)`", "Total tests: \($s.totalTests)",
+               else ["Branch: `\($ref)`", "Triggered by: \($actor)", "Total tests: \($s.totalTests)",
                      "Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"] end) as $stats
+            | (if $failed then "❌ Component tests failed" else "⚠️ Flaky component tests" end) as $title
             | {
-                text: (if $failed
-                       then "*Component tests failed* on `\($ref)`. This run was triggered by \($actor)."
-                       else "*Component tests passed, with flaky tests* on `\($ref)`. This run was triggered by \($actor)." end),
                 attachments: [{
+                  fallback: "\($title) on \($ref)",
                   # The red and yellow Slack uses for its own alerts.
                   color: (if $failed then "#E01E5A" else "#ECB22E" end),
                   blocks: (
-                    (if $s == null
-                     then [section("*No tests ran*\nBranch: `\($ref)`\nInstall, typecheck or bundling failed before the suite started.")]
+                    [ {type: "header", text: {type: "plain_text", text: $title, emoji: true}} ]
+                    + (if $s == null
+                     then [section("*No tests ran*\nBranch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
                      elif $failed
                      then [section((["*Total failed: \($s.totalFailed)*"] + $stats
                                     + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]

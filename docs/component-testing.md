@@ -60,6 +60,8 @@ env -u ELECTRON_RUN_AS_NODE npm run ct
 with the failed, total and passed counts, the branch, each failed test (up to
 10) with its file, a Test report button and the commit. It gets those from
 `cypress/results/component-summary.json`, which `cypress.config.ts` writes
-after every `cypress run`. A test that passes on a retry isn't listed. Like
-`e2e.yml`, it is **not a deploy gate**. The only required check is still
+after every `cypress run`. A test that fails and then passes on a retry is
+**flaky**. It doesn't fail the run, but a `main` run with any flaky tests posts
+a yellow card listing them (and a red card lists them too). A clean pass posts
+nothing. Like `e2e.yml`, it is **not a deploy gate**. The only required check is still
 `verify`.

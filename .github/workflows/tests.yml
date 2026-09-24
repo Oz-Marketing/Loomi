@@ -63,8 +63,11 @@ jobs:
           retention-days: 7
 
       - name: Build Slack message
-        if: failure() && github.ref == 'refs/heads/main'
+        id: slack
+        # Runs after passing runs too: a green run can still have flaky tests.
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         env:
+          STATUS: ${{ job.status }}
           SUMMARY: cypress/results/component-summary.json
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -74,13 +77,21 @@ jobs:
           summary=null
           if [ -f "$SUMMARY" ]; then summary="$(cat "$SUMMARY")"; fi
 
+          # Failed → red card. Passed with flaky tests → yellow card.
+          # Passed cleanly → nothing, so the channel only ever needs reading.
+          flaky="$(jq -n --argjson s "$summary" '$s.flaky // [] | length')"
+          if [ "$STATUS" != "failure" ] && [ "$flaky" -eq 0 ]; then
+            echo "send=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # Laid out like Cypress's own Slack reporter: one plain line above
-          # the card saying what happened and who triggered it, then a red
-          # card with stacked "Label: value" lines, the failed tests as a
-          # list, and a Test report button. The line above doubles as the
-          # notification text.
+          # the card saying what happened and who triggered it (it doubles as
+          # the notification text), then stacked "Label: value" lines, the
+          # tests as lists, a Test report button, and the commit.
           jq -n \
             --argjson s "$summary" \
+            --arg status "$STATUS" \
             --arg ref "$GITHUB_REF_NAME" \
             --arg sha "${GITHUB_SHA::7}" \
             --arg subject "$(git log -1 --format=%s)" \
@@ -91,24 +102,39 @@ jobs:
             def esc: gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;");
             def clip(n): if length > n then .[:n] + "…" else . end;
             def section(t): {type: "section", text: {type: "mrkdwn", text: t}};
-            def failure: (if .suite == "" then "" else "*\(.suite | esc)* — " end)
-                         + "\(.test | esc)  _(\(.spec))_";
+            def name: (if .suite == "" then "" else "*\(.suite | esc)* — " end) + (.test | esc);
+            # Capped at 10 so a mass failure stays readable.
+            def list(heading; line):
+              if length == 0 then []
+              else [section("*\(heading)*\n" + (.[:10] | map("- " + line) | join("\n"))
+                      + (if length > 10 then "\n…and \(length - 10) more in the report" else "" end))]
+              end;
 
-            ($s.failures // []) as $f
+            ($status == "failure") as $failed
+            | ($s.failures // []) as $f
+            | ($s.flaky // []) as $k
+            | (if $s == null then []
+               else ["Branch: `\($ref)`", "Total tests: \($s.totalTests)",
+                     "Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"] end) as $stats
             | {
-                text: "*Component tests failed* on `\($ref)`. This run was triggered by \($actor).",
+                text: (if $failed
+                       then "*Component tests failed* on `\($ref)`. This run was triggered by \($actor)."
+                       else "*Component tests passed, with flaky tests* on `\($ref)`. This run was triggered by \($actor)." end),
                 attachments: [{
-                  color: "#E01E5A",
+                  # The red and yellow Slack uses for its own alerts.
+                  color: (if $failed then "#E01E5A" else "#ECB22E" end),
                   blocks: (
                     (if $s == null
                      then [section("*No tests ran*\nBranch: `\($ref)`\nInstall, typecheck or bundling failed before the suite started.")]
-                     else [section("*Total failed: \($s.totalFailed)*\nBranch: `\($ref)`\nTotal tests: \($s.totalTests)\nTotal passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))")]
+                     elif $failed
+                     then [section((["*Total failed: \($s.totalFailed)*"] + $stats
+                                    + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]
+                     else [section((["*Flaky tests: \($k | length)*"] + $stats) | join("\n"))]
                      end)
-                    + (if ($f | length) > 0
-                       # Capped at 10 so a mass failure stays readable.
-                       then [section("*Failed tests*\n" + ($f[:10] | map("- " + failure) | join("\n"))
-                               + (if ($f | length) > 10 then "\n…and \(($f | length) - 10) more in the report" else "" end))]
-                       else [] end)
+                    + ($f | list("Failed tests"; "\(name)  _(\(.spec))_"))
+                    # A flaky test passed on its last attempt, so `attempts` is
+                    # the attempt it passed on.
+                    + ($k | list("Flaky tests"; "\(name)  _(\(.spec) · passed on attempt \(.attempts))_"))
                     + [ {type: "actions", elements: [
                           {type: "button", text: {type: "plain_text", text: "Test report"}, url: $run_url}]},
                         {type: "context", elements: [
@@ -116,9 +142,10 @@ jobs:
                   )
                 }]
               }' > slack-payload.json
+          echo "send=true" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: failure() && github.ref == 'refs/heads/main'
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.slack.outputs.send == 'true' }}
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}

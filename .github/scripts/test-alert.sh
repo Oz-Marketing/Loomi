@@ -86,9 +86,14 @@ jq -n \
   ($status == "failure") as $failed
   | ($s.failures // []) as $f
   | ($s.flaky // []) as $k
+  # Who and what come first, near the top: Slack folds a tall card behind
+  # "Show more", and the commit is the line most worth seeing.
+  | ["Branch: `\($ref)`",
+     "Commit: <\($commit_url)|`\($sha)`> \($subject | clip(60) | esc)",
+     "Triggered by: \($actor)"] as $who
   | (if $s == null then []
-     else ["Branch: `\($ref)`", "Triggered by: \($actor)", "Total tests: \($s.totalTests)",
-           "Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"] end) as $stats
+     else ["Total tests: \($s.totalTests) · Total passed: \($s.totalPassed // ($s.totalTests - $s.totalFailed))"
+           + (if $failed and ($k | length) > 0 then " · Flaky: \($k | length)" else "" end)] end) as $totals
   # Same prefix on every card so they scan as one family, with the
   # count up front: it is what notifications and the channel show.
   # (A curly apostrophe: an ASCII one would end this shell quote.)
@@ -107,19 +112,15 @@ jq -n \
                     text: "🧪 *Test alert* with sample data, sent from the Run workflow button. Nothing failed."}]}]
              else [] end)
           + (if $s == null
-           then [section("Branch: `\($ref)`\nTriggered by: \($actor)\nInstall, typecheck or bundling failed before the suite started.")]
-           elif $failed
-           then [section(($stats + (if ($k | length) > 0 then ["Flaky: \($k | length)"] else [] end)) | join("\n"))]
-           else [section($stats | join("\n"))]
-           end)
+             then [section(($who + ["Setup failed before any test ran (install, database, build or server start). See the run log."]) | join("\n"))]
+             else [section(($who + $totals) | join("\n"))]
+             end)
           + ($f | list("Failed tests"; "\(name)  _(\(.spec))_"))
           # A flaky test passed on its last attempt, so `attempts` is
           # the attempt it passed on.
           + ($k | list("Flaky tests"; "\(name)  _(\(.spec) · passed on attempt \(.attempts))_"))
           + [ {type: "actions", elements: [
-                {type: "button", text: {type: "plain_text", text: "Test report"}, url: $run_url}]},
-              {type: "context", elements: [
-                {type: "mrkdwn", text: "Commit <\($commit_url)|`\($sha)`> \($subject | clip(60) | esc)"}]} ]
+                {type: "button", text: {type: "plain_text", text: "Test report"}, url: $run_url}]} ]
         )
       }]
     }' > slack-payload.json

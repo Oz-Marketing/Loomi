@@ -1480,6 +1480,19 @@ model FormSubmission {
   utmCampaign String?
   utmTerm     String?
   utmContent  String?
+  // Ad-click ids for the visit that produced the lead — what an ad
+  // platform needs to credit a later sale back to its ad (offline
+  // conversion upload). gclid is Google's usual id; gbraid / wbraid stand
+  // in for it on some iOS traffic; fbclid is Meta's, msclkid Microsoft's.
+  // Captured off the form URL (for an embed, forwarded from the host page,
+  // or recovered from Google's _gcl_* cookies there) or the LP's
+  // `loomi_lp_click` cookie. Validated to [A-Za-z0-9._-]{1,256} by
+  // `lib/forms/click-ids`. Null when the visit carried none.
+  gclid       String?
+  gbraid      String?
+  wbraid      String?
+  fbclid      String?
+  msclkid     String?
   createdAt   DateTime     @default(now())
 
   @@index([formId, createdAt])

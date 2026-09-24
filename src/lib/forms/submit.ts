@@ -46,6 +46,13 @@ export interface SubmitContext {
    *  verbatim so automations can read it. Untrusted — escape on
    *  output. */
   metadata?: Record<string, string> | null;
+  /** Ad-click ids for the visit (see `lib/forms/click-ids`). Validated by
+   *  the route; null when the visit carried none. */
+  gclid?: string | null;
+  gbraid?: string | null;
+  wbraid?: string | null;
+  fbclid?: string | null;
+  msclkid?: string | null;
 }
 
 export interface SubmissionResult {
@@ -173,6 +180,11 @@ export async function submitForm(args: {
       utmCampaign: context.utmCampaign ?? null,
       utmTerm: context.utmTerm ?? null,
       utmContent: context.utmContent ?? null,
+      gclid: context.gclid ?? null,
+      gbraid: context.gbraid ?? null,
+      wbraid: context.wbraid ?? null,
+      fbclid: context.fbclid ?? null,
+      msclkid: context.msclkid ?? null,
     },
   });
 

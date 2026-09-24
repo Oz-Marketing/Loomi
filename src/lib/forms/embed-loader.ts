@@ -18,10 +18,17 @@
  *   data-params="utm_source=web&meta_vin=1FT…"
  *     Static tagging baked into the embed — the campaign this placement
  *     belongs to, or VDP context for a fixed vehicle.
- *   ?utm_*, ?gclid, ?fbclid, ?msclkid on the HOST page
+ *   ?utm_*, ?gclid, ?gbraid, ?wbraid, ?fbclid, ?msclkid on the HOST page
  *     Copied automatically, and they win over `data-params` — a visitor
  *     who actually clicked a tagged ad is better attribution data than
  *     the placement's hardcoded default.
+ *   Google's `_gcl_*` cookies on the HOST page
+ *     When the host URL carries no Google click, the loader falls back to
+ *     the one Google's conversion linker remembered — a visitor who landed
+ *     on the homepage from an ad and browsed to the trade-in page has no
+ *     gclid in the URL any more, but still has it in `_gcl_aw`. A site
+ *     whose Conversion Linker uses a custom cookie prefix declares it with
+ *     `data-gcl-prefix="_gcl2"` (Google's default is `_gcl`).
  *
  * Without that, tagging an embedded form meant hand-writing an <iframe>
  * with the params in its src — which also meant hand-picking a fixed
@@ -40,7 +47,96 @@ export function buildLoaderScript(origin: string): string {
   // Params copied off the host page URL. Campaign tagging and ad-click
   // ids only — never the whole query string, which on a dealer site
   // carries session junk and sometimes PII.
-  var FORWARD = /^(utm_[a-z]+|gclid|fbclid|msclkid)$/i;
+  var FORWARD = /^(utm_[a-z]+|gclid|gbraid|wbraid|fbclid|msclkid)$/i;
+  var CLICK_PARAM = /^(gclid|gbraid|wbraid|fbclid|msclkid)$/i;
+  // Google's three ids are alternatives for one click (gbraid / wbraid
+  // stand in for a gclid on some iOS traffic).
+  var GOOGLE_CLICK = /^(gclid|gbraid|wbraid)$/i;
+  // The server's rule for a click id (it re-checks; this just keeps junk
+  // off the iframe URL). gtag's own rule, [\\w-]+, fits inside it.
+  var CLICK_ID = /^[\\w.-]{1,256}$/;
+
+  // Google's conversion linker remembers the last ad click in first-party
+  // cookies. Google doesn't document the formats; these are read off
+  // gtag.js and a live session (Sept 2026):
+  //   <prefix>_aw  GCL.<unix seconds>.<gclid>
+  //   <prefix>_gb  GCL.<unix seconds>.<wbraid>    (wbraid — not gbraid)
+  //   <prefix>_ag  2.1.k<gbraid>$i<unix seconds>  ('$'-joined, each field
+  //                                                URI-encoded)
+  // <prefix>_au is the linker's visitor id, not a click — never read.
+  // Anything that doesn't parse is ignored rather than guessed at.
+  // Every value of each named cookie — a cookie can be set twice (a
+  // subdomain copy and a parent-domain one). Only the names asked for, so
+  // an odd host cookie name can't reach the lookup object.
+  function readCookies(names){
+    var found = {};
+    for (var n = 0; n < names.length; n++) found[names[n]] = [];
+    var raw;
+    try { raw = String(document.cookie || ''); } catch (e) { return found; }
+    var pairs = raw.split(';');
+    for (var i = 0; i < pairs.length; i++){
+      var pair = pairs[i].replace(/^\\s+|\\s+$/g, '');
+      var eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      var name = pair.slice(0, eq);
+      for (var m = 0; m < names.length; m++){
+        if (names[m] === name) found[name].push(pair.slice(eq + 1));
+      }
+    }
+    return found;
+  }
+
+  function parseGclCookie(value){
+    var bits = String(value).split('.');
+    if (bits.length < 3 || (bits[0] !== 'GCL' && bits[0] !== '1')) return null;
+    if (!/^\\d+$/.test(bits[1]) || !CLICK_ID.test(bits[2])) return null;
+    return { id: bits[2], ts: Number(bits[1]) };
+  }
+
+  function parseStructuredGclCookie(value){
+    var bits = String(value).split('.');
+    if (bits.length < 3 || bits[0] !== '2') return null;
+    var fields = bits.slice(2).join('.').split('$');
+    var id = null, ts = 0;
+    for (var i = 0; i < fields.length; i++){
+      var field;
+      try { field = decodeURIComponent(fields[i]); } catch (e) { continue; }
+      var tag = field.charAt(0), rest = field.slice(1);
+      if (tag === 'k') id = rest;
+      else if (tag === 'i' && /^\\d+$/.test(rest)) ts = Number(rest);
+    }
+    return id && CLICK_ID.test(id) ? { id: id, ts: ts } : null;
+  }
+
+  // The newest click that parses.
+  function newestClick(values, parse){
+    var best = null;
+    for (var i = 0; values && i < values.length; i++){
+      var click = parse(values[i]);
+      if (click && (!best || click.ts > best.ts)) best = click;
+    }
+    return best ? best.id : null;
+  }
+
+  function rememberedGoogleClick(prefix){
+    var aw = prefix + '_aw', ag = prefix + '_ag', gb = prefix + '_gb';
+    var jar = readCookies([aw, ag, gb]);
+    var out = [];
+    var gclid = newestClick(jar[aw], parseGclCookie);
+    var gbraid = newestClick(jar[ag], parseStructuredGclCookie);
+    var wbraid = newestClick(jar[gb], parseGclCookie);
+    if (gclid) out.push(['gclid', gclid]);
+    if (gbraid) out.push(['gbraid', gbraid]);
+    if (wbraid) out.push(['wbraid', wbraid]);
+    return out;
+  }
+
+  // Word characters only, as gtag itself requires; anything else means
+  // the default.
+  function gclPrefix(scriptEl){
+    var prefix = scriptEl.getAttribute('data-gcl-prefix');
+    return prefix && /^\\w{1,64}$/.test(prefix) ? prefix : '_gcl';
+  }
 
   function parseQuery(search){
     var out = [];
@@ -79,9 +175,31 @@ export function buildLoaderScript(origin: string): string {
 
     // Host-page params go first so they win the dedupe against data-params.
     var host = parseQuery(window.location.search);
+    var hostHasGoogleClick = false;
     for (var i = 0; i < host.length; i++){
-      if (FORWARD.test(host[i][0])) add(host[i][0], host[i][1]);
+      var key = host[i][0], value = host[i][1];
+      if (!FORWARD.test(key)) continue;
+      if (CLICK_PARAM.test(key)){
+        // An empty or malformed ?gclid= is no click — drop it rather than
+        // let it block the cookie one.
+        if (!CLICK_ID.test(value)) continue;
+        // The form reads them lowercase, which is how every network sends them.
+        key = key.toLowerCase();
+        if (GOOGLE_CLICK.test(key)) hostHasGoogleClick = true;
+      }
+      add(key, value);
     }
+
+    // No Google click on this URL: use the one the conversion linker
+    // remembered. Never both — a click on the URL is the fresher one, and
+    // mixing a URL gbraid with an old cookie gclid would blur which click
+    // produced the lead.
+    if (!hostHasGoogleClick){
+      var remembered = [];
+      try { remembered = rememberedGoogleClick(gclPrefix(scriptEl)); } catch (e) {}
+      for (var k = 0; k < remembered.length; k++) add(remembered[k][0], remembered[k][1]);
+    }
+
     var declared = parseQuery(scriptEl.getAttribute('data-params'));
     for (var j = 0; j < declared.length; j++) add(declared[j][0], declared[j][1]);
 

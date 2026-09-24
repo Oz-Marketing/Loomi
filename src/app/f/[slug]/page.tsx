@@ -10,6 +10,7 @@ import {
   type RawSearchParams,
 } from '@/lib/forms/embed-params';
 import { publicFormChromeCss } from '@/lib/forms/page-chrome';
+import { parseClickIdParams } from '@/lib/forms/click-ids';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
@@ -62,6 +63,9 @@ export default async function PublicFormPage({ params, searchParams }: PageProps
   // the only channel available — the iframe can't read the host page's
   // query string, so the embed loader copies them onto our URL for us.
   const utm = parseUtmParams(sp);
+  // Ad-click ids arrive the same way — plus, for an embed, the ones the
+  // loader recovered from Google's cookies on the host page.
+  const clickIds = parseClickIdParams(sp);
 
   return (
     <>
@@ -85,6 +89,7 @@ export default async function PublicFormPage({ params, searchParams }: PageProps
         helpTextOverrides={noteOverrides}
         metadata={metadata}
         utm={utm}
+        clickIds={clickIds}
       />
     </>
   );

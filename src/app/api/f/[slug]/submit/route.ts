@@ -4,6 +4,7 @@ import { submitForm, FormSubmitError } from '@/lib/forms/submit';
 import { FormValidationError } from '@/lib/forms/validate';
 import { checkRateLimit } from '@/lib/forms/rate-limit';
 import { META_FIELD_PREFIX, sanitizeMetadataRecord } from '@/lib/forms/embed-params';
+import { takeClickIdFields } from '@/lib/forms/click-ids';
 
 // Public endpoint — no auth. Receives form submissions from the hosted
 // /f/[slug] page AND from iframes/JS-embed snippets on customer sites.
@@ -77,6 +78,9 @@ export async function POST(
   // we don't want them showing up in `submission.data`.
   const attribution = extractAttribution(rawData);
   const metadata = extractEmbedMetadata(rawData);
+  // `__loomi_click_*` → gclid, gbraid, wbraid, fbclid, msclkid. Re-checked
+  // here to [A-Za-z0-9._-]{1,256}; anything else is dropped, not stored.
+  const clickIds = takeClickIdFields(rawData);
 
   try {
     const result = await submitForm({
@@ -88,6 +92,7 @@ export async function POST(
         referrer: req.headers.get('referer'),
         metadata,
         ...attribution,
+        ...clickIds,
       },
     });
 

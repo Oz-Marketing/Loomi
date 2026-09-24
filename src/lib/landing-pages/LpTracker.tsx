@@ -8,6 +8,11 @@
  *  - UTM capture: parses `utm_*` from the URL on first visit, persists
  *    them in `loomi_lp_utm` so subsequent events + form submissions
  *    inherit attribution.
+ *  - Ad-click capture: a landing with `gclid` / `gbraid` / `wbraid` /
+ *    `fbclid` / `msclkid` persists them in `loomi_lp_click` (see
+ *    `lib/forms/click-ids`), so a form later in the visit still sends
+ *    them. Its own cookie, not a field in `loomi_lp_utm`: the ad platforms
+ *    honor a click for 90 days, and the UTM cookie's life stays as it was.
  *  - View event on initial render.
  *  - Scroll milestone events (25/50/75/100), each fired at most once
  *    per page-mount.
@@ -22,6 +27,13 @@
  * routes (mounted once per page, alongside the rendered tree).
  */
 import * as React from 'react';
+import {
+  LP_CLICK_COOKIE,
+  LP_CLICK_TTL_DAYS,
+  clickIdsFromSearch,
+  mergeClickIds,
+  readLpClickCookie,
+} from '@/lib/forms/click-ids';
 
 const ANON_COOKIE = 'loomi_lp_anon';
 const SESSION_COOKIE = 'loomi_lp_session';
@@ -53,6 +65,7 @@ export function LpTracker({ pageId, slug }: LpTrackerProps) {
     const anonId = ensureCookie(ANON_COOKIE, ANON_TTL_DAYS * 24 * 60);
     const sessionId = touchSessionCookie();
     const utm = captureUtmsFromUrl() ?? readUtmCookie();
+    captureClickIdsFromUrl();
 
     const send = (
       type: string,
@@ -250,6 +263,22 @@ function readUtmCookie(): UtmTags | undefined {
   } catch {
     return undefined;
   }
+}
+
+// ── Ad-click ids ───────────────────────────────────────────────────
+
+/**
+ * Persist this landing's click ids. A network on the URL replaces what the
+ * cookie held for it (a new ad click is the one that counts); networks the
+ * URL doesn't mention keep their earlier click. No click ids on the URL
+ * leaves the cookie alone.
+ */
+function captureClickIdsFromUrl() {
+  if (typeof window === 'undefined') return;
+  const fromUrl = clickIdsFromSearch(window.location.search);
+  if (Object.keys(fromUrl).length === 0) return;
+  const merged = mergeClickIds(fromUrl, readLpClickCookie());
+  writeCookie(LP_CLICK_COOKIE, JSON.stringify(merged), LP_CLICK_TTL_DAYS * 24 * 60);
 }
 
 // ── Scroll depth ───────────────────────────────────────────────────

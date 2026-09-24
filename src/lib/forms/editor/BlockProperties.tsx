@@ -26,6 +26,7 @@ import {
   ToggleGroup,
 } from './PropertyControls';
 import { FORMATTING_PROP_KEYS, TOOLBAR_BLOCK_TYPES } from './FormattingToolbar';
+import { RichTextInput } from './RichTextInput';
 
 type TabKey = 'content' | 'style' | 'layout';
 
@@ -318,6 +319,10 @@ function PropertyList({ props, block, schema, isMobile, getValue, onResetMobile,
                   prop={prop}
                   value={getValue(prop.key)}
                   onChange={(v) => onChange(prop.key, v)}
+                  richText={
+                    prop.richText === true ||
+                    (typeof prop.richText === 'string' && [true, 'true'].includes(getValue(prop.richText) as boolean | string))
+                  }
                   device={{
                     isMobile,
                     responsive,
@@ -430,11 +435,14 @@ function PropertyField({
   value,
   onChange,
   device,
+  richText = false,
 }: {
   prop: PropSchema;
   value: unknown;
   onChange: (v: unknown) => void;
   device?: DeviceInfo;
+  /** Inline-HTML textarea: render the Text / Code editor instead. */
+  richText?: boolean;
 }) {
   const stringValue = value == null ? '' : String(value);
 
@@ -467,6 +475,7 @@ function PropertyField({
       onChange={onChange}
       isAlignProp={!!isAlignProp}
       isFontWeightProp={isFontWeightProp}
+      richText={richText}
     />
   );
 
@@ -503,6 +512,7 @@ function PropertyInput({
   onChange,
   isAlignProp,
   isFontWeightProp,
+  richText,
 }: {
   prop: PropSchema;
   stringValue: string;
@@ -510,6 +520,7 @@ function PropertyInput({
   onChange: (v: unknown) => void;
   isAlignProp: boolean;
   isFontWeightProp: boolean;
+  richText: boolean;
 }) {
   if (prop.type === 'toggle') {
     const checked = value === true || value === 'true';
@@ -540,6 +551,16 @@ function PropertyInput({
   }
   if (prop.type === 'color') {
     return <ColorInput value={stringValue} onChange={(v) => onChange(v)} />;
+  }
+  if (prop.type === 'textarea' && richText) {
+    return (
+      <RichTextInput
+        value={stringValue}
+        onChange={(v) => onChange(v)}
+        placeholder={prop.placeholder}
+        inputClass={inputClass}
+      />
+    );
   }
   if (prop.type === 'textarea') {
     // The Custom HTML block pastes markup, not prose — give it a taller

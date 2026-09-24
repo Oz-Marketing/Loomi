@@ -3,6 +3,8 @@
 Cypress drives a real browser against a running Loomi. It is the layer above
 `npm run test` (vitest, pure units with no browser and no database) and it
 answers a different question: *does the app still come up and let a person in?*
+For testing one component in isolation, see
+[component-testing.md](component-testing.md).
 
 Types are not evidence the app works — [`CLAUDE.md`](../CLAUDE.md) makes that
 point about `npm run verify`, and this suite is the part that actually checks.

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Loomi component tests</title>
+    <!--
+      Next's style loader inserts every stylesheet before this exact node,
+      which Next's own document normally renders. Without it, importing
+      globals.css throws before a single spec can run.
+    -->
+    <noscript id="__next_css__DO_NOT_USE__"></noscript>
+  </head>
+  <!--
+    data-theme matches what the root layout always stamps (see the
+    `@custom-variant dark` note in src/app/globals.css). Without it the
+    theme tokens and every `dark:` utility resolve differently than in the app.
+  -->
+  <body style="background: var(--background); color: var(--foreground)">
+    <div data-cy-root></div>
+  </body>
+</html>

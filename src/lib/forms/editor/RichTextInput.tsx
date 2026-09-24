@@ -1,11 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import { CodeBracketIcon, DocumentTextIcon, LinkIcon } from '@heroicons/react/24/outline';
-import { Collapse } from '@/components/ui/collapse';
+import { CodeBracketIcon, LinkIcon } from '@heroicons/react/24/outline';
+import { TextElementIcon } from '@/components/ad-generator/builder-icons';
 import { sanitizeInlineHtml } from '../sanitize-inline';
-import { ColorInput, ToggleGroup } from './PropertyControls';
+import { ToggleGroup } from './PropertyControls';
 import { LinkDialog, type LinkValue } from './LinkDialog';
+import { TextColorMenu, isCssColor as isColor } from './TextColorMenu';
 
 /**
  * Editor for the inline-HTML text props (Consent text, Text block with
@@ -13,7 +14,7 @@ import { LinkDialog, type LinkValue } from './LinkDialog';
  *
  *  - Text: a contentEditable preview of the markup — links look like
  *    links, and the toolbar writes bold / italic / underline, text color
- *    and links (through LinkDialog) for you.
+ *    (TextColorMenu) and links (LinkDialog) for you.
  *  - Code: the raw markup in a monospace box, for pasting or tweaking
  *    attributes by hand.
  *
@@ -24,15 +25,13 @@ import { LinkDialog, type LinkValue } from './LinkDialog';
 type View = 'text' | 'code';
 
 const VIEW_OPTIONS: { value: View; label: React.ReactNode; title: string }[] = [
-  { value: 'text', label: <DocumentTextIcon className="w-3.5 h-3.5" />, title: 'Text view' },
+  { value: 'text', label: <TextElementIcon className="w-3.5 h-3.5" />, title: 'Text view' },
   { value: 'code', label: <CodeBracketIcon className="w-3.5 h-3.5" />, title: 'Code view' },
 ];
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
-const isColor = (c: string) => !!c && typeof CSS !== 'undefined' && CSS.supports('color', c);
 
 /** `rgb(25, 124, 194)` → `#197cc2`, so the native color picker can show it. */
 function toHex(color: string): string {
@@ -62,12 +61,14 @@ export function RichTextInput({
   // The last string this editor emitted. When `value` comes back equal to
   // it, the DOM already shows it — rewriting innerHTML would reset the caret.
   const emittedRef = React.useRef<string | null>(null);
-  // Opening the link dialog or the color row moves focus out of the
+  // Opening the link dialog or the color menu moves focus out of the
   // editor, which drops the selection — keep it to put back on apply.
   const savedRangeRef = React.useRef<Range | null>(null);
   const [link, setLink] = React.useState<{ initial: LinkValue; editing: boolean } | null>(null);
   const [colorOpen, setColorOpen] = React.useState(false);
+  // The color the menu opens on, and the swatch under the "A" button.
   const [color, setColor] = React.useState('');
+  const colorButtonRef = React.useRef<HTMLButtonElement>(null);
 
   React.useEffect(() => {
     if (view !== 'text') return;
@@ -77,7 +78,7 @@ export function RichTextInput({
     emittedRef.current = value;
   }, [value, view]);
 
-  // While the color row is open, a new selection in the editor is what
+  // While the color menu is open, a new selection in the editor is what
   // Apply should color — not the one that was current when it opened.
   React.useEffect(() => {
     if (!colorOpen) return;
@@ -221,15 +222,16 @@ export function RichTextInput({
     setColorOpen(true);
   };
 
-  const applyColor = () => {
-    if (!isColor(color)) return;
+  const applyColor = (next: string) => {
+    if (!isColor(next)) return;
     restoreSelection();
     // Without styleWithCSS Chrome writes <font color>, which the inline
     // sanitizer drops — a styled span survives it.
     document.execCommand('styleWithCSS', false, 'true');
-    document.execCommand('foreColor', false, color);
+    document.execCommand('foreColor', false, next);
     document.execCommand('styleWithCSS', false, 'false');
     emit();
+    setColor(next);
     setColorOpen(false);
   };
 
@@ -267,7 +269,7 @@ export function RichTextInput({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-center justify-between gap-2">
+      <div className="relative flex items-center justify-between gap-2">
         <div
           className={`flex items-center gap-0.5 transition-opacity duration-150 ${
             view === 'text' ? 'opacity-100' : 'opacity-0 pointer-events-none'
@@ -284,9 +286,11 @@ export function RichTextInput({
             U
           </button>
           <button
+            ref={colorButtonRef}
             type="button"
             className={`${toolButton} ${colorOpen ? 'bg-[var(--muted)] text-[var(--foreground)]' : ''}`}
             title="Text color"
+            aria-haspopup="dialog"
             aria-expanded={colorOpen}
             onMouseDown={keepSelection}
             onClick={toggleColor}
@@ -316,27 +320,17 @@ export function RichTextInput({
             size="xs"
           />
         </div>
-      </div>
 
-      {/* Not clipped: the color picker's swatch panel hangs below the row. */}
-      <Collapse open={colorOpen && view === 'text'} clip={false}>
-        <div className="flex items-center gap-1.5 pb-1">
-          <div className="flex-1 min-w-0">
-            <ColorInput value={color} onChange={setColor} />
-          </div>
-          <button
-            type="button"
-            onClick={applyColor}
-            disabled={!isColor(color)}
-            className="h-9 px-2.5 rounded-md text-xs font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-40 transition-opacity"
-          >
-            Apply
-          </button>
-          <button type="button" onClick={resetColor} className={`${toolButton} h-9`} title="Remove the color from the selected text">
-            Reset
-          </button>
-        </div>
-      </Collapse>
+        {colorOpen && view === 'text' && (
+          <TextColorMenu
+            initial={color}
+            anchorRef={colorButtonRef}
+            onPick={applyColor}
+            onReset={resetColor}
+            onClose={() => setColorOpen(false)}
+          />
+        )}
+      </div>
 
       {view === 'text' ? (
         <div

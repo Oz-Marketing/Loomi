@@ -17,7 +17,8 @@ function Controlled({ initial }: { initial: string }) {
 
 const editor = () => cy.get('[contenteditable="true"]');
 const saved = () => cy.get('[data-cy="value"]');
-const dialog = () => cy.get('[role="dialog"]');
+const dialog = () => cy.get('[role="dialog"][aria-modal="true"]');
+const colorMenu = () => cy.get('[role="dialog"][aria-label="Text color"]');
 
 /** Select characters [start, end) of the editor's first text node (or of `within`). */
 function selectText(start: number, end: number, within?: string) {
@@ -91,18 +92,39 @@ describe('<RichTextInput>', () => {
     saved().should('have.text', 'x');
   });
 
-  it('colors the selected text', () => {
+  it('colors the selected text from the dropdown swatches', () => {
     cy.mount(<Controlled initial="Msg and data rates may apply." />);
     selectText(0, 3);
     cy.get('button[title="Text color"]').click();
-    cy.get('input[placeholder="#000000"]').type('#197cc2');
-    cy.contains('button', 'Apply').click();
-    saved().should('contain.text', '<span style="color: rgb(25, 124, 194)">Msg</span>');
+    colorMenu().find('button[title="#ef4444"]').click();
+    colorMenu().should('not.exist');
+    saved().should('contain.text', '<span style="color: rgb(239, 68, 68)">Msg</span>');
 
     selectText(0, 3, 'span');
     cy.get('button[title="Text color"]').click();
-    cy.contains('button', 'Reset').click();
+    colorMenu().contains('button', 'Reset color').click();
     saved().should('not.contain.text', 'color');
+  });
+
+  it('applies a custom hex color from the dropdown', () => {
+    cy.mount(<Controlled initial="Msg and data rates may apply." />);
+    selectText(0, 3);
+    cy.get('button[title="Text color"]').click();
+    colorMenu().find('input[aria-label="Hex color"]').type('#197cc2{enter}');
+    saved().should('contain.text', '<span style="color: rgb(25, 124, 194)">Msg</span>');
+  });
+
+  it('opens the color dropdown over the text box and closes it on an outside click', () => {
+    cy.mount(<Controlled initial="Msg" />);
+    cy.get('button[title="Text color"]').click();
+    // Overlays the editor rather than pushing it down.
+    editor().then(($ed) => {
+      const before = $ed[0].getBoundingClientRect().top;
+      colorMenu().should('be.visible');
+      editor().should(($after) => expect($after[0].getBoundingClientRect().top).to.eq(before));
+    });
+    cy.get('body').click('bottomRight');
+    colorMenu().should('not.exist');
   });
 
   it('round-trips hand-written markup through the Code view', () => {

@@ -223,7 +223,7 @@ export function AlignmentControl({ value = 'left', onChange }: AlignmentProps) {
 
 // ── Color input with swatches ──────────────────────────────────────
 
-const DEFAULT_SWATCHES = [
+export const DEFAULT_SWATCHES = [
   '#000000', '#1a1a1a', '#404040', '#737373',
   '#a3a3a3', '#d4d4d4', '#f5f5f5', '#ffffff',
   '#6366f1', '#3b82f6', '#10b981', '#f59e0b',

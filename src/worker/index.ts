@@ -518,6 +518,10 @@ async function main(): Promise<void> {
   };
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  // Every queue is registered and scheduled by now. The worker-boot CI job
+  // (.github/workflows/pr-checks.yml) waits for this exact line.
+  console.log('[worker] ready');
 }
 
 main().catch((err) => {

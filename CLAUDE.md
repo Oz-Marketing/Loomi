@@ -68,6 +68,11 @@ updates the relevant section **in the same change**.
   no server. Specs go in `cypress/component/`, **never beside the component**:
   a `*.cy.tsx` under `src/` lands in the root tsconfig and breaks `verify`.
   Not a deploy gate. See `docs/component-testing.md`.
+- `pr-checks.yml` adds three more PR jobs: `repo-rules` (the wording, spelling
+  and `NEXT_PUBLIC_*` rules below, on added lines), `worker-boot`, and
+  `deploy-prepare` (the prep chain twice, then every ensure-script index).
+  Run `node --experimental-strip-types scripts/ci/repo-rules.ts origin/main`
+  before pushing. See `docs/pr-checks.md`.
 
 ## Branches, deploys, and authorization
 
@@ -113,6 +118,13 @@ times out at 15 minutes.**
   columns). The pattern is an idempotent `scripts/ensure-*.ts` that adds any
   missing column *then* creates the index, wired into `deploy:prepare` and
   `db:sync` before the push. See `scripts/ensure-adcreative-offer-unique.ts`.
+- **A PARTIAL index goes AFTER the push, not before.** `db push` drops any
+  index the schema can't describe, so a partial one created before it is gone
+  by the time the app starts. `AdLaunch_live_offer_key` (the double-launch
+  guard) was silently dropped on every deploy that way (found 2026-09-25). The
+  `deploy-prepare` PR job now asserts every ensure-script index survives.
+- **Pre-push scripts must tolerate missing tables** (`ALTER TABLE IF EXISTS`):
+  on a fresh database they run before anything exists.
 - A deploy that fails at build/prepare is **safe** — the release symlink never
   flips, so prod keeps serving the previous release.
 - Droplet env is `/var/www/loomi-studio/shared/.env.local`. Edit there, not the
@@ -140,6 +152,9 @@ chain, all silently dead while the web process stays healthy.
 This happened **three times with the same queue**. `src/worker/queue-registration.test.ts`
 now asserts every queue that is `work`ed or `schedule`d is also `createQueue`'d.
 
+- The `worker-boot` PR job boots it against a fresh database and fails unless
+  it prints `[worker] ready`, stays up 30s, and exits 0 on SIGTERM. Keep
+  `[worker] ready` the last line of startup.
 - When a flow enrollment, scheduled campaign, or ad-gen job "does nothing",
   **check the worker is alive before reading engine code**: `pm2 jlist` and
   compare `restart_time` against uptime. High restarts + seconds of uptime is

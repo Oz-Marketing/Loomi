@@ -8,7 +8,8 @@ import path from 'node:path';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // scripts/ holds the CI helpers (scripts/ci/repo-rules.ts) and their tests.
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
     exclude: ['node_modules/**', '.next/**'],
   },
   resolve: {

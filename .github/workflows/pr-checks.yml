@@ -1,0 +1,133 @@
+name: PR checks
+
+# Three checks for failures that have cost real deploys, and that `verify`
+# (typecheck.yml) can't see. They run in parallel. Runbook: docs/pr-checks.md.
+#
+# Deliberately NOT required checks yet, like e2e.yml and tests.yml: branch
+# protection requires `verify` and nothing else. Promote each by adding its job
+# name to the branch rule once it has a track record.
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # A throwaway database per job, never a shared one.
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/loomi_ci?schema=public
+
+jobs:
+  # CLAUDE.md rules no compiler enforces, checked on the lines this PR adds.
+  repo-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The whole history, so the diff against the base branch works.
+          fetch-depth: 0
+
+      # Node 22 runs the TypeScript directly, so this job needs no install.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the added lines
+        run: >-
+          node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
+          scripts/ci/repo-rules.ts origin/${{ github.base_ref || 'main' }}
+
+  # One queue that was never createQueue'd crash-loops the whole worker while
+  # the web app looks healthy. It has happened three times.
+  worker-boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: loomi_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d loomi_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+        env:
+          CYPRESS_INSTALL_BINARY: "0"
+
+      - name: Create the schema
+        run: npx prisma generate && npx prisma db push
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: Boot the worker
+        run: scripts/ci/check-worker-boot.sh
+
+  # The deploy's own prep chain, twice: on an empty database (a new
+  # environment) and again on a seeded one (every later deploy). Catches a
+  # crashing script, one that isn't safe to re-run, and an index that
+  # `db push` quietly drops.
+  deploy-prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: loomi_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d loomi_ci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+        env:
+          CYPRESS_INSTALL_BINARY: "0"
+
+      - name: deploy:prepare on an empty database
+        run: npm run deploy:prepare
+
+      - name: Seed
+        run: npm run db:seed
+
+      - name: deploy:prepare again, on the seeded database
+        run: npm run deploy:prepare
+
+      - name: Every ensure-script index survived
+        run: scripts/ci/check-deploy-indexes.sh

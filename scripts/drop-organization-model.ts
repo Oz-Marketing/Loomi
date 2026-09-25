@@ -169,13 +169,16 @@ async function main() {
   // before the table is. Template/Form/LandingPage declare onDelete: Cascade on
   // that relation — dropping the columns first means there is no path for a
   // cascade to fire and take real records with it.
+  // `ALTER TABLE IF EXISTS`: on a brand-new database (a fresh environment,
+  // or the deploy-prepare CI job) these tables don't exist yet, and without it
+  // Postgres fails the whole deploy with 42P01 before `db push` can create them.
   const statements = [
-    'ALTER TABLE "Account" DROP COLUMN IF EXISTS "organizationId"',
-    'ALTER TABLE "Template" DROP COLUMN IF EXISTS "organizationId"',
-    'ALTER TABLE "Form" DROP COLUMN IF EXISTS "organizationId"',
-    'ALTER TABLE "LandingPage" DROP COLUMN IF EXISTS "organizationId"',
-    'ALTER TABLE "AdTemplateDoc" DROP COLUMN IF EXISTS "organizationId"',
-    'ALTER TABLE "User" DROP COLUMN IF EXISTS "orgKeys"',
+    'ALTER TABLE IF EXISTS "Account" DROP COLUMN IF EXISTS "organizationId"',
+    'ALTER TABLE IF EXISTS "Template" DROP COLUMN IF EXISTS "organizationId"',
+    'ALTER TABLE IF EXISTS "Form" DROP COLUMN IF EXISTS "organizationId"',
+    'ALTER TABLE IF EXISTS "LandingPage" DROP COLUMN IF EXISTS "organizationId"',
+    'ALTER TABLE IF EXISTS "AdTemplateDoc" DROP COLUMN IF EXISTS "organizationId"',
+    'ALTER TABLE IF EXISTS "User" DROP COLUMN IF EXISTS "orgKeys"',
     'DROP TABLE IF EXISTS "Organization"',
   ];
   for (const sql of statements) {

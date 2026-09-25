@@ -16,11 +16,13 @@
  *       ('queued', 'publishing', 'published')
  *
  * Prisma's schema language cannot express a partial index, which is why this is a
- * script and not an `@@unique`. Same reason and same shape as
- * `ensure-adcreative-offer-unique.ts`, and it runs in `deploy:prepare` BEFORE
- * `db push` for the same reason: db push refuses to add a unique constraint
- * unsupervised, and adding `--accept-data-loss` to make it comply would apply that
- * flag to every future schema change, silently dropping columns on deploy.
+ * script and not an `@@unique`.
+ *
+ * It runs AFTER `db push`, like `ensure-adrun-inflight-unique.ts`. It used to run
+ * before, alongside the other ensure scripts — but those create plain unique
+ * indexes the schema also declares, so push keeps them. This one is partial and
+ * the schema can't describe it, so push DROPPED it on every deploy: created, then
+ * removed before the app started. The CI deploy-prepare job asserts it survives.
  *
  * Idempotent (`IF NOT EXISTS` semantics via a catalog check), so it is safe to
  * leave in the pipeline permanently.

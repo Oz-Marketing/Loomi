@@ -27,9 +27,12 @@ const prisma = new PrismaClient({ adapter } as any);
 
 async function main() {
   // Dropping the columns also drops their indexes; DROP TABLE removes AdType.
+  // `ALTER TABLE IF EXISTS`: on a brand-new database (a fresh environment,
+  // or the deploy-prepare CI job) these tables don't exist yet, and without it
+  // Postgres fails the whole deploy with 42P01 before `db push` can create them.
   const statements = [
-    'ALTER TABLE "AdTemplateDoc" DROP COLUMN IF EXISTS "adTypeId"',
-    'ALTER TABLE "AdCreative" DROP COLUMN IF EXISTS "adTypeId"',
+    'ALTER TABLE IF EXISTS "AdTemplateDoc" DROP COLUMN IF EXISTS "adTypeId"',
+    'ALTER TABLE IF EXISTS "AdCreative" DROP COLUMN IF EXISTS "adTypeId"',
     'DROP TABLE IF EXISTS "AdType"',
   ];
   for (const sql of statements) {

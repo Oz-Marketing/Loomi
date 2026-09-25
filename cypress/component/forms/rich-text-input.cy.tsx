@@ -20,18 +20,33 @@ const saved = () => cy.get('[data-cy="value"]');
 const dialog = () => cy.get('[role="dialog"][aria-modal="true"]');
 const colorMenu = () => cy.get('[role="dialog"][aria-label="Text color"]');
 
+/**
+ * The editor writes its content in an effect AFTER it mounts, so the
+ * contenteditable exists a beat before its text does. Anything that reads or
+ * types into that text has to wait for it; a bare `.then` runs once and never
+ * retries, and on slower timing (the interactive runner) it read an empty
+ * editor and failed with "parameter 1 is not of type 'Node'".
+ */
+const editorWith = (text: string) => editor().should('contain.text', text);
+
 /** Select characters [start, end) of the editor's first text node (or of `within`). */
 function selectText(start: number, end: number, within?: string) {
-  editor().then(($el) => {
-    const host = within ? $el[0].querySelector(within)! : $el[0];
-    const text = host.firstChild!;
-    const range = document.createRange();
-    range.setStart(text, start);
-    range.setEnd(text, end);
-    const sel = window.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(range);
-  });
+  const target = ($el: JQuery<HTMLElement>) => (within ? $el[0].querySelector(within) : $el[0])?.firstChild;
+  editor()
+    .should(($el) => {
+      expect(target($el), `text inside ${within ?? 'the editor'}`).to.exist;
+    })
+    .then(($el) => {
+      const text = target($el)!;
+      // The editor's own document, not whichever one the spec runs in.
+      const doc = $el[0].ownerDocument;
+      const range = doc.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      const sel = doc.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
 }
 
 describe('<RichTextInput>', () => {
@@ -53,7 +68,7 @@ describe('<RichTextInput>', () => {
 
   it('inserts a new link with its own display text and color at the caret', () => {
     cy.mount(<Controlled initial="Read the " />);
-    editor().click().type('{moveToEnd}');
+    editorWith('Read the').click().type('{moveToEnd}');
     cy.get('button[title^="Link"]').click();
     dialog().find('input[name="linkText"]').should('be.focused').type('Terms');
     dialog().find('input[name="linkUrl"]').type('https://ex.com/terms');
@@ -140,7 +155,7 @@ describe('<RichTextInput>', () => {
 
   it('keeps Enter as a line break instead of a dropped <div>', () => {
     cy.mount(<Controlled initial="one" />);
-    editor().click().type('{moveToEnd}{enter}two');
+    editorWith('one').click().type('{moveToEnd}{enter}two');
     saved().should('contain.text', 'one<br>two');
   });
 });

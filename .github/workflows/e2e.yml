@@ -10,7 +10,18 @@ name: E2E
 # machinery is already here.
 on:
   pull_request:
+  # Pushes to main run too, so a regression that lands there reaches Slack.
+  push:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      test_alert:
+        # Preview the Slack alert from any branch without breaking a test.
+        # Skips the suite and sends a sample card built from made-up results.
+        description: Send a sample Slack alert instead of running the tests
+        type: choice
+        options: [none, failed, flaky, didnt-run]
+        default: none
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -31,6 +42,8 @@ jobs:
       # secret would fail the run in a way that looks like a product bug.
       NEXTAUTH_SECRET: e2e-ci-signing-key-not-a-secret
       CYPRESS_BASE_URL: http://localhost:3000
+      # Empty unless this is a manual run with a sample alert picked.
+      TEST_ALERT: ${{ github.event_name == 'workflow_dispatch' && inputs.test_alert != 'none' && inputs.test_alert || '' }}
 
     services:
       postgres:
@@ -52,6 +65,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Node
+        if: env.TEST_ALERT == ''
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -61,6 +75,7 @@ jobs:
       # other workflow sets CYPRESS_INSTALL_BINARY=0 because it has no use for
       # a browser; this is the one job that does.
       - name: Install dependencies
+        if: env.TEST_ALERT == ''
         uses: cypress-io/github-action@v6
         with:
           runTests: false
@@ -68,26 +83,32 @@ jobs:
           install-command: npm ci --legacy-peer-deps
 
       - name: Generate Prisma client
+        if: env.TEST_ALERT == ''
         run: npx prisma generate
 
       - name: Create the schema
+        if: env.TEST_ALERT == ''
         run: npx prisma db push
 
       - name: Seed the sign-in identity
+        if: env.TEST_ALERT == ''
         # prisma/seed.ts writes connor@ozmktg.com / admin123 — the pair
         # cypress.config.ts hands cy.login(). Without this the whole suite
         # fails at the first sign-in.
         run: npm run db:seed
 
       - name: Typecheck the e2e suite
+        if: env.TEST_ALERT == ''
         # Cypress lives outside the root tsconfig program, so `npm run verify`
         # never sees it. This is where that code is kept honest.
         run: npm run verify:e2e
 
       - name: Build
+        if: env.TEST_ALERT == ''
         run: npm run build:assets
 
       - name: Run the suite
+        if: env.TEST_ALERT == ''
         uses: cypress-io/github-action@v6
         with:
           install: false
@@ -112,7 +133,7 @@ jobs:
       - name: Upload failure artifacts
         # Only useful when the run was NOT recorded — Cypress Cloud already
         # has these otherwise.
-        if: failure()
+        if: failure() && env.TEST_ALERT == ''
         uses: actions/upload-artifact@v4
         with:
           name: cypress-artifacts
@@ -121,3 +142,25 @@ jobs:
             cypress/videos
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Build Slack message
+        id: slack
+        # Runs after passing runs too: a green run can still have flaky tests.
+        if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || env.TEST_ALERT != '') }}
+        env:
+          SUITE: E2E tests
+          SUITE_KEY: e2e
+          STATUS: ${{ job.status }}
+          SUMMARY: cypress/results/e2e-summary.json
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Shared with tests.yml, so both suites post the same card.
+        run: .github/scripts/test-alert.sh
+
+      - name: Notify Slack
+        if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || env.TEST_ALERT != '') && steps.slack.outputs.send == 'true' }}
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload-file-path: slack-payload.json

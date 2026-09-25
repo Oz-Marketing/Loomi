@@ -73,13 +73,45 @@ re-testing sign-in.
 - **`auth.cy.ts`** — the gate. Signed-out redirect, a 401 (not an HTML login
   page) for an unauthenticated API call, a rejected password, a successful
   form sign-in, and the role-branching `/` redirect.
-- **`surfaces.cy.ts`** — a signed-in smoke pass over the main surfaces.
+- **`surfaces.cy.ts`** — a signed-in smoke pass over **every** static page on
+  the studio host (about 70), plus the Reporting pages it also serves.
+- **`client-access.cy.ts`** — what a client can and can't reach in Studio.
 
 `surfaces.cy.ts` is deliberately shallow. It does not assert what any page
 *contains*, because that copy changes weekly and a smoke suite that fails on a
 reworded heading teaches people to ignore it. It asserts the ways a page dies
-unnoticed: a non-2xx response, the error boundary, the 404 page, and a bounce
-to `/login`.
+unnoticed: a non-2xx response, the error boundary, the 404 page, a bounce to
+`/login`, and, for redirects, landing somewhere other than the listed target.
+
+**It keeps its own coverage honest.** Its first test lists every `page.tsx`
+under `src/app` (the `listStaticPages` task in `cypress/tasks.ts`) and fails
+unless each one is either in `PAGES` or in `SKIPPED` with a reason. It also
+fails on entries for pages that no longer exist. Adding a page means adding one
+line to that file. Pages under a `[dynamic]` segment aren't listed, since they
+need real ids. Known-broken pages sit in `SKIPPED` marked **KNOWN BUG**; move
+each into `PAGES` once it's fixed.
+
+### `client-access.cy.ts` — the client's Studio bound
+
+A client enters Studio only to review the OEM offer campaigns built for their
+account (CLAUDE.md, "Permissions and scope"). Signed in as the seeded client, it
+checks that:
+
+1. the session really is the client tier
+2. `/ad-generator` sends them to `/campaign-builder`
+3. they see automation campaigns and never manual ones, in the API and the page
+4. a manual campaign is "not found" to them, not forbidden
+5. an ad opens from its campaign at the bare `/ad-generator/<id>`
+6. there is no Projects switch and no Agency Settings cog
+7. `/app/projects` sends them back to `/campaign-builder`
+
+The seed has no campaigns, so the spec creates its own through `cy.task`: one
+automation campaign with one ad, and one manual campaign, on the client's
+account, with fixed `e2e-…` ids. They're removed at the end. A staff check
+first confirms both exist, so "the client can't see it" can't pass just because
+creating it failed. The tasks write with plain SQL through `pg` to whatever
+`DATABASE_URL` is set (falling back to `.env`), which must be the database the
+server under test is using.
 
 ### `reporting-leakage.cy.ts` — the margin guard
 
@@ -180,8 +212,31 @@ and therefore no Test Replay).
 ## CI
 
 [`.github/workflows/e2e.yml`](../.github/workflows/e2e.yml) runs on every pull
-request: a throwaway Postgres, `prisma db push`, `npm run db:seed`,
-`build:assets`, `next start`, then the suite against the production bundle.
+request and on pushes to `main`: a throwaway Postgres, `prisma db push`,
+`npm run db:seed`, `build:assets`, `next start`, then the suite against the
+production bundle.
+
+A `main` run that fails, or passes with flaky tests, posts to Slack. It's the
+same card as the component suite (`.github/scripts/test-alert.sh` builds both),
+headed "E2E tests". The **Run workflow** button has the same **test_alert**
+preview (see [component-testing.md](component-testing.md#previewing-the-slack-alert)).
+
+### Running it locally like CI
+
+A long-lived dev database drifts: the seeded passwords change and the schema
+falls behind, and the suite fails for reasons that aren't bugs. To run it the
+way CI does without touching your dev data, give it a database of its own:
+
+```bash
+E2E_DB="postgresql://<user>:<password>@127.0.0.1:5432/loomi_e2e?schema=public"
+DATABASE_URL=$E2E_DB npx prisma db push && DATABASE_URL=$E2E_DB npm run db:seed
+npm run build:assets
+DATABASE_URL=$E2E_DB npm start                                   # terminal 1
+DATABASE_URL=$E2E_DB CYPRESS_BASE_URL=http://127.0.0.1:3000 npm run e2e   # terminal 2
+```
+
+`CYPRESS_BASE_URL` must be the exact origin in your `NEXTAUTH_URL`
+(`127.0.0.1` and `localhost` are different origins to the session cookie).
 
 It is **not a deploy gate.** Branch protection requires a check named exactly
 `verify` (`typecheck.yml`) and nothing else, and the deploy workflows declare

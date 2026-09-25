@@ -101,16 +101,26 @@ describe('<Select>', () => {
     menu().should('contain.text', 'Sans').and('contain.text', 'Serif');
   });
 
-  // Past 12 options the list gets a search box.
+  // Past 12 options the list gets a search box, and you can type straight
+  // away. It once never got focus: autoFocus fired while the menu was still
+  // hidden (before it had measured where to sit), and browsers drop focus on
+  // hidden elements.
+  it('focuses the search box when a long list opens', () => {
+    const many = Array.from({ length: 13 }, (_, i) => ({ value: `o${i}`, label: `Option ${i}` }));
+    cy.mount(<Controlled options={many} />);
+
+    trigger().click();
+    cy.focused().should('have.attr', 'placeholder', 'Search…');
+    cy.focused().type('7');
+    menu().find('button').should('have.length', 1).and('contain.text', 'Option 7');
+  });
+
   it('searches long lists and says when nothing matches', () => {
     const many = Array.from({ length: 13 }, (_, i) => ({ value: `o${i}`, label: `Option ${i}` }));
     cy.mount(<Controlled options={many} />);
 
     trigger().click();
-    // Clicked, not asserted focused: the box's autoFocus fires while the menu
-    // is still `visibility: hidden` (before it has measured its position), so
-    // the browser drops it and focus stays on the trigger. Known bug.
-    menu().find('input').click().type('12');
+    menu().find('input').should('be.focused').type('12');
     menu().find('button').should('have.length', 1).and('contain.text', 'Option 12');
 
     menu().find('input').clear().type('zzz');

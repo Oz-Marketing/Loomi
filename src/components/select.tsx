@@ -67,6 +67,7 @@ export function Select({
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   // Menu geometry, measured from the trigger each time it opens. `null` until
   // the first measurement so the menu never paints at the wrong spot.
   const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
@@ -155,6 +156,17 @@ export function Select({
     };
   }, [open, place]);
 
+  // Focus the search box once the menu is placed, so a long list can be typed
+  // into straight away. Not `autoFocus`: that fires on mount, while the menu is
+  // still `visibility: hidden` waiting for its first measurement, and browsers
+  // refuse focus on hidden elements — so it silently never landed. Keyed on
+  // "placed" rather than `coords`, so a scroll or resize repositioning the menu
+  // doesn't yank focus back from wherever the user has moved it.
+  const placed = coords !== null;
+  useEffect(() => {
+    if (open && placed && searchable) searchRef.current?.focus();
+  }, [open, placed, searchable]);
+
   // Reset the query each time the menu closes so it reopens fresh.
   useEffect(() => {
     if (!open) setQuery('');
@@ -184,7 +196,7 @@ export function Select({
           <div className="relative">
             <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
             <input
-              autoFocus
+              ref={searchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               // `previewFont` is the only signal this component has for

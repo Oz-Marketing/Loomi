@@ -1,0 +1,23 @@
+# A disposable Postgres for running the E2E suite locally
+
+name: loomi-e2e
+services:
+  db:
+    image: postgres:16
+    container_name: loomi-e2e-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: loomi_e2e
+    ports:
+      - "5434:5432"
+    # The data lives in memory, so every start is an empty database and
+    # stopping the container wipes it. 
+    tmpfs:
+      - /var/lib/postgresql/data:rw
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d loomi_e2e"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -440,6 +440,21 @@ function matcher(rule: { phrase?: string; pattern?: string }): ((text: string) =
 }
 
 /**
+ * Does `text` break a banned-phrase rule? Returns the term found when the rule
+ * is a `phrases` list, `''` for a `phrase`/`pattern` hit, null for no hit.
+ *
+ * Exported so email drafting judges copy with exactly the matching the ad
+ * engine uses — two implementations of "banned" would drift, and the one that
+ * drifted looser is the one that lets a co-op claim get denied.
+ */
+export function bannedPhraseHit(rule: BannedPhraseRule, text: string): string | null {
+  const terms = rule.phrases?.filter((x) => x.trim()) ?? [];
+  if (terms.length) return firstMatchingTerm(terms, text);
+  const test = matcher(rule);
+  return test?.(text) ? '' : null;
+}
+
+/**
  * Elements that display `field`, matched by binding KEY across binding kinds.
  *
  * Both `field` and `brand` bindings carry a key, and the account-derived values a
@@ -567,9 +582,6 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
       }
 
       case 'banned_phrase': {
-        const terms = rule.phrases?.filter((x) => x.trim()) ?? [];
-        const test = terms.length ? null : matcher(rule);
-        if (!test && terms.length === 0) break;
         // Scan the named fields, or every string value when unscoped. Skip the
         // internal `_`-prefixed bookkeeping keys — they never reach the canvas.
         const entries = rule.fields?.length
@@ -579,7 +591,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
           if (typeof value !== 'string' || !value.trim()) continue;
           // A list names the term that was found; whoever is blocked needs to know
           // which of fifty-one words to change, not that one of them is present.
-          const hit = terms.length ? firstMatchingTerm(terms, value) : test?.(value) ? '' : null;
+          const hit = bannedPhraseHit(rule, value);
           if (hit === null) continue;
           push({
             ruleId: rule.id,

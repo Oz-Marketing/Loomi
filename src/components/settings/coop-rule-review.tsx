@@ -41,7 +41,7 @@ import {
   type MustIncludeRow,
 } from '@/lib/ad-generator/coop-review';
 import { fillableFieldKeys } from '@/lib/ad-generator/coop-draft';
-import type { CoopRule, RequiredFieldEntry } from '@/lib/ad-generator/coop-rules';
+import { brokenPattern, type CoopRule, type RequiredFieldEntry } from '@/lib/ad-generator/coop-rules';
 
 /** Plain-language label for a rule kind, written for whoever is reviewing. */
 const KIND_LABEL: Record<string, string> = Object.fromEntries(
@@ -161,6 +161,7 @@ export function CoopRuleReview({
       let applied = 0;
       let rechecks = 0;
       const notInReview: string[] = [];
+      const malformed: string[] = [];
 
       for (const [action, ids] of [
         ['review_rules', ruleIds],
@@ -177,22 +178,37 @@ export function CoopRuleReview({
           applied?: number;
           rechecksQueued?: number;
           notInReview?: string[];
+          malformed?: { ruleId: string }[];
         };
         if (!res.ok) throw new Error(json.error || 'Could not save the decision');
         applied += json.applied ?? ids.length;
         rechecks += json.rechecksQueued ?? 0;
         notInReview.push(...(json.notInReview ?? []));
+        malformed.push(...(json.malformed ?? []).map((m) => m.ruleId));
       }
 
       const verb = state === 'accepted' ? 'accepted' : 'declined';
       const recheck = rechecks
         ? ` ${rechecks} template check${rechecks === 1 ? '' : 's'} will re-run.`
         : '';
-      toast.success(`${applied} requirement${applied === 1 ? '' : 's'} ${verb}.${recheck}`);
+      // Not when every selected rule was refused: "0 requirements accepted" in green
+      // beside a red refusal reads as a contradiction.
+      if (applied > 0 || malformed.length === 0) {
+        toast.success(`${applied} requirement${applied === 1 ? '' : 's'} ${verb}.${recheck}`);
+      }
       // Surfaced rather than swallowed: it means an id reached the request that was
       // never in review, which is a defect worth seeing rather than a quiet no-op.
       if (notInReview.length) {
         toast.error(`${notInReview.length} item(s) were not in review and were left alone.`);
+      }
+      // The server refuses to accept a rule it could never run. Said here, or the
+      // rule simply stays in the queue with no explanation.
+      if (malformed.length) {
+        toast.error(
+          malformed.length === 1
+            ? '1 rule was not accepted: its pattern is invalid, so it could never be checked. Decline it, or have the pattern fixed first.'
+            : `${malformed.length} rules were not accepted: their patterns are invalid, so they could never be checked. Decline them, or have the patterns fixed first.`,
+        );
       }
       setSelected(new Set());
       setIncSel(new Set());
@@ -295,6 +311,7 @@ export function CoopRuleReview({
               <ul className="divide-y divide-[var(--border)]">
                 {list.map((rule) => {
                   const doc = rule.sourceDocId ? docById.get(rule.sourceDocId) : undefined;
+                  const broken = brokenPattern(rule);
                   return (
                     <li key={rule.id} className="flex items-start gap-2 px-2.5 py-2">
                       <div className="pt-0.5">
@@ -308,6 +325,13 @@ export function CoopRuleReview({
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] leading-snug text-[var(--foreground)]">{rule.description}</p>
+                        {/* Said before anyone clicks, so the refusal isn't a surprise.
+                            The checkbox stays live: declining is how it leaves. */}
+                        {broken && (
+                          <p className="mt-1 text-[11px] leading-snug text-rose-500">
+                            Can&rsquo;t be accepted until its pattern is fixed ({broken}).
+                          </p>
+                        )}
                         {/* A prohibited-terms list shows its terms rather than a
                             paragraph of prose: the terms ARE the rule, and fifty of
                             them read faster as chips than as a sentence. */}

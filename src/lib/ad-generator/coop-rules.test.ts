@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  brokenPattern,
   coopPassed,
   effectiveSeverity,
   evaluateCoopRules,
+  normalizePattern,
   parseCoopPack,
+  patternProblem,
   splitCoopPack,
   EXAMPLE_PACK,
   type CoopRule,
@@ -711,5 +714,142 @@ describe('effectiveSeverity — one gate, asked per rule', () => {
     };
     expect(evaluateCoopRules({ doc: d, data: LEASE, pack: warnPack })[0].severity).toBe('warning');
     expect(evaluateCoopRules({ doc: d, data: LEASE, pack: blockPack })[0].severity).toBe('error');
+  });
+});
+
+// ── Python's inline `(?i)` ──────────────────────────────────────────────────
+//
+// A drafted rule carried `(?i)political|sexual|racial|religious` (Subaru §10a). JS
+// can't compile that, `matcher()` gave up, and a banned_phrase rule then skipped
+// itself without a word — accepted or not, it never fired.
+
+describe('normalizePattern', () => {
+  it('strips a leading (?i), which the engine applies anyway', () => {
+    expect(normalizePattern('(?i)political|sexual|racial|religious')).toBe('political|sexual|racial|religious');
+    expect(normalizePattern('(?i)\\bserving [A-Z][a-z]+')).toBe('\\bserving [A-Z][a-z]+');
+  });
+
+  it('strips repeats and the whitespace around them, and is idempotent', () => {
+    expect(normalizePattern('  (?i) (?i)free  ')).toBe('free');
+    expect(normalizePattern(normalizePattern('(?i)free'))).toBe('free');
+  });
+
+  it('leaves every other inline flag, and a (?i) that is not leading, to fail compilation', () => {
+    // (?s), (?m) and (?x) change what a pattern matches — stripping them would too.
+    expect(normalizePattern('(?s)a.b')).toBe('(?s)a.b');
+    expect(normalizePattern('free(?i)dom')).toBe('free(?i)dom');
+  });
+
+  it('leaves an ordinary pattern alone', () => {
+    expect(normalizePattern('\\bfree\\b|lowest price')).toBe('\\bfree\\b|lowest price');
+  });
+});
+
+describe('patternProblem', () => {
+  it('is null for a pattern the engine can compile', () => {
+    expect(patternProblem('approved credit|well-qualified')).toBeNull();
+  });
+
+  it('gives the engine’s own reason, without restating the pattern', () => {
+    expect(patternProblem('(?i)political|sexual')).toBe('Invalid group');
+  });
+
+  it('agrees that the stripped pattern compiles', () => {
+    expect(patternProblem(normalizePattern('(?i)political|sexual'))).toBeNull();
+  });
+});
+
+describe('brokenPattern', () => {
+  const banned: CoopRule = {
+    id: 'b', kind: 'banned_phrase', severity: 'error', description: 'd', citation: 'c',
+    pattern: '(?i)political|sexual',
+  };
+
+  it('names the problem with the pattern a phrase rule evaluates', () => {
+    expect(brokenPattern(banned)).toBe('Invalid group');
+    expect(brokenPattern({ ...banned, kind: 'required_phrase', field: 'disclaimer' } as CoopRule)).toBe('Invalid group');
+  });
+
+  it('is null when a prohibited-terms list makes the pattern irrelevant', () => {
+    expect(brokenPattern({ ...banned, phrases: ['blowout'] } as CoopRule)).toBeNull();
+  });
+
+  it('is null for a healthy rule and for kinds that never read a pattern', () => {
+    expect(brokenPattern({ ...banned, pattern: 'political|sexual' } as CoopRule)).toBeNull();
+    expect(brokenPattern({ id: 'e', kind: 'required_element', field: 'logoUrl', severity: 'error', description: 'd' })).toBeNull();
+  });
+});
+
+describe('a pattern the engine cannot compile', () => {
+  // As stored: drafted, ACCEPTED, error severity, in a VERIFIED pack — the strongest
+  // case for blocking, which is exactly why it must not.
+  const subaru: CoopRule = {
+    id: 'subaru-ads-must-not-contain-political-sexual-ra',
+    kind: 'banned_phrase',
+    severity: 'error',
+    description: 'Ads must not contain political, sexual, racial or religious content.',
+    citation: 'SAF 2026 §10a, p.47',
+    pattern: '(?i)political|sexual|racial|religious',
+    reviewState: 'accepted',
+    origin: 'ai',
+  };
+  const d = doc([textEl('h', 'headline')]);
+  const run = (rule: CoopRule, data: Partial<AdData> = {}) =>
+    evaluateCoopRules({ doc: d, data: { ...LEASE, headline: 'A political statement', ...data } as AdData, pack: pack([rule]) });
+
+  it('is REPORTED, where it used to be skipped without a word', () => {
+    const f = run(subaru);
+    expect(f).toHaveLength(1);
+    expect(f[0].ruleId).toBe(subaru.id);
+    expect(f[0].observed).toContain('Not checked');
+    expect(f[0].observed).toContain('Invalid group');
+  });
+
+  it('only warns — a broken rule must not block every ad for the make', () => {
+    const f = run(subaru);
+    expect(f[0].severity).toBe('warning');
+    expect(coopPassed(f)).toBe(true);
+  });
+
+  it('is reported once per ad, not once per field it would have scanned', () => {
+    expect(run(subaru, { tagline: 'religious', disclaimer: 'sexual' })).toHaveLength(1);
+  });
+
+  it('does the same for a required_phrase, which used to report it as a hard error', () => {
+    const required: CoopRule = {
+      id: 'r', kind: 'required_phrase', field: 'disclaimer', severity: 'error',
+      description: 'Must state a credit qualification.', citation: 'x',
+      pattern: '(?i)approved credit', reviewState: 'accepted',
+    };
+    const f = run(required);
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe('warning');
+    expect(f[0].field).toBe('disclaimer');
+    expect(f[0].observed).toContain('Not checked');
+  });
+
+  it('respects offer-type scope like any other finding', () => {
+    expect(run({ ...subaru, scope: { offerTypes: ['apr'] } })).toEqual([]);
+  });
+
+  it('fires once the redundant flag is stripped', () => {
+    const repaired = { ...subaru, pattern: normalizePattern(subaru.pattern!) } as CoopRule;
+    const f = run(repaired);
+    expect(f).toHaveLength(1);
+    expect(f[0].field).toBe('headline');
+    expect(f[0].severity).toBe('error');
+    expect(run(repaired, { headline: 'Drive home today' })).toEqual([]);
+  });
+});
+
+describe('brokenPattern on stored data', () => {
+  // It now runs over whole stored packs for the settings page and the review queue.
+  it('does not throw on a stray non-string list entry or pattern', () => {
+    const odd = {
+      id: 'odd', kind: 'banned_phrase', severity: 'error', description: 'd',
+      phrases: [42, null], pattern: { not: 'a string' },
+    } as unknown as CoopRule;
+    expect(() => brokenPattern(odd)).not.toThrow();
+    expect(brokenPattern(odd)).toBeNull();
   });
 });

@@ -101,6 +101,51 @@ describe('applyRuleReviews', () => {
   });
 });
 
+describe('applyRuleReviews — a pattern the engine cannot compile', () => {
+  // As drafted for Subaru §10a: Python's `(?i)`, which JavaScript rejects.
+  const broken = { ...rule('politics', 'proposed'), phrase: undefined, pattern: '(?i)political|sexual' } as CoopRule;
+  const withBroken: CoopRulePack = { ...pack, rules: [...pack.rules, broken] };
+
+  it('REFUSES to accept it, and leaves it exactly as it was', () => {
+    // Accepted, it would never fire — a signed-off rule that enforces nothing.
+    const r = applyRuleReviews(withBroken, [{ ruleId: 'politics', state: 'accepted' }], 'Dana', NOW);
+    expect(r.malformed).toEqual([{ ruleId: 'politics', problem: 'Invalid group' }]);
+    expect(r.applied).toEqual([]);
+    expect(r.pack.rules.find((x) => x.id === 'politics')).toEqual(broken);
+    expect(changesEnforcement(r.applied)).toBe(false);
+  });
+
+  it('still applies the rest of a bulk decision', () => {
+    const r = applyRuleReviews(
+      withBroken,
+      [
+        { ruleId: 'politics', state: 'accepted' },
+        { ruleId: 'draft-a', state: 'accepted' },
+      ],
+      'Dana',
+      NOW,
+    );
+    expect(r.applied).toEqual([{ ruleId: 'draft-a', from: 'proposed', to: 'accepted' }]);
+    expect(r.malformed.map((m) => m.ruleId)).toEqual(['politics']);
+  });
+
+  it('still lets a reviewer DECLINE it — that is how it leaves the queue', () => {
+    const r = applyRuleReviews(withBroken, [{ ruleId: 'politics', state: 'rejected' }], 'Dana', NOW);
+    expect(r.malformed).toEqual([]);
+    expect(r.pack.rules.find((x) => x.id === 'politics')!.reviewState).toBe('rejected');
+  });
+
+  it('accepts it once the pattern is repaired', () => {
+    const repaired: CoopRulePack = {
+      ...withBroken,
+      rules: withBroken.rules.map((x) => (x.id === 'politics' ? ({ ...x, pattern: 'political|sexual' } as CoopRule) : x)),
+    };
+    const r = applyRuleReviews(repaired, [{ ruleId: 'politics', state: 'accepted' }], 'Dana', NOW);
+    expect(r.malformed).toEqual([]);
+    expect(r.applied).toEqual([{ ruleId: 'politics', from: 'proposed', to: 'accepted' }]);
+  });
+});
+
 describe('changesEnforcement', () => {
   it('is true when a rule becomes accepted', () => {
     expect(changesEnforcement([{ ruleId: 'a', from: 'proposed', to: 'accepted' }])).toBe(true);

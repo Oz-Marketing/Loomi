@@ -182,3 +182,47 @@ describe('mergeDraftedRules — prohibited-terms lists', () => {
     expect(again.skipped[0].reason).toBe('duplicate_id');
   });
 });
+
+describe('mergeDraftedRules — patterns', () => {
+  // A draft file screened before (?i) was stripped. Those files are applied
+  // byte-identically per environment, so the merge has to cope with them too.
+  function patterned(id: string, pattern: string): AcceptedRule {
+    const d = drafted(id, 'unused');
+    return { ...d, rule: { ...d.rule, phrase: undefined, pattern } } as AcceptedRule;
+  }
+
+  it('stores a legacy draft’s pattern without (?i)', () => {
+    const r = mergeDraftedRules(existing, [patterned('politics', '(?i)political|sexual')], OPTS);
+    expect(r.added).toHaveLength(1);
+    expect(r.added[0]).toMatchObject({ pattern: 'political|sexual', reviewState: 'proposed' });
+  });
+
+  it('skips a pattern still broken after that as malformed, problem first', () => {
+    // First, because apply-coop-draft.ts truncates the line it prints.
+    const r = mergeDraftedRules(existing, [patterned('named', '(?P<x>political)')], OPTS);
+    expect(r.added).toEqual([]);
+    expect(r.skipped[0]).toMatchObject({ reason: 'malformed', ruleId: 'named' });
+    expect(r.skipped[0].description).toMatch(/^invalid pattern \(Invalid group\)/);
+  });
+
+  it('recognizes a stored (?i) rule as the same rule drafted again without it', () => {
+    // Compared raw, these differed: the re-draft was renamed and queued a second time.
+    const stored = {
+      ...handWritten,
+      id: 'politics',
+      phrase: undefined,
+      pattern: '(?i)political|sexual',
+      reviewState: 'proposed',
+      origin: 'ai',
+    } as CoopRule;
+    const pack = { ...existing, rules: [stored] };
+
+    const sameId = mergeDraftedRules(pack, [patterned('politics', 'political|sexual')], OPTS);
+    expect(sameId.added).toEqual([]);
+    expect(sameId.skipped[0].reason).toBe('duplicate_id');
+
+    const newId = mergeDraftedRules(pack, [patterned('politics-again', '(?i)political|sexual')], OPTS);
+    expect(newId.added).toEqual([]);
+    expect(newId.skipped[0].reason).toBe('duplicate_rule');
+  });
+});

@@ -1,4 +1,11 @@
-import type { CoopRule, CoopRulePack, CoopSeverity, LimitTerm } from './coop-rules';
+import {
+  normalizePattern,
+  patternProblem,
+  type CoopRule,
+  type CoopRulePack,
+  type CoopSeverity,
+  type LimitTerm,
+} from './coop-rules';
 
 /**
  * Authoring co-op rules — the schema behind the editor, and the validation that
@@ -136,6 +143,23 @@ function isFilled(v: string | undefined | null): boolean {
 }
 
 /**
+ * The pattern as it will be STORED — `(?i)` removed, see `normalizePattern` — or ''
+ * when there is none. Validation and `toCoopRule` both read it from here, so a
+ * pattern that passes is exactly the pattern that gets saved.
+ */
+function storedPattern(v: string | undefined): string {
+  return typeof v === 'string' ? normalizePattern(v) : '';
+}
+
+/** Why a pattern can't be used, in the editor's words, or null. */
+function patternError(pattern: string): string | null {
+  const problem = pattern ? patternProblem(pattern) : null;
+  return problem
+    ? `The pattern isn't valid (${problem}), so it could never be checked. Fix it, or give the wording as a phrase.`
+    : null;
+}
+
+/**
  * Everything wrong with one rule, in plain language.
  *
  * The bar is "could this rule be evaluated, and could a person defend it". A rule
@@ -152,17 +176,25 @@ export function validateRule(rule: DraftRule): string[] {
   if (!isFilled(rule.citation)) errs.push('Cite the section it comes from — a rule nobody can look up cannot be defended.');
 
   switch (rule.kind) {
-    case 'required_phrase':
+    case 'required_phrase': {
       if (!isFilled(rule.field)) errs.push('Choose which field must contain the wording.');
-      if (!isFilled(rule.phrase) && !isFilled(rule.pattern)) {
+      const pattern = storedPattern(rule.pattern);
+      if (!isFilled(rule.phrase) && !pattern) {
         errs.push('Give the wording it must contain.');
       }
+      const bad = patternError(pattern);
+      if (bad) errs.push(bad);
       break;
+    }
     case 'banned_phrase': {
       const terms = (rule.phrases ?? []).filter((x) => isFilled(x));
-      if (terms.length === 0 && !isFilled(rule.phrase) && !isFilled(rule.pattern)) {
+      const pattern = storedPattern(rule.pattern);
+      if (terms.length === 0 && !isFilled(rule.phrase) && !pattern) {
         errs.push('Give the wording that is not allowed.');
       }
+      // Only when no list: a list wins, so a pattern beside one is never stored.
+      const bad = terms.length ? null : patternError(pattern);
+      if (bad) errs.push(bad);
       break;
     }
     case 'required_element':
@@ -281,13 +313,14 @@ export function toCoopRule(d: DraftRule): CoopRule {
     citation: d.citation.trim(),
     ...(d.offerTypes?.length ? { scope: { offerTypes: d.offerTypes } } : {}),
   };
+  const pattern = storedPattern(d.pattern);
   switch (d.kind) {
     case 'required_phrase':
       return {
         ...base,
         kind: 'required_phrase',
         field: d.field!.trim(),
-        ...(isFilled(d.pattern) ? { pattern: d.pattern!.trim() } : { phrase: d.phrase!.trim() }),
+        ...(pattern ? { pattern } : { phrase: d.phrase!.trim() }),
       };
     case 'banned_phrase': {
       const terms = (d.phrases ?? []).map((x) => x.trim()).filter(Boolean);
@@ -298,11 +331,7 @@ export function toCoopRule(d: DraftRule): CoopRule {
         // A list wins where present: it is word-boundary matched, where a single
         // `phrase` is a plain substring. Falling back the other way would silently
         // widen a fifty-term list into fifty substring matches.
-        ...(terms.length
-          ? { phrases: terms }
-          : isFilled(d.pattern)
-            ? { pattern: d.pattern!.trim() }
-            : { phrase: d.phrase!.trim() }),
+        ...(terms.length ? { phrases: terms } : pattern ? { pattern } : { phrase: d.phrase!.trim() }),
       };
     }
     case 'required_element':

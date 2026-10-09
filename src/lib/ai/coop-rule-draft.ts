@@ -137,10 +137,22 @@ function ruleKindGuide(): string {
   return lines.join('\n');
 }
 
+/**
+ * The regex dialect, said out loud. Left unsaid, the model writes Python — a
+ * leading `(?i)` throws in JavaScript, and a rule carrying one never ran. Screening
+ * now strips `(?i)` and drops anything else that won't compile, so this only saves
+ * proposals; it isn't the safeguard.
+ *
+ * The capitals clause is for `\bserving [A-Z][a-z]+`, drafted to catch a city name
+ * after "serving": matched case-insensitively, it catches "serving our customers".
+ */
+const PATTERN_HINT =
+  ' A `pattern` is a JavaScript regular expression and is always matched case-insensitively, so it cannot tell capitals from lowercase: never add an inline flag such as `(?i)`.';
+
 /** What each kind needs beyond the shared fields, in the drafter's terms. */
 const FIELD_HINTS: Record<string, string> = {
-  required_phrase: ' Needs `field` and either `phrase` or `pattern`.',
-  banned_phrase: ' Needs `phrase` or `pattern`; `fields` optional (omit = every text field).',
+  required_phrase: ` Needs \`field\` and either \`phrase\` or \`pattern\`.${PATTERN_HINT}`,
+  banned_phrase: ` Needs \`phrase\` or \`pattern\`; \`fields\` optional (omit = every text field).${PATTERN_HINT}`,
   required_element: ' Needs `field` — the thing that must appear.',
   min_font_size:
     ' Needs `field` and `minPx` or `minShortEdgeFraction` (a share of the ad\'s short edge — the form that transfers across sizes). Only use this when the document states an actual size.',

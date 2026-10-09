@@ -18,13 +18,14 @@ const ACCOUNTS: AccountOption[] = [
   { key: 'youngMazdaOfOgden', dealer: 'Young Mazda of Ogden' },
   { key: 'youngNissan', dealer: 'Young Nissan' },
   { key: 'youngPowersports', dealer: 'Young Powersports', isGroup: true },
+  { key: 'youngPowersportsEuro', dealer: 'Young Powersports Euro' },
   { key: 'youngPowersportsOfOgden', dealer: 'Young Powersports of Ogden' },
   { key: 'youngPowersportsXl', dealer: 'Young Powersports XL' },
   { key: 'youngTruckAndTrailerOfKaysville', dealer: 'Young Truck & Trailer of Kaysville' },
   { key: 'youngUsedCenter', dealer: 'Young Used Center' },
 ];
 
-const suggest = (label: string) => suggestAccount([label], ACCOUNTS).accountKey;
+const suggest = (label: string) => suggestAccount(label, ACCOUNTS).accountKey;
 
 describe('suggestAccount — monday Client labels against Loomi dealer names', () => {
   it('matches despite word order, "in"/"of", punctuation and "&"', () => {
@@ -51,7 +52,7 @@ describe('suggestAccount — monday Client labels against Loomi dealer names', (
 
   it('says nothing rather than guess', () => {
     // Three Mazda stores; two Harley stores.
-    expect(suggestAccount(['Young Mazda'], ACCOUNTS)).toEqual({
+    expect(suggestAccount('Young Mazda', ACCOUNTS)).toEqual({
       accountKey: null,
       reason: '"Young Mazda" could be more than one account.',
     });
@@ -62,10 +63,11 @@ describe('suggestAccount — monday Client labels against Loomi dealer names', (
     expect(suggest('Young Powersports Bountiful/Centerville')).toBeNull();
   });
 
-  it('refuses a request naming several stores', () => {
-    expect(suggestAccount(['Young Powersports Ogden', 'Young Powersports Euro'], ACCOUNTS)).toEqual({
-      accountKey: null,
-      reason: 'monday names 2 stores; drafting is one store at a time.',
-    });
+  it('matches each store on a multi-store request on its own', () => {
+    // Two clients on one request, each with its own templates.
+    expect(['Young Powersports Ogden', 'Young Powersports Euro'].map(suggest)).toEqual([
+      'youngPowersportsOfOgden',
+      'youngPowersportsEuro',
+    ]);
   });
 });

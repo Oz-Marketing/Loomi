@@ -54,35 +54,51 @@ These come from Connor and govern every stage.
 ## 3. monday — what Loomi reads and writes
 
 Requests live on **Development Projects** (`18431636272`): one project per
-request, one subitem per deliverable (`18431636469`) — "Email Blast 1",
-"Text Blast 1", "Landing Page 1". Board contract in code:
-`src/lib/drafting/monday-board.ts`.
+request, one subitem per deliverable (`18431636469`). **One subitem, one client,
+one template, one proof, one link** (decided 2026-10-09): monday's fan-out makes
+one subitem per client per unit, so "YPS Euro & Ogden, 2 emails" is four
+subitems — "Email Blast 1 - Young Powersports Euro" and so on — and each store's
+proof moves on its own. Board contract in code: `src/lib/drafting/monday-board.ts`.
 
 | Subitem column | id | Owner | Loomi |
 |---|---|---|---|
 | Design Assets | `file_mm7z1a42` | design team | **reads** — the approved creative, drafting's input |
 | Assets Approved | `color_mm7zba2g` | design team | **reads** — "Approved" means ready to draft |
 | Draft Files | `file_mm7z7hyz` | Loomi | **writes** — the rendered draft, PNG + HTML |
+| Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft's template in Loomi |
 | Proof Status | `color_mm79xe71` | PageProof sync | reads — "Approved" is final |
 | Proof URL | `link_mm79djf1` | PageProof sync | reads |
 | Proof Approval Date | `date_mm7z9v44` | PageProof sync | reads |
 
+Loomi also posts **updates** on the subitem: when a draft is ready (the template
+link, the subject and preview options, what it read off the creative — offer
+terms, dates and the disclaimer verbatim, low-confidence readings flagged — and
+the draft's notes and warnings), or why it couldn't draft. Each notice is posted
+once; the same news is never posted twice.
+
 From the parent project Loomi reads Client, Co-op, Offer Disclaimer, Dev
 Details, Complete by, Ad Run Dates, audience and Job Number. They are mirrors of
 the rep's intake board, so the value is `display_value`; `text` is always null.
+Client is read from the mirror's structured values, never by splitting its text:
+"Young Caring For Our Young, Inc." is one store.
+
+**The client moves to the subitem** (Connor, in progress on monday): a connect
+column to **Oz Clients**, whose **Loomi Account Key** column (`text_mm7znnbh`)
+names the account exactly. Until it lands, the client comes from the parent's
+Client field — a request naming one client resolves by name; one naming several
+waits at `needs_account` with a note.
 
 **Proofing is not Loomi's.** A person starts the proof from the subitem by
 uploading the files and submitting; the existing monday ↔ PageProof integration
 writes Proof Status, Proof URL and Proof Approval Date back. Loomi builds no proof
-page and calls no PageProof API. Its one job is to put the rendered draft where
-a person can proof it, then read the outcome.
+page and calls no PageProof API.
 
 **The write scope is enforced, not trusted:**
 
-- `uploadDraftFile` is the only monday write in drafting, with the Draft Files
-  column fixed inside it. `monday-board.test.ts` reads the module source and fails
-  if a mutation or a second upload appears.
-- It refuses an item on any other board.
+- Exactly three writes, each with its target fixed in the code: the Draft Files
+  upload, the Loomi Template link, and an update. `monday-board.test.ts` reads the
+  module source and fails if a fourth appears or a proof column turns up in one.
+- Every write refuses an item on any other board.
 - Outside production it refuses every subitem not listed in
   `DRAFTING_MONDAY_WRITE_SUBITEMS`. A local run touches only the subitem someone
   nominated.
@@ -97,14 +113,14 @@ Compliance Check count as co-op (§7.2).
 | # | Stage | Stops when |
 |---|---|---|
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
-| 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; Loomi checks the board on a schedule | — |
+| 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; the intake pass (`loomi.drafting.intake`, every 5 minutes) starts it. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
 | 2 | **Fetch** the subitem, the project, and the Design Assets files | No approved assets, or a file over 40 MB (a layered PSD, not a flattened export) |
 | 3 | **Extract + classify** — one vision pass, saved field by field | — |
 | 4 | **Conflict check** — every number, date and disclaimer found in both the graphic and the request must agree | Any disagreement: both values are shown, nothing is chosen |
 | 5 | **Confirm** — where a person checks the extraction, with no Loomi screen, is open (§10) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
 | 7 | **Validate** — the rule registry (§7) | Any error |
-| 8 | **Save + link** — the draft becomes an account-owned Loomi email template, linked from the subitem (where on the subitem is open, §10). Rendered with Loomi's send-time footer so a proof shows what recipients get | — |
+| 8 | **Publish** (`publish.ts`) — the draft becomes the account's Loomi template (`draft-…` slug, category `drafted`; later drafts update it and `TemplateVersion` keeps the earlier ones); the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
 | 9 | **Watch** Proof Status | "Approved" freezes the version as final |
 
 Steps 2–8 run as a pg-boss job. Vision plus drafting outlasts nginx's 60-second
@@ -402,30 +418,37 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Piece | State |
 |---|---|
 | monday transport (`src/lib/monday/client.ts`), shared with the help desk | **built** |
-| Development Projects contract — reads, the one write, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
+| Development Projects contract — reads, the three writes, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
 | Local smoke script (`scripts/drafting-monday-smoke.ts`) | **built**; needs `MONDAY_API_TOKEN` |
 | Compliance rule registry, 19 rules, fixture tests | **built** |
 | Co-op warnings: banned phrases + the four cheap pack requirements | **built** |
 | UTM slug and tagging (`src/lib/drafting/utm.ts`) | **built** |
 | `DraftRequest` / `DraftVersion` models | **built** |
-| Drafting job queue (`loomi.drafting.run`) — fetch stage: re-checks approval, copies the creative | **built**; DB-tested (`requests.db.test.ts`) |
+| Drafting job queue (`loomi.drafting.run`) — fetch stage: re-checks approval, copies the creative | **built**; DB-tested (`drafting.db.test.ts`) |
 | Race-safe start (`requests.ts::startDraftRequest`) | **built** |
 | monday Client → account resolver (`accounts.ts`) | **built**; calibrated on the real names |
 | Proof Status watcher → freeze (`loomi.drafting.proof-status`, every 15 min) | **built**; read-only against monday |
-| Trigger: scheduled check for newly approved deliverables | next |
+| Intake: every 5 minutes, approved creative → request; holds + notices once; bounded quiet retries (`intake.ts`) | **built**; DB-tested |
+| Publish: template in Loomi, proof PNG + HTML to Draft Files, Loomi Template link, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested |
+| Client from the subitem (Oz Clients connect → Loomi Account Key) | waiting on monday |
 | Extraction (vision) | next |
 | Co-op documents as drafting context, notes on the draft (§8) | next, with the drafter |
 | Corpus import from Loomi prod | next |
-| Drafting + assembly into a Loomi template | next |
+| Drafting + assembly (the step between fetch and publish) | next |
 | Account → `siteDisplay`, abbreviations | next (needs the field) |
 
-**Open (Connor):** where on the subitem the template link and the draft's notes
-go; whether Draft Files still gets the rendered PNG + HTML for PageProof; what
-happens when the Client field doesn't name exactly one store; and where a
-person checks the extraction now that there's no drafting screen.
+**Retries, without noise.** A request that can't start waits (`needs_account`
+or `failed`) with one notice on the subitem. The intake retries it as soon as
+what it's made from changes on monday — the design assets or the client, hashed
+as `intakeFingerprint`; not the item's `updated_at`, which Loomi's own updates
+may bump. A failure with nothing changed is retried quietly at most three times,
+30 minutes apart, which rides out a monday or S3 hiccup without a fresh notice.
 
-Nothing here is reachable from the app yet: no route or page uses it, and the
-job only runs when something starts a request.
+**Switched off until turned on.** The intake does nothing unless
+`DRAFTING_INTAKE_ENABLED=true` on the droplet — `MONDAY_API_TOKEN` alone isn't
+enough, because the help desk needs the token too. Turn it on once the drafter
+can finish what the intake starts; until then a started request stops at
+`awaiting_extraction`. No route or page uses any of this.
 
 ---
 

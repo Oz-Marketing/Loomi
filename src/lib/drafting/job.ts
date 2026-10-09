@@ -3,6 +3,8 @@ import { getBoss } from '@/lib/queue/boss';
 import { MondayError } from '@/lib/monday/client';
 import { copyDesignAssets, imageType, sameCreative, type DraftAsset } from './assets';
 import { getDeliverable, type Deliverable } from './monday-board';
+import { cantDraftUpdate } from './notes';
+import { noticeOnce } from './notice';
 
 /**
  * The drafting job: one DraftRequest, carried as far as the pipeline goes.
@@ -60,7 +62,7 @@ function parseAssets(raw: string | null): DraftAsset[] | null {
   }
 }
 
-/** Why a deliverable can't be drafted right now, in words for the person who started it. */
+/** Why a deliverable can't be drafted right now, in words for the person reading the note. */
 export function fetchProblem(d: Deliverable | null): string | null {
   if (!d) return 'monday no longer has this deliverable.';
   if (d.kind !== 'email') return `"${d.name}" isn't an email deliverable; only email is drafted so far.`;
@@ -105,7 +107,7 @@ export async function runDraftingJob(requestId: string): Promise<void> {
     const deliverable = await getDeliverable(request.mondaySubitemId);
     const problem = fetchProblem(deliverable);
     if (problem || !deliverable?.project) {
-      await prisma.draftRequest.update({ where: { id: requestId }, data: { status: 'failed', error: problem } });
+      await failRequest(request, problem ?? 'This deliverable has no parent project on monday.');
       return;
     }
 
@@ -130,8 +132,15 @@ export async function runDraftingJob(requestId: string): Promise<void> {
     });
   } catch (err) {
     console.error(`[drafting-job] request ${requestId} failed:`, err);
-    await prisma.draftRequest
-      .update({ where: { id: requestId }, data: { status: 'failed', error: failureMessage(err) } })
-      .catch(() => {});
+    await failRequest(request, failureMessage(err)).catch(() => {});
   }
+}
+
+/** Stop the request and say why on the subitem, once. */
+async function failRequest(
+  request: { id: string; mondaySubitemId: string; lastNotice: string | null },
+  error: string,
+): Promise<void> {
+  await prisma.draftRequest.update({ where: { id: request.id }, data: { status: 'failed', error } });
+  await noticeOnce(request, cantDraftUpdate(error));
 }

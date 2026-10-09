@@ -39,6 +39,7 @@ import {
   runTemplateSyncJob,
   type TemplateSyncJob,
 } from '@/lib/ad-generator/template-sync-job';
+import { DRAFTING_INTAKE_QUEUE, runDraftingIntake } from '@/lib/drafting/intake';
 import { DRAFTING_RUN_QUEUE, runDraftingJob, type DraftingJob } from '@/lib/drafting/job';
 import { DRAFTING_PROOF_QUEUE, runProofStatusSweep } from '@/lib/drafting/proof-watch';
 import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
@@ -441,13 +442,26 @@ async function main(): Promise<void> {
     }
   });
 
-  // Email drafting (docs/email-drafting.md). Event-driven: a person starts a
-  // request from the drafting queue and the route enqueues one job. Reading the
-  // creative and drafting outlast nginx's 60-second cut, as template sync does.
+  // Email drafting (docs/email-drafting.md). The intake pass below starts a
+  // request when a deliverable's creative is approved on monday, and enqueues
+  // one job. Reading the creative and drafting outlast nginx's 60-second cut,
+  // as template sync does.
   await boss.createQueue(DRAFTING_RUN_QUEUE);
   await boss.work<DraftingJob>(DRAFTING_RUN_QUEUE, async (jobs) => {
     for (const job of jobs) {
       await runDraftingJob(job.data.requestId);
+    }
+  });
+
+  // The drafting trigger: approved creative on monday becomes a request. No
+  // screen in Loomi — the person approving the creative IS the trigger. Quiet by
+  // design: it starts each deliverable once and never posts the same notice twice.
+  await boss.createQueue(DRAFTING_INTAKE_QUEUE);
+  await boss.work(DRAFTING_INTAKE_QUEUE, async () => {
+    try {
+      await runDraftingIntake();
+    } catch (err) {
+      console.error('[worker] drafting intake failed', err);
     }
   });
 
@@ -525,6 +539,11 @@ async function main(): Promise<void> {
   // the runs that finished this morning rather than yesterday's.
   await boss.schedule(PLAYBOOKS_SWEEP_QUEUE, '30 8 * * *');
   console.log('[worker] scheduled', PLAYBOOKS_SWEEP_QUEUE, 'daily at 08:30 UTC');
+
+  // Every 5 minutes: approving the creative on monday should feel like it
+  // started something. A no-op unless DRAFTING_INTAKE_ENABLED=true.
+  await boss.schedule(DRAFTING_INTAKE_QUEUE, '*/5 * * * *');
+  console.log('[worker] scheduled', DRAFTING_INTAKE_QUEUE, 'every 5 minutes');
 
   // Every 15 minutes: a proof turning Approved isn't urgent to the minute, and
   // the sweep is a no-op while nothing is out for proof.

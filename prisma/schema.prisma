@@ -5882,16 +5882,19 @@ model AgentProfileRevision {
 //
 // docs/email-drafting.md. A design-approved "Email Blast N" subitem on monday's
 // Development Projects board becomes one DraftRequest; every draft written for it
-// is a DraftVersion. monday stays the record of the WORK — who, when, and the
+// is a DraftVersion, and the drafts live in one Loomi email template. monday stays the record of the WORK — who, when, and the
 // proof outcome the PageProof sync writes back. These rows are the record of what
 // Loomi read and what it wrote.
 
 model DraftRequest {
   id String @id @default(cuid())
 
-  /// The deliverable: a subitem on monday board 18431636469. One request per
-  /// deliverable — drafting it again adds a version, never a second request.
+  /// The deliverable: a subitem on monday board 18431636469 — one client, one
+  /// email. monday fans a request out one subitem per client per unit, so "YPS
+  /// Euro & Ogden, 2 emails" is four subitems. Drafting again adds a version.
   mondaySubitemId String  @unique
+  /// The client as monday names it ("Young Powersports Ogden"), for notes.
+  clientName      String?
   /// Its parent project on board 18431636272.
   mondayProjectId String?
   /// Names as monday showed them when the request was last read.
@@ -5900,9 +5903,13 @@ model DraftRequest {
   /// email | text | landing_page — slice 1 drafts email only.
   kind            String  @default("email")
 
-  /// The Loomi account the email is for. monday names a store by label, which
-  /// isn't a key, so the person who starts the request confirms it.
-  accountKey String
+  /// The Loomi account the email is for, resolved from the subitem's client.
+  /// Null while it can't be — the request then waits at `needs_account`.
+  accountKey String?
+
+  /// The Loomi email template the drafts are written into, one per deliverable.
+  /// Its own TemplateVersion history keeps every earlier draft.
+  templateId String?
 
   /// Where the request is in the pipeline; see src/lib/drafting/status.ts.
   status String @default("queued")
@@ -5938,6 +5945,16 @@ model DraftRequest {
 
   /// Why the request is `failed` or `blocked`, in words a person can act on.
   error String? @db.Text
+
+  /// What the draft was made from on monday — the design asset ids and the
+  /// client — as a hash. The poller retries a stopped request when this changes,
+  /// i.e. when someone fixed something; it can't use the item's `updated_at`,
+  /// which Loomi's own updates may bump.
+  intakeFingerprint String?
+  /// Starts since the inputs last changed. Bounds quiet retries of a failure.
+  attempts          Int     @default(0)
+  /// The last notice posted to the subitem, so the same news is never posted twice.
+  lastNotice        String? @db.Text
 
   startedByUserId String?
   createdAt       DateTime @default(now())

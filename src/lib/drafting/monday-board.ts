@@ -7,23 +7,28 @@ import { MondayError, mondayRequest, mondayUploadFile } from '@/lib/monday/clien
  *   https://oz-marketing.monday.com/boards/18431636469   (subitems — one per deliverable)
  *
  * A project is one request ("Q4 YAG Branding Conquest Campaign"); each subitem
- * is one deliverable ("Email Blast 1"). Drafting works on ONE subitem at a time
- * and reads its parent for the request fields.
+ * is one deliverable for one client ("Email Blast 1 - Young Powersports Euro").
+ * Drafting works on ONE subitem at a time and reads its parent for the request
+ * fields.
  *
  * ── WHO OWNS WHICH COLUMN ──
  *
  *   Design Assets        design team     the approved creative — drafting's INPUT
  *   Assets Approved      design team     "Approved" = ready to draft (the trigger)
- *   Draft Files          LOOMI           the rendered draft, PNG + HTML (OUTPUT)
+ *   Draft Files          LOOMI           the rendered draft, PNG + HTML
+ *   Loomi Template       LOOMI           link to the draft's template in Loomi
  *   Proof Status         PageProof sync  "Approved" is final — Loomi only READS it
  *   Proof URL            PageProof sync  read only
  *   Proof Approval Date  PageProof sync  read only
  *
+ * Loomi also posts UPDATES on the subitem: the draft's link, what it read off the
+ * creative, and its notes — or why it couldn't draft.
+ *
  * Proofs are started by a person from the subitem; the monday ↔ PageProof
- * integration writes the outcome back. A Loomi write to any of the last three
- * would fight that sync, so this module has exactly ONE write, with the column
- * fixed inside it — `uploadDraftFile` — and `monday-board.test.ts` fails if a
- * second one appears.
+ * integration writes the outcome back. A Loomi write to any of the proof columns
+ * would fight that sync, so this module has exactly three writes — Draft Files,
+ * the Loomi Template link, an update — each with its target fixed inside it, and
+ * `monday-board.test.ts` fails if a fourth appears.
  */
 
 export const DEV_PROJECTS_BOARD_ID = '18431636272';
@@ -39,6 +44,7 @@ export const DELIVERABLE_COLUMNS = {
   proofStatus: 'color_mm79xe71',
   proofUrl: 'link_mm79djf1',
   proofApprovalDate: 'date_mm7z9v44',
+  loomiTemplate: 'link_mm7zjhj9',
 } as const;
 
 /**
@@ -57,8 +63,9 @@ export const PROJECT_COLUMNS = {
   jobNumber: 'lookup_mm7parn0',
 } as const;
 
-/** The one column drafting writes. */
+/** The columns drafting writes. */
 export const DRAFT_OUTPUT_COLUMN = DELIVERABLE_COLUMNS.draftFiles;
+export const TEMPLATE_LINK_COLUMN = DELIVERABLE_COLUMNS.loomiTemplate;
 
 /** Written by the monday ↔ PageProof sync. Loomi reads these and never writes them. */
 export const PAGEPROOF_OWNED_COLUMNS = [
@@ -120,9 +127,13 @@ export interface Deliverable {
   id: string;
   name: string;
   kind: DeliverableKind;
+  /** ISO time of the subitem's last change on monday. */
+  updatedAt: string | null;
   assetsApproved: boolean;
   designAssets: DeliverableFile[];
   draftFiles: DeliverableFile[];
+  /** The Loomi Template link, once Loomi has written one. */
+  templateUrl: string | null;
   proof: ProofState;
   /** Null only for an orphaned subitem, which drafting can't use. */
   project: ProjectRequest | null;
@@ -132,12 +143,17 @@ export interface ReadyDeliverable {
   id: string;
   name: string;
   kind: DeliverableKind;
+  /** ISO time of the subitem's last change — what tells a fixed deliverable from a stale one. */
+  updatedAt: string | null;
   projectId: string | null;
   projectName: string | null;
-  /** The project's Client mirror, split — the account suggestion starts here. */
+  /** The project's Client mirror — the account resolution starts here. */
   clients: string[];
   coop: CoopFlag;
+  /** The Design Assets on the subitem — part of what the poller fingerprints. */
+  designAssetIds: string[];
   hasDraftFiles: boolean;
+  hasTemplateLink: boolean;
 }
 
 // ── Parsing (pure) ───────────────────────────────────────────────────────────
@@ -175,12 +191,15 @@ interface RawColumnValue {
   url?: string | null;
   date?: string | null;
   display_value?: string | null;
+  /** A mirror's source values, structured — how a dropdown's labels survive intact. */
+  mirrored_items?: { mirrored_value?: { values?: { label?: string | null }[] | null } | null }[] | null;
   files?: RawFile[] | null;
 }
 
 interface RawItem {
   id: string;
   name: string;
+  updated_at?: string | null;
   board?: { id: string } | null;
   column_values: RawColumnValue[];
   parent_item?: { id: string; name: string; column_values: RawColumnValue[] } | null;
@@ -207,12 +226,26 @@ function mirror(cv: RawColumnValue | undefined): string {
   return (cv?.display_value ?? cv?.text ?? '').trim();
 }
 
-/** A Client mirror can name several stores: "Young Powersports Ogden, Young Powersports Euro". */
-function splitClients(value: string): string[] {
-  return value
-    .split(/,\s*/)
-    .map((c) => c.trim())
+/**
+ * The stores a Client mirror names: "Young Powersports Ogden, Young Powersports Euro".
+ *
+ * Read from the mirror's STRUCTURED source values, not by splitting its display
+ * text: monday joins labels with ", ", and "Young Caring For Our Young, Inc." is
+ * one store that a split turns into two. The text split is only a fallback for a
+ * mirror that comes back without its source values.
+ */
+export function clientLabels(cv: RawColumnValue | undefined): string[] {
+  const structured = (cv?.mirrored_items ?? [])
+    .flatMap((m) => m.mirrored_value?.values ?? [])
+    .map((v) => v.label?.trim() ?? '')
     .filter(Boolean);
+  const labels = structured.length
+    ? structured
+    : mirror(cv)
+        .split(/,\s*/)
+        .map((c) => c.trim())
+        .filter(Boolean);
+  return [...new Set(labels)];
 }
 
 function proofState(cols: Map<string, RawColumnValue>): ProofState {
@@ -234,7 +267,7 @@ export function parseDeliverable(raw: RawItem): Deliverable {
     project = {
       id: parent.id,
       name: parent.name,
-      clients: splitClients(mirror(p.get(PROJECT_COLUMNS.client))),
+      clients: clientLabels(p.get(PROJECT_COLUMNS.client)),
       coop: parseCoopFlag(mirror(p.get(PROJECT_COLUMNS.coop))),
       offerDisclaimer: mirror(p.get(PROJECT_COLUMNS.offerDisclaimer)),
       details: mirror(p.get(PROJECT_COLUMNS.details)),
@@ -249,9 +282,11 @@ export function parseDeliverable(raw: RawItem): Deliverable {
     id: raw.id,
     name: raw.name,
     kind: deliverableKind(raw.name),
+    updatedAt: raw.updated_at ?? null,
     assetsApproved: cols.get(DELIVERABLE_COLUMNS.assetsApproved)?.label === ASSETS_APPROVED_LABEL,
     designAssets: files(cols.get(DELIVERABLE_COLUMNS.designAssets)),
     draftFiles: files(cols.get(DELIVERABLE_COLUMNS.draftFiles)),
+    templateUrl: cols.get(TEMPLATE_LINK_COLUMN)?.url || null,
     proof: proofState(cols),
     project,
   };
@@ -265,7 +300,7 @@ const COLUMN_VALUE_FIELDS = `
   ... on StatusValue { label }
   ... on LinkValue { url }
   ... on DateValue { date }
-  ... on MirrorValue { display_value }
+  ... on MirrorValue { display_value mirrored_items { mirrored_value { ... on DropdownValue { values { label } } } } }
   ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } }
 `;
 
@@ -274,6 +309,7 @@ const DELIVERABLE_QUERY = `
     items(ids: $ids) {
       id
       name
+      updated_at
       board { id }
       column_values(ids: ${JSON.stringify(Object.values(DELIVERABLE_COLUMNS))}) { ${COLUMN_VALUE_FIELDS} }
       parent_item {
@@ -330,7 +366,8 @@ export async function listReadyDeliverables(): Promise<ReadyDeliverable[]> {
           items {
             id
             name
-            column_values(ids: ["${DRAFT_OUTPUT_COLUMN}"]) { ${COLUMN_VALUE_FIELDS} }
+            updated_at
+            column_values(ids: ["${DELIVERABLE_COLUMNS.designAssets}", "${DRAFT_OUTPUT_COLUMN}", "${TEMPLATE_LINK_COLUMN}"]) { ${COLUMN_VALUE_FIELDS} }
             parent_item {
               id
               name
@@ -362,11 +399,14 @@ export async function listReadyDeliverables(): Promise<ReadyDeliverable[]> {
         id: item.id,
         name: item.name,
         kind: deliverableKind(item.name),
+        updatedAt: item.updated_at ?? null,
         projectId: item.parent_item?.id ?? null,
         projectName: item.parent_item?.name ?? null,
-        clients: splitClients(mirror(parent.get(PROJECT_COLUMNS.client))),
+        clients: clientLabels(parent.get(PROJECT_COLUMNS.client)),
         coop: parseCoopFlag(mirror(parent.get(PROJECT_COLUMNS.coop))),
+        designAssetIds: files(cols.get(DELIVERABLE_COLUMNS.designAssets)).map((f) => f.assetId),
         hasDraftFiles: files(cols.get(DRAFT_OUTPUT_COLUMN)).length > 0,
+        hasTemplateLink: Boolean(cols.get(TEMPLATE_LINK_COLUMN)?.url),
       });
     }
     cursor = itemsPage?.cursor ?? null;
@@ -405,7 +445,7 @@ export async function getProofStates(subitemIds: string[]): Promise<Map<string, 
   return out;
 }
 
-// ── The one write ────────────────────────────────────────────────────────────
+// ── The writes ───────────────────────────────────────────────────────────────
 
 /**
  * Comma-separated subitem ids drafting may write to. When set, every other
@@ -428,18 +468,14 @@ export function assertDraftWriteAllowed(subitemId: string): void {
   }
   if (process.env.NODE_ENV !== 'production') {
     throw new MondayError(
-      `Set ${WRITE_ALLOWLIST_ENV} to the subitem you nominated before writing Draft Files from a non-production run.`,
+      `Set ${WRITE_ALLOWLIST_ENV} to the subitem you nominated before writing to monday from a non-production run.`,
       'api_error',
     );
   }
 }
 
-/**
- * Attach one rendered draft file (the PNG or the HTML) to the deliverable's
- * Draft Files column. The column is fixed here, not passed in: this is the only
- * monday write drafting makes.
- */
-export async function uploadDraftFile(subitemId: string, file: File): Promise<{ assetId: string | null }> {
+/** Every write starts here: a nominated subitem (outside production) on the deliverables board. */
+async function assertWritableDeliverable(subitemId: string): Promise<void> {
   assertDraftWriteAllowed(subitemId);
   const data = await mondayRequest<{ items: { id: string; board: { id: string } | null }[] | null }>(
     `query ($ids: [ID!]) { items(ids: $ids) { id board { id } } }`,
@@ -450,5 +486,37 @@ export async function uploadDraftFile(subitemId: string, file: File): Promise<{ 
     throw new MondayError(`monday has no item ${subitemId}.`, 'api_error');
   }
   assertDeliverableBoard(item);
+}
+
+/** Attach one rendered draft file (the PNG or the HTML) to Draft Files. */
+export async function uploadDraftFile(subitemId: string, file: File): Promise<{ assetId: string | null }> {
+  await assertWritableDeliverable(subitemId);
   return mondayUploadFile({ itemId: subitemId, columnId: DRAFT_OUTPUT_COLUMN, file });
+}
+
+/** Point the Loomi Template column at the draft's template. */
+export async function setTemplateLink(subitemId: string, url: string, text: string): Promise<void> {
+  await assertWritableDeliverable(subitemId);
+  await mondayRequest(
+    `mutation ($boardId: ID!, $itemId: ID!, $columnId: String!, $value: JSON!) {
+      change_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) { id }
+    }`,
+    {
+      boardId: DELIVERABLES_BOARD_ID,
+      itemId: subitemId,
+      columnId: TEMPLATE_LINK_COLUMN,
+      // A link column's value is a JSON scalar — monday wants it stringified.
+      value: JSON.stringify({ url, text }),
+    },
+  );
+}
+
+/** Post an update on the subitem. `html` must already be escaped — see notes.ts. */
+export async function postDraftUpdate(subitemId: string, html: string): Promise<{ updateId: string | null }> {
+  await assertWritableDeliverable(subitemId);
+  const data = await mondayRequest<{ create_update: { id: string } | null }>(
+    `mutation ($itemId: ID!, $body: String!) { create_update(item_id: $itemId, body: $body) { id } }`,
+    { itemId: subitemId, body: html },
+  );
+  return { updateId: data.create_update?.id ?? null };
 }

@@ -1,11 +1,12 @@
 /**
  * Where a DraftRequest is in the pipeline (docs/email-drafting.md §4).
  *
- * Stored as a plain string column, so this list is the vocabulary. Client-safe:
- * the queue page renders its badges from the same labels the server writes.
+ * Stored as a plain string column, so this list is the vocabulary.
  */
 
 export const DRAFT_STATUSES = [
+  /** monday's Client label doesn't name exactly one Loomi account; nothing is drafted until it does. */
+  'needs_account',
   /** Started; waiting for the worker. */
   'queued',
   /** Reading monday and copying the approved creative into Loomi. */
@@ -45,36 +46,3 @@ export function isRunning(status: string): boolean {
 
 /** Proof is out, so the PageProof outcome is worth reading. */
 export const PROOFING_STATUSES: readonly DraftStatus[] = ['in_proofing', 'changes_requested'];
-
-export const DRAFT_STATUS_LABEL: Record<DraftStatus, string> = {
-  queued: 'Queued',
-  fetching: 'Reading monday',
-  awaiting_extraction: 'Creative copied',
-  extracting: 'Reading the creative',
-  awaiting_confirmation: 'Needs confirming',
-  conflict: 'Conflict',
-  drafting: 'Drafting',
-  blocked: 'Blocked',
-  in_proofing: 'In proofing',
-  changes_requested: 'Changes requested',
-  approved: 'Approved',
-  failed: 'Failed',
-};
-
-/** How a badge reads at a glance. */
-export type DraftStatusTone = 'neutral' | 'progress' | 'attention' | 'success' | 'danger';
-
-export const DRAFT_STATUS_TONE: Record<DraftStatus, DraftStatusTone> = {
-  queued: 'progress',
-  fetching: 'progress',
-  awaiting_extraction: 'neutral',
-  extracting: 'progress',
-  awaiting_confirmation: 'attention',
-  conflict: 'attention',
-  drafting: 'progress',
-  blocked: 'danger',
-  in_proofing: 'neutral',
-  changes_requested: 'attention',
-  approved: 'success',
-  failed: 'danger',
-};

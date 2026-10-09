@@ -45,7 +45,11 @@ export interface AccountSuggestion {
 }
 
 /**
- * The account a monday Client value names, or null with the reason.
+ * The account one monday Client label names, or null with the reason.
+ *
+ * One label at a time: a request can name several stores ("Young Powersports
+ * Ogden, Young Powersports Euro"), and each is its own client with its own
+ * templates, so each is matched on its own.
  *
  * A candidate's name and the label must CONTAIN one another — every word of the
  * shorter appears in the longer — so "Young Audi" finds "Audi Layton" but
@@ -53,13 +57,9 @@ export interface AccountSuggestion {
  * words. Among candidates the most shared words wins, and a tie is no answer:
  * "Young Mazda" is three stores, and "Young Harley Davidson" two.
  */
-export function suggestAccount(clients: string[], accounts: AccountOption[]): AccountSuggestion {
-  if (clients.length === 0) return { accountKey: null, reason: 'monday names no client.' };
-  if (clients.length > 1) {
-    return { accountKey: null, reason: `monday names ${clients.length} stores; drafting is one store at a time.` };
-  }
-  const label = nameTokens(clients[0]);
-  if (label.size === 0) return { accountKey: null, reason: `"${clients[0]}" doesn't name a store.` };
+export function suggestAccount(client: string, accounts: AccountOption[]): AccountSuggestion {
+  const label = nameTokens(client);
+  if (label.size === 0) return { accountKey: null, reason: `"${client}" doesn't name a store.` };
 
   const scored = accounts
     .map((a) => {
@@ -77,10 +77,10 @@ export function suggestAccount(clients: string[], accounts: AccountOption[]): Ac
     .sort((x, y) => y.shared - x.shared);
 
   if (scored.length === 0) {
-    return { accountKey: null, reason: `No Loomi account matches "${clients[0]}".` };
+    return { accountKey: null, reason: `No Loomi account matches "${client}".` };
   }
   if (scored.length > 1 && scored[1].shared === scored[0].shared) {
-    return { accountKey: null, reason: `"${clients[0]}" could be more than one account.` };
+    return { accountKey: null, reason: `"${client}" could be more than one account.` };
   }
   return { accountKey: scored[0].key };
 }

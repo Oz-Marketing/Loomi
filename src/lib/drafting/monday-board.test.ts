@@ -5,10 +5,13 @@ import {
   DELIVERABLES_BOARD_ID,
   DRAFT_OUTPUT_COLUMN,
   PAGEPROOF_OWNED_COLUMNS,
+  TEMPLATE_LINK_COLUMN,
   deliverableKind,
   getDeliverable,
   parseCoopFlag,
   parseDeliverable,
+  postDraftUpdate,
+  setTemplateLink,
   uploadDraftFile,
 } from './monday-board';
 
@@ -81,6 +84,24 @@ describe('parseDeliverable', () => {
     const d = parseDeliverable(raw);
     expect(d.assetsApproved).toBe(false);
     expect(d.proof.approved).toBe(true);
+  });
+
+  it('keeps a store whose name contains a comma in one piece', () => {
+    const raw = structuredClone(RAW_SUBITEM);
+    raw.parent_item!.column_values = raw.parent_item!.column_values.map((cv) =>
+      cv.id === 'lookup_mm7pw1hd'
+        ? {
+            id: cv.id,
+            text: null,
+            // What monday shows, and the structured values behind it.
+            display_value: 'Young Toyota, Young Caring For Our Young, Inc.',
+            mirrored_items: [
+              { mirrored_value: { values: [{ label: 'Young Toyota' }, { label: 'Young Caring For Our Young, Inc.' }] } },
+            ],
+          }
+        : cv,
+    );
+    expect(parseDeliverable(raw).project?.clients).toEqual(['Young Toyota', 'Young Caring For Our Young, Inc.']);
   });
 
   it('survives an orphaned subitem', () => {
@@ -190,6 +211,47 @@ describe('uploadDraftFile', () => {
   });
 });
 
+describe('setTemplateLink and postDraftUpdate', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubEnv('MONDAY_API_TOKEN', 'test-token');
+    vi.stubEnv('DRAFTING_MONDAY_WRITE_SUBITEMS', '13241541081');
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ data: { items: [{ id: '13241541081', board: { id: DELIVERABLES_BOARD_ID } }] } }),
+    );
+  });
+  afterEach(() => {
+    fetchMock.mockReset();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  const lastVariables = () => JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body)).variables;
+
+  it('writes the link into the Loomi Template column', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: { change_column_value: { id: '13241541081' } } }));
+    await setTemplateLink('13241541081', 'https://studio.loomilm.com/templates/editor?design=x', 'Open in Loomi');
+    expect(lastVariables()).toEqual({
+      boardId: DELIVERABLES_BOARD_ID,
+      itemId: '13241541081',
+      columnId: TEMPLATE_LINK_COLUMN,
+      value: JSON.stringify({ url: 'https://studio.loomilm.com/templates/editor?design=x', text: 'Open in Loomi' }),
+    });
+  });
+
+  it('posts an update on the subitem', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: { create_update: { id: '777' } } }));
+    await expect(postDraftUpdate('13241541081', '<p>Draft ready</p>')).resolves.toEqual({ updateId: '777' });
+    expect(lastVariables()).toEqual({ itemId: '13241541081', body: '<p>Draft ready</p>' });
+  });
+
+  it('refuses a subitem nobody nominated', async () => {
+    fetchMock.mockReset();
+    await expect(postDraftUpdate('999', '<p>x</p>')).rejects.toThrow(/isn't in/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * Static guard on the write scope, in the style of the worker's queue test:
  * read the source rather than trust review. The PageProof sync owns the proof
@@ -197,10 +259,21 @@ describe('uploadDraftFile', () => {
  */
 describe('drafting write scope', () => {
   const source = readFileSync(join(__dirname, 'monday-board.ts'), 'utf8');
+  const mutations = [...source.matchAll(/`mutation[^`]*`/g)].map((m) => m[0]);
 
-  it('declares no GraphQL mutation of its own', () => {
-    expect(source).not.toMatch(/\bmutation\b\s*[({]/);
-    expect(source).not.toMatch(/change_(simple_|multiple_)?column_value/);
+  it('has exactly two mutations: the Loomi Template link and an update', () => {
+    expect(mutations).toHaveLength(2);
+    expect(mutations[0]).toMatch(/change_column_value\(/);
+    expect(mutations[1]).toMatch(/create_update\(/);
+    expect(source).not.toMatch(/change_(simple|multiple)_column_values?/);
+  });
+
+  it('sets only the Loomi Template column, and never names a proof column in a write', () => {
+    const columnArgs = [...source.matchAll(/columnId: ([A-Z_]+),/g)].map((m) => m[1]);
+    expect(columnArgs.sort()).toEqual(['DRAFT_OUTPUT_COLUMN', 'TEMPLATE_LINK_COLUMN']);
+    for (const m of mutations) {
+      for (const col of PAGEPROOF_OWNED_COLUMNS) expect(m).not.toContain(col);
+    }
   });
 
   it('uploads only to the Draft Files column', () => {

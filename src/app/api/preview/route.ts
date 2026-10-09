@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as templateService from '@/lib/services/templates';
 import * as accountEmailService from '@/lib/services/account-emails';
-import { isV2Template, parseV2Template } from '@/lib/email/types';
-import { renderEmailTemplate } from '@/lib/email/render';
+import { compileTemplateContent } from '@/lib/email/compile-template';
 
 // ── Helpers ──
 
@@ -30,23 +29,6 @@ function applyPreviewValues(
   return output;
 }
 
-/**
- * Compile any template content into rendered HTML.
- *  - v2 JSON  → react-email render
- *  - Pure HTML → returned as-is
- *
- * Legacy Maizzle <x-base> templates are no longer supported; they fall through
- * to the HTML pass-through path and render unmodified (raw markup visible).
- */
-async function compileToHtml(content: string, opts: { pretty?: boolean } = {}): Promise<string> {
-  if (isV2Template(content)) {
-    const tpl = parseV2Template(content);
-    if (!tpl) throw new Error('Invalid v2 template JSON');
-    return renderEmailTemplate(tpl, { pretty: opts.pretty ?? false });
-  }
-  return content;
-}
-
 // ── POST /api/preview — Editor preview ──
 
 export async function POST(req: NextRequest) {
@@ -59,7 +41,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No HTML provided' }, { status: 400 });
     }
 
-    const rendered = await compileToHtml(html, { pretty: pretty === true });
+    const rendered = await compileTemplateContent(html, { pretty: pretty === true });
     const resolved = applyPreviewValues(
       rendered,
       previewValues && typeof previewValues === 'object'
@@ -128,7 +110,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'No template content' }, { status: 404 });
     }
 
-    const rendered = await compileToHtml(html);
+    const rendered = await compileTemplateContent(html);
     const resolved = applyPreviewValues(rendered, previewValues);
 
     if (wantsHtml) {

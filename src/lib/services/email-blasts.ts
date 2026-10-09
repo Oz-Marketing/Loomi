@@ -22,6 +22,7 @@ import {
 } from '@/lib/sending/unsubscribe-footer';
 import { resolveAccountFooters } from '@/lib/sending/account-footer';
 import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
+import { stripFrontmatter } from '@/lib/email/compile-template';
 import {
   applyBlastMergetags,
   buildBlastMergetagContext,
@@ -1811,12 +1812,15 @@ export async function processEmailBlast(
 
   // The base HTML, before per-recipient mergetag substitution. UTM tagging
   // is applied once here since it rewrites campaign-level links, not
-  // per-recipient ones.
+  // per-recipient ones. Blasts compiled before /api/preview stripped a
+  // template's frontmatter block still carry it in htmlContent, so strip
+  // again at dispatch.
+  const sendHtml = stripFrontmatter(campaign.htmlContent);
   const baseHtml = applyUtmTags(
-    withPreviewText(campaign.htmlContent, campaign.previewText || ''),
+    withPreviewText(sendHtml, campaign.previewText || ''),
     metadata.utm,
   );
-  const baseText = campaign.textContent?.trim() || stripHtml(campaign.htmlContent);
+  const baseText = campaign.textContent?.trim() || stripHtml(sendHtml);
 
   // Reputation is spent by mail that LEAVES, so only a successful dispatch
   // counts against the warm-up day. Suppressed, opted-out and invalid

@@ -1,23 +1,18 @@
 import type { Block } from '@/lib/email/types';
 import { anchors, collapseWhitespace, stripTags, visibleText } from '../html';
 import { blockText, findBlock, walkBlocks } from '../surfaces';
-import type { CopyOption, DraftRule, Finding, SendTarget } from '../types';
+import type { CopyOption, DraftRule, Finding } from '../types';
 
 /**
  * Rules about the shape of every draft, whatever the brand.
  */
 
 /**
- * The unsubscribe link each sender understands. GoHighLevel's token means
- * nothing to Loomi's sender and Loomi's means nothing to GoHighLevel's — the
- * wrong one sends an email whose unsubscribe link goes nowhere.
+ * Loomi's unsubscribe merge tag. At send it becomes each recipient's own
+ * unsubscribe link (see `buildBlastMergetagContext`), and the send-time footer
+ * sees it already placed and doesn't repeat it.
  */
-export const UNSUBSCRIBE_TOKENS: Record<SendTarget, string> = {
-  ghl: '{{email.unsubscribe_link}}',
-  loomi: '{{unsubscribe_link}}',
-};
-
-const SENDER_NAME: Record<SendTarget, string> = { ghl: 'GoHighLevel', loomi: 'Loomi' };
+export const UNSUBSCRIBE_TOKEN = '{{unsubscribe_link}}';
 
 /** Every href a block subtree links to: buttons, linked images, links inside rich text. */
 function linksUnder(root: Block): string[] {
@@ -38,38 +33,31 @@ function linksUnder(root: Block): string[] {
 export const unsubscribeRule: DraftRule = {
   id: 'footer.unsubscribe',
   scope: {},
-  summary: "The footer links to the sender's unsubscribe token.",
+  summary: `The footer links to ${UNSUBSCRIBE_TOKEN}.`,
   check(a) {
-    const token = UNSUBSCRIBE_TOKENS[a.sendTarget];
     const footer = findBlock(a.template, a.footerBlockId);
     if (!footer) {
       return [{ severity: 'error', message: `The footer block "${a.footerBlockId}" isn't in the email.`, where: 'footer' }];
     }
-    const findings: Finding[] = [];
-    if (!linksUnder(footer).includes(token)) {
-      findings.push({
-        severity: 'error',
-        message: `The footer has no unsubscribe link. It must link to ${token} for a ${SENDER_NAME[a.sendTarget]} send.`,
-        where: 'footer',
-      });
-    } else if (!anchors(a.html).some((l) => l.href === token)) {
-      findings.push({
-        severity: 'error',
-        message: 'The unsubscribe link is in the template but missing from the rendered email.',
-        where: 'footer',
-      });
-    }
-    for (const [target, other] of Object.entries(UNSUBSCRIBE_TOKENS) as [SendTarget, string][]) {
-      if (target === a.sendTarget) continue;
-      if (anchors(a.html).some((l) => l.href === other)) {
-        findings.push({
+    if (!linksUnder(footer).includes(UNSUBSCRIBE_TOKEN)) {
+      return [
+        {
           severity: 'error',
-          message: `A link uses ${other}, which only works when ${SENDER_NAME[target]} sends. This draft goes out through ${SENDER_NAME[a.sendTarget]}.`,
-          excerpt: other,
-        });
-      }
+          message: `The footer has no unsubscribe link. It must link to ${UNSUBSCRIBE_TOKEN}.`,
+          where: 'footer',
+        },
+      ];
     }
-    return findings;
+    if (!anchors(a.html).some((l) => l.href === UNSUBSCRIBE_TOKEN)) {
+      return [
+        {
+          severity: 'error',
+          message: 'The unsubscribe link is in the template but missing from the rendered email.',
+          where: 'footer',
+        },
+      ];
+    }
+    return [];
   },
 };
 

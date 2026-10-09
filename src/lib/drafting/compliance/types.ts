@@ -13,13 +13,6 @@ import type { EmailTemplate } from '@/lib/email/types';
 /** `error` stops the draft before it reaches Draft Files; `warning` rides along for the proofer. */
 export type Severity = 'error' | 'warning';
 
-/**
- * Where the approved email is sent from — it decides which unsubscribe token
- * the footer must carry. Most email still goes out through GoHighLevel, whose
- * token Loomi's own sender doesn't understand, and vice versa.
- */
-export type SendTarget = 'ghl' | 'loomi';
-
 export interface DraftAccount {
   key: string;
   /** `Account.dealer` — the full name, which copy must never shorten. */
@@ -68,7 +61,6 @@ export interface DraftArtifact {
   facts: FactSource[];
   /** The utm_campaign every link must carry. */
   utmCampaign: string;
-  sendTarget: SendTarget;
   /** The advertised make's co-op pack, accepted rules only — or null. */
   coopPack: CoopRulePack | null;
 }

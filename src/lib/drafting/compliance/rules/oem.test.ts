@@ -73,7 +73,7 @@ describe('palettes', () => {
   it('flags a text link with no color, which inboxes paint default blue', async () => {
     const a = asAccount(
       await draft((t) => {
-        blockById(t, 'footer-text').props.text = 'YoungChev.com · <a href="{{email.unsubscribe_link}}">Unsubscribe</a>';
+        blockById(t, 'footer-text').props.text = 'YoungChev.com · <a href="{{unsubscribe_link}}">Unsubscribe</a>';
       }),
       { oems: ['Kia'] },
     );

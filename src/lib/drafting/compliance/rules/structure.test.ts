@@ -1,33 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { DISCLAIMER, blockById, draft } from '../__fixtures__/drafts';
-import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule, unsubscribeRule, UNSUBSCRIBE_TOKENS } from './structure';
+import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule, unsubscribeRule } from './structure';
 
 describe('footer.unsubscribe', () => {
-  it('requires the sender’s unsubscribe link in the footer', async () => {
+  it('requires Loomi’s unsubscribe link in the footer', async () => {
     const a = await draft((t) => {
       blockById(t, 'footer-text').props.text = 'YoungChev.com';
     });
-    expect(unsubscribeRule.check(a)).toMatchObject([{ severity: 'error', where: 'footer' }]);
+    expect(unsubscribeRule.check(a)).toEqual([
+      { severity: 'error', message: 'The footer has no unsubscribe link. It must link to {{unsubscribe_link}}.', where: 'footer' },
+    ]);
   });
 
-  it('rejects the other sender’s token, which would unsubscribe nobody', async () => {
+  it('accepts no other unsubscribe tag in its place', async () => {
     const a = await draft((t) => {
-      blockById(t, 'footer-text').props.text = `YoungChev.com · <a href="${UNSUBSCRIBE_TOKENS.loomi}" style="color:#000000">Unsubscribe</a>`;
+      blockById(t, 'footer-text').props.text = 'YoungChev.com · <a href="{{unsubscribe}}" style="color:#000000">Unsubscribe</a>';
     });
-    const messages = unsubscribeRule.check(a).map((f) => f.message);
-    expect(messages).toHaveLength(2);
-    expect(messages[0]).toContain('{{email.unsubscribe_link}}');
-    expect(messages[1]).toContain('only works when Loomi sends');
-  });
-
-  it('accepts Loomi’s token on a Loomi send', async () => {
-    const a = await draft(
-      (t) => {
-        blockById(t, 'footer-text').props.text = `YoungChev.com · <a href="${UNSUBSCRIBE_TOKENS.loomi}" style="color:#000000">Unsubscribe</a>`;
-      },
-      { sendTarget: 'loomi' },
-    );
-    expect(unsubscribeRule.check(a)).toEqual([]);
+    expect(unsubscribeRule.check(a)).toHaveLength(1);
   });
 
   it('reports a missing footer block', async () => {

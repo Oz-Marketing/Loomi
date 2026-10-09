@@ -1,7 +1,7 @@
 import { renderEmailTemplate } from '@/lib/email/render';
 import type { Block, EmailTemplate } from '@/lib/email/types';
 import { tagLink } from '../../utm';
-import { UNSUBSCRIBE_TOKENS } from '../rules/structure';
+import { UNSUBSCRIBE_TOKEN } from '../rules/structure';
 import type { DraftAccount, DraftArtifact } from '../types';
 
 /**
@@ -10,7 +10,7 @@ import type { DraftAccount, DraftArtifact } from '../types';
  * Young Chevrolet's Equinox ACTIV offer, built the way the assembler will
  * build drafts: Helvetica, black and white, square full-width CTAs side by
  * side, every link tagged, the disclaimer verbatim, and a footer with the
- * dealer logo, the camelCase site and the GoHighLevel unsubscribe token.
+ * dealer logo, the camelCase site and Loomi's unsubscribe link.
  * Black and white also satisfies the Kia and Honda palettes, so OEM tests can
  * reuse it by swapping the account.
  *
@@ -95,7 +95,7 @@ export function baseTemplate(): EmailTemplate {
             props: {
               allowHtml: true,
               color: '#000000',
-              text: `<a href="${link('/', 'footer-site')}" style="color:#000000">YoungChev.com</a> · <a href="${UNSUBSCRIBE_TOKENS.ghl}" style="color:#000000">Unsubscribe</a>`,
+              text: `<a href="${link('/', 'footer-site')}" style="color:#000000">YoungChev.com</a> · <a href="${UNSUBSCRIBE_TOKEN}" style="color:#000000">Unsubscribe</a>`,
             },
           },
         ],
@@ -151,7 +151,6 @@ export async function draft(
       { label: 'extraction.disclaimer', text: DISCLAIMER },
     ],
     utmCampaign: CAMPAIGN,
-    sendTarget: 'ghl',
     coopPack: null,
     ...patch,
   };

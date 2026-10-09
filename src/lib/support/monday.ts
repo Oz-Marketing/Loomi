@@ -3,12 +3,8 @@
  *
  * Server-only — it holds the API token. Scope is deliberately tiny: read a
  * board's dropdown labels, create one item, attach files to it. Everything
- * about WHICH board and WHICH columns lives in `./help-desk.ts`.
- *
- * Auth is a single workspace-level personal API token (`MONDAY_API_TOKEN`,
- * from monday → Developers → My Access Tokens). There's no per-account
- * credential here the way there is for GoHighLevel: the help desk is one
- * internal Oz board, not a per-client integration.
+ * about WHICH board and WHICH columns lives in `./help-desk.ts`; the transport
+ * itself (auth, errors, uploads) is shared in `@/lib/monday/client`.
  */
 
 import {
@@ -16,41 +12,9 @@ import {
   HELP_DESK_COLUMNS,
   HELP_DESK_GROUP_ID,
 } from '@/lib/support/help-desk';
+import { MondayError, mondayRequest, mondayUploadFile } from '@/lib/monday/client';
 
-const API_URL = 'https://api.monday.com/v2';
-const FILE_API_URL = 'https://api.monday.com/v2/file';
-/** Pinned per monday's guidance — an unversioned call floats onto whatever is current. */
-const API_VERSION = '2024-10';
-const REQUEST_TIMEOUT_MS = 20_000;
-
-export type MondayErrorCode = 'not_configured' | 'api_error';
-
-export class MondayError extends Error {
-  code: MondayErrorCode;
-  httpStatus?: number;
-  constructor(message: string, code: MondayErrorCode, httpStatus?: number) {
-    super(message);
-    this.name = 'MondayError';
-    this.code = code;
-    this.httpStatus = httpStatus;
-  }
-}
-
-/** True when a token is present — callers use this to pick the email fallback. */
-export function isMondayConfigured(): boolean {
-  return Boolean(process.env.MONDAY_API_TOKEN?.trim());
-}
-
-function requireToken(): string {
-  const token = process.env.MONDAY_API_TOKEN?.trim();
-  if (!token) {
-    throw new MondayError(
-      'monday.com is not connected — set MONDAY_API_TOKEN.',
-      'not_configured',
-    );
-  }
-  return token;
-}
+export { MondayError, isMondayConfigured, type MondayErrorCode } from '@/lib/monday/client';
 
 export function helpDeskBoardId(): string {
   return process.env.MONDAY_HELP_DESK_BOARD_ID?.trim() || HELP_DESK_BOARD_ID;
@@ -58,52 +22,6 @@ export function helpDeskBoardId(): string {
 
 export function helpDeskGroupId(): string {
   return process.env.MONDAY_HELP_DESK_GROUP_ID?.trim() || HELP_DESK_GROUP_ID;
-}
-
-/**
- * monday answers 200 OK with an `errors` array for GraphQL-level failures
- * (bad column value, missing permission), so a status check alone isn't enough.
- */
-async function mondayRequest<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  const token = requireToken();
-
-  let res: Response;
-  try {
-    res = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: token,
-        'API-Version': API_VERSION,
-      },
-      body: JSON.stringify({ query, variables }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    throw new MondayError(
-      `Could not reach monday.com: ${err instanceof Error ? err.message : String(err)}`,
-      'api_error',
-    );
-  }
-
-  const body = (await res.json().catch(() => null)) as
-    | { data?: T; errors?: { message?: string }[]; error_message?: string }
-    | null;
-
-  if (!res.ok) {
-    const detail = body?.error_message || body?.errors?.[0]?.message || res.statusText;
-    throw new MondayError(`monday.com returned ${res.status}: ${detail}`, 'api_error', res.status);
-  }
-  if (body?.errors?.length) {
-    throw new MondayError(
-      `monday.com rejected the request: ${body.errors.map((e) => e.message).join('; ')}`,
-      'api_error',
-    );
-  }
-  if (!body?.data) {
-    throw new MondayError('monday.com returned an empty response.', 'api_error');
-  }
-  return body.data;
 }
 
 // ── Board label cache ────────────────────────────────────────────────────────
@@ -210,60 +128,7 @@ export async function createHelpDeskItem(input: {
   return { id: item.id, url: item.url };
 }
 
-/**
- * Attach one file to an item's Attachments column.
- *
- * Uploads go to a different endpoint (`/v2/file`) as a GraphQL multipart
- * request: the `map` field wires the multipart part named `variables[file]`
- * onto the `$file` variable. Uploading via the normal JSON endpoint silently
- * does nothing.
- */
+/** Attach one file to an item's Attachments column. */
 export async function addFileToHelpDeskItem(itemId: string, file: File): Promise<void> {
-  const token = requireToken();
-  const query = `
-    mutation ($itemId: ID!, $columnId: String!, $file: File!) {
-      add_file_to_column(item_id: $itemId, column_id: $columnId, file: $file) { id }
-    }
-  `;
-
-  const form = new FormData();
-  form.append(
-    'query',
-    query.replace(/\s+/g, ' ').trim(),
-  );
-  form.append(
-    'variables',
-    JSON.stringify({ itemId, columnId: HELP_DESK_COLUMNS.attachments, file: null }),
-  );
-  form.append('map', JSON.stringify({ 'variables[file]': 'variables.file' }));
-  form.append('variables[file]', file, file.name);
-
-  let res: Response;
-  try {
-    res = await fetch(FILE_API_URL, {
-      method: 'POST',
-      headers: { Authorization: token, 'API-Version': API_VERSION },
-      body: form,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    throw new MondayError(
-      `Could not upload "${file.name}" to monday.com: ${err instanceof Error ? err.message : String(err)}`,
-      'api_error',
-    );
-  }
-
-  const body = (await res.json().catch(() => null)) as
-    | { data?: unknown; errors?: { message?: string }[]; error_message?: string }
-    | null;
-
-  if (!res.ok || body?.errors?.length) {
-    const detail =
-      body?.error_message || body?.errors?.map((e) => e.message).join('; ') || res.statusText;
-    throw new MondayError(
-      `monday.com rejected the attachment "${file.name}": ${detail}`,
-      'api_error',
-      res.status,
-    );
-  }
+  await mondayUploadFile({ itemId, columnId: HELP_DESK_COLUMNS.attachments, file });
 }

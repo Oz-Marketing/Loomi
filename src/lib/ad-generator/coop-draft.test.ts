@@ -392,3 +392,39 @@ describe('screenRuleProposals — a prohibited-terms list as one rule', () => {
     expect(r.accepted).toHaveLength(1);
   });
 });
+
+describe('screenRuleProposals — patterns written in Python', () => {
+  // The real Subaru §10a proposal. The model wrote its regex the way Python reads it.
+  const PASSAGE =
+    'Advertisements are prohibited from use of political, sexual, racial and religious content.';
+  const pages = ['cover', PASSAGE];
+  const patterned = (pattern: string): RuleProposal => ({
+    page: 2,
+    quote: PASSAGE,
+    section: '10a',
+    rule: {
+      kind: 'banned_phrase',
+      severity: 'error',
+      description: 'Ads must not contain political, sexual, racial or religious content.',
+      pattern,
+    } as RuleProposal['rule'],
+  });
+
+  it('strips a leading (?i), so the draft file carries the pattern that will be stored', () => {
+    const r = screenRuleProposals([patterned('(?i)political|sexual|racial|religious')], pages, OPTS);
+    expect(r.dropped).toEqual([]);
+    expect(r.accepted[0].rule.pattern).toBe('political|sexual|racial|religious');
+  });
+
+  it('drops a pattern that still will not compile, and says why', () => {
+    const r = screenRuleProposals([patterned('(?P<topic>political|sexual)')], pages, OPTS);
+    expect(r.accepted).toEqual([]);
+    expect(r.dropped[0].reason).toBe('invalid_rule');
+    expect(r.dropped[0].detail).toContain('Invalid group');
+  });
+
+  it('drops a pattern that was nothing but (?i)', () => {
+    const r = screenRuleProposals([patterned('(?i)')], pages, OPTS);
+    expect(r.dropped[0].reason).toBe('invalid_rule');
+  });
+});

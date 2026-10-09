@@ -1,4 +1,10 @@
-import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
+import {
+  brokenPattern,
+  normalizePattern,
+  type CoopRule,
+  type CoopRulePack,
+  type RequiredFieldEntry,
+} from './coop-rules';
 import { toCoopRule } from './coop-rule-authoring';
 import type { AcceptedRequiredField, AcceptedRule } from './coop-draft';
 
@@ -39,6 +45,10 @@ import type { AcceptedRequiredField, AcceptedRule } from './coop-draft';
  *
  * Sorted, because term order is not identity: the same list read twice may come back
  * in a different order and that must not read as a different rule.
+ *
+ * `pattern` is compared NORMALIZED. A pack written before `(?i)` was stripped holds
+ * `(?i)x`, and the same rule drafted again now arrives as `x`; compared raw, the two
+ * read as different rules and the re-draft was renamed and queued a second time.
  */
 function signature(rule: CoopRule): string {
   const r = rule as CoopRule & Record<string, unknown>;
@@ -51,7 +61,7 @@ function signature(rule: CoopRule): string {
     (Array.isArray(r.fields) ? (r.fields as string[]).join('+') : ''),
     String(r.phrase ?? ''),
     phrases,
-    String(r.pattern ?? ''),
+    normalizePattern(String(r.pattern ?? '')),
   ];
   return parts.join('|').toLowerCase().replace(/\s+/g, ' ').trim();
 }
@@ -73,9 +83,10 @@ export type SkipReason =
   | 'duplicate_rule'
   /**
    * The rule could not be converted to a storable rule — it is missing something
-   * `toCoopRule` requires, such as a citation. Screening guarantees these, so this
-   * means a defect upstream; it is reported rather than thrown so one malformed
-   * rule cannot abandon a batch of thirty documents part-written.
+   * `toCoopRule` requires, such as a citation — or its pattern does not compile.
+   * Screening guarantees both now, so this means a defect upstream or a draft file
+   * screened before patterns were checked; it is reported rather than thrown so one
+   * malformed rule cannot abandon a batch of thirty documents part-written.
    */
   | 'malformed';
 
@@ -154,6 +165,20 @@ export function mergeDraftedRules(
         ruleId: item.rule.id ?? '(no id)',
         existingId: '',
         description: `${item.rule.description ?? ''} — ${err instanceof Error ? err.message : String(err)}`,
+      });
+      continue;
+    }
+    // `toCoopRule` has already removed a redundant `(?i)`. A pattern still broken
+    // after that would land in the queue as a proposal nobody can accept, and that
+    // the engine could never run. The reason leads, because the apply script
+    // truncates this line.
+    const broken = brokenPattern(rule);
+    if (broken) {
+      skipped.push({
+        reason: 'malformed',
+        ruleId: rule.id,
+        existingId: '',
+        description: `invalid pattern (${broken}) — ${rule.description}`,
       });
       continue;
     }

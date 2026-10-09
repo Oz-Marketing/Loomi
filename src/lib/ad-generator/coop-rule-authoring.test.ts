@@ -52,6 +52,30 @@ describe('validateRule', () => {
     expect(errs.join(' ')).toMatch(/not allowed/i);
   });
 
+  // The engine could never run it, so it would be saved, counted and never fire.
+  it('rejects a pattern the engine cannot compile, saying why', () => {
+    const errs = validateRule({ ...base, phrase: undefined, pattern: '(?P<term>credit)' });
+    // Python's named group — another dialect slip, and one stripping can't fix.
+    expect(errs.join(' ')).toMatch(/pattern isn't valid \(Invalid group\)/i);
+    const banned = validateRule({ ...base, kind: 'banned_phrase', phrase: undefined, pattern: '([unclosed' });
+    expect(banned.join(' ')).toMatch(/pattern isn't valid/i);
+  });
+
+  it('accepts a redundant leading (?i), since that is stripped before storing', () => {
+    expect(validateRule({ ...base, phrase: undefined, pattern: '(?i)approved credit' })).toEqual([]);
+  });
+
+  it('treats a pattern that is only (?i) as no pattern at all', () => {
+    const errs = validateRule({ ...base, phrase: undefined, pattern: '(?i)' });
+    expect(errs.join(' ')).toMatch(/wording it must contain/i);
+  });
+
+  it('ignores a broken pattern beside a prohibited-terms list, which is never stored', () => {
+    expect(
+      validateRule({ ...base, kind: 'banned_phrase', phrase: undefined, phrases: ['blowout'], pattern: '(?P<x>a)' }),
+    ).toEqual([]);
+  });
+
   describe('element_zone', () => {
     const zoneRule: DraftRule = {
       ...base,
@@ -187,6 +211,19 @@ describe('toCoopRule', () => {
     const r = toCoopRule({ ...base, phrase: 'approved credit', pattern: 'approved credit|well-qualified' });
     expect(r).toMatchObject({ pattern: 'approved credit|well-qualified' });
     expect((r as unknown as Record<string, unknown>).phrase).toBeUndefined();
+  });
+
+  it('stores a pattern without Python’s leading (?i), for both phrase kinds', () => {
+    expect(toCoopRule({ ...base, pattern: '(?i)approved credit' })).toMatchObject({ pattern: 'approved credit' });
+    expect(
+      toCoopRule({ ...base, kind: 'banned_phrase', phrase: undefined, pattern: '(?i)political|sexual' }),
+    ).toMatchObject({ pattern: 'political|sexual' });
+  });
+
+  it('falls back to the phrase when the pattern was only (?i)', () => {
+    const r = toCoopRule({ ...base, phrase: 'approved credit', pattern: '(?i)' }) as unknown as Record<string, unknown>;
+    expect(r.phrase).toBe('approved credit');
+    expect(r.pattern).toBeUndefined();
   });
 
   it('only sets a tie-break when there is more than one limit', () => {

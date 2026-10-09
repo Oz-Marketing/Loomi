@@ -271,6 +271,9 @@ export async function POST(req: NextRequest) {
           unchanged: result.unchanged.length,
           notFound: result.notFound,
           notInReview: result.notInReview,
+          // Refused acceptances — a pattern the engine can't compile. Returned so the
+          // panel can say so; a 200 that only counted `applied` would read as success.
+          malformed: result.malformed,
           rechecksQueued,
         });
       }

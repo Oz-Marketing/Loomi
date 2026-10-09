@@ -797,6 +797,36 @@ heaviest node in the schema, which the API intermittently refused.
 Nothing is lost. A stated pricing rule still comes back as a note carrying the
 formula and its quote — which is exactly what someone needs in order to type it.
 
+### 12.8 Drafted patterns were Python, and never ran
+
+Nothing told the drafter which regex dialect to write, so it wrote Python: two
+Subaru proposals and six Chevrolet rules carried a leading `(?i)`. JavaScript
+can't compile that ("Invalid group"), `matcher()` gave up, and a `banned_phrase`
+then skipped itself without a word. Six rules accepted in review enforced nothing
+while the page counted them under "can block".
+
+`matcher()` already compiles with the `i` flag, so the prefix is redundant and
+`normalizePattern` strips it. Every gate now asks one question —
+`brokenPattern()` in `coop-rules.ts`, "will the engine compile this?":
+
+- **Drafting** strips `(?i)` and drops anything still uncompilable as
+  `invalid_rule`, through `validateRule`, so the editor gets the same check. The
+  prompt now names the dialect.
+- **Merging** an older draft file strips it too, skips anything still broken as
+  `malformed`, and compares patterns normalized, so `(?i)x` and `x` are one rule.
+- **Accepting** refuses a rule the engine can't compile (`malformed` in the
+  `review_rules` response). Declining it still works.
+- **Evaluating** reports a broken pattern as a *Not checked* **warning**, never an
+  error: nobody blocked by it could fix it, and an unscoped `banned_phrase` would
+  block every ad for the make. The page's "can block" count leaves it out.
+
+Rules already stored are repaired by `scripts/fix-coop-inline-flags.ts`, dry run
+by default. It repairs proposed and rejected rules, which changes no ad. An
+**accepted** rule is held unless `--include-accepted` is passed: repairing it
+switches on enforcement of a regex the queue never showed anyone. On 2026-10-09
+only the local dev database held any — staging had no packs, and production had
+only the three hand-written seeds, all of which compile.
+
 ---
 
 ## 13. Boundary with the Co-op specialist agent

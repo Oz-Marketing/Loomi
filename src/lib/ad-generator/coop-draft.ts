@@ -5,6 +5,7 @@ import {
   type DraftRule,
   type RuleKind,
 } from './coop-rule-authoring';
+import { normalizePattern } from './coop-rules';
 import { OFFER_KINDS } from './offer-kinds';
 import { enrichOfferFields } from './offer-text';
 import { representativeData } from './coop-template-check';
@@ -30,7 +31,8 @@ import {
  *      in the document is discarded outright, never queued.
  *   2. THE RULE IS WELL-FORMED. Reuses `validateRule` — the same validator behind
  *      the hand-authoring editor, so a drafted rule must clear exactly the bar a
- *      typed one clears. Not a parallel standard that could drift from it.
+ *      typed one clears. Not a parallel standard that could drift from it. That
+ *      includes a pattern the engine can compile: the model writes Python regex.
  *   3. THE FIELDS EXIST. New, and the reason this module isn't just steps 1 and 2.
  *   4. THE SCOPE EXISTS — offer types must be real offer types.
  *
@@ -392,6 +394,7 @@ export function screenRuleProposals(
     }
 
     const id = raw.id?.trim() || suggestRuleId(opts.make, raw.description ?? '', taken);
+    const pattern = typeof raw.pattern === 'string' ? normalizePattern(raw.pattern) : '';
     const rule: DraftRule = {
       ...raw,
       id,
@@ -400,8 +403,14 @@ export function screenRuleProposals(
       description: (raw.description ?? '').trim(),
       // Built from the verified page, not from the drafter.
       citation: buildCitation(opts.source, proposal.section, quote.at.page),
+      // Python's `(?i)` removed HERE, not only on the way into a pack: the draft file
+      // is applied byte-identically per environment, so it should carry the pattern
+      // that will actually be stored.
+      pattern: pattern || undefined,
     };
 
+    // Also refuses a pattern that still won't compile. That one would be accepted,
+    // stored and counted, and never fire.
     const errs = validateRule(rule);
     if (errs.length) {
       drop('invalid_rule', errs.join(' '));

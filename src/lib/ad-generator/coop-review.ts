@@ -1,16 +1,20 @@
-import type { CoopRule, CoopRulePack, RequiredFieldEntry } from './coop-rules';
+import { brokenPattern, type CoopRule, type CoopRulePack, type RequiredFieldEntry } from './coop-rules';
 
 /**
  * Deciding on drafted rules — the human gate.
  *
  * Accepting a rule is the moment it starts affecting ads, so this is the one place
- * where a drafted rule changes from inert to enforced. Three properties matter:
+ * where a drafted rule changes from inert to enforced. Four properties matter:
  *
  *   • ONLY A RULE IN REVIEW CAN BE DECIDED. A hand-written rule carries no
  *     `reviewState`, is not in the queue, and must not be reachable by a review
  *     action — otherwise a stray id in a bulk request could reject a rule a person
  *     wrote and enforce for years. Those are reported as `notInReview`, never
  *     applied.
+ *   • ONLY A RULE THE ENGINE CAN RUN CAN BE ACCEPTED. A pattern that doesn't
+ *     compile never fires, so accepting it would put a person's name on a rule that
+ *     enforces nothing while the page counted it as live. Refused as `malformed`;
+ *     declining it is still allowed, since that is how it leaves the queue.
  *   • DECISIONS ARE ATTRIBUTED. An accepted rule records who accepted it, for the
  *     same reason the pack records who verified it.
  *   • REJECTION IS NOT DELETION. A rejected rule stays in the pack, marked. It
@@ -38,6 +42,8 @@ export interface ApplyReviewsResult {
   notInReview: string[];
   /** Already in the requested state; a no-op rather than an error. */
   unchanged: string[];
+  /** Ids a decision tried to ACCEPT whose pattern can't be compiled — refused, left as they were. */
+  malformed: { ruleId: string; problem: string }[];
 }
 
 /** A rule is in review if it carries an explicit reviewState. */
@@ -60,6 +66,7 @@ export function applyRuleReviews(
   const applied: ApplyReviewsResult['applied'] = [];
   const notInReview: string[] = [];
   const unchanged: string[] = [];
+  const malformed: ApplyReviewsResult['malformed'] = [];
   const seen = new Set<string>();
   const stamp = now.toISOString();
 
@@ -78,12 +85,17 @@ export function applyRuleReviews(
       unchanged.push(rule.id);
       return rule;
     }
+    const problem = want === 'accepted' ? brokenPattern(rule) : null;
+    if (problem) {
+      malformed.push({ ruleId: rule.id, problem });
+      return rule;
+    }
     applied.push({ ruleId: rule.id, from: state, to: want });
     return { ...rule, reviewState: want, reviewedBy: reviewer, reviewedAt: stamp };
   });
 
   const notFound = [...wanted.keys()].filter((id) => !seen.has(id));
-  return { pack: { ...pack, rules }, applied, notFound, notInReview, unchanged };
+  return { pack: { ...pack, rules }, applied, notFound, notInReview, unchanged, malformed };
 }
 
 /** The rules a reviewer still has to decide on, in the order they were drafted. */

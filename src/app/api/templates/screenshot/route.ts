@@ -3,26 +3,11 @@ import { canAccessAccount, getAccountScope, getAuthSession } from '@/lib/api-aut
 import { requirePermission } from '@/lib/permissions/require';
 import * as templateService from '@/lib/services/templates';
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
-import { isV2Template, parseV2Template } from '@/lib/email/types';
-import { renderEmailTemplate } from '@/lib/email/render';
+import { compileTemplateContent } from '@/lib/email/compile-template';
 import {
   loadPreviewAccountData,
   resolvePreviewTokens,
 } from '@/lib/email/preview-substitute';
-
-/**
- * Compile any supported template format to email-safe HTML.
- *  - v2 JSON  → react-email render
- *  - Pure HTML → returned as-is
- */
-async function compileToHtml(content: string): Promise<string> {
-  if (isV2Template(content)) {
-    const tpl = parseV2Template(content);
-    if (!tpl) throw new Error('Invalid v2 template JSON');
-    return renderEmailTemplate(tpl);
-  }
-  return content;
-}
 
 function sanitizeFileName(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -69,7 +54,7 @@ export async function GET(req: NextRequest) {
       : null;
 
   try {
-    const compiledHtml = await compileToHtml(template.content);
+    const compiledHtml = await compileTemplateContent(template.content);
     const accountData = accountKey ? await loadPreviewAccountData(accountKey) : null;
 
     const screenshot = await renderCampaignScreenshotFromHtml({

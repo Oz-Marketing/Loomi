@@ -10,6 +10,7 @@ import {
   type UnsubscribeFooterInput,
 } from '@/lib/sending/unsubscribe-footer';
 import { resolveAccountFooter } from '@/lib/sending/account-footer';
+import { compileTemplateContent } from '@/lib/email/compile-template';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
@@ -2749,7 +2750,7 @@ async function executeEmailNode(
   if (templateId) {
     const template = await prisma.template.findUnique({ where: { id: templateId } });
     if (template) {
-      html = template.content || '';
+      html = template.content ? await compileTemplateContent(template.content) : '';
       if (!subject) subject = template.title || '';
     }
   }

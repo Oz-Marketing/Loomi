@@ -3,6 +3,7 @@ import nodemailer from 'nodemailer';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { resolveAccountFooter } from '@/lib/sending/account-footer';
+import { stripFrontmatter } from '@/lib/email/compile-template';
 import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
@@ -48,7 +49,9 @@ export async function POST(req: NextRequest) {
     // predict a blast's inbox placement was scored on a subject line no
     // blast would ever carry.
     const subject = body.subject?.trim() || 'Test Email from Loomi Studio';
-    const html = body.html;
+    // Callers compile through /api/preview, which already strips a template's
+    // frontmatter — this catches any that hand us stored content directly.
+    const html = body.html ? stripFrontmatter(body.html) : body.html;
     const accountKey = typeof body.accountKey === 'string' ? body.accountKey.trim() : '';
 
     if (!to) return NextResponse.json({ error: 'Recipient email is required' }, { status: 400 });

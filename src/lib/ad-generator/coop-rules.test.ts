@@ -11,6 +11,7 @@ import {
 } from './coop-rules';
 import type { DocElement, TemplateDoc } from './doc-types';
 import type { AdData } from './types';
+import { VIN_TAIL_PATTERN } from './vin';
 
 const SQUARE = { id: 'square', label: 'Square', width: 1080, height: 1080 };
 const TOWER = { id: 'tower', label: 'Tower', width: 300, height: 600 };
@@ -111,6 +112,53 @@ describe('required_phrase', () => {
       pack: pack([aprOnly]),
     });
     expect(f).toEqual([]); // lease ad, apr-only rule
+  });
+});
+
+describe('required_phrase — a VIN in the disclaimer', () => {
+  // Subaru §6a: at least the last eight characters of a valid VIN. First
+  // transcribed as `[A-Z0-9]{8}`, which — compiled with the `i` flag like every
+  // pattern — any eight-letter word satisfied, so an ad with no VIN passed.
+  const vin: CoopRule = {
+    id: 'subaru-vin-required',
+    kind: 'required_phrase',
+    field: 'disclaimer',
+    pattern: VIN_TAIL_PATTERN,
+    severity: 'error',
+    description: 'The disclaimer must carry at least the last eight characters of a valid VIN.',
+  };
+  const check = (disclaimer: string) =>
+    evaluateCoopRules({ doc: doc([textEl('e', 'disclaimer')]), data: { ...LEASE, disclaimer }, pack: pack([vin]) });
+
+  it('passes the last eight of a VIN', () => {
+    expect(check('Closed-end lease with approved credit. VIN: N3123456.')).toEqual([]);
+  });
+
+  it('passes a whole VIN, as composeDisclaimer appends it', () => {
+    expect(check('Closed-end lease with approved credit. VIN: 4S4BTAFC5R3123456')).toEqual([]);
+  });
+
+  it('fails a disclaimer of ordinary words, in capitals too', () => {
+    const words = 'Advertised price excludes tax, title and license. Purchase by the end of the month.';
+    // The fixture has to fool the first transcription, or this proves nothing.
+    expect(new RegExp('[A-Z0-9]{8}', 'i').test(words)).toBe(true);
+    // PURCHASE and EXCLUDES are eight letters from the VIN alphabet, so only the
+    // digit count turns them away — matcher() ignores case.
+    for (const text of [words, words.toUpperCase()]) {
+      expect(check(text)).toHaveLength(1);
+    }
+  });
+
+  it('does not take a date for a VIN', () => {
+    for (const date of ['10/31/2026', '2026-10-31']) {
+      expect(check(`Offer ends ${date}.`)).toHaveLength(1);
+    }
+  });
+
+  it('wants the VIN alphabet and length: no I, O or Q, and 8 or 17 characters', () => {
+    for (const almost of ['NO123456', 'N31234567', '4S4BTAFC5R312345']) {
+      expect(check(`VIN: ${almost}`)).toHaveLength(1);
+    }
   });
 });
 

@@ -420,7 +420,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | monday transport (`src/lib/monday/client.ts`), shared with the help desk | **built** |
 | Development Projects contract — reads, the three writes, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
 | Local smoke script (`scripts/drafting-monday-smoke.ts`) | **built**; needs `MONDAY_API_TOKEN` |
-| Compliance rule registry, 19 rules, fixture tests | **built** |
+| Compliance rule registry, 20 rules, fixture tests | **built** |
 | Co-op warnings: banned phrases + the four cheap pack requirements | **built** |
 | UTM slug and tagging (`src/lib/drafting/utm.ts`) | **built** |
 | `DraftRequest` / `DraftVersion` models | **built** |

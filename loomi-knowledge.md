@@ -47,6 +47,8 @@ Native contact database (not ESP-synced). Full CRUD with extensible per-account 
 ### Email Production (template builder)
 The visual drag-and-drop editor produces **v2 JSON** templates compiled to email-safe HTML via react-email. There is also a raw-HTML **code mode** (Monaco). Templates can be global library assets (`accountKey = null`) or account-owned, with publish/draft states and version snapshots. See the detailed **Template Builder Architecture** and **Component Catalog** sections below — that detail is functional guidance for the AI assistant.
 
+**Email drafting from approved creative** — built, but switched off (`DRAFTING_INTAKE_ENABLED`), and the step that reads the creative and writes the copy is not built yet, so it produces no drafts today. The design: when the creative for an email deliverable is approved on monday (Development Projects board, Assets Approved = "Approved"), Loomi picks it up within five minutes. It drafts the email as an account-owned template (category `drafted`) and puts a link to it in the subitem's "Loomi Template" column. It also uploads a proof PNG and HTML to Draft Files and posts an update with the subject and preview options and what it read off the creative, flagging low-confidence readings. Nothing sends: a person proofs every draft in PageProof, and Proof Status "Approved" freezes that version. Copy may state only what the creative or the request says, disclaimers are copied word for word, and house and OEM brand rules are enforced in code (a draft that breaks one never reaches monday). Co-op guidance only ever warns. One subitem is one client and one template. Spec: `docs/email-drafting.md`.
+
 ### Flows (marketing automation)
 Visual journey builder (nodes + branches). Triggers (list, audience, manual, form submission, tag added, birthday, date reminder) enroll contacts; the worker advances each enrollment tick-by-tick through node types (email, SMS, tag/field updates, waits, conditions, splits, webhooks, CRM push, create task). Respects timezone-aware quiet hours, goals, re-entry policy, and max duration. Flows can be published as global templates and deployed as per-account instances with sync-from-parent.
 
@@ -366,6 +368,7 @@ A pg-boss worker (separate PM2 process; see `ecosystem.config.js`) handles:
 - **CRM lead delivery** — event-driven (form submission / flow push-to-CRM)
 - **Template → ad design sync** (`loomi.adgen.template-sync`) — event-driven (pushing a saved template design into the ads built from it)
 - **Archive retention sweep** (`loomi.purge-archived`) — daily
+- **Email drafting** — intake from monday (`loomi.drafting.intake`, every 5 minutes, off unless `DRAFTING_INTAKE_ENABLED=true`), the per-draft run (`loomi.drafting.run`), and the proof-status watch (`loomi.drafting.proof-status`, every 15 minutes)
 
 ---
 
@@ -377,6 +380,7 @@ A pg-boss worker (separate PM2 process; see `ecosystem.config.js`) handles:
 - **Creative data:** EVOX (vehicle imagery), MarketCheck (OEM incentives), Google Places
 - **Cloud:** AWS S3 / DigitalOcean Spaces (media), Cloudflare (custom-domain SSL via Cloudflare-for-SaaS)
 - **Analytics:** GA4, Meta Pixel, GTM (injected on landing pages)
+- **Work management:** monday.com (help desk tickets; Development Projects deliverables for email drafting)
 - **AI:** Anthropic Claude API (campaign planning, email/SMS/flow/LP generation, ad copy, copy suggestions)
 
 Third-party credentials are encrypted at rest via `src/lib/crypto/encryption.ts` using `TOKEN_ENCRYPTION_SECRET` (legacy `ESP_TOKEN_SECRET` accepted as fallback).

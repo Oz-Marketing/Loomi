@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       }
 
       if (format === 'raw') {
-        return NextResponse.json({ raw: template.content, id: template.id, slug: template.slug });
+        return NextResponse.json({ raw: template.content, id: template.id, slug: template.slug, title: template.title });
       }
 
       const parsed = parseTemplate(template.content);
@@ -165,6 +165,13 @@ export async function PUT(req: NextRequest) {
         const phMatch = fmMatch[1].match(/^preheader:\s*(.+)$/m);
         if (phMatch) preheader = phMatch[1].trim().replace(/^["']|["']$/g, '');
       }
+    }
+
+    // An HTML template with no frontmatter block has nowhere in its content
+    // to keep a name, so the editor sends a rename alongside. Content still
+    // wins when it carries a title — that is what the library list shows.
+    if (!title && typeof body.title === 'string' && body.title.trim()) {
+      title = body.title.trim();
     }
 
     const updated = await templateService.updateTemplate(

@@ -133,6 +133,7 @@ export async function draft(
     account: YOUNG_CHEVROLET,
     coop: false,
     offerType: 'cash',
+    vehicle: { year: 2026, make: 'Chevrolet', model: 'Equinox', trim: 'ACTIV' },
     subjects: [
       { kind: 'initial', text: 'Save $3,500 on the new 2026 Chevy Equinox ACTIV' },
       { kind: 'urgent', text: 'Last chance: $3,500 off the 2026 Equinox ACTIV ends Oct 31' },

@@ -48,6 +48,8 @@ export interface DraftArtifact {
   coop: boolean;
   /** lease | finance | cash | …, from the extraction, when it says. */
   offerType: string | null;
+  /** The advertised vehicle, from the confirmed extraction. Null for a non-vehicle offer. */
+  vehicle: { year: number | null; make: string | null; model: string | null; trim: string | null } | null;
   subjects: CopyOption[];
   previews: CopyOption[];
   template: EmailTemplate;

@@ -1,6 +1,6 @@
 import { dealerLogoRule, dealerNameRule, noFooterLogoRule, noSerifRule, siteUrlRule, yagHelveticaRule } from './rules/brand';
 import { claimsRule } from './rules/claims';
-import { coopBannedPhrasesRule } from './rules/coop';
+import { coopBannedPhrasesRule, coopPackRequirementsRule } from './rules/coop';
 import { utmRule } from './rules/links';
 import {
   hondaNameRule,
@@ -34,7 +34,9 @@ export const DRAFT_RULES: DraftRule[] = [
   dealerNameRule,
   siteUrlRule,
   dealerLogoRule,
+  // co-op: warnings only, never a block
   coopBannedPhrasesRule,
+  coopPackRequirementsRule,
   // groups
   yagHelveticaRule,
   // OEMs

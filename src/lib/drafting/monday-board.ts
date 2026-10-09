@@ -134,6 +134,9 @@ export interface ReadyDeliverable {
   kind: DeliverableKind;
   projectId: string | null;
   projectName: string | null;
+  /** The project's Client mirror, split — the account suggestion starts here. */
+  clients: string[];
+  coop: CoopFlag;
   hasDraftFiles: boolean;
 }
 
@@ -204,6 +207,14 @@ function mirror(cv: RawColumnValue | undefined): string {
   return (cv?.display_value ?? cv?.text ?? '').trim();
 }
 
+/** A Client mirror can name several stores: "Young Powersports Ogden, Young Powersports Euro". */
+function splitClients(value: string): string[] {
+  return value
+    .split(/,\s*/)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
 function proofState(cols: Map<string, RawColumnValue>): ProofState {
   const status = cols.get(DELIVERABLE_COLUMNS.proofStatus)?.label ?? null;
   return {
@@ -223,10 +234,7 @@ export function parseDeliverable(raw: RawItem): Deliverable {
     project = {
       id: parent.id,
       name: parent.name,
-      clients: mirror(p.get(PROJECT_COLUMNS.client))
-        .split(/,\s*/)
-        .map((c) => c.trim())
-        .filter(Boolean),
+      clients: splitClients(mirror(p.get(PROJECT_COLUMNS.client))),
       coop: parseCoopFlag(mirror(p.get(PROJECT_COLUMNS.coop))),
       offerDisclaimer: mirror(p.get(PROJECT_COLUMNS.offerDisclaimer)),
       details: mirror(p.get(PROJECT_COLUMNS.details)),
@@ -323,7 +331,11 @@ export async function listReadyDeliverables(): Promise<ReadyDeliverable[]> {
             id
             name
             column_values(ids: ["${DRAFT_OUTPUT_COLUMN}"]) { ${COLUMN_VALUE_FIELDS} }
-            parent_item { id name }
+            parent_item {
+              id
+              name
+              column_values(ids: ["${PROJECT_COLUMNS.client}", "${PROJECT_COLUMNS.coop}"]) { ${COLUMN_VALUE_FIELDS} }
+            }
           }
         }
       }
@@ -345,12 +357,15 @@ export async function listReadyDeliverables(): Promise<ReadyDeliverable[]> {
     const itemsPage = data.boards?.[0]?.items_page;
     for (const item of itemsPage?.items ?? []) {
       const cols = byId(item.column_values);
+      const parent = byId(item.parent_item?.column_values ?? []);
       out.push({
         id: item.id,
         name: item.name,
         kind: deliverableKind(item.name),
         projectId: item.parent_item?.id ?? null,
         projectName: item.parent_item?.name ?? null,
+        clients: splitClients(mirror(parent.get(PROJECT_COLUMNS.client))),
+        coop: parseCoopFlag(mirror(parent.get(PROJECT_COLUMNS.coop))),
         hasDraftFiles: files(cols.get(DRAFT_OUTPUT_COLUMN)).length > 0,
       });
     }

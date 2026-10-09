@@ -39,6 +39,8 @@ import {
   runTemplateSyncJob,
   type TemplateSyncJob,
 } from '@/lib/ad-generator/template-sync-job';
+import { DRAFTING_RUN_QUEUE, runDraftingJob, type DraftingJob } from '@/lib/drafting/job';
+import { DRAFTING_PROOF_QUEUE, runProofStatusSweep } from '@/lib/drafting/proof-watch';
 import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
 import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
@@ -439,6 +441,28 @@ async function main(): Promise<void> {
     }
   });
 
+  // Email drafting (docs/email-drafting.md). Event-driven: a person starts a
+  // request from the drafting queue and the route enqueues one job. Reading the
+  // creative and drafting outlast nginx's 60-second cut, as template sync does.
+  await boss.createQueue(DRAFTING_RUN_QUEUE);
+  await boss.work<DraftingJob>(DRAFTING_RUN_QUEUE, async (jobs) => {
+    for (const job of jobs) {
+      await runDraftingJob(job.data.requestId);
+    }
+  });
+
+  // Follows proofs on monday: reads the Proof Status the PageProof sync writes
+  // and freezes the version once it reads Approved. Read-only against monday,
+  // and it doesn't call monday at all while no draft is out for proof.
+  await boss.createQueue(DRAFTING_PROOF_QUEUE);
+  await boss.work(DRAFTING_PROOF_QUEUE, async () => {
+    try {
+      await runProofStatusSweep();
+    } catch (err) {
+      console.error('[worker] drafting proof-status sweep failed', err);
+    }
+  });
+
   // Recurring schedule: every minute. pg-boss is idempotent on schedule
   // creation, so this is safe to call on every boot.
   await boss.schedule(PROCESS_DUE_CAMPAIGNS_QUEUE, '* * * * *');
@@ -501,6 +525,11 @@ async function main(): Promise<void> {
   // the runs that finished this morning rather than yesterday's.
   await boss.schedule(PLAYBOOKS_SWEEP_QUEUE, '30 8 * * *');
   console.log('[worker] scheduled', PLAYBOOKS_SWEEP_QUEUE, 'daily at 08:30 UTC');
+
+  // Every 15 minutes: a proof turning Approved isn't urgent to the minute, and
+  // the sweep is a no-op while nothing is out for proof.
+  await boss.schedule(DRAFTING_PROOF_QUEUE, '*/15 * * * *');
+  console.log('[worker] scheduled', DRAFTING_PROOF_QUEUE, 'every 15 minutes');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

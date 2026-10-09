@@ -12,7 +12,9 @@ subitem for a person to proof. **Nothing is sent or published automatically.**
 ## 1. Scope
 
 **Slice 1 — building now:** monthly model / APR offer emails, any brand, started
-by a person.
+by a person — on monday, by setting Assets Approved to "Approved". **There is no
+drafting screen in Loomi** (decided 2026-10-09): the output is a Loomi email
+template, and the subitem carries a link to it.
 
 Chosen over Subaru service specials (the first pick) because the corpus exists
 today: ~30 monthly-offer finals already sent from Loomi plus ~35 urgent-subject
@@ -95,14 +97,14 @@ Compliance Check count as co-op (§7.2).
 | # | Stage | Stops when |
 |---|---|---|
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
-| 1 | **Trigger** — a person picks a ready deliverable in Loomi | — |
+| 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; Loomi checks the board on a schedule | — |
 | 2 | **Fetch** the subitem, the project, and the Design Assets files | No approved assets, or a file over 40 MB (a layered PSD, not a flattened export) |
 | 3 | **Extract + classify** — one vision pass, saved field by field | — |
 | 4 | **Conflict check** — every number, date and disclaimer found in both the graphic and the request must agree | Any disagreement: both values are shown, nothing is chosen |
-| 5 | **Confirm** — a person corrects and confirms the extraction | Unconfirmed disclaimer |
+| 5 | **Confirm** — where a person checks the extraction, with no Loomi screen, is open (§10) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
 | 7 | **Validate** — the rule registry (§7) | Any error |
-| 8 | **Render + attach** — PNG and HTML to Draft Files, with Loomi's send-time footer injected so the proof shows what recipients get | — |
+| 8 | **Save + link** — the draft becomes an account-owned Loomi email template, linked from the subitem (where on the subitem is open, §10). Rendered with Loomi's send-time footer so a proof shows what recipients get | — |
 | 9 | **Watch** Proof Status | "Approved" freezes the version as final |
 
 Steps 2–8 run as a pg-boss job. Vision plus drafting outlasts nginx's 60-second
@@ -153,12 +155,13 @@ survey/announcement, conquest) share a common core and are out of slice 1.
 
 ---
 
-## 6. Data model — proposed, not built
+## 6. Data model — built
 
 - **`DraftRequest`** — one per monday deliverable. It holds:
   - the subitem and project ids, and the resolved account key;
-  - status;
-  - the design asset ids (copied into the media library);
+  - status (`src/lib/drafting/status.ts`);
+  - the approved creative, copied to Spaces with a content hash — a replaced
+    file clears the extraction;
   - the extraction (proposed / confirmed, with edits);
   - the classification;
   - any conflicts.
@@ -172,6 +175,11 @@ survey/announcement, conquest) share a common core and are out of slice 1.
   - the parent version;
   - the monday asset ids written to Draft Files;
   - `finalAt`, set when Proof Status reads Approved.
+
+Each draft also becomes an account-owned `Template` (the editor opens it at
+`/templates/editor?design=<slug>`); `TemplateVersion` keeps its edit history,
+and the `DraftVersion` keeps what the template's history can't — the rule
+evaluation, the notes and the provenance of the copy.
 
 **On Approved, freeze the version only. No `EmailBlast` is created.** This was
 decided while GoHighLevel still carried most sends, to avoid a trail of drafts
@@ -217,7 +225,8 @@ How rules are organized and run:
 | `copy.dealer-name-in-full` — no CDJR, YAG, YPS… or the account's own short forms | all | error |
 | `footer.site-url` — the footer shows the camelCase site name | all | error; warning if its domain differs from `Account.website` |
 | `footer.dealer-logo` — the footer has the dealer logo | all except Hyundai, Audi, VW | error |
-| `coop.banned-phrases` — the make's co-op banned phrases | all, when a pack exists | see §7.2 |
+| `coop.banned-phrases` — the make's co-op banned phrases | all, when a pack exists | warning |
+| `coop.pack-requirements` — dealer full name, year/make/model, VIN (last 8) in the disclaimer, "lease" beside the payment, where the make's pack requires them | co-op requests | warning |
 | `fonts.yag-helvetica` — base font leads with Helvetica | Young Automotive Group | error |
 | `oem.mazda.no-exclusivity` — "exclusive" in any form | Mazda | error; synonyms ("VIP", "only at", "invitation only"…) warn |
 | `oem.kia.palette` — black and white only, no red | Kia | error; grays warn |
@@ -238,25 +247,28 @@ How the rules read the email:
 - **A text link with no color of its own is an error for Kia and Honda.** Inboxes
   paint it their default blue.
 
-### 7.2 Co-op severity
+### 7.2 Co-op never blocks
 
-Co-op banned phrases use the ad engine's own matcher (`coop-rules.ts::bannedPhraseHit`).
+Co-op findings are warnings, read as notes on the draft. Nothing about co-op
+can stop a draft reaching Draft Files. A person reviews every draft and adjusts
+it; co-op claims, matching funds, evidence capture and eligibility rulings are
+outside this project (decided 2026-10-09). The hard blocks stay where they are —
+the fact check, the verbatim disclaimer and the house rules — because those are
+about not sending something wrong, which is a different risk from co-op
+reimbursement.
 
-A hit blocks only when both of these hold:
-
-1. **The request is co-op** — monday Co-op is Yes or Compliance Check. On any
-   other request a hit warns.
-2. **A person has signed off the rule.** This is the existing `effectiveSeverity`
-   gate: a rule in an unverified pack warns until accepted.
-
-**As of 2026-10-09 no pack in production is signed off.** Chevrolet, Mazda and
-Subaru are all `verified: false` with zero accepted rules, so today every co-op
-hit warns. Signing off a pack in the existing review UI turns its rules into
-errors for co-op requests.
-
-**A phrase list is the floor, not the co-op check.** What decides whether a
-co-op claim is paid lives in the guideline documents, which Loomi holds. §8 is
-how co-op requests use them.
+- **Banned phrases** use the ad engine's own matcher
+  (`coop-rules.ts::bannedPhraseHit`) and warn on every request whose make has a
+  pack.
+- **Four cheap pack requirements** warn on co-op requests: the dealer's full
+  name, year/make/model in the email body, the VIN's last 8 in the disclaimer,
+  and "lease" beside a lease payment. The pack decides whether each applies to a
+  make; the matching is written for email, because two transcribed matchers don't
+  hold up: the Subaru VIN pattern `[A-Z0-9]{8}` is matched case-insensitively, so
+  any eight-letter word satisfies it, and `phrase: 'lease'` is a substring test
+  that "please" passes.
+- A registry test asserts every `coop.*` finding is a warning, whatever the pack
+  or the flag.
 
 ### 7.3 The fact check, and the incident it is built on
 
@@ -315,131 +327,45 @@ verbatim disclaimer aren't checked, because code assembles them from trusted dat
 
 ---
 
-## 8. Co-op requests: the guideline documents
+## 8. Co-op requests: the guideline documents as drafting input
 
-Status: **proposed** 2026-10-09. A banned-phrase pack is a thin extract. What
-decides whether a co-op claim is paid is in the documents: eligibility, required
-disclosures, mandatory elements, logo and trademark use, substantiation and
-expiration rules.
+The goal for a co-op-flagged request is a draft as close to co-op compliant as
+it reasonably gets, so the person proofing has less to fix. The guideline
+documents are **input to drafting, not a gate on it.**
 
-### 8.1 What Loomi holds
+**What Loomi holds.** 33 manufacturer guideline documents across 26 makes in
+`AdGuidelineDoc`, with per-page text extracted and searchable for all but one
+(Genesis Tier 3 R6 has no text), plus three hand-transcribed rule packs
+(Chevrolet, Mazda, Subaru). Nissan, a current Toyota and several powersports
+brands are missing; Connor is getting them in. A make without a document simply
+drafts without co-op context.
 
-- **The documents themselves.** 33 manufacturer guideline documents across 26
-  makes in `AdGuidelineDoc`:
-  - the per-page text is extracted and searchable for all but one (Genesis Tier 3
-    R6 has no text);
-  - section headings are stored;
-  - each document is re-checked daily for changes.
-- **Three hand-transcribed rule packs** (Chevrolet, Mazda, Subaru), none signed
-  off. Beyond their 26 banned-phrase rules they carry 15 more:
-  - required elements: the dealer's full DBA, the brand mark, GM's tagline, a
-    vehicle photo, offer details, year/make/model, Mazda's event logo;
-  - Subaru required phrases: the last eight of the VIN in the disclaimer, "lease"
-    beside the payment, due-at-signing in the body, the mileage cap, and a
-    security-deposit statement.
+**How drafting uses them, for a co-op request:**
 
-  The packs' layout rules (logo zones, minimum sizes) are ad-canvas geometry and
-  don't carry to email.
-- **Slice 1 enforces only the banned phrases.** The required elements and phrases
-  are the larger gap, and the documents hold more still.
+1. Pick the make's document(s) from an explicit make → document map. A lookup
+   by make finds the wrong document or none: Chrysler, Dodge, Jeep and Ram are
+   filed as "CDJR", Honda's car and powersports guides are both filed as "Honda",
+   and Buick and GMC fall under GM iMR, filed as Chevrolet.
+2. Pull the relevant pages — offer, pricing, disclaimer, logo and trademark,
+   email/digital — with the existing guideline search, and give them to the
+   drafter as context alongside the confirmed extraction.
+3. The drafter writes copy that satisfies them, and returns a list of what it
+   couldn't satisfy, each with the page it comes from. A required disclosure
+   missing from the creative is one of those: the disclaimer is verbatim and
+   can't be changed, so it becomes a note and Connor decides whether to go back
+   to design.
+4. Those items are saved as notes on the draft version, beside the warnings from
+   §7.2. Nothing blocks.
 
-**Coverage gaps** for stores we run:
+**Not in scope:** eligibility rulings, a signed-off requirements checklist,
+growing per-brand rules from accepted items, claim evidence capture, and any
+enforced route back to design.
 
-- There is no document for Nissan, KTM, Husqvarna, Ducati, Triumph, Royal Enfield
-  or Sherco.
-- Toyota's document is the June 2022 covenant.
-- Buick and GMC fall under GM iMR, which is filed as Chevrolet.
-- Chrysler, Dodge, Jeep and Ram are filed as "CDJR".
-- Honda's automotive and powersports documents are both filed as "Honda".
-
-A lookup by an account's make therefore finds the wrong document, or none.
-Documents must be selected from an explicit make → document map.
-
-### 8.2 What the documents say about email
-
-The first question is eligibility, not wording:
-
-- **GM iMR (Chevrolet, Buick, GMC):** email is eligible, but how it's paid
-  depends on who sends it (p. 21):
-  - through a GM-approved CSSR Plus-Up vendor, it's a turnkey GM Match claim;
-  - through any other vendor — Loomi, unless Oz is approved — it's a No-Match
-    claim, needing the vendor invoice and a screenshot of the email.
-- **Subaru SAF:** direct mail and email are an ineligible media type, except
-  through CareConnect (pp. 11, 19).
-- **Ford, Kia, Mazda, Hyundai and Volkswagen** list email as eligible.
-
-Claim documentation is specific to email:
-
-| Make | What an email claim needs |
-|---|---|
-| Kia | A screenshot of the email as deployed, with its subject line (p. 34) |
-| Mazda | An in-inbox screenshot showing recipient and date received, not a sample (p. 37) |
-| Hyundai | A copy of the email including its header (p. 10) |
-| Volkswagen | An invoice separating creative from transmission, plus a screenshot (p. 57) |
-
-Content rules that reach email:
-
-- **MAAP pricing.** Toyota applies it to multi-customer email blasts and exempts
-  one-to-one email (p. 5). Kia exempts one-to-one messages (p. 25). Subaru
-  applies it to all advertised pricing (p. 44).
-- **Subaru required disclosures for a price** (p. 44): the official TSRP,
-  labeled "TSRP", and an itemized price calculation beside the offer, not in the
-  disclaimer. No phrase list catches a missing one.
-- **Volkswagen** relaxes its font-color and logo-count rules for CRM email, and
-  requires substantiation for product and brand claims (pp. 29, 32, 36).
-- **Mazda** approves Arial for email and wants typography in black, gray or
-  white (p. 14).
-- **Hyundai's** warranty-logo requirement excludes email (p. 23).
-
-Page numbers are as stored. Read each page in Loomi's guideline reader before
-relying on it.
-
-### 8.3 Proposal
-
-For a request flagged co-op:
-
-1. **Eligibility gate, before anything is drafted.** Keep a per-make record:
-   eligible, eligible only through an approved vendor or program, or ineligible.
-   Each record carries its document, page and verified quote, and is confirmed
-   by a person once. An ineligible or vendor-only request stops with the reason
-   and the citation.
-2. **A requirements checklist from the document, per request.** Once the
-   extraction is confirmed, a co-op pass reads the make's document and lists what
-   this email must carry. It reads the media-type, offer, disclaimer and pricing
-   pages, found with the existing search, and covers:
-   - required disclosures;
-   - mandatory elements;
-   - logo and trademark use;
-   - substantiation;
-   - expiration.
-
-   Every item cites a page and a quote that must match the stored page text
-   (`guideline-quotes.ts`, the machinery behind AI-drafted co-op rules). An item
-   that doesn't verify is dropped. The co-op specialist's tools already search
-   and read these documents.
-3. **Enforcement.** Each item is either checkable or a manual confirmation.
-   - Checkable items run in the registry: a phrase that must appear in the body
-     or disclaimer, an element the extraction must show, a numeric limit.
-   - Manual items, such as substantiating a superlative, need a named person's
-     tick.
-
-   A co-op draft does not reach Draft Files with an unmet check or an unticked
-   item. A missed disclosure can't pass silently: either code verified it or a
-   person confirmed it.
-4. **Durable layer.** Items a reviewer accepts become pack rules for that make,
-   marked for email, so the next request checks them in code and the
-   per-request list shrinks over time. The existing required-element and
-   required-phrase rules are mapped onto email now.
-5. **No document, no co-op draft.** A co-op request for a make without a usable
-   document stops, e.g. "no guideline on file for Nissan". This follows the ad
-   generator's no-source-no-output rule.
-6. **A required disclosure missing from the creative's disclaimer is a conflict
-   with hard rule 2.** The disclaimer can't be edited, so the draft stops and the
-   creative goes back to design. The ad generator's approved per-make disclaimer
-   addenda are the alternative; they are not assumed here.
-
-Now that Loomi sends every email, it could also produce the claim documentation
-(§8.2) at send time. That is outside drafting.
+**Worth knowing when reading notes** (from the documents, 2026-10-09; page
+numbers as stored): Subaru lists direct mail and email as ineligible except
+through CareConnect (p. 19); GM pays email sent by a non-approved vendor as a
+No-Match claim (p. 21); Subaru requires an advertised price to show the official
+TSRP, labeled "TSRP", and an itemized price calculation beside the offer (p. 44).
 
 ---
 
@@ -479,20 +405,27 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Development Projects contract — reads, the one write, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
 | Local smoke script (`scripts/drafting-monday-smoke.ts`) | **built**; needs `MONDAY_API_TOKEN` |
 | Compliance rule registry, 19 rules, fixture tests | **built** |
-| Co-op: pack banned phrases on email | **built** |
-| Co-op: pack required elements and phrases on email | next |
-| Co-op: document-driven eligibility gate and requirements checklist (§8) | proposed |
+| Co-op warnings: banned phrases + the four cheap pack requirements | **built** |
 | UTM slug and tagging (`src/lib/drafting/utm.ts`) | **built** |
-| `DraftRequest` / `DraftVersion` models | next |
-| Account → `siteDisplay`, abbreviations | next (needs the field) |
-| monday Client → account resolver | next |
-| Extraction (vision) + confirmation UI | next |
+| `DraftRequest` / `DraftVersion` models | **built** |
+| Drafting job queue (`loomi.drafting.run`) — fetch stage: re-checks approval, copies the creative | **built**; DB-tested (`requests.db.test.ts`) |
+| Race-safe start (`requests.ts::startDraftRequest`) | **built** |
+| monday Client → account resolver (`accounts.ts`) | **built**; calibrated on the real names |
+| Proof Status watcher → freeze (`loomi.drafting.proof-status`, every 15 min) | **built**; read-only against monday |
+| Trigger: scheduled check for newly approved deliverables | next |
+| Extraction (vision) | next |
+| Co-op documents as drafting context, notes on the draft (§8) | next, with the drafter |
 | Corpus import from Loomi prod | next |
-| Drafting + assembly | next |
-| Worker job, render to PNG + HTML, attach | next |
-| Proof Status watcher → freeze | next |
+| Drafting + assembly into a Loomi template | next |
+| Account → `siteDisplay`, abbreviations | next (needs the field) |
 
-Nothing here is reachable from the app yet. No route, page or job uses it.
+**Open (Connor):** where on the subitem the template link and the draft's notes
+go; whether Draft Files still gets the rendered PNG + HTML for PageProof; what
+happens when the Client field doesn't name exactly one store; and where a
+person checks the extraction now that there's no drafting screen.
+
+Nothing here is reachable from the app yet: no route or page uses it, and the
+job only runs when something starts a request.
 
 ---
 

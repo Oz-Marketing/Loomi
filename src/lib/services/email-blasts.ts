@@ -13,6 +13,7 @@ import {
   sendingDomain,
 } from '@/lib/sending/warmup';
 import { orderByEngagement } from '@/lib/sending/warmup-ordering';
+import { resolveDomainMx, domainOf } from '@/lib/sending/mx-check';
 import {
   injectUnsubscribeFooter,
   UNSUBSCRIBE_TOKEN,
@@ -21,6 +22,7 @@ import {
 } from '@/lib/sending/unsubscribe-footer';
 import { resolveAccountFooters } from '@/lib/sending/account-footer';
 import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
+import { stripFrontmatter } from '@/lib/email/compile-template';
 import {
   applyBlastMergetags,
   buildBlastMergetagContext,
@@ -78,7 +80,12 @@ type EmailBlastStatus =
 // schedules them, at which point status transitions to queued/scheduled.
 const PROCESSABLE_STATUSES: EmailBlastStatus[] = ['queued', 'scheduled', 'processing'];
 const TERMINAL_STATUSES: EmailBlastStatus[] = ['completed', 'partial', 'failed', 'canceled'];
-const INVALID_EMAIL_ERROR = 'Recipient email is missing or blocked by hygiene policy';
+// An address we deliberately never attempt: missing, or on a domain that
+// cannot receive mail (see lib/sending/email-domains.ts). Recorded as
+// `skipped`, the same as a suppression — we made a choice, nothing failed.
+// It used to be `failed`, which is how a blast to an old list with a handful
+// of placeholder addresses reported itself as a send with errors.
+const INVALID_EMAIL_ERROR = 'Skipped (address cannot receive mail)';
 
 export interface EmailRecipientInput {
   contactId: string;
@@ -575,7 +582,7 @@ export async function createEmailBlast(input: CreateEmailBlastInput): Promise<Em
         accountKey: recipient.accountKey,
         email: recipient.email || null,
         fullName: recipient.fullName || null,
-        status: recipient.email ? 'pending' : 'failed',
+        status: recipient.email ? 'pending' : 'skipped',
         error: recipient.email ? null : INVALID_EMAIL_ERROR,
       })),
     });
@@ -748,7 +755,7 @@ export async function scheduleEmailBlastDraft(
             accountKey: recipient.accountKey,
             email: null,
             fullName: recipient.fullName || null,
-            status: 'failed',
+            status: 'skipped',
             error: INVALID_EMAIL_ERROR,
           };
         }
@@ -891,6 +898,7 @@ export async function cancelEmailBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
+      bouncedCount: counts.bounced,
     },
     select: emailCampaignSummarySelect,
   });
@@ -1298,11 +1306,14 @@ async function loadBlastAccountData(
   return map;
 }
 
-interface BlastCounts {
+export interface BlastCounts {
   total: number;
   pending: number;
   sent: number;
+  /** Messages Loomi could not dispatch. The only kind anyone can act on. */
   failed: number;
+  /** Dispatched fine, then refused by the mailbox. A hygiene number. */
+  bounced: number;
   skipped: number;
   firstError: string;
 }
@@ -1315,11 +1326,25 @@ interface BlastCounts {
  * Returning 'queued' there (the old behaviour) made the sweep re-pick it
  * forever.
  */
-function resolveBlastStatus(counts: BlastCounts): EmailBlastStatus {
+export function resolveBlastStatus(counts: BlastCounts): EmailBlastStatus {
   if (counts.pending > 0) return 'processing';
   if (counts.sent > 0 && counts.failed > 0) return 'partial';
   if (counts.sent > 0) return 'completed';
   if (counts.failed > 0) return 'failed';
+  // Bounces are NOT in any of the tests above, and that is the point.
+  //
+  // A bounce happens after a successful dispatch, so it says nothing about
+  // whether the blast worked. Counting them as failures is what made a
+  // perfectly healthy send to an old list render as "Sent with errors": a
+  // warm-up-capped blast sends over several days, and by day two the previous
+  // day's bounce webhooks had already flipped rows to 'failed', so every
+  // subsequent slice resolved to 'partial'. The client saw an alarm about a
+  // send that did exactly what it was asked to.
+  //
+  // A blast that dispatched everything and bounced on half is 'completed'.
+  // The bounces are reported as their own number, and each one suppresses its
+  // address so the next blast never attempts it.
+  if (counts.bounced > 0) return 'completed';
   if (counts.skipped > 0) return 'completed';
   // Genuinely nothing to do — no recipients at all.
   return 'completed';
@@ -1357,12 +1382,19 @@ async function summarizeCampaign(campaignId: string) {
   let pending = 0;
   let sent = 0;
   let failed = 0;
+  let bounced = 0;
   let skipped = 0;
   let firstError = '';
 
   for (const row of recipients) {
     if (row.status === 'sent') sent += 1;
-    else if (row.status === 'failed') {
+    else if (row.status === 'bounced') {
+      // Deliberately NOT folded into firstError: that string becomes the
+      // blast's `error` column and the headline of the failure banner, and a
+      // bounce message ("550 the account does not exist") reads as a system
+      // fault when it is a fact about one stale address.
+      bounced += 1;
+    } else if (row.status === 'failed') {
       failed += 1;
       if (!firstError && row.error) firstError = row.error;
     } else if (row.status === 'skipped') {
@@ -1381,6 +1413,7 @@ async function summarizeCampaign(campaignId: string) {
     pending,
     sent,
     failed,
+    bounced,
     skipped,
     firstError,
   };
@@ -1654,6 +1687,7 @@ export async function processEmailBlast(
       totalRecipients: counts.total,
       sentCount: counts.sent,
       failedCount: counts.failed,
+      bouncedCount: counts.bounced,
       completedAt: status === 'processing' ? null : new Date(),
       error: counts.firstError || null,
     });
@@ -1761,14 +1795,32 @@ export async function processEmailBlast(
 
   const accountDataByKey = await loadBlastAccountData(uniqueAccountKeys);
 
+  // ── Don't knock on doors that aren't there ──
+  //
+  // A domain publishing no MX (and no A record to fall back on) cannot
+  // receive mail from anyone — `wilsonpaintandfloors.om`, `ziprider.con`, a
+  // dealership that folded. Sending anyway earns a guaranteed hard bounce,
+  // and bounces are charged to OUR sending domain's reputation.
+  //
+  // Resolved once per distinct domain for the whole audience, outside the
+  // loop: a few hundred lookups for thousands of recipients, the common
+  // providers answered from cache after the first. Fails open — a resolver
+  // that times out returns `unknown` and the address is sent to, because a
+  // wrong "dead" silently cuts a real customer off from the dealership while
+  // a wrong "alive" costs one bounce.
+  const mxByDomain = await resolveDomainMx(recipients.map((r) => r.email));
+
   // The base HTML, before per-recipient mergetag substitution. UTM tagging
   // is applied once here since it rewrites campaign-level links, not
-  // per-recipient ones.
+  // per-recipient ones. Blasts compiled before /api/preview stripped a
+  // template's frontmatter block still carry it in htmlContent, so strip
+  // again at dispatch.
+  const sendHtml = stripFrontmatter(campaign.htmlContent);
   const baseHtml = applyUtmTags(
-    withPreviewText(campaign.htmlContent, campaign.previewText || ''),
+    withPreviewText(sendHtml, campaign.previewText || ''),
     metadata.utm,
   );
-  const baseText = campaign.textContent?.trim() || stripHtml(campaign.htmlContent);
+  const baseText = campaign.textContent?.trim() || stripHtml(sendHtml);
 
   // Reputation is spent by mail that LEAVES, so only a successful dispatch
   // counts against the warm-up day. Suppressed, opted-out and invalid
@@ -1787,7 +1839,7 @@ export async function processEmailBlast(
       await prisma.emailBlastRecipient.update({
         where: { id: recipient.id },
         data: {
-          status: 'failed',
+          status: 'skipped',
           error: INVALID_EMAIL_ERROR,
         },
       });
@@ -1806,6 +1858,22 @@ export async function processEmailBlast(
         data: {
           status: 'skipped',
           error: `Suppressed (${suppressionReason})`,
+        },
+      });
+      return;
+    }
+
+    // Dead domain — skip rather than attempt. `skipped`, not `failed`: we
+    // chose not to send, the same as a suppression, and nothing went wrong.
+    // Only a definitive `no-mx` counts; `unknown` and a missing entry both
+    // mean the lookup told us nothing, so the message goes out.
+    const recipientDomain = domainOf(recipientEmail);
+    if (recipientDomain && mxByDomain.get(recipientDomain) === 'no-mx') {
+      await prisma.emailBlastRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status: 'skipped',
+          error: `Skipped (${recipientDomain} does not accept mail)`,
         },
       });
       return;
@@ -1986,6 +2054,7 @@ export async function processEmailBlast(
     totalRecipients: counts.total,
     sentCount: counts.sent,
     failedCount: counts.failed,
+    bouncedCount: counts.bounced,
     completedAt: nextStatus === 'processing' ? null : new Date(),
     error: counts.firstError || null,
   });

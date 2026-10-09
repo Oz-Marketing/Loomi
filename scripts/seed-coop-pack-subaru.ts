@@ -41,6 +41,7 @@
  */
 import { prisma } from '../src/lib/prisma';
 import type { CoopRulePack } from '../src/lib/ad-generator/coop-rules';
+import { VIN_TAIL_PATTERN } from '../src/lib/ad-generator/vin';
 
 const SRC = 'Subaru SAF Guidelines, April 2026 (Subaru_SAF_Guidelines_2026.pdf)';
 const cite = (infraction: string, page: number) => `${SRC} — §${infraction}, p.${page}`;
@@ -112,7 +113,12 @@ const PACK: CoopRulePack = {
       // At least the last 8 digits of a VIN, or a VON. Checked in the disclaimer
       // because that is one of the three permitted places and the only one we
       // control; "next to the offer" or "one click away" also satisfy SAF.
-      pattern: '[A-Z0-9]{8}',
+      //
+      // A VIN-shaped token, not any eight characters — see vin.ts for how the
+      // first transcription, `[A-Z0-9]{8}`, let an ad with no VIN pass. A VON is
+      // NOT recognized: nothing here records what one looks like. Packs already
+      // stored keep the old pattern until scripts/fix-subaru-vin-pattern.ts runs.
+      pattern: VIN_TAIL_PATTERN,
       severity: 'error',
       description:
         'ANY offer ad must include at least the last eight digits of a valid VIN next to the offer, in the disclaimer, or one click away — a VON is acceptable for vehicles without an assigned VIN. This is not conditional on offer type, so Subaru cannot be automated without that retailer\'s inventory feed.',

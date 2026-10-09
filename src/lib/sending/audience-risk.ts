@@ -178,7 +178,15 @@ export async function assessAudienceRisk(
     const email = (row.email || '').toLowerCase().trim();
     if (!email) continue;
     seen.add(email);
-    if (row.status === 'failed' && isHardBounceError(row.error)) bounced.add(email);
+    // `bounced` is now its own status, so a hard bounce is a fact the row
+    // states outright rather than something inferred from its error text.
+    // The `failed` arm stays for rows written before the split, and for the
+    // backfill's stragglers — losing them would quietly weaken the guard
+    // this whole module exists to provide.
+    const isBounce =
+      row.status === 'bounced' ||
+      (row.status === 'failed' && isHardBounceError(row.error));
+    if (isBounce) bounced.add(email);
   }
 
   const withHistory = seen.size;

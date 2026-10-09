@@ -56,6 +56,7 @@ import {
 } from "@/lib/component-schemas";
 import { parseTemplate, type ParsedTemplate } from "@/lib/template-parser";
 import { isVisualEditableTemplate, isV2Template, parseV2Template, type EmailTemplate } from "@/lib/email/types";
+import { readHtmlTemplateTitle, writeHtmlTemplateTitle } from "@/lib/email/html-template-title";
 import { serializeTemplate as serializeTemplateUnified } from "@/lib/template-serializer";
 import { V2EditorShell } from "@/lib/email/editor/V2EditorShell";
 import {
@@ -6629,6 +6630,10 @@ export default function TemplateEditorPage() {
     useState("__sample__");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
+  // The record's own title. An HTML template with no frontmatter block keeps
+  // its name only here, so a rename is tracked and saved alongside the code.
+  const [recordTitle, setRecordTitle] = useState<string | null>(null);
+  const [savedRecordTitle, setSavedRecordTitle] = useState<string | null>(null);
   const [showAiAssistant, setShowAiAssistant] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -7186,6 +7191,12 @@ export default function TemplateEditorPage() {
 
         setCode(raw);
         setOriginalCode(raw);
+        const loadedTitle =
+          typeof rawData.title === "string" && rawData.title.trim()
+            ? rawData.title
+            : null;
+        setRecordTitle(loadedTitle);
+        setSavedRecordTitle(loadedTitle);
 
         const visualSource = hasVisualTemplateScaffold(raw);
         if (!visualSource) {
@@ -7214,8 +7225,8 @@ export default function TemplateEditorPage() {
   }, [design, templateName, accountKeyParam, libraryTemplateSlug, parsedBranding?.fonts?.body, modeParam, isHtmlOnlyBuilder]);
 
   useEffect(() => {
-    setHasChanges(code !== originalCode);
-  }, [code, originalCode]);
+    setHasChanges(code !== originalCode || recordTitle !== savedRecordTitle);
+  }, [code, originalCode, recordTitle, savedRecordTitle]);
 
   useEffect(() => {
     if (hasChanges) {
@@ -7277,16 +7288,18 @@ export default function TemplateEditorPage() {
     autoSaveTimerRef.current = setTimeout(async () => {
       setSaving(true);
       setMessage("");
+      const title = recordTitle;
       try {
         const res = await fetch("/api/templates", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ design, type: templateName, raw: code }),
+          body: JSON.stringify({ design, type: templateName, raw: code, title: title ?? undefined }),
         });
         if (res.ok) {
           const data = await res.json();
           if (data.slug && data.slug !== design) setDesign(data.slug);
           setOriginalCode(code);
+          setSavedRecordTitle(title);
           setMessage("Saved");
           setTimeout(() => setMessage(""), 2000);
         }
@@ -7295,7 +7308,7 @@ export default function TemplateEditorPage() {
     }, 3000);
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasChanges, code, design, templateName, saving]);
+  }, [hasChanges, code, recordTitle, design, templateName, saving]);
 
   useEffect(() => {
     if (isHtmlOnlyBuilder) {
@@ -8123,15 +8136,17 @@ export default function TemplateEditorPage() {
         setMessage("Save unavailable until template has a slug");
         return false;
       }
+      const title = recordTitle;
       const res = await fetch("/api/templates", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ design, type: templateName, raw: code }),
+        body: JSON.stringify({ design, type: templateName, raw: code, title: title ?? undefined }),
       });
       if (res.ok) {
         const data = await res.json().catch(() => ({}));
         if (data.slug && data.slug !== design) setDesign(data.slug);
         setOriginalCode(code);
+        setSavedRecordTitle(title);
         setMessage("Saved");
         setTimeout(() => setMessage(""), 3000);
         toast.success("Template saved!");
@@ -8896,15 +8911,25 @@ export default function TemplateEditorPage() {
    * could not be renamed at all.
    */
   const v2Doc = useMemo(() => parseV2Template(code), [code]);
-  const designLabel = v2Doc?.title || parsed?.frontmatter?.title || slugLabel;
+  /**
+   * An HTML template has no parsed model at all, so it fell straight through
+   * to the slug and a rename was dropped on the floor. Its name lives in the
+   * frontmatter block when there is one, else on the record.
+   */
+  const htmlTitle = v2Doc ? undefined : readHtmlTemplateTitle(code);
+  const designLabel =
+    v2Doc?.title || parsed?.frontmatter?.title || htmlTitle || recordTitle || slugLabel;
 
   /** Write the title back to whichever shape this template actually is. */
   const applyTemplateTitle = (title: string) => {
+    if (title === designLabel) return;
     if (v2Doc) {
       handleCodeChange(JSON.stringify({ ...v2Doc, title }, null, 2));
       return;
     }
-    if (parsed) updateFrontmatter("title", title);
+    const withTitle = writeHtmlTemplateTitle(code, title);
+    if (withTitle !== null) handleCodeChange(withTitle);
+    setRecordTitle(title);
   };
   const isDragDropTemplate = useMemo(
     () => hasVisualTemplateScaffold(code),
@@ -9021,13 +9046,13 @@ export default function TemplateEditorPage() {
                 role="button"
                 tabIndex={0}
                 onClick={() => {
-                  setEditTitleValue(parsed?.frontmatter?.title || designLabel);
+                  setEditTitleValue(designLabel);
                   setIsEditingTitle(true);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    setEditTitleValue(parsed?.frontmatter?.title || designLabel);
+                    setEditTitleValue(designLabel);
                     setIsEditingTitle(true);
                   }
                 }}

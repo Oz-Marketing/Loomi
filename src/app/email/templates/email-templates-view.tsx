@@ -41,6 +41,7 @@ import {
   assignmentsMapToArray,
 } from '@/lib/template-tags-payload';
 import PrimaryButton from '@/components/primary-button';
+import { updateLibraryTemplateTitle } from '@/lib/email/library-template-title';
 
 // ── Types ──
 
@@ -102,24 +103,6 @@ function sanitizeFileName(value: string): string {
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
   return safe || 'template';
-}
-
-function updateLibraryTemplateTitle(raw: string, title: string): string {
-  const nextTitle = JSON.stringify(title.trim());
-  const frontmatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---(\r?\n)?/);
-
-  if (!frontmatterMatch) {
-    return `---\ntitle: ${nextTitle}\n---\n\n${raw}`;
-  }
-
-  const existingFrontmatter = frontmatterMatch[1];
-  const hasTitle = /^title:\s*.*$/m.test(existingFrontmatter);
-  const updatedFrontmatter = hasTitle
-    ? existingFrontmatter.replace(/^title:\s*.*$/m, `title: ${nextTitle}`)
-    : `title: ${nextTitle}\n${existingFrontmatter}`;
-  const rest = raw.slice(frontmatterMatch[0].length);
-
-  return `---\n${updatedFrontmatter}\n---\n${rest}`;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {

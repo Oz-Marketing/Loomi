@@ -440,6 +440,97 @@ function matcher(rule: { phrase?: string; pattern?: string }): ((text: string) =
 }
 
 /**
+ * A pattern with Python's leading `(?i)` removed.
+ *
+ * ── WHY STRIP IT RATHER THAN REJECT THE RULE ──
+ *
+ * Drafted rules are written by a model, and a model writes regex the way most of
+ * what it has read does — in Python, where a leading `(?i)` turns on case folding.
+ * JavaScript has no such syntax: `new RegExp('(?i)…')` throws "Invalid group" on
+ * Node 20 and 22 alike, so the rule never compiles and never fires. But `matcher()`
+ * already compiles every pattern with the `i` flag, so the prefix asks for nothing
+ * the engine doesn't do anyway, and removing it changes no match. Rejecting the rule
+ * instead would throw a real requirement away over a redundant prefix.
+ *
+ * Only `(?i)` is removed. Any other inline flag — `(?s)`, `(?m)`, `(?x)` — changes
+ * what a pattern matches, so it is left in place to fail {@link patternProblem}.
+ */
+export function normalizePattern(pattern: string): string {
+  return pattern.replace(/^(?:\s*\(\?i\))+/, '').trim();
+}
+
+/**
+ * Why the engine cannot compile `pattern`, or null when it can.
+ *
+ * Compiled exactly as `matcher()` compiles it — same source, same `i` flag — so the
+ * answer is about the rule actually running, not about regex in general. The reason
+ * is the engine's own ("Invalid group"), without the pattern it restates.
+ */
+export function patternProblem(pattern: string): string | null {
+  try {
+    new RegExp(pattern, 'i');
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return /: ([^:]+)$/.exec(message)?.[1] ?? message;
+  }
+}
+
+/**
+ * Why the pattern this rule EVALUATES cannot be compiled, or null.
+ *
+ * Null too for a rule that never reads a pattern: only the two phrase kinds do, and
+ * a `banned_phrase` carrying a prohibited-terms list matches the list and ignores
+ * any pattern beside it.
+ *
+ * The one test of "is this rule broken" for evaluation, merging, acceptance and the
+ * page's counts, so none of them can disagree about which rules those are.
+ */
+export function brokenPattern(rule: CoopRule): string | null {
+  if (rule.kind !== 'required_phrase' && rule.kind !== 'banned_phrase') return null;
+  // `typeof`, because this also runs over stored packs for the settings page and the
+  // review queue, where a stray non-string entry must not take the page down.
+  const hasList = rule.kind === 'banned_phrase' && rule.phrases?.some((x) => typeof x === 'string' && x.trim());
+  if (hasList) return null;
+  return typeof rule.pattern === 'string' && rule.pattern ? patternProblem(rule.pattern) : null;
+}
+
+/**
+ * A finding for a rule the engine could not apply — reported, never silent, and
+ * never blocking.
+ *
+ * WARNING whatever the rule declares, for the reason `numeric_limit` gives for its
+ * own "Not checked": nobody blocked by a broken rule can fix it, so it must not hold
+ * back their month, but silence would read as a pass. At `error` it would block
+ * every ad for the make — an unscoped `banned_phrase` scans every field of every ad.
+ */
+function notChecked(rule: CoopRule, problem: string, field?: string): CoopFinding {
+  return {
+    ruleId: rule.id,
+    severity: 'warning',
+    description: rule.description,
+    citation: rule.citation,
+    ...(field ? { field } : {}),
+    observed: `Not checked — the rule is malformed: its pattern is invalid (${problem}).`,
+  };
+}
+
+/**
+ * Does `text` break a banned-phrase rule? Returns the term found when the rule
+ * is a `phrases` list, `''` for a `phrase`/`pattern` hit, null for no hit.
+ *
+ * Exported so email drafting judges copy with exactly the matching the ad
+ * engine uses — two implementations of "banned" would drift, and the one that
+ * drifted looser is the one that lets a co-op claim get denied.
+ */
+export function bannedPhraseHit(rule: BannedPhraseRule, text: string): string | null {
+  const terms = rule.phrases?.filter((x) => x.trim()) ?? [];
+  if (terms.length) return firstMatchingTerm(terms, text);
+  const test = matcher(rule);
+  return test?.(text) ? '' : null;
+}
+
+/**
  * Elements that display `field`, matched by binding KEY across binding kinds.
  *
  * Both `field` and `brand` bindings carry a key, and the account-derived values a
@@ -540,6 +631,11 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
 
     switch (rule.kind) {
       case 'required_phrase': {
+        const broken = brokenPattern(rule);
+        if (broken) {
+          push(notChecked(rule, broken, rule.field));
+          break;
+        }
         const test = matcher(rule);
         const value = (data[rule.field] ?? '').trim();
         if (!test) {
@@ -567,9 +663,13 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
       }
 
       case 'banned_phrase': {
-        const terms = rule.phrases?.filter((x) => x.trim()) ?? [];
-        const test = terms.length ? null : matcher(rule);
-        if (!test && terms.length === 0) break;
+        // A pattern that won't compile used to fall through to the `break` below with
+        // nothing said, so an ACCEPTED rule could sit in a pack enforcing nothing.
+        const broken = brokenPattern(rule);
+        if (broken) {
+          push(notChecked(rule, broken));
+          break;
+        }
         // Scan the named fields, or every string value when unscoped. Skip the
         // internal `_`-prefixed bookkeeping keys — they never reach the canvas.
         const entries = rule.fields?.length
@@ -579,7 +679,7 @@ export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): 
           if (typeof value !== 'string' || !value.trim()) continue;
           // A list names the term that was found; whoever is blocked needs to know
           // which of fifty-one words to change, not that one of them is present.
-          const hit = terms.length ? firstMatchingTerm(terms, value) : test?.(value) ? '' : null;
+          const hit = bannedPhraseHit(rule, value);
           if (hit === null) continue;
           push({
             ruleId: rule.id,

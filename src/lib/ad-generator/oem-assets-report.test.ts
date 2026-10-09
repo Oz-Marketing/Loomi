@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { classifyEvents, EVENT_EXPIRY_WARN_DAYS, type EventRow } from './oem-assets-report';
+import { classifyEvents, countBySeverity, EVENT_EXPIRY_WARN_DAYS, type EventRow } from './oem-assets-report';
+import type { CoopRule } from './coop-rules';
 
 function ev(over: Partial<EventRow> = {}): EventRow {
   return {
@@ -71,5 +72,33 @@ describe('classifyEvents', () => {
     );
     expect(r.state).toBe('ending_soon');
     expect(r.summary).toContain('Presidents');
+  });
+});
+
+describe('countBySeverity', () => {
+  const accepted = (pattern: string): CoopRule => ({
+    id: pattern,
+    kind: 'banned_phrase',
+    severity: 'error',
+    description: 'No political content.',
+    citation: 'SAF §10a, p.47',
+    pattern,
+    reviewState: 'accepted',
+  });
+
+  it('counts an accepted error rule as one that can block', () => {
+    expect(countBySeverity([accepted('political|sexual')], { verified: false })).toEqual({
+      errorCount: 1,
+      warningCount: 0,
+    });
+  });
+
+  // The engine only reports it as "Not checked", so "can block" would be a claim
+  // about enforcement that isn't happening.
+  it('does NOT count a rule whose pattern cannot compile as able to block', () => {
+    expect(countBySeverity([accepted('(?i)political|sexual')], { verified: true })).toEqual({
+      errorCount: 0,
+      warningCount: 1,
+    });
   });
 });

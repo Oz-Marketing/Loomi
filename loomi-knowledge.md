@@ -47,6 +47,8 @@ Native contact database (not ESP-synced). Full CRUD with extensible per-account 
 ### Email Production (template builder)
 The visual drag-and-drop editor produces **v2 JSON** templates compiled to email-safe HTML via react-email. There is also a raw-HTML **code mode** (Monaco). Templates can be global library assets (`accountKey = null`) or account-owned, with publish/draft states and version snapshots. See the detailed **Template Builder Architecture** and **Component Catalog** sections below — that detail is functional guidance for the AI assistant.
 
+**Email drafting from approved creative** — built, but switched off (`DRAFTING_INTAKE_ENABLED`), and the step that reads the creative and writes the copy is not built yet, so it produces no drafts today. The design: when the creative for an email deliverable is approved on monday (Development Projects board, Assets Approved = "Approved"), Loomi picks it up within five minutes. It drafts the email as an account-owned template (category `drafted`) and puts a link to it in the subitem's "Loomi Template" column. It also uploads a proof PNG and HTML to Draft Files and posts an update with the subject and preview options and what it read off the creative, flagging low-confidence readings. Nothing sends: a person proofs every draft in PageProof, and Proof Status "Approved" freezes that version. Copy may state only what the creative or the request says, disclaimers are copied word for word, and house and OEM brand rules are enforced in code (a draft that breaks one never reaches monday). Co-op guidance only ever warns. One subitem is one client and one template. Spec: `docs/email-drafting.md`.
+
 ### Flows (marketing automation)
 Visual journey builder (nodes + branches). Triggers (list, audience, manual, form submission, tag added, birthday, date reminder) enroll contacts; the worker advances each enrollment tick-by-tick through node types (email, SMS, tag/field updates, waits, conditions, splits, webhooks, CRM push, create task). Respects timezone-aware quiet hours, goals, re-entry policy, and max duration. Flows can be published as global templates and deployed as per-account instances with sync-from-parent.
 
@@ -332,7 +334,9 @@ Loomi sends campaigns natively — no third-party ESP is involved on either the 
 
 **Domain warm-up.** A new sending domain earns its reputation on a 14-day ramp (50 sends on day 1, doubling to 100,000 by day 14). The cap belongs to the *domain*, not the blast, so every blast sending from that domain shares one daily budget. When a blast exhausts the day's budget, the remaining recipients are held and the blast stays **Processing** — that is the entire representation of a warm-up pause, and the send resumes on its own the next day with no duplicates. A blast can therefore sit in Processing for hours or across days and still be perfectly healthy. The Blasts list labels those rows **Warming up · Day N/14** and explains, on hover, how many recipients are waiting and which domain's budget is spent. Note that SendGrid will still show activity for a held blast — it is delivering the batch Loomi already handed it, not receiving more.
 
-**Bounces suppress the address automatically.** A bounce, spam report, or unsubscribe from SendGrid writes an `EmailSuppression` row and cascades it to every sibling rooftop in the group, so a dead address is skipped by every later blast across the organization without anyone maintaining a list.
+**A bounce is not a send error.** Loomi distinguishes what it could not *dispatch* from what the far end *refused* afterwards. A message SendGrid accepted and a mailbox then rejected — or an SMS Twilio sent and a carrier refused — is recorded as **Bounced** / **Undelivered**, reported as its own neutral number beside Sent and Delivered, and never marks the blast "Sent with errors". That status is reserved for messages Loomi genuinely could not send (a missing SendGrid key, an API rejection), which is the only kind anyone can act on. Addresses Loomi declines to attempt — already suppressed, missing, or on a domain that publishes no mail server — are counted as **skipped**, the same as an opt-out.
+
+**Bounces suppress the address automatically.** A bounce, spam report, or unsubscribe from SendGrid writes an `EmailSuppression` row and cascades it to every sibling rooftop in the group, so a dead address is skipped by every later blast across the organization without anyone maintaining a list. Before each send, the audience's domains are also checked for an MX record and anything on a domain that cannot receive mail at all is skipped rather than attempted — the check fails open, so a DNS outage sends rather than silently withholding.
 
 **Preflight judges the audience, not just the account.** Alongside the sender-configuration and CAN-SPAM blockers, scheduling a blast measures the audience against the account's own send history. A measured hard-bounce rate above 15% refuses the send; above 5% warns, tightening to 2% while the sending domain is still warming up. Separately, a large audience that has never been mailed going out from a warming domain draws a warning — that is the pattern that does the most damage to a new domain, and it can only ever be a warning, since every list is unproven once. The advice is always the same: send to a smaller, recently engaged slice first and watch the bounce rate.
 
@@ -366,6 +370,7 @@ A pg-boss worker (separate PM2 process; see `ecosystem.config.js`) handles:
 - **CRM lead delivery** — event-driven (form submission / flow push-to-CRM)
 - **Template → ad design sync** (`loomi.adgen.template-sync`) — event-driven (pushing a saved template design into the ads built from it)
 - **Archive retention sweep** (`loomi.purge-archived`) — daily
+- **Email drafting** — intake from monday (`loomi.drafting.intake`, every 5 minutes, off unless `DRAFTING_INTAKE_ENABLED=true`), the per-draft run (`loomi.drafting.run`), and the proof-status watch (`loomi.drafting.proof-status`, every 15 minutes)
 
 ---
 
@@ -377,6 +382,7 @@ A pg-boss worker (separate PM2 process; see `ecosystem.config.js`) handles:
 - **Creative data:** EVOX (vehicle imagery), MarketCheck (OEM incentives), Google Places
 - **Cloud:** AWS S3 / DigitalOcean Spaces (media), Cloudflare (custom-domain SSL via Cloudflare-for-SaaS)
 - **Analytics:** GA4, Meta Pixel, GTM (injected on landing pages)
+- **Work management:** monday.com (help desk tickets; Development Projects deliverables for email drafting)
 - **AI:** Anthropic Claude API (campaign planning, email/SMS/flow/LP generation, ad copy, copy suggestions)
 
 Third-party credentials are encrypted at rest via `src/lib/crypto/encryption.ts` using `TOKEN_ENCRYPTION_SECRET` (legacy `ESP_TOKEN_SECRET` accepted as fallback).

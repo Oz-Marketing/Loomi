@@ -72,7 +72,9 @@ export async function processTwilioStatusCallback(
   // when the send returns 202.
   const recipient = await prisma.smsBlastRecipient.findFirst({
     where: { messageId: sid },
-    select: { id: true, campaignId: true },
+    // `status` too: the counter update below has to know what the row was
+    // before this callback, so a retried callback can't count it twice.
+    select: { id: true, campaignId: true, status: true },
   });
 
   // Idempotent persist on (sid, eventType).
@@ -105,13 +107,44 @@ export async function processTwilioStatusCallback(
 
   // Side effects on first-insert only.
   if (recipient && FAILURE_STATUSES.has(status)) {
+    // Twilio draws a line we follow rather than flatten:
+    //
+    //   `undelivered` — Twilio sent it, a carrier returned a delivery receipt
+    //                   refusing it. That is a fact about the NUMBER (dead,
+    //                   landline, unreachable), not about the blast. It is the
+    //                   SMS counterpart of an email bounce, so it gets its own
+    //                   status and never makes a blast read "Sent with errors".
+    //   `failed`      — Twilio could not send it at all: account suspended,
+    //                   queue overflow, malformed media. Somebody has to act on
+    //                   that, so it stays a failure and still raises the flag.
+    const isCarrierRefusal = status === 'undelivered';
     await prisma.smsBlastRecipient.update({
       where: { id: recipient.id },
       data: {
-        status: 'failed',
+        status: isCarrierRefusal ? 'undelivered' : 'failed',
         error: `${status}${payload.ErrorMessage ? ': ' + payload.ErrorMessage : ''}`,
       },
     });
+
+    // Move the blast's own counters with the row. They are written once when
+    // the send runs and callbacks land minutes later, so without this a blast
+    // drifts away from its own recipients — the same gap that opened up on the
+    // email side before its bounce counters were maintained here.
+    //
+    // Guarded on a real transition: Twilio retries callbacks, and rows already
+    // in a terminal failure state (including the pre-split 'failed' the
+    // backfill reclassifies) must not be counted twice.
+    if (recipient.status !== 'undelivered' && recipient.status !== 'failed') {
+      await prisma.smsBlast.update({
+        where: { id: recipient.campaignId },
+        data: {
+          ...(isCarrierRefusal
+            ? { undeliveredCount: { increment: 1 } }
+            : { failedCount: { increment: 1 } }),
+          ...(recipient.status === 'sent' ? { sentCount: { decrement: 1 } } : {}),
+        },
+      });
+    }
 
     // Undelivered messages often indicate a bad/dormant phone — auto-suppress
     // so we don't retry. errorCode 30003 = unreachable, 30005 = unknown

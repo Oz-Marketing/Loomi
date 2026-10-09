@@ -14,6 +14,7 @@ import {
   XMarkIcon,
   EnvelopeOpenIcon,
   CursorArrowRaysIcon,
+  ArrowUturnLeftIcon,
   ExclamationTriangleIcon,
   NoSymbolIcon,
   PaperAirplaneIcon,
@@ -79,6 +80,9 @@ interface SmsBlastDetail {
   name: string;
   message: string;
   failedCount: number;
+  /** Twilio took it, a carrier refused it. Not a send failure. */
+  undeliveredCount: number;
+  sentCount: number;
   totalRecipients: number;
   error: string;
 }
@@ -256,6 +260,8 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
             name: data.campaign.name || '',
             message: data.campaign.message || '',
             failedCount: data.campaign.failedCount ?? 0,
+            undeliveredCount: data.campaign.undeliveredCount ?? 0,
+            sentCount: data.campaign.sentCount ?? 0,
             totalRecipients: data.campaign.totalRecipients ?? 0,
             error: data.campaign.error || '',
           });
@@ -305,8 +311,18 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
   const failedCount = detail?.failedCount ?? 0;
   const failureSummary = useMemo(() => {
     const status = (campaign?.status || '').toLowerCase().trim();
-    const errored = status === 'partial' || status === 'failed';
-    if (!errored && failedCount === 0) return null;
+    // Gate on the COUNT, not the status.
+    //
+    // `failedCount` now means only "Loomi could not dispatch this" — bounces
+    // moved to their own column and their own tile. A blast that dispatched
+    // everything and bounced on some of it therefore has nothing to say here,
+    // and gating on `status === 'partial'` would keep the banner up anyway on
+    // any older row the backfill has not reached yet.
+    //
+    // `status === 'failed'` with no failed recipients still speaks: that is a
+    // blast that fell over before it could write any, and silence would be
+    // worse than a vague headline.
+    if (failedCount === 0 && status !== 'failed') return null;
     const total = detail?.totalRecipients ?? 0;
     const headline =
       failedCount > 0
@@ -390,8 +406,8 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                     </p>
                   )}
                   <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5">
-                    Suppressed and opted-out contacts are skipped, not failed — these are
-                    genuine send errors.
+                    Bounces, suppressed and opted-out contacts are not counted here —
+                    these are messages Loomi could not send at all.
                   </p>
                 </div>
               </div>
@@ -404,8 +420,28 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
               Performance
             </h3>
             {channel === 'sms' ? (
-              <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-3 text-xs text-[var(--muted-foreground)]">
-                SMS engagement analytics aren&apos;t available yet.
+              <div className="space-y-3">
+                {/* Opens and clicks don't exist for SMS, but delivery does —
+                    and it's the half that used to be reported only as an
+                    error banner. */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  <KpiTile
+                    icon={PaperAirplaneIcon}
+                    label="Sent"
+                    primary={num(smsDetail?.sentCount ?? 0)}
+                    tone="primary"
+                  />
+                  <KpiTile
+                    icon={ArrowUturnLeftIcon}
+                    label="Undelivered"
+                    primary={num(smsDetail?.undeliveredCount ?? 0)}
+                    secondary="Carrier refused — number auto-suppressed"
+                    tone="zinc"
+                  />
+                </div>
+                <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-3 text-xs text-[var(--muted-foreground)]">
+                  SMS open and click analytics aren&apos;t available yet.
+                </div>
               </div>
             ) : engagementLoading ? (
               <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -446,12 +482,16 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                   secondary={`${num(engagement.uniqueClicks)} unique`}
                   tone="violet"
                 />
+                {/* Neutral on purpose. A bounce means an address on the list
+                    has gone dead — routine on any list with age, and every one
+                    of them is auto-suppressed so the next blast skips it. In
+                    amber, under a warning triangle, it read as an incident. */}
                 <KpiTile
-                  icon={ExclamationTriangleIcon}
-                  label="Bounce rate"
-                  primary={pct(engagement.bounceRate)}
-                  secondary={num(engagement.bounces)}
-                  tone="amber"
+                  icon={ArrowUturnLeftIcon}
+                  label="Bounced"
+                  primary={num(engagement.bounces)}
+                  secondary={pct(engagement.bounceRate)}
+                  tone="zinc"
                 />
                 <KpiTile
                   icon={NoSymbolIcon}

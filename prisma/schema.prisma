@@ -1905,6 +1905,10 @@ model SmsBlast {
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)
   failedCount      Int       @default(0)
+  // The SMS counterpart of a bounce: Twilio took the message and the carrier
+  // then refused it (dead number, blocked handset). Dispatch worked, so these
+  // never make a blast `partial` — see EmailBlast.bouncedCount for the rule.
+  undeliveredCount Int       @default(0)
   metadata         String?
   error            String?
   // Set when the campaign is archived via /archive. The daily purge
@@ -1936,7 +1940,10 @@ model SmsBlastRecipient {
   accountKey     String
   phone          String?
   fullName       String?
-  status         String    @default("pending") // pending | sent | failed | skipped
+  // pending | sent | failed | skipped | undelivered
+  //   failed      — Loomi could not hand it to Twilio
+  //   undelivered — Twilio took it; the carrier refused it afterwards
+  status         String    @default("pending")
   messageId      String?
   conversationId String?
   sentAt         DateTime?
@@ -2117,6 +2124,13 @@ model EmailBlast {
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)
   failedCount      Int       @default(0)
+  // Messages the far end rejected AFTER we successfully handed them over — a
+  // mailbox that does not exist, a dead domain. NOT a send error: the dispatch
+  // worked, so these never make a blast `partial`. They are a list-hygiene
+  // number, and each one auto-suppresses the address so the next blast skips
+  // it. `failedCount` is reserved for messages Loomi could not dispatch at
+  // all, which is the only kind anyone can act on.
+  bouncedCount     Int       @default(0)
   metadata         String?
   error            String?
   // Set when the campaign is archived via /archive. The daily purge
@@ -2148,7 +2162,10 @@ model EmailBlastRecipient {
   accountKey String
   email      String?
   fullName   String?
-  status     String     @default("pending") // pending | sent | failed | skipped
+  // pending | sent | failed | skipped | bounced
+  //   failed  — Loomi could not dispatch it (misconfiguration, API error)
+  //   bounced — dispatched fine; the mailbox rejected it afterwards
+  status     String     @default("pending")
   messageId  String?
   sentAt     DateTime?
   error      String?
@@ -5874,4 +5891,143 @@ model AgentProfileRevision {
   changedAt DateTime @default(now())
 
   @@index([profileId, changedAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Email drafting — a monday deliverable and its drafts
+// ─────────────────────────────────────────────────────
+//
+// docs/email-drafting.md. A design-approved "Email Blast N" subitem on monday's
+// Development Projects board becomes one DraftRequest; every draft written for it
+// is a DraftVersion, and the drafts live in one Loomi email template. monday stays the record of the WORK — who, when, and the
+// proof outcome the PageProof sync writes back. These rows are the record of what
+// Loomi read and what it wrote.
+
+model DraftRequest {
+  id String @id @default(cuid())
+
+  /// The deliverable: a subitem on monday board 18431636469 — one client, one
+  /// email. monday fans a request out one subitem per client per unit, so "YPS
+  /// Euro & Ogden, 2 emails" is four subitems. Drafting again adds a version.
+  mondaySubitemId String  @unique
+  /// The client as monday names it ("Young Powersports Ogden"), for notes.
+  clientName      String?
+  /// Its parent project on board 18431636272.
+  mondayProjectId String?
+  /// Names as monday showed them when the request was last read.
+  name            String
+  projectName     String?
+  /// email | text | landing_page — slice 1 drafts email only.
+  kind            String  @default("email")
+
+  /// The Loomi account the email is for, resolved from the subitem's client.
+  /// Null while it can't be — the request then waits at `needs_account`.
+  accountKey String?
+
+  /// The Loomi email template the drafts are written into, one per deliverable.
+  /// Its own TemplateVersion history keeps every earlier draft.
+  templateId String?
+
+  /// Where the request is in the pipeline; see src/lib/drafting/status.ts.
+  status String @default("queued")
+
+  /// The request as monday carried it when the job last read it — client labels,
+  /// co-op flag, disclaimer mirror, details, dates — as JSON. A snapshot, so a
+  /// draft stays explicable after someone edits the monday item.
+  request String? @db.Text
+  /// The monday Co-op flag: yes | no | compliance_check | unset.
+  coop    String  @default("unset")
+
+  /// The approved creative, copied out of monday as JSON DraftAsset[]. The
+  /// content hash is what tells a re-read creative from a replaced one.
+  assets String? @db.Text
+
+  /// What the creative says, field by field, with the model's value, any
+  /// correction and the asset it came from — JSON. Null until extracted.
+  extraction            String?   @db.Text
+  extractionConfirmedAt DateTime?
+  extractionConfirmedBy String?
+
+  /// Where the creative and the written request disagree, as JSON. An
+  /// unresolved conflict stops drafting: hard rule 1 says report, never choose.
+  conflicts String? @db.Text
+
+  /// The proof outcome as the monday ↔ PageProof sync last wrote it. Loomi
+  /// reads these columns and never writes them.
+  proofStatus     String?
+  proofUrl        String?   @db.Text
+  /// YYYY-MM-DD, from Proof Approval Date.
+  proofApprovedOn String?
+  proofCheckedAt  DateTime?
+
+  /// Why the request is `failed` or `blocked`, in words a person can act on.
+  error String? @db.Text
+
+  /// What the draft was made from on monday — the design asset ids and the
+  /// client — as a hash. The poller retries a stopped request when this changes,
+  /// i.e. when someone fixed something; it can't use the item's `updated_at`,
+  /// which Loomi's own updates may bump.
+  intakeFingerprint String?
+  /// Starts since the inputs last changed. Bounds quiet retries of a failure.
+  attempts          Int     @default(0)
+  /// The last notice posted to the subitem, so the same news is never posted twice.
+  lastNotice        String? @db.Text
+
+  startedByUserId String?
+  createdAt       DateTime @default(now())
+  /// Moves on every stage change, which is what tells a running request from
+  /// one the worker died in the middle of.
+  updatedAt       DateTime @updatedAt
+
+  versions DraftVersion[]
+
+  @@index([status, updatedAt])
+  @@index([accountKey, createdAt])
+}
+
+/// One draft of a request. Its content never changes — a revision is a new row
+/// pointing at the one it revised. Only the delivery fields move afterward:
+/// when it reached Draft Files, and when PageProof made it final.
+model DraftVersion {
+  id        String       @id @default(cuid())
+  requestId String
+  request   DraftRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  /// 1, 2, 3… within the request.
+  number    Int
+  parentId  String?
+
+  /// The assembled email, as a v2 EmailTemplate JSON.
+  template String  @db.Text
+  /// Initial and urgent options, as JSON CopyOption[].
+  subjects String  @db.Text
+  previews String  @db.Text
+  /// The rendered HTML, exactly as written to Draft Files.
+  html     String  @db.Text
+  /// The rendered PNG in Spaces, when one was stored.
+  pngS3Key String?
+
+  /// The rule evaluation (every violation, the rules that ran) as JSON. A
+  /// blocked version is kept too: it's the record of why nothing was uploaded.
+  evaluation String  @db.Text
+  /// Notes for the proofer as JSON string[] — co-op requirements the drafter
+  /// couldn't meet, a disclosure missing from the creative, and the like.
+  notes      String? @db.Text
+
+  /// Provenance of the copy.
+  model      String?
+  promptHash String?
+  /// Few-shot example ids the drafter was shown, JSON string[].
+  exampleIds String? @db.Text
+
+  /// monday asset ids written to Draft Files, JSON string[]. Null until uploaded.
+  mondayAssetIds String?   @db.Text
+  uploadedAt     DateTime?
+  /// Proof Status read "Approved": this version is the final artifact.
+  finalAt        DateTime?
+
+  /// Null when the drafter wrote it unattended.
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@unique([requestId, number])
 }

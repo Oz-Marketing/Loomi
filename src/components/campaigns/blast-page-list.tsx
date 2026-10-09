@@ -728,11 +728,18 @@ function CampaignTableRow({
         secondary={engagement ? `${formatNum(engagement.uniqueClicks)} unique` : null}
         empty={!hasSendResult}
       />
+      {/* No `warn` threshold on bounces.
+          The number stays — list hygiene is worth watching — but it is not an
+          alarm. An aging dealership list bounces well past 2% on its first
+          send, and painting that amber on a blast that did exactly what it
+          was asked to is what sent clients looking for a fault that isn't
+          there. Every bounce auto-suppresses, so the rate falls on its own.
+          The pre-send audience check in lib/sending/audience-risk.ts is where
+          a bad list gets stopped, before it costs anything. */}
       <EngagementCell
-        primary={engagement ? formatPct(engagement.bounceRate) : null}
-        secondary={engagement ? formatNum(engagement.bounces) : null}
+        primary={engagement ? formatNum(engagement.bounces) : null}
+        secondary={engagement ? formatPct(engagement.bounceRate) : null}
         empty={!hasSendResult}
-        warn={engagement ? engagement.bounceRate > 0.02 : false}
       />
       <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
         {updatedParts ? (
@@ -2011,7 +2018,7 @@ export function BlastPageList({
                         Click
                       </th>
                       <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
-                        Bounce
+                        Bounced
                       </th>
                       <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         <SortHeader label="Last Updated" field="updated" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />

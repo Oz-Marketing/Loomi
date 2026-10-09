@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import {
+  brokenPattern,
   effectiveSeverity,
   parseCoopPack,
   type CoopRule,
@@ -117,15 +118,18 @@ function jsonArray(raw: string | null): string[] {
  * had approved reported "21 can block" while the engine downgraded every one of them
  * to a warning. Both numbers were true of different things, and together they were
  * a lie.
+ *
+ * The same goes for a rule whose pattern won't compile: the engine can only report
+ * it as "Not checked", so it can block nothing whatever its sign-off says.
  */
-function countBySeverity(
+export function countBySeverity(
   rules: CoopRule[],
   pack: Pick<CoopRulePack, 'verified'>,
 ): { errorCount: number; warningCount: number } {
   let errorCount = 0;
   let warningCount = 0;
   for (const r of rules) {
-    if (effectiveSeverity(r, pack) === 'error') errorCount++;
+    if (effectiveSeverity(r, pack) === 'error' && !brokenPattern(r)) errorCount++;
     else warningCount++;
   }
   return { errorCount, warningCount };

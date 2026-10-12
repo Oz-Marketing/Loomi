@@ -3,6 +3,7 @@ import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import { isBudgetLineType } from '@/lib/budget/channels';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET  /api/budget/categorize?accountKey=…&year=… — what still needs a type,
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ updated });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not categorize those lines' },
+      { error: clientErrorMessage(err, 'Could not categorize those lines') },
       { status: 400 },
     );
   }

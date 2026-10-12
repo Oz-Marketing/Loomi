@@ -10,6 +10,7 @@ import {
   serializeMediaAsset,
   type ScopeTarget,
 } from '@/lib/services/media';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/media/[id]/copy
@@ -160,7 +161,7 @@ export async function POST(
     // No bytes at the destination means the row points at nothing, so take the
     // row back out rather than leaving a broken asset in someone's library.
     await prisma.mediaAsset.delete({ where: { id: created.id } }).catch(() => {});
-    const message = err instanceof Error ? err.message : 'Copy failed';
+    const message = clientErrorMessage(err, 'Copy failed');
     return NextResponse.json({ error: `Could not copy the file: ${message}` }, { status: 502 });
   }
 

@@ -10,6 +10,7 @@ import {
   setCarryover,
 } from '@/lib/meta-ads-pacer';
 import { writeAudit } from '@/lib/meta-ads-audit';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface Body {
   bucket?: 'base' | 'added';
@@ -74,7 +75,7 @@ export async function POST(
     ]);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not apply carryover.' },
+      { error: clientErrorMessage(err, 'Could not apply carryover.') },
       { status: 400 },
     );
   }

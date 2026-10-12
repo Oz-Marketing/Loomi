@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { coerceAudience, publishChangelogEntries } from '@/lib/changelog-publish';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /** Management roles see drafts and staff-only entries; everyone else doesn't. */
 function isStaff(role: string | undefined): boolean {
@@ -29,7 +30,7 @@ export async function GET() {
     });
     return NextResponse.json({ entries });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch changelog';
+    const message = clientErrorMessage(err, 'Failed to fetch changelog');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
     const entry = await prisma.changelogEntry.findUnique({ where: { id: created.id } });
     return NextResponse.json({ entry });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create changelog entry';
+    const message = clientErrorMessage(err, 'Failed to create changelog entry');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -27,6 +27,7 @@ import { resolveLaunch, type PresetRow } from '@/lib/ad-generator/launch-preset'
 import { mergeRenderData, renderCreativeSizes } from '@/lib/ad-generator/render-creative';
 import { renderMotionSizes } from '@/lib/ad-generator/render-motion';
 import { docHasMotion } from '@/lib/ad-generator/motion-plan';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -167,7 +168,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     });
   } catch (err) {
     return NextResponse.json(
-      { error: `Could not render the creative: ${err instanceof Error ? err.message : 'unknown error'}` },
+      { error: `Could not render the creative: ${clientErrorMessage(err, 'unknown error')}` },
       { status: 500 },
     );
   }
@@ -197,7 +198,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       kitNotices.push(...new Set(clips.flatMap((c) => c.warnings)));
     } catch (err) {
       kitNotices.push(
-        `This ad has a video layer, but the MP4 could not be produced: ${err instanceof Error ? err.message : 'unknown error'}`,
+        `This ad has a video layer, but the MP4 could not be produced: ${clientErrorMessage(err, 'unknown error')}`,
       );
     }
   }

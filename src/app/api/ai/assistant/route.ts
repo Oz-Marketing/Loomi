@@ -6,6 +6,7 @@ import {
   EmailAssistantError,
   type ConversationMessage,
 } from '@/lib/ai/email-assistant';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface AssistantRequestBody {
   prompt?: string;
@@ -48,7 +49,7 @@ export async function POST(req: NextRequest) {
     if (err instanceof EmailAssistantError) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
-    const message = err instanceof Error ? err.message : 'Failed to run AI assistant';
+    const message = clientErrorMessage(err, 'Failed to run AI assistant');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

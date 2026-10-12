@@ -23,6 +23,7 @@ import { Select } from '@/components/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { HelpTip } from '@/components/ui/help-tip';
 import { useAccount } from '@/contexts/account-context';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import {
   buildUnsubscribeFooter,
   DEFAULT_FOOTER_CONFIG,
@@ -56,6 +57,7 @@ const inputClass =
 const sectionCardClass = 'glass-section-card rounded-xl p-6';
 
 export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
+  const { markClean } = useUnsavedChanges();
   const { accountData, accounts } = useAccount();
   const [config, setConfig] = useState<UnsubscribeFooterConfig>(DEFAULT_FOOTER_CONFIG);
   const [saved, setSaved] = useState<UnsubscribeFooterConfig>(DEFAULT_FOOTER_CONFIG);
@@ -115,6 +117,7 @@ export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
       setSaved(stored);
       setInherited(false);
       setSourceAccountKey(accountKey);
+      markClean();
       toast.success('Footer saved');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
@@ -136,6 +139,7 @@ export function EmailFooterTab({ accountKey }: EmailFooterTabProps) {
       setSaved(resolved);
       setInherited(Boolean(body?.inherited));
       setSourceAccountKey(body?.sourceAccountKey ?? null);
+      markClean();
       toast.success(
         body?.inherited ? 'Now inheriting the parent account footer' : 'Reset to the default footer',
       );

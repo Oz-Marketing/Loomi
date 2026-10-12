@@ -24,6 +24,7 @@ import { applyUtmTags, type BlastUtmSettings } from '@/lib/sending/blast-utm';
 import { applyPreviewText } from '@/lib/sending/preheader';
 import { htmlToText } from '@/lib/sending/html-to-text';
 import { SAMPLE_PREVIEW_CONTACT } from '@/lib/preview-variables';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface SendTestBody {
   to: string;
@@ -101,7 +102,7 @@ export async function POST(req: NextRequest) {
         html = await compileTemplateContent(body.content);
       } catch (err) {
         return NextResponse.json(
-          { error: err instanceof Error ? err.message : 'The template could not be compiled' },
+          { error: clientErrorMessage(err, 'The template could not be compiled') },
           { status: 400 },
         );
       }
@@ -240,7 +241,7 @@ export async function POST(req: NextRequest) {
           lastMessageId = result.messageId || lastMessageId;
         }
       } catch (err) {
-        const msg = err instanceof SendGridError ? `SendGrid: ${err.message}` : err instanceof Error ? err.message : 'SendGrid send failed';
+        const msg = err instanceof SendGridError ? `SendGrid: ${err.message}` : clientErrorMessage(err, 'SendGrid send failed');
         return NextResponse.json({ error: msg }, { status: 500 });
       }
       return NextResponse.json({
@@ -312,7 +313,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('Send test email error:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to send test email' },
+      { error: clientErrorMessage(err, 'Failed to send test email') },
       { status: 500 },
     );
   }

@@ -3,6 +3,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { filterAccountKeysByAccess } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 import { listContactsPaged, type PagedSortKey } from '@/lib/contacts/queries';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // GET /api/contacts/paged?accountKeys=&page=&pageSize=&search=
 //
@@ -92,7 +93,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch contacts';
+    const message = clientErrorMessage(err, 'Failed to fetch contacts');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -132,3 +132,37 @@ export function withRouteErrors<A extends unknown[]>(
     }
   };
 }
+
+const DB_BUSY = /too many (database )?connections|remaining connection slots|timed out fetching a new connection|timeout exceeded when trying to connect|connection terminated/i;
+
+/** A Prisma or Postgres driver error — never a message written for a person. */
+function isDatabaseError(err: Error & { code?: unknown; severity?: unknown }): boolean {
+  return (
+    err.name.startsWith('PrismaClient') ||
+    err.name === 'DriverAdapterError' ||
+    err.name === 'DatabaseError' ||
+    (typeof err.code === 'string' && /^P\d{4}$/.test(err.code)) ||
+    err.message.includes('Invalid `prisma.')
+  );
+}
+
+/**
+ * The message a route may hand back for a caught error.
+ *
+ * Most routes end in `err instanceof Error ? err.message : '…'`, which is
+ * right for the errors our own code throws ("accountKey is required") and
+ * wrong for database ones: those put Prisma's invocation dump and Postgres
+ * internals on screen ("Invalid `prisma.contact.findMany()` invocation: Too
+ * many database connections opened…"). This keeps the first and replaces the
+ * second, logging the real error under a trace id the person can quote.
+ */
+export function clientErrorMessage(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback;
+  if (!isDatabaseError(err)) return err.message;
+
+  const traceId = newTraceId();
+  console.error(`[api:db] ${traceId}`, err);
+  return DB_BUSY.test(err.message)
+    ? `The database is busy right now. Please try again in a moment. (ref ${traceId})`
+    : `${fallback} (ref ${traceId})`;
+}

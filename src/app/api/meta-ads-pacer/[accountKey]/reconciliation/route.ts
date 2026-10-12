@@ -13,6 +13,7 @@ import {
   unapplyCarryover,
 } from '@/lib/meta-ads-pacer';
 import { writeAudit } from '@/lib/meta-ads-audit';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 function resolveYear(req: NextRequest): number {
   const raw = Number(req.nextUrl.searchParams.get('year'));
@@ -216,7 +217,7 @@ export async function POST(
     }
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Reconciliation failed.' },
+      { error: clientErrorMessage(err, 'Reconciliation failed.') },
       { status: 400 },
     );
   }

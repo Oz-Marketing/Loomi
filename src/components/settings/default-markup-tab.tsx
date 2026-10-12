@@ -13,8 +13,10 @@
 import { useEffect, useState } from 'react';
 import PrimaryButton from '@/components/primary-button';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 
 export function DefaultMarkupTab() {
+  const { markClean } = useUnsavedChanges();
   const [value, setValue] = useState('');
   const [saved, setSaved] = useState('');
   const [loading, setLoading] = useState(true);
@@ -57,6 +59,7 @@ export function DefaultMarkupTab() {
       const m = typeof data.markup === 'number' ? String(data.markup) : value;
       setValue(m);
       setSaved(m);
+      markClean();
       toast.success('Default markup saved.');
     } catch {
       toast.error('Failed to save default markup');

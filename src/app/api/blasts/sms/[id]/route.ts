@@ -7,6 +7,7 @@ import { deleteBlastWithLinkedChannels } from '@/lib/services/blast-linked';
 import { canReadBlast } from '@/lib/messaging/blast-access';
 import { isEditableBlastStatus, lockedBlastMessage } from '@/lib/messaging/blast-builder-steps';
 import { mergeBlastMetadata, readMetadataPatch } from '@/lib/messaging/blast-metadata';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -115,7 +116,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
         { status: 409 },
       );
     }
-    const message = err instanceof Error ? err.message : 'Failed to update campaign';
+    const message = clientErrorMessage(err, 'Failed to update campaign');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -154,7 +155,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
       ...(result.partnerError ? { partnerError: result.partnerError } : {}),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to delete campaign';
+    const message = clientErrorMessage(err, 'Failed to delete campaign');
     return NextResponse.json({ error: message }, { status: 409 });
   }
 }

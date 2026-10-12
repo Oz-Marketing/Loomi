@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/budget/lines — list budget lines with the usual filters
@@ -87,7 +88,7 @@ export async function POST(req: NextRequest) {
     // Validation failures from the service (bad period, unknown channel, year
     // disagreement) are the caller's fault, not a server fault.
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to create budget line' },
+      { error: clientErrorMessage(err, 'Failed to create budget line') },
       { status: 400 },
     );
   }

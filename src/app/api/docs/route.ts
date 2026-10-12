@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { docReaderFromSession, docVisibilityWhere } from '@/lib/docs/reader';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/docs            — the whole library
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ articles, isStaff: !reader.isClient });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to load docs';
+    const message = clientErrorMessage(err, 'Failed to load docs');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

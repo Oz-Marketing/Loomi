@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { campaignAccessFor } from '@/lib/campaigns/access';
 import { createCampaign, listCampaigns } from '@/lib/services/campaigns';
 import { getAccount } from '@/lib/services/accounts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/campaigns — list campaign containers visible to the session.
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ campaign }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create campaign';
+    const message = clientErrorMessage(err, 'Failed to create campaign');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

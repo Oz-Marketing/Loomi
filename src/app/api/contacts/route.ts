@@ -6,6 +6,7 @@ import { listContactsForAccount, CONTACT_SELECT, serializeContact } from '@/lib/
 import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
 import { OPT_OUT_SOURCE, recordEmailOptOut, recordSmsOptOut } from '@/lib/sending/opt-outs';
 import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // GET /api/contacts?accountKey=&search=&limit=&all=true&includeMessaging=true
 //   List contacts for a sub-account. Response matches the existing
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch contacts';
+    const message = clientErrorMessage(err, 'Failed to fetch contacts');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -163,7 +164,7 @@ export async function POST(req: NextRequest) {
         { status: 409 },
       );
     }
-    const message = err instanceof Error ? err.message : 'Failed to create contact';
+    const message = clientErrorMessage(err, 'Failed to create contact');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

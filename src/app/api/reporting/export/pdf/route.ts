@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireReportingAccess } from '../../_lib/guard';
 import { renderReportPdf } from '@/lib/reporting/pdf';
 import { isValidReportDoc, reportDocSizeError, sanitizeReportFilename } from '@/lib/reporting/report-doc';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const dynamic = 'force-dynamic';
 // Headless Chromium can take a few seconds to spin up + render.
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('[reporting/export/pdf] failed', err);
-    const message = err instanceof Error ? err.message : 'PDF export failed';
+    const message = clientErrorMessage(err, 'PDF export failed');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

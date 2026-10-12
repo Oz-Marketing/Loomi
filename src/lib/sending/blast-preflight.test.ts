@@ -169,14 +169,16 @@ describe('preflightEmailBlast — SendGrid domain authentication', () => {
     expect(issue?.message).toContain("DNS records don't validate");
   });
 
-  // SendGrid's documented rule: subdomains don't inherit authentication.
-  it('blocks a subdomain From covered only by a non-default parent', async () => {
+  // How every rooftop is set up: From `send.<domain>`, with only `<domain>`
+  // authenticated. SendGrid signs it with the parent and DMARC passes
+  // (observed 2026-10-12), so it must not block — see domain-auth.ts.
+  it('allows a subdomain From covered by a valid parent', async () => {
     findMany.mockResolvedValue([
       readyAccount({ senderEmail: 'marketing@mail.audilayton.com', sendgridFromDomain: 'audilayton.com' }),
     ]);
     sendgridAnswers([{ domain: 'audilayton.com', valid: true }]);
     const result = await preflightEmailBlast(GOOD_CONTENT);
-    expect(codes(result.issues, 'blocker')).toContain(PREFLIGHT_CODES.SENDER_DOMAIN_UNAUTHENTICATED);
+    expect(codes(result.issues, 'blocker')).not.toContain(PREFLIGHT_CODES.SENDER_DOMAIN_UNAUTHENTICATED);
   });
 
   it('blocks a key SendGrid rejects outright', async () => {

@@ -9,6 +9,7 @@ import {
   createDraftSmsBlast,
   updateSmsBlastDraft,
 } from '@/lib/services/sms-blasts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/blasts/multi/draft
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
       { status: 201 },
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create multi-channel draft';
+    const message = clientErrorMessage(err, 'Failed to create multi-channel draft');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

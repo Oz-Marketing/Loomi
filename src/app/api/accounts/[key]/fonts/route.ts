@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import * as accountService from '@/lib/services/accounts';
 import { uploadToS3, deleteFromS3, s3PublicUrl, s3KeyFromPublicUrl, isS3Configured } from '@/lib/s3';
 import { syncAccountBrandAssets } from '@/lib/services/brand-assets';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * Custom font uploads for an account (e.g. OEM-required brand fonts).
@@ -93,7 +94,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ key
     return NextResponse.json({ font, customFonts: fonts });
   } catch (err) {
     console.error('Font upload error:', err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Upload failed' }, { status: 500 });
+    return NextResponse.json({ error: clientErrorMessage(err, 'Upload failed') }, { status: 500 });
   }
 }
 
@@ -133,6 +134,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ k
     return NextResponse.json({ customFonts: remaining });
   } catch (err) {
     console.error('Font delete error:', err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Delete failed' }, { status: 500 });
+    return NextResponse.json({ error: clientErrorMessage(err, 'Delete failed') }, { status: 500 });
   }
 }

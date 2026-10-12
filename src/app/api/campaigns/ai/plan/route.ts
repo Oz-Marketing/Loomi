@@ -6,6 +6,7 @@ import { generateCampaignPlan } from '@/lib/ai/campaign-plan';
 import { createCampaign } from '@/lib/services/campaigns';
 import { channelsFromPicked, composeBrief, normalizeAnswers } from '@/lib/ai/campaign-intake';
 import { PHASE_3_CHANNELS } from '@/lib/campaigns/types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/campaigns/ai/plan
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ campaign }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to plan campaign';
+    const message = clientErrorMessage(err, 'Failed to plan campaign');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

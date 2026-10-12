@@ -5,6 +5,7 @@ import {
   syncAllOutOfDateInstances,
   syncFlowFromTemplate,
 } from '@/lib/services/loomi-flows';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // POST /api/flows/[id]/resync — admin/developer/super_admin only.
 //
@@ -42,7 +43,7 @@ export async function POST(
       return NextResponse.json(result);
     } catch (err) {
       return NextResponse.json(
-        { error: err instanceof Error ? err.message : 'Sync failed' },
+        { error: clientErrorMessage(err, 'Sync failed') },
         { status: 400 },
       );
     }
@@ -61,7 +62,7 @@ export async function POST(
     return NextResponse.json({ flow });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Sync failed' },
+      { error: clientErrorMessage(err, 'Sync failed') },
       { status: 400 },
     );
   }

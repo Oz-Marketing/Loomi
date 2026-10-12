@@ -24,6 +24,7 @@ import {
 } from '@/lib/segments/lookup';
 import { SegmentRefError } from '@/lib/segments/refs';
 import type { FieldDefinition, FilterDefinition } from '@/lib/smart-list-types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export async function POST(req: Request) {
   const { session, error } = await requirePermission('studio.segments.edit');
@@ -91,7 +92,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
     const message =
-      err instanceof Error ? err.message : 'Failed to resolve eligibility';
+      clientErrorMessage(err, 'Failed to resolve eligibility');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -9,6 +9,7 @@ import {
   type LpAssistantResponse,
   type LpConversationMessage,
 } from '@/lib/ai/lp-assistant';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface ChatRequestBody {
   /** Conversation so far, in order. Last entry must be the new user turn. */
@@ -67,7 +68,7 @@ export async function POST(
     if (err instanceof LpAssistantError) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
-    const message = err instanceof Error ? err.message : 'Failed to run Loomi AI';
+    const message = clientErrorMessage(err, 'Failed to run Loomi AI');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

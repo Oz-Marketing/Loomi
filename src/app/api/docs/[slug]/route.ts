@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { docReaderFromSession } from '@/lib/docs/reader';
 import { canReadDoc, DOC_AUDIENCES, type DocAudience, type DocSector } from '@/lib/docs/types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/docs/[slug]
@@ -42,7 +43,7 @@ export async function GET(
 
     return NextResponse.json({ article, isStaff: !reader.isClient });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to load the article';
+    const message = clientErrorMessage(err, 'Failed to load the article');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -128,7 +129,7 @@ export async function PATCH(
     });
     return NextResponse.json({ article: updated });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to save the article';
+    const message = clientErrorMessage(err, 'Failed to save the article');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

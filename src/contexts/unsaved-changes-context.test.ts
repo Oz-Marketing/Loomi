@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { pruneResolvedElements, type TrackableElement } from './unsaved-changes-context';
+import { forgetElementsWithin, pruneResolvedElements, type TrackableElement } from './unsaved-changes-context';
 
 /** An input in the document, with `initial` recorded as its focus-time value. */
 function trackedInput(initial: string, current = initial) {
@@ -68,5 +68,31 @@ describe('pruneResolvedElements', () => {
     el.checked = false;
     pruneResolvedElements(dirty, initialValues);
     expect(dirty.has(el)).toBe(false);
+  });
+});
+
+describe('forgetElementsWithin', () => {
+  it('forgets the saved row and keeps guarding the unsaved one', () => {
+    const saved = document.createElement('div');
+    const other = document.createElement('div');
+    const savedInput = document.createElement('input');
+    const otherInput = document.createElement('input');
+    saved.appendChild(savedInput);
+    other.appendChild(otherInput);
+    document.body.append(saved, other);
+    savedInput.value = 'Google Ads';
+    otherInput.value = 'Meta';
+    const initialValues = new WeakMap<TrackableElement, string>([
+      [savedInput, 'Google'],
+      [otherInput, 'Facebook'],
+    ]);
+    const dirty = new Set<TrackableElement>([savedInput, otherInput]);
+
+    forgetElementsWithin(saved, dirty, initialValues);
+
+    expect(dirty.has(savedInput)).toBe(false);
+    expect(initialValues.has(savedInput)).toBe(false);
+    expect(dirty.has(otherInput)).toBe(true);
+    expect(initialValues.get(otherInput)).toBe('Facebook');
   });
 });

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { listAlertRules } from '@/lib/services/alert-rules';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * §9 alert-rule config rows. GET — management-tier reads the list for the
@@ -15,7 +16,7 @@ export async function GET() {
   try {
     return NextResponse.json({ rules: await listAlertRules() });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not load alert rules.';
+    const message = clientErrorMessage(err, 'Could not load alert rules.');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

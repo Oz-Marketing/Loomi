@@ -8,6 +8,7 @@ import {
   type ContactField,
 } from '@/lib/contacts/normalize';
 import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // CSV upload pipeline. Three modes:
 //
@@ -130,7 +131,7 @@ export async function POST(req: NextRequest) {
     mapping = parseMapping(mappingRaw);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid mapping payload' },
+      { error: clientErrorMessage(err, 'Invalid mapping payload') },
       { status: 400 },
     );
   }
@@ -160,7 +161,7 @@ export async function POST(req: NextRequest) {
     applyTags = parseAppliedTags(form.get('tags'));
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Invalid tags payload' },
+      { error: clientErrorMessage(err, 'Invalid tags payload') },
       { status: 400 },
     );
   }

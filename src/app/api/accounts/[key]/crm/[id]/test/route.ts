@@ -8,6 +8,7 @@ import { buildAdfXml, buildAdfSubject } from '@/lib/integrations/crm/adf';
 import { sendLeadEmail, LeadEmailError } from '@/lib/integrations/crm/send-lead-email';
 import { parseLeadEmails } from '@/lib/integrations/crm/lead-emails';
 import { testHubspotConnection, HubspotError } from '@/lib/integrations/crm/hubspot';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ key: string; id: string }>;
@@ -57,9 +58,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
       const message =
         err instanceof HubspotError
           ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'HubSpot test failed';
+          : clientErrorMessage(err, 'HubSpot test failed');
       return NextResponse.json({ ok: false, error: message }, { status: 400 });
     }
   }
@@ -127,9 +126,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
     const message =
       err instanceof LeadEmailError
         ? err.message
-        : err instanceof Error
-          ? err.message
-          : 'Send failed';
+        : clientErrorMessage(err, 'Send failed');
     return NextResponse.json({ ok: false, error: message }, { status: 400 });
   }
 }

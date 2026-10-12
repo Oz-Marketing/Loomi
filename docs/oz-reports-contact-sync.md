@@ -311,8 +311,18 @@ Two severities, and the split matters:
   rooftop, so silence from either is a fault. Mail drops are episodic — a group
   can genuinely go weeks without one — so a stale mailer feed is a warning.
 
-`REPORTING_FEEDS` in the health route holds that table; add a feed there and it
-is monitored, with its own note explaining what its silence means.
+- **`awaiting-producer` warns.** As of 2026-09-16 none of `pushcalls`,
+  `pushreviews` or `pushmailer` exists on the Oz Reports host — they 404, so
+  `never-run` was failing the whole job every day for a reason no Loomi change
+  could fix, and a real contact outage would have landed in a run that was
+  already red. A feed carrying `awaitingProducer` reports this status instead
+  of `never-run`. It only softens never-run: the first batch it delivers arms
+  it as a normal feed, so shipping the producer turns enforcement on with no
+  Loomi change. Remove the field when the producer ships anyway.
+
+`REPORTING_FEEDS` in `src/lib/contacts/sync-feed-health.ts` holds that table;
+add a feed there and it is monitored, with its own note explaining what its
+silence means.
 
 By hand:
 

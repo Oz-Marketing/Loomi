@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireInternalJobAuth } from '@/lib/internal-jobs';
 import { prisma } from '@/lib/prisma';
+import { REPORTING_FEEDS, feedStatus, type FeedStatus } from '@/lib/contacts/sync-feed-health';
 
 /**
  * GET /api/internal/contact-sync/health
@@ -21,7 +22,7 @@ import { prisma } from '@/lib/prisma';
  *   curl -H "x-internal-job-secret: $INTERNAL_JOB_SECRET" \
  *     "https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30"
  *
- * TWO CHECKS, DIFFERENT SHAPES — see REPORTING_FEEDS below for why the
+ * TWO CHECKS, DIFFERENT SHAPES — see REPORTING_FEEDS (lib/contacts/sync-feed-health) for why the
  * reporting feeds are checked per-FEED while the CRM feeds are checked
  * per-ACCOUNT.
  *
@@ -45,60 +46,7 @@ const DEFAULT_RETENTION_DAYS = 180;
 // CSV account never gets flagged for a sync it was never part of.
 const CRM_SOURCE_PREFIX = 'oz-reports';
 
-/**
- * The reporting feeds — calls, reviews, mailer — checked PER FEED, not per
- * account, and deliberately so.
- *
- * The CRM feeds are per-account because every mapped rooftop should be
- * producing contacts and events; silence from one is a real signal. These
- * three are not: calls exist only for a dealer with a `call_tracker_id`,
- * reviews only for a rooftop with a Google `place_id`, and mailer campaigns
- * only for an account that has actually mailed. Flagging every account that
- * legitimately has none would mean dozens of daily false alarms — which is
- * how a monitor gets muted and stops being a monitor.
- *
- * What CAN be checked without noise is the feed itself: these are driven by
- * one cron on the Oz Reports host, so "has this feed reported from anywhere
- * recently" answers the failure that actually happened — the endpoints
- * existed and worked for months while nothing ever called them.
- *
- * `neverRunIsFailure` is separate from staleness on purpose. A feed with no
- * runs AT ALL means the cron was never wired up; that is unambiguous for all
- * three. Going stale after having run is only unambiguous for two of them —
- * see `staleIsFailure` on mailer.
- */
-const REPORTING_FEEDS: {
-  kind: string;
-  label: string;
-  staleIsFailure: boolean;
-  note: string;
-}[] = [
-  {
-    kind: 'calls',
-    label: 'Call Tracking',
-    staleIsFailure: true,
-    note: 'Every dealer with a call tracker produces calls daily.',
-  },
-  {
-    kind: 'reviews',
-    label: 'Reputation history',
-    staleIsFailure: true,
-    note: 'Runs on a 90-day window across every rooftop, so it is effectively never empty.',
-  },
-  {
-    kind: 'mailer',
-    label: 'Direct Mail ROI',
-    // Warning, not failure. Mail drops are episodic — a group can genuinely
-    // go weeks without one, and the bridge skips the POST when a dealer has
-    // nothing in the window. Failing on that would cry wolf. A feed that has
-    // NEVER run is still a failure, which is the case this was added to catch.
-    staleIsFailure: false,
-    note: 'Campaigns are episodic; a quiet stretch is normal. Never-run is still a failure.',
-  },
-];
-
 type AccountStatus = 'ok' | 'stale' | 'never-synced';
-type FeedStatus = 'ok' | 'stale' | 'never-run';
 
 interface FeedHealth {
   kind: string;
@@ -187,7 +135,8 @@ export async function GET(req: NextRequest) {
         _max: { updatedAt: true },
       }),
       // Reporting feeds, collapsed across accounts — "has this feed reported
-      // from anywhere", which is the question REPORTING_FEEDS explains.
+      // from anywhere", which is the question REPORTING_FEEDS explains
+      // (src/lib/contacts/sync-feed-health.ts).
       prisma.ingestRun.groupBy({
         by: ['kind'],
         where: { kind: { in: REPORTING_FEEDS.map((f) => f.kind) } },
@@ -271,22 +220,18 @@ export async function GET(req: NextRequest) {
       const recent = feedRecentByKind.get(def.kind);
       const hoursSinceLastRun = lastRunAt ? hoursBetween(lastRunAt, now) : null;
 
-      const status: FeedStatus = !lastRunAt
-        ? 'never-run'
-        : hoursSinceLastRun !== null && hoursSinceLastRun > maxAgeHours
-          ? 'stale'
-          : 'ok';
+      const { status, failing } = feedStatus(def, hoursSinceLastRun, maxAgeHours);
 
       return {
         kind: def.kind,
         label: def.label,
         status,
-        failing: status === 'never-run' || (status === 'stale' && def.staleIsFailure),
+        failing,
         lastRunAt: lastRunAt?.toISOString() ?? null,
         hoursSinceLastRun,
         accountsReporting24h: recent?._count._all ?? 0,
         rows24h: recent?._sum.totalRows ?? 0,
-        note: def.note,
+        note: def.awaitingProducer ?? def.note,
       };
     });
 

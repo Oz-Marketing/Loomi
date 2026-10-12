@@ -44,13 +44,35 @@ describe('evaluateDomainAuth', () => {
     );
   });
 
-  // SendGrid: "subdomains don't inherit authentication permissions from their
-  // parent domain" — a valid parent alone does not sign the subdomain's mail.
-  it('does not let a non-default parent domain cover a subdomain', () => {
-    const result = evaluateDomainAuth('mail.audilayton.com', [{ domain: 'audilayton.com', valid: true }]);
+  // Observed, not documented: mail From communications@send.youngchev.com with
+  // only youngchev.com authenticated arrived d=youngchev.com, dmarc=pass.
+  it('lets a valid parent domain cover a subdomain, as SendGrid actually signs it', () => {
+    const result = evaluateDomainAuth('send.youngchev.com', [
+      { domain: 'youngchev.com', valid: true },
+      { domain: 'youngtoyota.com', valid: true, default: true },
+    ]);
+    expect(result.status).toBe('authenticated');
+    expect(result.authenticatedDomain).toBe('youngchev.com');
+  });
+
+  it('picks the most specific valid parent', () => {
+    const result = evaluateDomainAuth('a.mail.audilayton.com', [
+      { domain: 'audilayton.com', valid: true },
+      { domain: 'mail.audilayton.com', valid: true },
+    ]);
+    expect(result.authenticatedDomain).toBe('mail.audilayton.com');
+  });
+
+  it('does not let an invalid parent cover a subdomain', () => {
+    expect(
+      evaluateDomainAuth('send.youngchev.com', [{ domain: 'youngchev.com', valid: false }]).status,
+    ).toBe('not_authenticated');
+  });
+
+  it('does not let a child domain cover its parent unless it is the default', () => {
+    const result = evaluateDomainAuth('audilayton.com', [{ domain: 'mail.audilayton.com', valid: true }]);
     expect(result.status).toBe('not_authenticated');
-    expect(result.detail).toContain('audilayton.com');
-    expect(result.availableDomains).toEqual(['audilayton.com']);
+    expect(result.detail).toContain('mail.audilayton.com');
   });
 
   it("accepts the account's DEFAULT domain when it shares the organization", () => {

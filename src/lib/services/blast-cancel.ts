@@ -33,7 +33,8 @@ export interface CancelBlastResult {
   partnerError?: string;
 }
 
-function parseLinkedId(
+/** The partner blast's id from a multi-channel blast's metadata, if it has one. */
+export function parseLinkedId(
   metadata: string | null | undefined,
   key: 'linkedSmsBlastId' | 'linkedEmailBlastId',
 ): string | null {

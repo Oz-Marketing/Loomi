@@ -31,11 +31,7 @@ export async function GET(req: NextRequest) {
   const role = session!.user.role;
   const userAccountKeys: string[] = session!.user.accountKeys ?? [];
 
-  // Role-based access check on the requested accountKey, then defer the
-  // actual filtering to JS so we can include orphan campaigns (empty
-  // accountKeys) alongside scoped ones. Campaigns created from the
-  // admin-level Campaigns page have no accountKey by default, and users
-  // expect to see those when they drill into any sub-account.
+  // Role-based access check on the requested accountKey.
   if (accountKey) {
     if (role === 'client' && !userAccountKeys.includes(accountKey)) {
       return NextResponse.json({ campaigns: [] });
@@ -46,8 +42,7 @@ export async function GET(req: NextRequest) {
   }
 
   // Scope at the service layer to the user's visible accounts (when
-  // applicable), but DON'T filter to a single account here — we want
-  // orphans through too.
+  // applicable).
   let visibilityScope: string[] | undefined;
   if (role === 'client' || (role === 'admin' && userAccountKeys.length > 0)) {
     visibilityScope = userAccountKeys;
@@ -69,14 +64,26 @@ export async function GET(req: NextRequest) {
   const source: BlastSourceFilter =
     sourceParam === 'flows' || sourceParam === 'all' ? sourceParam : 'blasts';
 
+  // Narrow to the requested account IN THE QUERY. Filtering after a
+  // platform-wide `take` let an account's own blast — a scheduled one
+  // included — fall off its own list once the platform had more blasts than
+  // the cap, with no way to find it to cancel it.
+  //
+  // An account's list shows ONLY that account's blasts. Blasts with no
+  // account used to show in every account's view, so one made while a group
+  // was selected appeared in the group and in each of its rooftops, as if
+  // every child had been given a copy. The create and PATCH routes no longer
+  // allow a blast without an account (lib/services/blast-account-keys).
+  const listScope = accountKey
+    ? { accountKeys: [accountKey] }
+    : { accountKeys: visibilityScope };
   const [emails, sms] = await Promise.all([
-    listEmailBlasts({ limit: CAMPAIGN_ROW_LIMIT, accountKeys: visibilityScope, statusFilter, source }),
-    listSmsBlasts({ limit: CAMPAIGN_ROW_LIMIT, accountKeys: visibilityScope, statusFilter, source }),
+    listEmailBlasts({ limit: CAMPAIGN_ROW_LIMIT, ...listScope, statusFilter, source }),
+    listSmsBlasts({ limit: CAMPAIGN_ROW_LIMIT, ...listScope, statusFilter, source }),
   ]);
 
   function matchesAccount(accountKeys: string[]): boolean {
     if (!accountKey) return true;
-    if (accountKeys.length === 0) return true; // orphan — show in every subaccount view
     return accountKeys.includes(accountKey);
   }
 
@@ -177,6 +184,8 @@ function mapEmail(c: EmailBlastSummary, warmupHold?: WarmupHold) {
     accountKey: c.accountKeys[0] || undefined,
     totalRecipients: c.totalRecipients,
     failedCount: c.failedCount,
+    // A paused send keeps its status and says why here ("Paused: …").
+    error: c.error || undefined,
     channel: (isMulti ? 'multi' : 'email') as 'multi' | 'email',
   };
 }
@@ -198,6 +207,7 @@ function mapSms(c: SmsBlastSummary) {
     accountKey: c.accountKeys[0] || undefined,
     totalRecipients: c.totalRecipients,
     failedCount: c.failedCount,
+    error: c.error || undefined,
     channel: 'sms' as const,
   };
 }

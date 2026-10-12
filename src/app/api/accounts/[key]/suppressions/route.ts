@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
+import {
+  OPT_OUT_SOURCE,
+  recordEmailOptOut,
+  type EmailOptOutReason,
+} from '@/lib/sending/opt-outs';
 
 interface RouteParams {
   params: Promise<{ key: string }>;
@@ -21,12 +26,16 @@ function assertAdminScope(
 }
 
 /**
- * GET /api/accounts/[key]/suppressions?search=&reason=&limit=&offset=
+ * GET /api/accounts/[key]/suppressions?channel=&search=&reason=&limit=&offset=
  *
- * Returns the suppression list for this sub-account, optionally filtered
- * by reason (bounce|spamreport|unsubscribe|manual) or a substring search
- * on the email column. Paginated; the response includes `total` so the
- * UI can render an accurate count.
+ * Returns the suppression list for this account, optionally filtered
+ * by reason (bounce|spamreport|unsubscribe|manual|crm-optout) or a
+ * substring search on the address. Paginated; the response includes
+ * `total` so the UI can render an accurate count.
+ *
+ * `channel=sms` lists the texting opt-outs instead (SmsSuppression) — rows
+ * carry `phone` rather than `email`. Without it the list was email-only,
+ * so phone numbers brought over in an import had nowhere to be seen.
  */
 export async function GET(req: NextRequest, { params }: RouteParams) {
   const { error, session } = await requirePermission('agency.subaccounts.view');
@@ -48,6 +57,10 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     MAX_PAGE_SIZE,
   );
   const offset = Math.max(0, Number(req.nextUrl.searchParams.get('offset')) || 0);
+
+  if (req.nextUrl.searchParams.get('channel') === 'sms') {
+    return listSmsSuppressions(key, { search, reason, limit, offset });
+  }
 
   const where: {
     accountKey: string;
@@ -101,10 +114,12 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
  *
  * Body: { email: string, reason?: 'bounce' | 'spamreport' | 'unsubscribe' | 'manual' }
  *
- * Manual entries default to reason='manual' + source='manual'. Existing
- * (accountKey, email) tuples are updated rather than rejected so re-adds
- * with a stricter reason (e.g. promoting a manual entry to spamreport)
- * just refresh the row.
+ * Manual entries default to reason='manual' + source='manual', and land at
+ * this account AND every other account in its group — an opt-out added at
+ * one rooftop used to stay at that rooftop. Re-adding an address that's
+ * already listed can raise its reason (promoting a manual entry to
+ * spamreport) but never lower it: re-adding someone who unsubscribed as
+ * 'manual' used to relabel their unsubscribe as something staff may clear.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   const { error, session } = await requirePermission('agency.subaccounts.edit');
@@ -125,26 +140,76 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   if (!rawEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
     return NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 });
   }
-  if (!['bounce', 'spamreport', 'unsubscribe', 'manual'].includes(rawReason)) {
+  if (!isManualReason(rawReason)) {
     return NextResponse.json({ error: 'Invalid reason.' }, { status: 400 });
   }
 
-  const row = await prisma.emailSuppression.upsert({
-    where: { accountKey_email: { accountKey: key, email: rawEmail } },
-    create: {
-      accountKey: key,
-      email: rawEmail,
-      reason: rawReason,
-      source: 'manual',
-    },
-    update: {
-      reason: rawReason,
-      // Don't overwrite an automated 'sendgrid' source if the user adds
-      // the same email manually — the original source has more weight.
-    },
+  const recorded = await recordEmailOptOut({
+    accountKey: key,
+    email: rawEmail,
+    reason: rawReason,
+    source: OPT_OUT_SOURCE.manual,
   });
 
-  return NextResponse.json({ suppression: row }, { status: 201 });
+  const row = await prisma.emailSuppression.findUnique({
+    where: { accountKey_email: { accountKey: key, email: rawEmail } },
+  });
+
+  return NextResponse.json(
+    { suppression: row, accounts: recorded.accountKeys.length },
+    { status: 201 },
+  );
+}
+
+const MANUAL_REASONS: readonly EmailOptOutReason[] = ['bounce', 'spamreport', 'unsubscribe', 'manual'];
+
+function isManualReason(value: string): value is EmailOptOutReason {
+  return (MANUAL_REASONS as readonly string[]).includes(value);
+}
+
+async function listSmsSuppressions(
+  accountKey: string,
+  { search, reason, limit, offset }: { search: string; reason: string; limit: number; offset: number },
+): Promise<NextResponse> {
+  const where: {
+    accountKey: string;
+    reason?: string;
+    phone?: { contains: string };
+  } = { accountKey };
+  if (reason) where.reason = reason;
+  // Phones are stored E.164 ("+18015550134"), so "(801) 555" has to be
+  // searched as its digits to match anything.
+  if (search) where.phone = { contains: search.replace(/\D/g, '') || search };
+
+  const [rows, total, reasonGroups] = await Promise.all([
+    prisma.smsSuppression.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        phone: true,
+        reason: true,
+        source: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    }),
+    prisma.smsSuppression.count({ where }),
+    prisma.smsSuppression.groupBy({
+      by: ['reason'],
+      where: { accountKey },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const reasonCounts: Record<string, number> = {};
+  for (const g of reasonGroups) {
+    reasonCounts[g.reason] = g._count._all;
+  }
+
+  return NextResponse.json({ rows, total, limit, offset, reasonCounts });
 }
 
 function clamp(n: number, lo: number, hi: number): number {

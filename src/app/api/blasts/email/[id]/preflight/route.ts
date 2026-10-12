@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import {
-  checkTextPart,
-  preflightEmailBlast,
-} from '@/lib/sending/blast-preflight';
-import { getEmailBlast } from '@/lib/services/email-blasts';
+import { preflightEmailBlast } from '@/lib/sending/blast-preflight';
+import { getEmailBlast, resendSubjectToCheck } from '@/lib/services/email-blasts';
+import { canReadBlast, canUseAccount } from '@/lib/messaging/blast-access';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -30,18 +28,20 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
 
   const { id } = await params;
   const blast = await getEmailBlast(id);
-  if (!blast) {
+  // Account-scoped admins used to pass this check (only clients were held to
+  // their accounts), and so could read another account's sending setup.
+  if (!blast || !canReadBlast(session!.user, blast.accountKeys)) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
 
-  if (session!.user.role === 'client') {
-    const allowed = new Set(session!.user.accountKeys ?? []);
-    if (!blast.accountKeys.some((key) => allowed.has(key))) {
-      return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-    }
-  }
-
   const override = (req.nextUrl.searchParams.get('accountKey') || '').trim();
+  // The override names an account outright, so it is checked against the
+  // caller's scope on its own — any key used to be accepted, which exposed
+  // that account's sender, footer and domain status to anyone with the id of
+  // some blast they could see.
+  if (override && !canUseAccount(session!.user, override)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
   const accountKeys = override ? [override] : blast.accountKeys;
 
   // Nothing to check against yet — the caller hasn't picked an account and the
@@ -54,11 +54,10 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     subject: blast.subject || '',
     htmlContent: blast.htmlContent || '',
     textContent: blast.textContent,
+    previewText: blast.previewText,
+    resendSubject: resendSubjectToCheck(blast.metadata),
     accountKeys,
   });
 
-  const textIssue = checkTextPart(blast.htmlContent || '', blast.textContent);
-  const issues = textIssue ? [...result.issues, textIssue] : result.issues;
-
-  return NextResponse.json({ ok: result.ok, issues, pending: false });
+  return NextResponse.json({ ok: result.ok, issues: result.issues, pending: false });
 }

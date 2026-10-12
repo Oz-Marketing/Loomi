@@ -11,7 +11,10 @@ const resolve = vi.fn<(domain: string) => Promise<string[]>>();
 vi.mock('node:dns', () => ({
   promises: {
     resolveMx: (domain: string) => resolveMx(domain),
-    resolve: (domain: string) => resolve(domain),
+    // The implicit-MX fallback asks for both address families; one mock
+    // stands in for "does this domain have an address record".
+    resolve4: (domain: string) => resolve(domain),
+    resolve6: (domain: string) => resolve(domain),
   },
 }));
 

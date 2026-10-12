@@ -8,14 +8,19 @@ interface RouteParams {
 }
 
 /**
- * GET /api/blasts/loomi/engagement/[id]
+ * GET /api/blasts/loomi/engagement/[id]?accountKey=
  *
  * Per-campaign engagement KPIs for the sent-campaign detail drawer on
  * the campaigns list. Returns the same shape as one row from
  * /api/blasts/loomi/engagement so the drawer can render KPI cards
  * without pulling the whole account.
+ *
+ * The recipients counted are scoped exactly as that list endpoint scopes
+ * them — the requested `accountKey`, else a scoped user's own accounts, else
+ * everyone — so a blast that spans several accounts reads the same in its
+ * list row and in its drawer. Unscoped, the numbers cover the whole blast.
  */
-export async function GET(_req: NextRequest, { params }: RouteParams) {
+export async function GET(req: NextRequest, { params }: RouteParams) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
@@ -39,8 +44,19 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
     }
   }
 
+  const accountKey = req.nextUrl.searchParams.get('accountKey');
+  let recipientScope: string[] | null = null;
+  if (accountKey) {
+    if (scoped && !userAccountKeys.includes(accountKey)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    recipientScope = [accountKey];
+  } else if (scoped) {
+    recipientScope = userAccountKeys;
+  }
+
   try {
-    const row = await getCampaignEngagementById(id);
+    const row = await getCampaignEngagementById(id, recipientScope);
     return NextResponse.json({ campaign: row });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to load engagement';

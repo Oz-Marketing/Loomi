@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
-  CalendarDaysIcon,
   ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -16,12 +15,29 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import {
-  audienceSelectionFromDraft,
-  type RecipientRow,
-} from '@/lib/segments/selection';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import PrimaryButton from '@/components/primary-button';
+import { Collapse } from '@/components/ui/collapse';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
+import {
+  parseMetadataObject,
+  restoreSchedule,
+  scheduleInstantValue,
+  useScheduleStepAutosave,
+} from '@/lib/messaging/schedule-step-autosave';
+import { isAudienceConfirmed, isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
+import { submitSchedule } from '@/lib/messaging/schedule-submit';
+import {
+  accountLocalEquivalent,
+  browserTimeZone,
+  instantFromWallClock,
+  timeZoneLabel,
+  wallClockInZone,
+} from '@/lib/messaging/send-time';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -58,13 +74,6 @@ interface SmsPreflightReport {
   pending?: boolean;
 }
 
-/** Format an instant for a datetime-local input in the browser's timezone. */
-function toLocalInputValue(iso: string): string {
-  const d = new Date(iso);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
 function parseSmsMediaUrls(rawMetadata: string): string[] {
   if (!rawMetadata) return [];
   try {
@@ -80,41 +89,47 @@ function parseSmsMediaUrls(rawMetadata: string): string[] {
 
 type SendMode = 'now' | 'later';
 
-function toLocalDateTimeInputValue(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
+/** "Tue, Oct 14, 2026, 9:00 AM MDT" — with the zone, so nobody has to guess. */
 function formatDateTime(iso: string): string {
   const value = new Date(iso);
   if (Number.isNaN(value.getTime())) return iso;
-  return value.toLocaleString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return value
+    .toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    })
+    .replace(/ /g, ' ');
 }
 
 export default function SmsScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
+  const locked = draft !== null && !isEditableBlastStatus(draft.status);
 
   const [messageDraft, setMessageDraft] = useState('');
 
+  // The pickers edit a wall clock in the BROWSER's zone; it's named next to
+  // them, and the account's own zone is spelled out when it differs.
+  const browserZone = useMemo(() => browserTimeZone(), []);
   const [sendMode, setSendMode] = useState<SendMode>('later');
-  const [sendAtLocal, setSendAtLocal] = useState(
-    toLocalDateTimeInputValue(new Date(Date.now() + 30 * 60_000)),
-  );
+  const [sendAtLocal, setSendAtLocal] = useState(() => {
+    const wall = wallClockInZone(new Date(Date.now() + 30 * 60_000), browserTimeZone());
+    return `${wall.date}T${wall.time}`;
+  });
   const [submitting, setSubmitting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
-  // Compliance + deliverability report. Fetched whenever the recipient list or
+  // Compliance + deliverability report. Fetched whenever the audience or
   // send time changes, so a TCPA problem surfaces while the user is still
   // choosing a time rather than at the final click. The POST /schedule gate
   // runs the same checks and is authoritative.
@@ -122,6 +137,40 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
   // When true, recipients inside their local quiet period are HELD and go out
   // as each window opens, instead of the send being refused outright.
   const [deferQuietHours, setDeferQuietHours] = useState(false);
+
+  // Restore "When should this send?" once per blast, then autosave it so
+  // stepping back to Recipients or Message and returning keeps it.
+  const [hydratedId, setHydratedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!draft || hydratedId === draft.id) return;
+    const saved = restoreSchedule(draft.metadata, new Date(), browserZone);
+    if (saved) {
+      setSendMode(saved.mode);
+      if (saved.at) setSendAtLocal(saved.at);
+    }
+    setDeferQuietHours(parseMetadataObject(draft.metadata).deferOutsideQuietHours === true);
+    setHydratedId(draft.id);
+  }, [draft, hydratedId, browserZone]);
+
+  // The instant the pickers name — stored as such (ISO), so a colleague in
+  // another zone reopening the draft sees the same moment.
+  const sendInstant = useMemo(
+    () => instantFromWallClock(sendAtLocal.slice(0, 10), sendAtLocal.slice(11, 16), browserZone),
+    [sendAtLocal, browserZone],
+  );
+
+  const autosave = useScheduleStepAutosave({
+    endpoint: `/api/blasts/sms/${encodeURIComponent(id)}`,
+    settings: {
+      schedule: {
+        mode: sendMode,
+        at: scheduleInstantValue(sendAtLocal.slice(0, 10), sendAtLocal.slice(11, 16), browserZone),
+      },
+    },
+    // A blast that isn't a draft must not change — so nothing autosaves.
+    ready: hydratedId !== null && !locked,
+    onSaved: (metadata) => setDraft((prev) => (prev ? { ...prev, metadata } : prev)),
+  });
 
   // Keep the inline-editable message text in sync with the loaded draft.
   useEffect(() => {
@@ -148,12 +197,12 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/blasts/sms/${encodeURIComponent(id)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load campaign'))))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load blast'))))
       .then((data: { campaign?: DraftCampaign }) => {
         if (cancelled) return;
         if (!data.campaign) {
           toast.error('Blast not found');
-          router.push('/messaging/blasts');
+          router.push(subHref('/messaging/blasts'));
           return;
         }
         setDraft(data.campaign);
@@ -171,72 +220,55 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
   const accountKey = draft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // Resolved SERVER-side, over the whole contact roster.
-  //
-  // Previously this filtered `contacts` — the 5,000 most-recently-added
-  // rows — which applied the per-campaign ceiling BEFORE the segment
-  // filter rather than after it. A segment uncorrelated with recency
-  // reached only the fraction of its members that happened to be recent,
-  // with nothing in the UI indicating anyone was left out.
-  const [recipients, setRecipients] = useState<RecipientRow[]>([]);
-  const [recipientsLoading, setRecipientsLoading] = useState(true);
-  const [audienceTotal, setAudienceTotal] = useState(0);
-  const [audienceTruncated, setAudienceTruncated] = useState(false);
+  const audienceChosen = isAudienceConfirmed(draft);
 
-  const selection = useMemo(() => audienceSelectionFromDraft(draft), [draft]);
-  const selectionKey = useMemo(() => JSON.stringify(selection), [selection]);
+  // How many people this blast would reach, resolved by the same server code
+  // the schedule route runs. A count only; no phone numbers reach the page.
+  const [audienceTotal, setAudienceTotal] = useState(0);
+  const [audienceReason, setAudienceReason] = useState<string | null>(null);
+  const [audienceLoading, setAudienceLoading] = useState(true);
 
   useEffect(() => {
-    if (!draft || !accountKey || !selection) {
-      setRecipients([]);
-      setRecipientsLoading(false);
+    if (!draft?.id || locked) return;
+    if (!audienceChosen) {
+      setAudienceTotal(0);
+      setAudienceLoading(false);
       return;
     }
     let cancelled = false;
-    setRecipientsLoading(true);
-
-    fetch('/api/segments/recipients', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountKey, selection, channel: 'sms' }),
-    })
+    setAudienceLoading(true);
+    fetch(`/api/blasts/sms/${encodeURIComponent(draft.id)}/audience`, { cache: 'no-store' })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-        return data;
+        return data as { total?: number; reason?: string };
       })
       .then((data) => {
         if (cancelled) return;
-        setRecipients(Array.isArray(data.recipients) ? data.recipients : []);
         setAudienceTotal(Number(data.total) || 0);
-        setAudienceTruncated(Boolean(data.truncated));
+        setAudienceReason(typeof data.reason === 'string' && data.reason ? data.reason : null);
       })
-      .catch(() => {
+      .catch((err: Error) => {
         if (cancelled) return;
-        setRecipients([]);
         setAudienceTotal(0);
-        setAudienceTruncated(false);
+        setAudienceReason(`Couldn’t count recipients: ${err.message}`);
       })
       .finally(() => {
-        if (!cancelled) setRecipientsLoading(false);
+        if (!cancelled) setAudienceLoading(false);
       });
-
     return () => {
       cancelled = true;
     };
-    // `selectionKey` stands in for `selection` (fresh object each render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectionKey, accountKey, draft?.id]);
+  }, [draft?.id, audienceChosen, locked]);
 
   // The instant the send would actually happen, as the preflight sees it.
   const intendedSendAt = useMemo(() => {
     if (sendMode === 'now') return null;
-    const d = new Date(sendAtLocal);
-    return Number.isNaN(d.getTime()) ? null : d.toISOString();
-  }, [sendMode, sendAtLocal]);
+    return sendInstant ? sendInstant.toISOString() : null;
+  }, [sendMode, sendInstant]);
 
   useEffect(() => {
-    if (!draft?.id || recipientsLoading || recipients.length === 0) return;
+    if (!draft?.id || locked || audienceLoading || audienceTotal === 0) return;
     let canceled = false;
     (async () => {
       try {
@@ -245,8 +277,9 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            // The route resolves the draft's saved audience itself — posting
+            // the phone list would put a size limit on the audience.
             body: JSON.stringify({
-              recipients,
               scheduledFor: intendedSendAt,
               deferOutsideQuietHours: deferQuietHours,
             }),
@@ -262,96 +295,96 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     return () => {
       canceled = true;
     };
-  }, [draft?.id, recipients, recipientsLoading, intendedSendAt, deferQuietHours]);
+  }, [draft?.id, locked, audienceTotal, audienceLoading, intendedSendAt, deferQuietHours]);
 
   /**
    * Persist the deferral choice onto the blast, then re-run the gate.
    *
    * The flag has to live on the campaign rather than in component state: the
    * POST /schedule gate reads it from metadata, and the worker holds recipients
-   * based on the same record long after this page is closed.
+   * based on the same record long after this page is closed. Sent as a merge,
+   * so it can't overwrite metadata other steps keep.
    */
   async function enableQuietHoursDeferral() {
     if (!draft) return;
     setDeferQuietHours(true);
     try {
-      const existing = draft.metadata ? JSON.parse(draft.metadata) : {};
-      const metadata = JSON.stringify({
-        ...existing,
-        deferOutsideQuietHours: true,
-      });
       const res = await fetch(`/api/blasts/sms/${encodeURIComponent(draft.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ metadata }),
+        body: JSON.stringify({ metadataPatch: { deferOutsideQuietHours: true } }),
       });
-      if (res.ok) setDraft((prev) => (prev ? { ...prev, metadata } : prev));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Save failed');
+      if (typeof data?.campaign?.metadata === 'string') {
+        const metadata = data.campaign.metadata as string;
+        setDraft((prev) => (prev ? { ...prev, metadata } : prev));
+      }
     } catch {
+      setDeferQuietHours(false);
       toast.error('Could not save the send-window preference.');
     }
   }
 
   async function handleSchedule() {
     if (!draft) return;
-    if (recipients.length === 0) {
-      toast.error('No recipients with valid phone numbers.');
+    if (!audienceChosen) {
+      toast.error('Choose who should receive this blast on the Recipients step first.');
       return;
     }
-    if (audienceTruncated) {
-      toast.error(
-        `This audience has ${audienceTotal.toLocaleString()} contacts, over the ${recipients.length.toLocaleString()} per-campaign limit. Narrow the segment and try again.`,
-      );
+    if (audienceTotal === 0) {
+      toast.error(audienceReason || 'No recipients with valid phone numbers.');
       return;
     }
-
     let scheduledFor: string | null = null;
     if (sendMode === 'later') {
-      const date = new Date(sendAtLocal);
-      if (Number.isNaN(date.getTime())) {
+      if (!sendInstant) {
         toast.error('Pick a valid send date and time.');
         return;
       }
-      if (date.getTime() <= Date.now() + 30_000) {
+      if (sendInstant.getTime() <= Date.now() + 30_000) {
         toast.error('Send time must be in the future.');
         return;
       }
-      scheduledFor = date.toISOString();
+      scheduledFor = sendInstant.toISOString();
     }
 
     setSubmitting(true);
     try {
-      const res = await fetch(
-        `/api/blasts/sms/${encodeURIComponent(draft.id)}/schedule`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recipients, scheduledFor }),
-        },
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      await autosave.flush().catch(() => undefined);
+      // No recipient list: the route resolves the audience the draft saved,
+      // so an audience of any size never has to round-trip the browser. A
+      // gateway timeout is checked against the blast rather than reported.
+      const outcome = await submitSchedule({
+        scheduleUrl: `/api/blasts/sms/${encodeURIComponent(draft.id)}/schedule`,
+        blastUrl: `/api/blasts/sms/${encodeURIComponent(draft.id)}`,
+        body: { scheduledFor },
+        onWaiting: () => setConfirming(true),
+      });
+      if (!outcome.ok) {
         // The gate returns 422 with the full issue list — refresh the panel so
         // every blocker is visible, not just the summary in the toast.
-        if (res.status === 422 && Array.isArray(data?.issues)) {
+        if (outcome.status === 422 && Array.isArray(outcome.data?.issues)) {
           setPreflight({
             ok: false,
-            issues: data.issues,
-            suggestedSendAt: data.suggestedSendAt ?? null,
-            heldByQuietHours: data.heldByQuietHours ?? 0,
+            issues: outcome.data.issues as SmsPreflightIssue[],
+            suggestedSendAt: (outcome.data.suggestedSendAt as string | null | undefined) ?? null,
+            heldByQuietHours: Number(outcome.data.heldByQuietHours) || 0,
           });
         }
-        throw new Error(data?.error || 'Failed to schedule campaign');
+        throw new Error(outcome.error);
       }
       toast.success(
         sendMode === 'now'
           ? 'Blast queued — sending starts within ~1 minute.'
           : `Blast scheduled for ${formatDateTime(scheduledFor!)}`,
       );
-      router.push('/messaging/blasts');
+      router.push(subHref('/messaging/blasts'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to schedule campaign');
+      toast.error(err instanceof Error ? err.message : 'Failed to schedule blast');
     } finally {
       setSubmitting(false);
+      setConfirming(false);
     }
   }
 
@@ -367,13 +400,21 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
   }
 
+  if (draft && locked) {
+    return <BlastLockedNotice status={draft.status} name={draft.name} />;
+  }
+
   const smsMediaUrls = draft ? parseSmsMediaUrls(draft.metadata || '') : [];
+  const zoneLabel = timeZoneLabel(browserZone, sendInstant ?? new Date());
+  const accountEquivalent = sendInstant
+    ? accountLocalEquivalent(sendInstant, account?.timezone, browserZone)
+    : null;
 
   return (
     <div className="pb-32">
@@ -382,7 +423,9 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Schedule
           </p>
-          <h1 className="text-2xl font-bold">{draft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="sms" variant="title" initialName={draft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             Review the message and choose when this blast should send.
           </p>
@@ -414,26 +457,49 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                 />
               </div>
 
-              {sendMode === 'later' && (
+              <Collapse open={sendMode === 'later'} mountClosed={false} clip={false}>
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">
-                  <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
-                    Send Date &amp; Time
-                  </label>
-                  <div className="relative">
-                    <CalendarDaysIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-                    <input
-                      type="datetime-local"
-                      value={sendAtLocal}
-                      min={toLocalDateTimeInputValue(new Date())}
-                      onChange={(e) => setSendAtLocal(e.target.value)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Date
+                      </label>
+                      <DatePicker
+                        value={sendAtLocal.slice(0, 10) || null}
+                        onChange={(v) =>
+                          setSendAtLocal(v ? `${v}T${sendAtLocal.slice(11, 16) || '09:00'}` : '')
+                        }
+                        minDate={wallClockInZone(new Date(), browserZone).date}
+                        placeholder="Select date"
+                        className="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Time{' '}
+                        <span className="normal-case tracking-normal font-normal">({zoneLabel})</span>
+                      </label>
+                      <TimePicker
+                        value={sendAtLocal.slice(11, 16) || null}
+                        onChange={(t) =>
+                          setSendAtLocal(
+                            `${sendAtLocal.slice(0, 10) || wallClockInZone(new Date(), browserZone).date}T${t}`,
+                          )
+                        }
+                        className="w-full inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
+                    </div>
                   </div>
                   <p className="text-[11px] text-[var(--muted-foreground)] mt-2">
-                    Will send {sendAtLocal ? formatDateTime(new Date(sendAtLocal).toISOString()) : '—'}
+                    {sendInstant ? `Will send ${formatDateTime(sendInstant.toISOString())}.` : 'Pick a date and time.'}
+                    {accountEquivalent && (
+                      <span className="text-[var(--foreground)]">
+                        {' '}That’s {accountEquivalent} for this account.
+                      </span>
+                    )}
                   </p>
                 </div>
-              )}
+              </Collapse>
             </div>
 
             <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
@@ -453,22 +519,25 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                       </p>
                       <button
                         type="button"
-                        onClick={() => router.push(`/messaging/blasts/sms/${encodeURIComponent(id)}/recipients`)}
+                        onClick={() => router.push(subHref(`/messaging/blasts/sms/${encodeURIComponent(id)}/recipients`))}
                         className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
                       >
                         <PencilSquareIcon className="w-3 h-3" />
-                        Change
+                        {audienceChosen ? 'Change' : 'Choose'}
                       </button>
                     </div>
                     <p className="text-2xl font-bold tabular-nums mt-0.5">
-                      {recipientsLoading ? (
+                      {!audienceChosen ? (
+                        <span className="text-sm font-normal text-[var(--muted-foreground)]">No recipients chosen yet</span>
+                      ) : audienceLoading ? (
                         <ArrowPathIcon className="w-5 h-5 inline animate-spin text-[var(--muted-foreground)]" />
-                      ) : audienceTruncated ? (
-                        audienceTotal.toLocaleString()
                       ) : (
-                        recipients.length.toLocaleString()
+                        audienceTotal.toLocaleString()
                       )}
                     </p>
+                    {audienceChosen && !audienceLoading && audienceTotal === 0 && audienceReason && (
+                      <p className="text-[11px] text-amber-400 mt-0.5 animate-fade-in-up">{audienceReason}</p>
+                    )}
                   </div>
                 </div>
 
@@ -504,7 +573,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                     )}
                   </p>
                   <p className="text-xs text-[var(--muted-foreground)]">
-                    Routes through this subaccount&apos;s Twilio connection.
+                    Routes through this account&apos;s Twilio connection.
                   </p>
                 </div>
               </div>
@@ -521,12 +590,16 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
               <ul className="space-y-2 text-sm">
                 <ChecklistItem ok={Boolean(draft?.message?.trim())} label="Message text is written" />
                 <ChecklistItem
-                  ok={recipients.length > 0}
-                  label={`${recipients.length.toLocaleString()} sendable recipient${recipients.length === 1 ? '' : 's'}`}
+                  ok={audienceChosen && audienceTotal > 0}
+                  label={
+                    audienceChosen
+                      ? `${audienceTotal.toLocaleString()} sendable recipient${audienceTotal === 1 ? '' : 's'}`
+                      : 'Recipients chosen'
+                  }
                 />
                 <ChecklistItem
                   ok={Boolean(account)}
-                  label="Subaccount selected (SMS routes through its Twilio connection)"
+                  label="Account selected (SMS routes through its Twilio connection)"
                 />
               </ul>
             </div>
@@ -553,7 +626,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
       {/* Compliance + deliverability report */}
       {(smsBlockers.length > 0 || smsWarnings.length > 0) && (
-        <div className="max-w-5xl mx-auto px-6 pb-4">
+        <div className="max-w-5xl mx-auto px-6 pb-4 animate-fade-in-up">
           <div
             className={`rounded-2xl border p-5 ${
               smsPreflightBlocked
@@ -570,7 +643,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-[var(--foreground)]">
                   {smsPreflightBlocked
-                    ? 'This blast can\u2019t send yet'
+                    ? 'This blast can’t send yet'
                     : 'Worth checking before you send'}
                 </h3>
                 <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
@@ -578,7 +651,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                       as a non-sequitur when the actual blocker was a missing
                       Twilio credential. */}
                   {!smsPreflightBlocked
-                    ? 'These won\u2019t stop the send, but they affect cost or deliverability.'
+                    ? 'These won’t stop the send, but they affect cost or deliverability.'
                     : quietHoursBlocking
                       ? 'Texting outside the legal window carries statutory damages per message, so this has to be resolved first.'
                       : 'Each item below would stop this blast from reaching anyone, or get the sending number filtered by carriers.'}
@@ -608,7 +681,8 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                         type="button"
                         onClick={() => {
                           setSendMode('later');
-                          setSendAtLocal(toLocalInputValue(preflight.suggestedSendAt!));
+                          const wall = wallClockInZone(new Date(preflight.suggestedSendAt!), browserZone);
+                          setSendAtLocal(`${wall.date}T${wall.time}`);
                         }}
                         className="inline-flex items-center gap-1.5 px-3 h-9 text-xs font-medium rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
                       >
@@ -636,34 +710,40 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => router.push(`/messaging/blasts/sms/${encodeURIComponent(id)}/message`)}
+            onClick={() => router.push(subHref(`/messaging/blasts/sms/${encodeURIComponent(id)}/message`))}
             className="inline-flex items-center gap-1.5 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back
           </button>
-          <PrimaryButton
-            onClick={handleSchedule}
-            disabled={
-              submitting ||
-              recipientsLoading ||
-              // Never send an arbitrary prefix of an over-limit audience.
-              audienceTruncated ||
-              recipients.length === 0 ||
-              !draft?.message?.trim() ||
-              // Compliance gate. The server enforces this too; disabling the
-              // button just avoids telling the user "no" only after they've
-              // committed to a send time.
-              smsPreflightBlocked
-            }
-          >
-            <PaperAirplaneIcon className="w-4 h-4" />
-            {submitting
-              ? 'Scheduling…'
-              : sendMode === 'now'
-                ? 'Send now'
-                : 'Schedule send'}
-          </PrimaryButton>
+          <div className="flex items-center gap-4 min-w-0">
+            {confirming && (
+              <p className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">
+                Still working — checking whether the schedule went through…
+              </p>
+            )}
+            <PrimaryButton
+              onClick={handleSchedule}
+              disabled={
+                submitting ||
+                audienceLoading ||
+                !audienceChosen ||
+                audienceTotal === 0 ||
+                !draft?.message?.trim() ||
+                // Compliance gate. The server enforces this too; disabling the
+                // button just avoids telling the user "no" only after they've
+                // committed to a send time.
+                smsPreflightBlocked
+              }
+            >
+              <PaperAirplaneIcon className="w-4 h-4" />
+              {submitting
+                ? 'Scheduling…'
+                : sendMode === 'now'
+                  ? 'Send now'
+                  : 'Schedule send'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>
@@ -715,7 +795,7 @@ function ChecklistItem({ ok, label }: { ok: boolean; label: string }) {
   return (
     <li className="flex items-start gap-2.5">
       <CheckCircleIcon
-        className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+        className={`w-4 h-4 mt-0.5 flex-shrink-0 transition-colors ${
           ok ? 'text-emerald-300' : 'text-[var(--muted-foreground)] opacity-40'
         }`}
       />

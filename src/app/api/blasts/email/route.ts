@@ -1,46 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import { recordCapabilityUse } from '@/lib/permissions/audit';
 import {
-  createEmailBlast,
   listEmailBlasts,
-  processEmailBlast,
   type BlastStatusFilter,
-  type EmailRecipientInput,
 } from '@/lib/services/email-blasts';
+import { confinedAccountKeys } from '@/lib/messaging/blast-access';
+
+// There is deliberately no POST here. It used to create a blast from a
+// recipient list in the request body and send it inside the request — no
+// preflight (sender, CAN-SPAM footer, audience quality), no worker, a
+// browser-supplied audience, and a scheduled send that skipped the
+// `blast.send` check entirely. Nothing in the app called it. Every blast now
+// goes draft → Recipients → Message → Schedule, through
+// POST /api/blasts/{email,sms,multi}/[id]/schedule. Removed 2026-10-12.
 
 function parseCampaignStatusFilter(
   value: string | null,
 ): BlastStatusFilter | undefined {
   if (value === 'all' || value === 'archived') return value;
   return undefined;
-}
-
-function parseDate(value: unknown): Date | null {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date;
-}
-
-function normalizeRecipients(raw: unknown): EmailRecipientInput[] {
-  if (!Array.isArray(raw)) return [];
-  const recipients: EmailRecipientInput[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-    const row = item as Record<string, unknown>;
-    const contactId = String(row.contactId || '').trim();
-    const accountKey = String(row.accountKey || '').trim();
-    if (!contactId || !accountKey) continue;
-
-    recipients.push({
-      contactId,
-      accountKey,
-      email: String(row.email || '').trim(),
-      fullName: String(row.fullName || '').trim(),
-    });
-  }
-  return recipients;
 }
 
 /**
@@ -57,102 +35,19 @@ export async function GET(req: NextRequest) {
   const statusFilter = parseCampaignStatusFilter(
     req.nextUrl.searchParams.get('status'),
   );
-  const accountKeys = session!.user.role === 'client'
-    ? (session!.user.accountKeys ?? [])
-    : undefined;
+  // Clients AND account-scoped admins see only their accounts' blasts. Only
+  // clients used to be filtered, so a scoped admin listed every account's.
+  const confined = confinedAccountKeys(session!.user);
+  // listEmailBlasts reads an empty list as "no filter" — everything. A
+  // confined user with no accounts must get nothing instead.
+  if (confined !== null && confined.length === 0) {
+    return NextResponse.json({ campaigns: [] });
+  }
 
-  const campaigns = await listEmailBlasts({ limit, accountKeys, statusFilter });
+  const campaigns = await listEmailBlasts({
+    limit,
+    accountKeys: confined ?? undefined,
+    statusFilter,
+  });
   return NextResponse.json({ campaigns });
-}
-
-/**
- * POST /api/blasts/email
- *
- * Creates a bulk email campaign and optionally processes it immediately.
- */
-export async function POST(req: NextRequest) {
-  // Staff only. The old guard admitted `client`, so a dealer-role user could
-  // email a contact list — closed deliberately, see "Deliberate narrowings" in
-  // docs/permissions-architecture.md. The `blast.send` capability narrows the
-  // send itself further still; that check is below, since it only applies when
-  // the request actually sends.
-  const { session, error } = await requirePermission('studio.email.edit');
-  if (error) return error;
-
-  const body = await req.json().catch(() => ({}));
-  const subject = typeof body?.subject === 'string' ? body.subject : '';
-  const previewText = typeof body?.previewText === 'string' ? body.previewText : '';
-  const htmlContent = typeof body?.htmlContent === 'string' ? body.htmlContent : '';
-  const textContent = typeof body?.textContent === 'string' ? body.textContent : '';
-  const sourceType = typeof body?.sourceType === 'string' ? body.sourceType : '';
-  const scheduledForRaw = body?.scheduledFor;
-  const scheduledFor = parseDate(scheduledForRaw);
-  const recipients = normalizeRecipients(body?.recipients);
-  const processNow = typeof body?.processNow === 'boolean'
-    ? body.processNow
-    : !(scheduledFor && scheduledFor.getTime() > Date.now());
-
-  if (!subject.trim()) {
-    return NextResponse.json({ error: 'subject is required' }, { status: 400 });
-  }
-  if (!htmlContent.trim()) {
-    return NextResponse.json({ error: 'htmlContent is required' }, { status: 400 });
-  }
-  if (recipients.length === 0) {
-    return NextResponse.json({ error: 'At least one recipient is required' }, { status: 400 });
-  }
-  if (recipients.length > 1000) {
-    return NextResponse.json({ error: 'Recipient limit is 1000 per email send' }, { status: 400 });
-  }
-
-  // (A `client`-role recipient-scoping branch used to sit here. It became
-  // unreachable when the guard above closed this route to clients.)
-
-  // Creating a draft is Studio work; putting it on the wire is not. Checked
-  // here rather than in the guard above because it depends on the body — a
-  // campaign saved for later needs no send capability at all.
-  if (processNow) {
-    const { error: sendError } = await requirePermission('blast.send');
-    if (sendError) return sendError;
-  }
-
-  try {
-    const created = await createEmailBlast({
-      name: typeof body?.name === 'string' ? body.name : '',
-      subject,
-      previewText,
-      htmlContent,
-      textContent,
-      sourceType,
-      recipients,
-      scheduledFor: scheduledFor?.toISOString() || null,
-      createdByUserId: session!.user.id,
-      createdByRole: session!.user.role,
-      sourceAudienceId: typeof body?.audienceId === 'string' ? body.audienceId : null,
-      sourceFilter: typeof body?.sourceFilter === 'string' ? body.sourceFilter : null,
-      metadata: typeof body?.metadata === 'string' ? body.metadata : null,
-    });
-
-    if (!processNow) {
-      return NextResponse.json({ campaign: created, processed: false }, { status: 201 });
-    }
-
-    const processed = await processEmailBlast(created.id, { concurrency: 3 });
-    recordCapabilityUse(
-      { id: session!.user.id, email: session!.user.email },
-      'blast.send',
-      `Sent email blast ${created.id} ("${subject}") to ${recipients.length} recipient(s)`,
-      recipients[0]?.accountKey ?? null,
-    );
-    return NextResponse.json({ campaign: processed, processed: true }, { status: 201 });
-  } catch (err) {
-    const messageText = err instanceof Error ? err.message : 'Failed to create email campaign';
-    const normalized = messageText.toLowerCase();
-    const status = normalized.includes('required') || normalized.includes('invalid')
-      ? 400
-      : normalized.includes('configured')
-        ? 500
-        : 500;
-    return NextResponse.json({ error: messageText }, { status });
-  }
 }

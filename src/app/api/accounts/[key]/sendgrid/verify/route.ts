@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { decryptToken } from '@/lib/crypto/encryption';
-import { verifySendGridKey, checkSendGridDomain } from '@/lib/sending/sendgrid';
+import { verifySendGridKey } from '@/lib/sending/sendgrid';
+import { checkSenderDomainAuth, type DomainAuthResult } from '@/lib/sending/domain-auth';
 
 interface RouteParams {
   params: Promise<{ key: string }>;
@@ -12,7 +13,7 @@ interface RouteParams {
 /**
  * POST /api/accounts/[key]/sendgrid/verify
  *
- * Body: { apiKey?: string }
+ * Body: { apiKey?: string, senderEmail?: string, fromDomain?: string }
  *
  * Two modes:
  * - If apiKey is provided, verify that key without persisting it. Use
@@ -21,8 +22,12 @@ interface RouteParams {
  * - If apiKey is omitted, verify the currently-stored key. Use case:
  *   "is my saved config still working?" check.
  *
- * Also reports domain auth status when sendgridFromDomain is set on the
- * account (or when fromDomain is passed in the body alongside apiKey).
+ * Also reports whether the domain blasts are sent FROM is authenticated in
+ * SendGrid — the same check (lib/sending/domain-auth.ts) the send preflight
+ * runs, so this screen and the Schedule step can never disagree. A fresh
+ * answer here also refreshes the one preflight uses. The From address is
+ * `senderEmail` from the body, else the account's saved From address; with
+ * neither, the recorded sending domain is checked as if mail came from it.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   const { error, session } = await requirePermission('integrations.credentials.manage');
@@ -36,18 +41,17 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const bodyKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
   const bodyDomain = typeof body.fromDomain === 'string' ? body.fromDomain.trim() : '';
+  const bodySender = typeof body.senderEmail === 'string' ? body.senderEmail.trim() : '';
+
+  const row = await prisma.account.findUnique({
+    where: { key },
+    select: { sendgridApiKey: true, sendgridFromDomain: true, senderEmail: true },
+  });
 
   let plaintextKey: string | null = null;
-  let domain: string | null = null;
-
   if (bodyKey) {
     plaintextKey = bodyKey;
-    domain = bodyDomain || null;
   } else {
-    const row = await prisma.account.findUnique({
-      where: { key },
-      select: { sendgridApiKey: true, sendgridFromDomain: true },
-    });
     if (!row?.sendgridApiKey) {
       return NextResponse.json(
         { ok: false, error: 'No SendGrid API key configured for this account.' },
@@ -62,7 +66,6 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         { status: 500 },
       );
     }
-    domain = row.sendgridFromDomain || null;
   }
 
   if (!plaintextKey) {
@@ -72,15 +75,28 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     );
   }
   const verify = await verifySendGridKey(plaintextKey);
-  let domainStatus = null;
-  if (verify.ok && domain) {
-    domainStatus = await checkSendGridDomain(plaintextKey, domain);
+
+  const fallbackDomain = (bodyDomain || row?.sendgridFromDomain || '').replace(/^@+/, '');
+  const fromEmail = bodySender || row?.senderEmail || (fallbackDomain ? `postmaster@${fallbackDomain}` : '');
+  let domainAuth: DomainAuthResult | null = null;
+  if (verify.ok && fromEmail) {
+    domainAuth = await checkSenderDomainAuth({ apiKey: plaintextKey, fromEmail, fresh: true });
   }
 
   return NextResponse.json({
     ok: verify.ok,
     error: verify.error,
     scopes: verify.scopes,
-    domain: domainStatus,
+    // `domain` keeps the shape the Sending Config tab already renders.
+    domain: domainAuth
+      ? {
+          domain: domainAuth.fromDomain,
+          valid: domainAuth.status === 'authenticated',
+          status: domainAuth.status,
+          detail: domainAuth.detail,
+          authenticatedDomain: domainAuth.authenticatedDomain,
+        }
+      : null,
+    domainAuth,
   });
 }

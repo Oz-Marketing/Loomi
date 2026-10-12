@@ -87,7 +87,14 @@ export interface CombinedTotals {
   deliveryRate: number;
 }
 
-const safe = (num: number, den: number): number => (den > 0 ? num / den : 0);
+/**
+ * A rate, clamped to 0–100%. Clamped HERE, at the source, rather than only by
+ * whichever route projects it: counts are aggregated from events that can
+ * arrive late or twice (a click whose open was blocked, a delivery confirmed
+ * after a bounce), and no surface should ever print 104%.
+ */
+const safe = (num: number, den: number): number =>
+  den > 0 ? Math.min(1, Math.max(0, num / den)) : 0;
 
 export const EMPTY_EMAIL_COUNTS: EmailCounts = {
   campaigns: 0,

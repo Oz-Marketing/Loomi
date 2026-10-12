@@ -227,3 +227,20 @@ export async function getAncestorAccountKeysForAll(keys: string[]): Promise<stri
 export async function getRelatedAccountKeys(accountKey: string): Promise<string[]> {
   return relatedKeys(await hierarchyEdges(), accountKey);
 }
+
+/**
+ * For each key, the key itself plus every account grouped with it — the set
+ * whose suppressions apply to it. ONE hierarchy query for the whole batch.
+ *
+ * The send path checks opt-outs against this whole set rather than relying on
+ * every writer having cascaded its row to every sibling: a writer that didn't,
+ * or an account that joined the group after the opt-out was recorded, would
+ * otherwise mail someone the group already promised not to.
+ */
+export async function getSuppressionScopes(keys: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (keys.length === 0) return out;
+  const edges = await hierarchyEdges();
+  for (const key of new Set(keys)) out.set(key, [key, ...relatedKeys(edges, key)]);
+  return out;
+}

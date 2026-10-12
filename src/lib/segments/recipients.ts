@@ -5,20 +5,18 @@
 // 5,000 most-recently-added contacts. The segment filter was then applied
 // to THAT slice.
 //
-// The ordering is the bug. There is a deliberate 5,000-recipient ceiling
-// per campaign (see the schedule routes), so a large audience being
-// capped is by design — but the cap was landing BEFORE the filter instead
-// of after it. For any segment that doesn't correlate with recency —
+// The ordering was the bug. There was then a deliberate 5,000-recipient
+// ceiling per campaign (removed 2026-10-12), and the cap was landing BEFORE
+// the filter instead of after it. For any segment that doesn't correlate with recency —
 // "purchased more than 2 years ago", "lapsed service", "lease ending" —
 // the campaign reached only those members who happened to fall inside the
 // newest 5,000 rows. That can be a small and essentially arbitrary
 // fraction of the real segment, and nothing in the UI said so: the
 // campaign reported sending to its full (truncated) list.
 //
-// Resolving here fixes the ordering — filter the whole roster, then apply
-// the ceiling — and, when the audience genuinely exceeds the ceiling,
-// reports it so the caller can refuse rather than quietly send to a
-// subset.
+// Resolving here filters the whole roster. `limit` remains for callers that
+// want a sample, and `truncated` says when one was taken, so nothing quietly
+// sends to a subset.
 
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
@@ -30,6 +28,11 @@ import {
 import type { Contact as ApiContact } from '@/lib/contacts/types';
 import type { FieldDefinition } from '@/lib/smart-list-types';
 import { collectSegmentContactIds } from './resolve';
+import {
+  loadEmailSuppressions,
+  loadSmsSuppressions,
+  phoneMatchKey,
+} from '@/lib/sending/suppression-lookup';
 import type { AudienceSelection, RecipientRow } from './selection';
 
 export type { AudienceSelection, RecipientRow };
@@ -73,24 +76,12 @@ export async function resolveRecipients(
   // Nothing matched — return early rather than issuing an `IN ()` query.
   if (ids.length === 0) return { recipients: [], total: 0, truncated: false };
 
-  // Suppressed addresses are dropped from the COUNT, not just from the send.
-  // The sender already skips them, so including them here only ever produced a
-  // number larger than what would go out — and on an account with thousands of
-  // opt-outs that gap is the difference between a plausible audience and a
-  // fictional one. Loaded once for the whole account rather than per chunk.
-  const suppressed =
-    opts.channel === 'sms'
-      ? new Set<string>()
-      : new Set(
-          (
-            await prisma.emailSuppression.findMany({
-              where: { accountKey },
-              select: { email: true },
-            })
-          ).map((s) => s.email.trim().toLowerCase()),
-        );
-
-  const deliverable: RecipientRow[] = [];
+  // Everything the SENDER drops is dropped here too, so the number someone
+  // schedules against is the number that goes out: undeliverable addresses,
+  // the contact's own do-not-contact flag, opt-outs (group-wide, case- and
+  // format-insensitive — the sender's own lookup), and a second contact
+  // sharing an address or handset, which gets one message, not two.
+  const candidates: RecipientRow[] = [];
   // Chunked so a large audience doesn't build one enormous IN clause.
   const CHUNK = 1000;
   for (let i = 0; i < ids.length; i += CHUNK) {
@@ -101,14 +92,40 @@ export async function resolveRecipients(
     for (const row of rows) {
       const contact = serializeContact(row);
       if (!isDeliverable(contact, opts.channel)) continue;
-      if (suppressed.has(contact.email.trim().toLowerCase())) continue;
-      deliverable.push({
+      if (opts.channel === 'email' && contact.dndEmail) continue;
+      if (opts.channel === 'sms' && contact.dndSms) continue;
+      candidates.push({
         contactId: contact.id,
         accountKey,
         email: contact.email.trim(),
         fullName: contact.fullName.trim(),
         phone: normalizePhoneNumber(contact.phone),
       });
+    }
+  }
+
+  const deliverable: RecipientRow[] = [];
+  if (opts.channel === 'sms') {
+    const isSuppressed = await loadSmsSuppressions(candidates);
+    const seen = new Set<string>();
+    for (const row of candidates) {
+      if (isSuppressed(row.accountKey, row.phone)) continue;
+      const key = phoneMatchKey(row.phone);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deliverable.push(row);
+    }
+  } else {
+    const isSuppressed = await loadEmailSuppressions(candidates);
+    const seen = new Set<string>();
+    for (const row of candidates) {
+      const email = row.email.toLowerCase();
+      if (email && isSuppressed(row.accountKey, email)) continue;
+      if (opts.channel === 'email') {
+        if (seen.has(email)) continue;
+        seen.add(email);
+      }
+      deliverable.push(row);
     }
   }
 

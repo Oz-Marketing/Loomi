@@ -166,6 +166,84 @@ export function resolveFooterConfig(
   };
 }
 
+// ── Legibility ─────────────────────────────────────────────────────────
+//
+// resolveFooterConfig() only checks that a color is well-formed hex, so a
+// footer could be configured with its text color equal to its background —
+// a valid config that renders the postal address and the unsubscribe link
+// invisible, which is a CAN-SPAM problem wearing a style setting. The colors
+// are therefore checked against the background at RENDER time: below the
+// minimum contrast the default colors are used instead, and preflight warns
+// (footerContrastProblems) so the account can fix the setting.
+
+/** WCAG's floor for large or bold text; footer copy must clear at least this. */
+export const MIN_FOOTER_CONTRAST = 3;
+
+/** A transparent footer sits on the template, which is assumed light. */
+const ASSUMED_BACKGROUND = '#ffffff';
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const value = hex.trim().replace(/^#/, '');
+  const full = value.length === 3 ? value.split('').map((c) => c + c).join('') : value;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null;
+  return [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16)) as [number, number, number];
+}
+
+function relativeLuminance([r, g, b]: [number, number, number]): number {
+  const channel = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/** WCAG contrast ratio between two hex colors (1–21); null when unreadable. */
+export function contrastRatio(foreground: string, background: string): number | null {
+  const fg = hexToRgb(foreground);
+  const bg = hexToRgb(background);
+  if (!fg || !bg) return null;
+  const a = relativeLuminance(fg);
+  const b = relativeLuminance(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function legibleColor(color: string, fallback: string, background: string): string {
+  if ((contrastRatio(color, background) ?? 0) >= MIN_FOOTER_CONTRAST) return color;
+  if ((contrastRatio(fallback, background) ?? 0) >= MIN_FOOTER_CONTRAST) return fallback;
+  // Even the default disappears on this background: pick whichever of black
+  // and white reads.
+  return (contrastRatio('#000000', background) ?? 0) >= (contrastRatio('#ffffff', background) ?? 0)
+    ? '#000000'
+    : '#ffffff';
+}
+
+export interface FooterContrastProblem {
+  field: 'textColor' | 'linkColor';
+  color: string;
+  background: string;
+  ratio: number;
+}
+
+/**
+ * The footer colors that are too close to their background to read. Empty
+ * when the config is legible. Takes a stored (partial) config or a resolved
+ * one.
+ */
+export function footerContrastProblems(
+  stored?: Partial<UnsubscribeFooterConfig> | null,
+): FooterContrastProblem[] {
+  const cfg = resolveFooterConfig(stored);
+  const background = cfg.backgroundColor ?? ASSUMED_BACKGROUND;
+  const problems: FooterContrastProblem[] = [];
+  for (const field of ['textColor', 'linkColor'] as const) {
+    const ratio = contrastRatio(cfg[field], background);
+    if (ratio !== null && ratio < MIN_FOOTER_CONTRAST) {
+      problems.push({ field, color: cfg[field], background, ratio: Math.round(ratio * 100) / 100 });
+    }
+  }
+  return problems;
+}
+
 function formatAddressLine(input: UnsubscribeFooterInput): string {
   const lineCity = [input.city, input.state].filter(Boolean).join(', ');
   return [input.address, lineCity, input.postalCode].filter(Boolean).join(' · ');
@@ -179,6 +257,12 @@ export interface BuildUnsubscribeFooterOptions {
    * to true.
    */
   includeUnsubscribeLink?: boolean;
+  /**
+   * The same decision for the text/plain part, which can differ: a designer
+   * who placed an unsubscribe button in the HTML has not necessarily put the
+   * URL in the text part. Defaults to `includeUnsubscribeLink`.
+   */
+  includeTextUnsubscribeLink?: boolean;
   /**
    * Per-account styling. Omit for the default appearance; a partial is
    * merged over the defaults and validated by resolveFooterConfig().
@@ -197,7 +281,11 @@ export function buildUnsubscribeFooter(
   options: BuildUnsubscribeFooterOptions = {},
 ): UnsubscribeFooter {
   const includeLink = options.includeUnsubscribeLink !== false;
+  const includeTextLink = options.includeTextUnsubscribeLink ?? includeLink;
   const cfg = resolveFooterConfig(options.config);
+  const background = cfg.backgroundColor ?? ASSUMED_BACKGROUND;
+  const textColor = legibleColor(cfg.textColor, DEFAULT_FOOTER_CONFIG.textColor, background);
+  const linkColor = legibleColor(cfg.linkColor, DEFAULT_FOOTER_CONFIG.linkColor, background);
   const dealer = input.dealer || 'This sender';
   const dealerSafe = escapeHtml(dealer);
   const address = formatAddressLine(input);
@@ -224,7 +312,7 @@ export function buildUnsubscribeFooter(
     `font-family:${cfg.fontFamily}`,
     `font-size:${cfg.fontSizePx}px`,
     'line-height:1.6',
-    `color:${cfg.textColor}`,
+    `color:${textColor}`,
     `text-align:${cfg.align}`,
     `padding:0 ${cfg.paddingXPx}px`,
   ].join(';');
@@ -244,7 +332,7 @@ export function buildUnsubscribeFooter(
     // hosted page of our own); promising one in the footer is worse than
     // not having it.
     includeLink
-      ? `<p style="margin:0;"><a href="${UNSUBSCRIBE_TOKEN}" style="color:${cfg.linkColor};text-decoration:underline;">${labelSafe}</a></p>`
+      ? `<p style="margin:0;"><a href="${UNSUBSCRIBE_TOKEN}" style="color:${linkColor};text-decoration:underline;">${labelSafe}</a></p>`
       : '',
     '</td></tr></table>',
   ].filter(Boolean).join('');
@@ -252,7 +340,7 @@ export function buildUnsubscribeFooter(
   const text = [
     optInText,
     address || '',
-    includeLink ? `${cfg.unsubscribeLabel}: ${UNSUBSCRIBE_TOKEN}` : '',
+    includeTextLink ? `${cfg.unsubscribeLabel}: ${UNSUBSCRIBE_TOKEN}` : '',
   ].filter(Boolean).join('\n');
 
   return { html, text };
@@ -269,6 +357,13 @@ export function buildUnsubscribeFooter(
  *
  * The HTML footer goes inside </body> when there is one, so it lands within
  * the document rather than after it.
+ *
+ * The two parts are decided SEPARATELY. A designer's {{unsubscribe_link}}
+ * button lives in the HTML; whether the text part carries the URL depends on
+ * how that part was made. Deciding both from "either part has the token"
+ * used to leave a text part with no unsubscribe URL at all whenever the
+ * designer placed the link — so the text part now gets the footer's link
+ * unless it already has the token itself.
  */
 export function injectUnsubscribeFooter(input: {
   html: string;
@@ -285,14 +380,16 @@ export function injectUnsubscribeFooter(input: {
    * as literal token text. The postal address still ships either way.
    *
    * Omit for the default, which is what blasts and flows want: render the
-   * link unless the designer already placed their own.
+   * link unless the designer already placed their own. Passing true behaves
+   * like omitting it — the override can only ever REMOVE the link, never
+   * add a second one beside the designer's.
    */
   includeUnsubscribeLink?: boolean;
 }): { html: string; text: string } {
-  const alreadyLinked =
-    hasUnsubscribeToken(input.html) || hasUnsubscribeToken(input.text);
+  const forcedOff = input.includeUnsubscribeLink === false;
   const footer = buildUnsubscribeFooter(input.account, {
-    includeUnsubscribeLink: input.includeUnsubscribeLink ?? !alreadyLinked,
+    includeUnsubscribeLink: !forcedOff && !hasUnsubscribeToken(input.html),
+    includeTextUnsubscribeLink: !forcedOff && !hasUnsubscribeToken(input.text),
     config: input.config,
   });
 

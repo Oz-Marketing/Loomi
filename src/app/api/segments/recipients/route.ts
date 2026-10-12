@@ -1,7 +1,9 @@
-// POST /api/segments/recipients
+// POST /api/segments/recipients → `{ total }`
 //
-// Resolve a blast's audience selection into a deliverable recipient list,
-// server-side and over the WHOLE contact roster.
+// Count the deliverable members of an audience selection, server-side and
+// over the WHOLE contact roster — the Recipients step's "sendable recipients"
+// number. Pass `limit` (≤ 50) for a sample of ids and names as well; email
+// addresses and phone numbers are never returned (lib/messaging/audience-count).
 //
 // The schedule steps used to do this in the browser against the 5,000
 // most-recently-added contacts, so the campaign ceiling was effectively
@@ -19,9 +21,7 @@ import {
   formatFilterErrors,
   validateFilterDefinition,
 } from '@/lib/smart-list-validate';
-
-// Matches the per-campaign ceiling enforced by the schedule routes.
-const DEFAULT_LIMIT = 5000;
+import { projectAudienceCount, requestedSampleSize } from '@/lib/messaging/audience-count';
 
 export async function POST(req: Request) {
   const { session, error } = await requirePermission('studio.segments.edit');
@@ -52,10 +52,9 @@ export async function POST(req: Request) {
 
   const channel =
     body.channel === 'email' || body.channel === 'sms' ? body.channel : 'any';
-  const limit = Math.max(
-    1,
-    Math.min(DEFAULT_LIMIT, Number(body.limit) || DEFAULT_LIMIT),
-  );
+  // A count by default. The roster stays on the server: see
+  // lib/messaging/audience-count for why rows are no longer returned.
+  const sampleSize = requestedSampleSize(body.limit);
 
   const fields = await resolveFilterFields(accountKey);
 
@@ -98,9 +97,9 @@ export async function POST(req: Request) {
   try {
     const result = await resolveRecipients(accountKey, selection, fields, {
       channel,
-      limit,
+      limit: sampleSize,
     });
-    return NextResponse.json(result);
+    return NextResponse.json(projectAudienceCount(result, sampleSize));
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'Failed to resolve recipients';

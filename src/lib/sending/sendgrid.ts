@@ -128,7 +128,11 @@ export async function setSendGridFromDomain(
   });
 }
 
-/** Attempts, including the first. Small: the worker retries the blast too. */
+/**
+ * Attempts, including the first. Small: a blast send that still fails with a
+ * retryable error leaves the recipient pending for a later pass (see
+ * ./send-failures.ts), so this only smooths over momentary blips.
+ */
 const MAX_SEND_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 
@@ -136,13 +140,14 @@ const RETRY_BASE_DELAY_MS = 500;
  * Is this failure worth another attempt?
  *
  * Only for responses that PROVE SendGrid did not accept the message: 429
- * (rate limited) and 5xx (their side). Deliberately NOT for timeouts or
- * network errors — those are ambiguous, SendGrid may have queued the mail
- * before the connection dropped, and a retry would double-send to a real
- * customer. A duplicate blast is worse than a failed row the user can see
- * and re-run.
+ * (rate limited) and the 5xx errors SendGrid itself answers with. NOT 502 or
+ * 504 — those come from a gateway in front of SendGrid and can arrive after
+ * the message was accepted — and NOT timeouts or network errors, which are
+ * ambiguous the same way. A retry there could double-send to a real customer;
+ * a duplicate is worse than a failed row the user can see.
  */
 function isRetryableSendStatus(status: number): boolean {
+  if (status === 502 || status === 504) return false;
   return status === 429 || (status >= 500 && status < 600);
 }
 

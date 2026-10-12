@@ -317,6 +317,9 @@ export function ContactsTable({
   ) {
     if (selectionAccountKeys.length === 0) return;
     setBusy(true);
+    // Contacts who unsubscribed themselves, bounced, or were imported as
+    // opted out keep DND — turning it off in bulk can't override them.
+    let stillOptedOut = 0;
     try {
       const results = await Promise.allSettled(
         selectionAccountKeys.map(async (key) => {
@@ -331,6 +334,7 @@ export function ContactsTable({
           if (!res.ok) {
             throw new Error(typeof data.error === 'string' ? data.error : 'Bulk action failed');
           }
+          if (typeof data.stillOptedOut === 'number') stillOptedOut += data.stillOptedOut;
           return typeof data.affected === 'number' ? data.affected : 0;
         }),
       );
@@ -340,6 +344,11 @@ export function ContactsTable({
       const totalAffected = successes.reduce((acc, r) => acc + r.value, 0);
 
       if (totalAffected > 0) toast.success(successLabel(totalAffected));
+      if (stillOptedOut > 0) {
+        toast.info(
+          `${stillOptedOut.toLocaleString()} ${stillOptedOut === 1 ? 'contact stayed' : 'contacts stayed'} opted out — they unsubscribed, bounced, or were imported as opted out.`,
+        );
+      }
       if (failures.length > 0) {
         const first = failures[0].reason instanceof Error ? failures[0].reason.message : 'Bulk action failed';
         toast.error(

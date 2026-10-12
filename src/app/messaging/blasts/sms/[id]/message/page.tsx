@@ -10,8 +10,12 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import PrimaryButton from '@/components/primary-button';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -63,6 +67,7 @@ export default function SmsMessageStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +86,7 @@ export default function SmsMessageStepPage({ params }: PageProps) {
         if (cancelled) return;
         if (!data.campaign) {
           toast.error('Blast not found');
-          router.push('/messaging/blasts');
+          router.push(subHref('/messaging/blasts'));
           return;
         }
         setDraft(data.campaign);
@@ -111,11 +116,6 @@ export default function SmsMessageStepPage({ params }: PageProps) {
     return data?.campaign || null;
   }
 
-  function buildMetadata(urls: string[]): string {
-    const channel: 'SMS' | 'MMS' = urls.length > 0 ? 'MMS' : 'SMS';
-    return JSON.stringify({ channel, mediaUrls: urls, sourceMetadata: '' });
-  }
-
   async function handleMessageBlur() {
     if (!draft || message === draft.message) return;
     try {
@@ -129,7 +129,13 @@ export default function SmsMessageStepPage({ params }: PageProps) {
   async function persistMediaUrls(next: string[]) {
     if (!draft) return;
     try {
-      const updated = await patchDraft({ metadata: buildMetadata(next) });
+      // Just the media keys, merged into the stored metadata server-side.
+      // This used to rewrite the whole blob, which silently dropped the
+      // remembered send time, the quiet-hours choice and the confirmed
+      // audience every time an image was added or removed.
+      const updated = await patchDraft({
+        metadataPatch: { channel: next.length > 0 ? 'MMS' : 'SMS', mediaUrls: next },
+      });
       if (updated) setDraft(updated);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save media');
@@ -195,7 +201,7 @@ export default function SmsMessageStepPage({ params }: PageProps) {
       if (message !== draft.message) {
         await patchDraft({ message });
       }
-      router.push(`/messaging/blasts/sms/${encodeURIComponent(id)}/schedule`);
+      router.push(subHref(`/messaging/blasts/sms/${encodeURIComponent(id)}/schedule`));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -212,10 +218,16 @@ export default function SmsMessageStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
+  }
+
+  // Scheduled or sent: the text is what it was committed with. Nothing on
+  // this step may change it (the PATCH route refuses too).
+  if (draft && !isEditableBlastStatus(draft.status)) {
+    return <BlastLockedNotice status={draft.status} name={draft.name} />;
   }
 
   return (
@@ -225,7 +237,9 @@ export default function SmsMessageStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Message
           </p>
-          <h1 className="text-2xl font-bold">{draft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="sms" variant="title" initialName={draft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             Write the text your recipients will see. Add images to send as MMS.
           </p>
@@ -357,7 +371,7 @@ export default function SmsMessageStepPage({ params }: PageProps) {
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => router.push(`/messaging/blasts/sms/${encodeURIComponent(id)}/recipients`)}
+            onClick={() => router.push(subHref(`/messaging/blasts/sms/${encodeURIComponent(id)}/recipients`))}
             className="inline-flex items-center gap-1.5 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
           >
             <ArrowLeftIcon className="w-4 h-4" />

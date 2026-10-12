@@ -23,6 +23,13 @@
 // what makes the one-time full backfill safe to re-run.
 
 import { prisma } from '@/lib/prisma';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import {
+  OPT_OUT_SOURCE,
+  mergeStickyDnd,
+  recordEmailOptOuts,
+  recordSmsOptOuts,
+} from '@/lib/sending/opt-outs';
 import {
   ADDITIONAL_EMAILS_FIELD,
   UNPARSED_EMAIL_FIELD,
@@ -79,9 +86,10 @@ export interface IngestContactInput {
   customFields?: Record<string, string> | null;
   /**
    * Channel suppression. Sent only by sources that carry real consent
-   * data (e.g. dealer opt-out flags). Merged into the existing dnd, so a
-   * suppression from one feed is never silently cleared by a feed that
-   * omits it. Loomi's send engine must honor this before email/SMS.
+   * data (e.g. dealer opt-out flags). Merged into the existing dnd and
+   * sticky: a feed may set a channel true, but its `false` never clears an
+   * opt-out already recorded — by this feed, another feed, or Loomi itself.
+   * Loomi's send engine must honor this before email/SMS.
    */
   dnd?: { email?: boolean; sms?: boolean } | null;
   firstName?: string | null;
@@ -164,6 +172,8 @@ function coerceString(value: string | null | undefined): string | null {
 
 interface NormalisedContact {
   email: string | null;
+  /** Every address the email cell held — `email` first. An opt-out covers all of them. */
+  emails: string[];
   phone: string | null;
   source: string | null;
   tags: string[];
@@ -256,7 +266,7 @@ function normalise(
     if (Object.keys(d).length > 0) dnd = d;
   }
 
-  return { email, phone, source, tags, customFields, strings, dates, dnd };
+  return { email, emails: addresses, phone, source, tags, customFields, strings, dates, dnd };
 }
 
 /** Read an existing contact's tags Json column as a string[]. */
@@ -264,42 +274,37 @@ function existingTags(value: unknown): string[] {
   return Array.isArray(value) ? (value.filter((t) => typeof t === 'string') as string[]) : [];
 }
 
-/** Read an existing contact's dnd Json column as an object. */
-function existingDnd(value: unknown): Record<string, boolean> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, boolean>)
-    : {};
-}
-
 /**
  * Enforce suppression at the level the send worker actually checks:
- * EmailSuppression / SmsSuppression rows (the Contact.dnd JSON is only a
- * UI convenience). We upsert a row for each channel the source marked
- * opted-out. We intentionally do NOT delete on a `false` flag — an
- * opt-out is a sticky compliance signal, and skipping the per-row delete
- * keeps the backfill fast (the vast majority of contacts aren't
- * suppressed). Manual re-opt-in is handled by the suppression UI.
+ * EmailSuppression / SmsSuppression rows (the Contact.dnd JSON is the UI's
+ * copy). One row per opted-out address at this account AND every other
+ * account in its group — the dealer's CRM saying "don't contact" is not a
+ * per-rooftop preference.
+ *
+ * Through the shared helpers, so the reason never DOWNGRADES: this used to
+ * upsert reason 'crm-optout' unconditionally, which turned a person's own
+ * unsubscribe into a CRM flag that staff are allowed to clear.
+ *
+ * We intentionally do NOT delete on a `false` flag — an opt-out is a sticky
+ * compliance signal, and skipping the delete keeps the backfill fast (the
+ * vast majority of contacts aren't suppressed). Re-opting someone in is a
+ * deliberate act in the UI.
  */
 async function applyCrmSuppression(
   accountKey: string,
-  email: string | null,
-  phone: string | null,
-  dnd: { email?: boolean; sms?: boolean },
+  emails: string[],
+  phones: string[],
 ): Promise<void> {
-  if (dnd.email === true && email) {
-    await prisma.emailSuppression.upsert({
-      where: { accountKey_email: { accountKey, email } },
-      update: { reason: 'crm-optout', source: 'oz-reports' },
-      create: { accountKey, email, reason: 'crm-optout', source: 'oz-reports' },
-    });
-  }
-  if (dnd.sms === true && phone) {
-    await prisma.smsSuppression.upsert({
-      where: { accountKey_phone: { accountKey, phone } },
-      update: { reason: 'crm-optout', source: 'oz-reports' },
-      create: { accountKey, phone, reason: 'crm-optout', source: 'oz-reports' },
-    });
-  }
+  if (emails.length === 0 && phones.length === 0) return;
+  const shared = {
+    accountKey,
+    reason: 'crm-optout' as const,
+    source: OPT_OUT_SOURCE.crm,
+    // One hierarchy read for the batch, not one per opted-out row.
+    relatedAccountKeys: await getRelatedAccountKeys(accountKey),
+  };
+  if (emails.length > 0) await recordEmailOptOuts({ ...shared, emails });
+  if (phones.length > 0) await recordSmsOptOuts({ ...shared, phones });
 }
 
 /** Read an existing contact's customFields Json column as an object. */
@@ -323,6 +328,9 @@ export async function ingestContacts({
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  // Opted-out addresses, written in one set-based pass after the loop.
+  const optOutEmails: string[] = [];
+  const optOutPhones: string[] = [];
 
   for (let i = 0; i < contacts.length; i++) {
     const row = normalise(contacts[i], source);
@@ -333,6 +341,12 @@ export async function ingestContacts({
       }
       continue;
     }
+
+    // Collected before the upsert and regardless of how it goes: the opt-out
+    // is about the address, and a contact row that failed to save is no
+    // reason to keep messaging it.
+    if (row.dnd?.email === true) optOutEmails.push(...row.emails);
+    if (row.dnd?.sms === true && row.phone) optOutPhones.push(row.phone);
 
     try {
       const existing = await findExisting(accountKey, row.email, row.phone);
@@ -348,9 +362,11 @@ export async function ingestContacts({
             ...(row.source ? { source: row.source } : {}),
             tags: Array.from(new Set([...existingTags(existing.tags), ...row.tags])),
             customFields: { ...existingCustomFields(existing.customFields), ...row.customFields },
-            // Merge suppression so a prior opt-out is never cleared by a feed
-            // that omits dnd. Only written when this row carried consent data.
-            ...(row.dnd ? { dnd: { ...existingDnd(existing.dnd), ...row.dnd } } : {}),
+            // Sticky: a feed may opt a channel out, but its explicit `false`
+            // must not erase an opt-out set in Loomi or by another feed. A
+            // plain spread let `{ email: false }` overwrite `email: true`.
+            // Only written when this row carried consent data.
+            ...(row.dnd ? { dnd: mergeStickyDnd(existing.dnd, row.dnd) } : {}),
           },
         });
         updated += 1;
@@ -372,12 +388,6 @@ export async function ingestContacts({
         });
         created += 1;
       }
-
-      // Write the suppression rows the send worker enforces on. Runs for
-      // both create and update; only channels flagged opted-out are written.
-      if (row.dnd) {
-        await applyCrmSuppression(accountKey, row.email, row.phone, row.dnd);
-      }
     } catch (err) {
       skipped += 1;
       if (issues.length < MAX_ISSUES_RETURNED) {
@@ -388,6 +398,14 @@ export async function ingestContacts({
       }
     }
   }
+
+  // Write the suppression rows the send worker enforces on, for both created
+  // and updated contacts; only channels flagged opted-out are written. Not
+  // caught: if this fails the batch fails loudly — a 500 to the sender and no
+  // IngestRun heartbeat — and re-sending it is safe because the whole path is
+  // idempotent. A swallowed error here would leave opted-out people mailable
+  // with nothing but a log line to show for it.
+  await applyCrmSuppression(accountKey, optOutEmails, optOutPhones);
 
   return { totalRows: contacts.length, created, updated, skipped, issues };
 }

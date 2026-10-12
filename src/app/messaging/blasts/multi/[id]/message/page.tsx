@@ -12,10 +12,26 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import PrimaryButton from '@/components/primary-button';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
-import { TemplateLibraryPanel } from '@/components/campaigns/template-library-panel';
+import {
+  TemplateLibraryPanel,
+  type TemplateLibraryItem,
+} from '@/components/campaigns/template-library-panel';
 import { SelectedTemplatePanel } from '@/components/campaigns/selected-template-panel';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
+import { readLinkedSmsId, readTemplateSlug } from '@/lib/messaging/blast-metadata';
+import { formatFromLine } from '@/lib/messaging/blast-sender';
+import {
+  attachTemplateToDraft,
+  detachTemplateFromDraft,
+  resolveTemplateForBlast,
+  syncEmailDraftFromTemplate,
+  templateSlugToEdit,
+} from '@/lib/messaging/blast-template';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -24,6 +40,7 @@ interface PageProps {
 interface EmailDraft {
   id: string;
   name: string;
+  status: string;
   accountKeys: string[];
   subject: string;
   previewText: string;
@@ -34,6 +51,7 @@ interface EmailDraft {
 interface SmsDraft {
   id: string;
   name: string;
+  status: string;
   accountKeys: string[];
   message: string;
   metadata: string;
@@ -54,31 +72,11 @@ function parseSmsMediaUrls(rawMetadata: string): string[] {
 
 type Tab = 'email' | 'sms';
 
-function parseLinkedSmsId(rawMetadata: string): string | null {
-  if (!rawMetadata) return null;
-  try {
-    const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    const value = parsed?.linkedSmsBlastId;
-    return typeof value === 'string' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseTemplateSlug(rawMetadata: string): string {
-  if (!rawMetadata) return '';
-  try {
-    const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    return typeof parsed?.templateSlug === 'string' ? parsed.templateSlug : '';
-  } catch {
-    return '';
-  }
-}
-
 export default function MultiMessageStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
 
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [smsDraft, setSmsDraft] = useState<SmsDraft | null>(null);
@@ -95,6 +93,14 @@ export default function MultiMessageStepPage({ params }: PageProps) {
   // Email template picker state (embedded in the Email tab)
   const [applying, setApplying] = useState(false);
 
+  // Either half past draft locks the pair — they're scheduled as one.
+  const lockedDraft =
+    emailDraft && !isEditableBlastStatus(emailDraft.status)
+      ? emailDraft
+      : smsDraft && !isEditableBlastStatus(smsDraft.status)
+        ? smsDraft
+        : null;
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
@@ -105,8 +111,8 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         if (!emailRes.ok || !emailData?.campaign) {
           throw new Error(emailData?.error || 'Blast not found');
         }
-        const email = emailData.campaign as EmailDraft;
-        const smsId = parseLinkedSmsId(email.metadata || '');
+        let email = emailData.campaign as EmailDraft;
+        const smsId = readLinkedSmsId(email.metadata || '');
         if (!smsId) {
           throw new Error('Linked SMS draft missing');
         }
@@ -115,17 +121,32 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         if (!smsRes.ok || !smsData?.campaign) {
           throw new Error(smsData?.error || 'Linked SMS draft not loadable');
         }
+        const sms = smsData.campaign as SmsDraft;
+
+        // Pull the template's latest content onto the email half. This page
+        // never did, so editor changes never reached an Email + Text blast's
+        // email and "Create New" left the blank starter as what would send.
+        // Drafts only — a committed pair keeps what it was scheduled with.
+        if (isEditableBlastStatus(email.status) && isEditableBlastStatus(sms.status)) {
+          const synced = await syncEmailDraftFromTemplate(email);
+          if (synced.error) {
+            toast.error(
+              `Couldn’t refresh the email from its template, so the last saved version is shown. ${synced.error}`,
+            );
+          }
+          email = synced.draft;
+        }
         if (cancelled) return;
         setEmailDraft(email);
-        setSmsDraft(smsData.campaign);
+        setSmsDraft(sms);
         setSubject(email.subject || '');
         setPreviewText(email.previewText || '');
-        setSmsMessage(smsData.campaign.message || '');
-        setSmsMediaUrls(parseSmsMediaUrls(smsData.campaign.metadata || ''));
+        setSmsMessage(sms.message || '');
+        setSmsMediaUrls(parseSmsMediaUrls(sms.metadata || ''));
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
-          router.push('/messaging/blasts');
+          toast.error(err instanceof Error ? err.message : 'Failed to load blast');
+          router.push(subHref('/messaging/blasts'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -180,79 +201,62 @@ export default function MultiMessageStepPage({ params }: PageProps) {
     }
   }
 
-  /**
-   * Compile template raw (v2 JSON for drag-and-drop, raw HTML for HTML-mode)
-   * to email-ready HTML via /api/preview. Mirrors the standalone email
-   * flow so both end up storing compiled HTML on the campaign.
-   */
-  async function compileTemplate(raw: string): Promise<string> {
-    const res = await fetch('/api/preview', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html: raw, previewValues: {} }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data?.html) throw new Error(data?.error || 'Failed to compile template');
-    return String(data.html);
+  /** Load the email half's fields after the template changed them. */
+  function adoptEmail(updated: EmailDraft) {
+    setEmailDraft(updated);
+    setSubject(updated.subject || '');
+    setPreviewText(updated.previewText || '');
   }
 
-  async function applyTemplate(design: string) {
+  /** Carry the subject/preview someone typed but hasn't blurred yet. */
+  async function emailWithTypedFields(current: EmailDraft): Promise<EmailDraft> {
+    const patch: Record<string, unknown> = {};
+    if (subject !== current.subject) patch.subject = subject;
+    if (previewText !== current.previewText) patch.previewText = previewText;
+    if (Object.keys(patch).length === 0) return current;
+    return (await patchEmail(patch)) ?? current;
+  }
+
+  function openEditor(slug: string, extra = '') {
+    // multi=1 so the editor's Done and Change template come back to the
+    // Email + Text builder, not the email-only one.
+    router.push(
+      `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}&multi=1${extra}`,
+    );
+  }
+
+  async function applyTemplate(template: TemplateLibraryItem) {
     if (!emailDraft) return;
     // Without the preview modal in the way, two quick clicks in the library
     // fire two applies — each compiling and PATCHing — and the second can
     // land after the first, attaching a template the user did not pick last.
     if (applying) return;
+    if (!accountKey) {
+      toast.error('Choose recipients first, so the template can be set up for the right account.');
+      return;
+    }
     setApplying(true);
     try {
-      const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(design)}&format=raw`);
-      const rawData = await rawRes.json().catch(() => ({}));
-      if (!rawRes.ok || !rawData?.raw) {
-        throw new Error(rawData?.error || 'Failed to load template');
-      }
-      const raw = String(rawData.raw);
-      const titleMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-      let newSubject = subject;
-      if (!newSubject && titleMatch) {
-        const line = titleMatch[1].match(/^title:\s*(.+)$/m);
-        if (line) newSubject = line[1].trim().replace(/^["']|["']$/g, '');
-      }
-      const compiled = await compileTemplate(raw);
-      // Preserve existing multi-channel metadata (multiChannel + linkedSmsBlastId)
-      // while recording the chosen templateSlug.
-      let existingMeta: Record<string, unknown> = {};
-      try {
-        existingMeta = JSON.parse(emailDraft.metadata || '{}') as Record<string, unknown>;
-      } catch {
-        existingMeta = {};
-      }
-      const meta = JSON.stringify({ ...existingMeta, templateSlug: design });
-      const updated = await patchEmail({
-        subject: newSubject || emailDraft.name,
-        htmlContent: compiled,
-        sourceType: 'template-library',
-        metadata: meta,
+      // Shared library and group templates are copied into this account
+      // first, so editing never changes them for everyone else.
+      const slug = await resolveTemplateForBlast({
+        template,
+        blastName: emailDraft.name,
+        blastAccountKey: accountKey,
       });
-      if (updated) {
-        setEmailDraft(updated);
-        setSubject(updated.subject);
-      }
-      // Jump into the editor with multi=1 so navigation from the editor
-      // goes back to /campaigns/multi/[id]/...
-      router.push(
-        `/templates/editor?design=${encodeURIComponent(design)}&campaignId=${encodeURIComponent(id)}&multi=1`,
-      );
+      adoptEmail(await attachTemplateToDraft(await emailWithTypedFields(emailDraft), slug));
+      openEditor(slug);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to apply template');
       setApplying(false);
     }
   }
 
-  // "Create New" from the picker: create a blank template scoped to this
-  // campaign's sub-account (accountKey → never global), attach it to the
-  // email draft, then open the editor with multi=1 so navigation flows
-  // back into the multi-channel builder. Mirrors applyTemplate.
+  // "Create New" from the picker: create a blank template owned by this
+  // blast's account (accountKey → never global), attach it to the email
+  // draft, then open the editor. Mirrors applyTemplate.
   async function handleCreateNew(mode: 'visual' | 'code') {
-    if (!emailDraft) return;
+    if (!emailDraft || applying) return;
     if (!accountKey) {
       toast.error('This blast has no account, so a template can’t be created here.');
       return;
@@ -269,35 +273,36 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         throw new Error(createData?.error || 'Failed to create template');
       }
       const slug = String(createData.design);
-
-      const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(slug)}&format=raw`);
-      const rawData = await rawRes.json().catch(() => ({}));
-      const raw = String(rawData?.raw || '');
-      const compiled = raw ? await compileTemplate(raw) : '';
-      // Preserve existing multi-channel metadata while recording the slug.
-      let existingMeta: Record<string, unknown> = {};
-      try {
-        existingMeta = JSON.parse(emailDraft.metadata || '{}') as Record<string, unknown>;
-      } catch {
-        existingMeta = {};
-      }
-      const meta = JSON.stringify({ ...existingMeta, templateSlug: slug });
-      const updated = await patchEmail({
-        subject: subject || emailDraft.name,
-        htmlContent: compiled,
-        sourceType: 'template-library',
-        metadata: meta,
-      });
-      if (updated) {
-        setEmailDraft(updated);
-        setSubject(updated.subject);
-      }
+      adoptEmail(await attachTemplateToDraft(await emailWithTypedFields(emailDraft), slug));
       const builderSuffix = mode === 'code' ? '&builder=html' : '';
-      router.push(
-        `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}&accountKey=${encodeURIComponent(accountKey)}&multi=1${builderSuffix}`,
-      );
+      openEditor(slug, `&accountKey=${encodeURIComponent(accountKey)}${builderSuffix}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create template');
+      setApplying(false);
+    }
+  }
+
+  async function handleEdit() {
+    if (!emailDraft || applying) return;
+    const slug = readTemplateSlug(emailDraft.metadata);
+    if (!slug) {
+      toast.error("Can't open the editor — no template is recorded for this email.");
+      return;
+    }
+    setApplying(true);
+    try {
+      // A blast still pointing at a shared template gets its own copy first.
+      const own = await templateSlugToEdit({
+        slug,
+        blastName: emailDraft.name,
+        blastAccountKey: accountKey,
+      });
+      if (own !== slug) {
+        adoptEmail(await attachTemplateToDraft(await emailWithTypedFields(emailDraft), own));
+      }
+      openEditor(own);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to open the editor');
       setApplying(false);
     }
   }
@@ -311,8 +316,8 @@ export default function MultiMessageStepPage({ params }: PageProps) {
     // picker opens immediately so re-selecting is one click.
     if (!emailDraft) return;
     try {
-      const updated = await patchEmail({ htmlContent: '' });
-      if (updated) setEmailDraft(updated);
+      // The slug goes too, or the next load re-syncs the old template back.
+      setEmailDraft(await detachTemplateFromDraft(emailDraft));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to change template');
     }
@@ -328,21 +333,15 @@ export default function MultiMessageStepPage({ params }: PageProps) {
     }
   }
 
-  function buildSmsMetadata(urls: string[]): string {
-    const channel: 'SMS' | 'MMS' = urls.length > 0 ? 'MMS' : 'SMS';
-    return JSON.stringify({
-      channel,
-      mediaUrls: urls,
-      sourceMetadata: '',
-      multiChannel: true,
-      linkedEmailBlastId: id,
-    });
-  }
-
   async function persistSmsMedia(next: string[]) {
     if (!smsDraft) return;
     try {
-      const updated = await patchSms({ metadata: buildSmsMetadata(next) });
+      // Just the media keys, merged server-side. This used to rewrite the
+      // text half's whole metadata, dropping anything another step kept
+      // there — its confirmed audience among them.
+      const updated = await patchSms({
+        metadataPatch: { channel: next.length > 0 ? 'MMS' : 'SMS', mediaUrls: next },
+      });
       if (updated) setSmsDraft(updated);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save media');
@@ -363,12 +362,12 @@ export default function MultiMessageStepPage({ params }: PageProps) {
     setSmsUploading(true);
     try {
       const uploaded: string[] = [];
-      const accountKey = smsDraft.accountKeys[0] || '';
+      const smsAccountKey = smsDraft.accountKeys[0] || '';
       for (const file of toUpload) {
         const fd = new FormData();
         fd.append('file', file);
         fd.append('category', 'ad-creative');
-        if (accountKey) fd.append('accountKey', accountKey);
+        if (smsAccountKey) fd.append('accountKey', smsAccountKey);
         const res = await fetch('/api/media', { method: 'POST', body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Upload failed');
@@ -416,7 +415,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
       if (subject !== emailDraft.subject) await patchEmail({ subject });
       if (previewText !== emailDraft.previewText) await patchEmail({ previewText });
       if (smsDraft && smsMessage !== smsDraft.message) await patchSms({ message: smsMessage });
-      router.push(`/messaging/blasts/multi/${encodeURIComponent(id)}/schedule`);
+      router.push(subHref(`/messaging/blasts/multi/${encodeURIComponent(id)}/schedule`));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
     } finally {
@@ -426,17 +425,20 @@ export default function MultiMessageStepPage({ params }: PageProps) {
 
   const accountKey = emailDraft?.accountKeys[0] || smsDraft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  const templateSlug = emailDraft ? parseTemplateSlug(emailDraft.metadata) : '';
 
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
+  }
+
+  if (lockedDraft) {
+    return <BlastLockedNotice status={lockedDraft.status} name={emailDraft?.name} />;
   }
 
   return (
@@ -446,7 +448,9 @@ export default function MultiMessageStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Message
           </p>
-          <h1 className="text-2xl font-bold">{emailDraft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="multi" variant="title" initialName={emailDraft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             Compose the email and SMS that go to your audience. Both fire at the same time once
             you schedule.
@@ -472,7 +476,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         </div>
 
         {tab === 'email' && (
-          <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start animate-fade-in-up">
             <div className="space-y-5 lg:sticky lg:top-20">
               <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)] space-y-4">
                 <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
@@ -502,10 +506,13 @@ export default function MultiMessageStepPage({ params }: PageProps) {
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
                   />
                 </div>
+                {/* What the send puts in the From header: sender name, else
+                    the account's name (lib/messaging/blast-sender). */}
                 <div className="text-[11px] text-[var(--muted-foreground)] border-t border-[var(--border)] pt-3">
-                  Sender: <span className="text-[var(--foreground)] font-medium">{account?.senderName || account?.dealer || '—'}</span>
-                  <br />
-                  {account?.senderEmail || (
+                  From:{' '}
+                  {account?.senderEmail ? (
+                    <span className="text-[var(--foreground)] font-medium">{formatFromLine(account)}</span>
+                  ) : (
                     <span className="text-amber-400">
                       No From address set — add one in Settings &rarr; Sending
                       before scheduling
@@ -519,15 +526,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
             {emailDraft?.htmlContent ? (
               <SelectedTemplatePanel
                 htmlContent={emailDraft.htmlContent}
-                onEdit={() => {
-                  if (!templateSlug) {
-                    toast.error("Can't open editor — no template slug recorded.");
-                    return;
-                  }
-                  router.push(
-                    `/templates/editor?design=${encodeURIComponent(templateSlug)}&campaignId=${encodeURIComponent(id)}&multi=1`,
-                  );
-                }}
+                onEdit={handleEdit}
                 onChangeTemplate={handleChangeTemplate}
               />
             ) : (
@@ -536,13 +535,18 @@ export default function MultiMessageStepPage({ params }: PageProps) {
             // edit this template regardless — that is the whole point of
             // picking one for a blast — so previewing first was a step that
             // only ever delayed the edit.
-              <TemplateLibraryPanel onSelect={applyTemplate} onCreateNew={handleCreateNew} />
+              <TemplateLibraryPanel
+                onSelect={applyTemplate}
+                onCreateNew={handleCreateNew}
+                accountKey={accountKey || undefined}
+                busy={applying}
+              />
             )}
           </div>
         )}
 
         {tab === 'sms' && (
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start animate-fade-in-up">
             <div className="space-y-5">
               <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
                 <div className="flex items-center justify-between mb-3">
@@ -647,7 +651,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => router.push(`/messaging/blasts/multi/${encodeURIComponent(id)}/recipients`)}
+            onClick={() => router.push(subHref(`/messaging/blasts/multi/${encodeURIComponent(id)}/recipients`))}
             className="inline-flex items-center gap-1.5 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
           >
             <ArrowLeftIcon className="w-4 h-4" />
@@ -688,7 +692,7 @@ function ChannelTab({
       <Icon className="w-4 h-4" />
       {label}
       <span
-        className={`w-1.5 h-1.5 rounded-full ${
+        className={`w-1.5 h-1.5 rounded-full transition-colors ${
           ready ? 'bg-emerald-400' : 'bg-[var(--muted-foreground)] opacity-40'
         }`}
         aria-hidden

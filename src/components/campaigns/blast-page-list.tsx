@@ -24,6 +24,7 @@ import {
   DocumentDuplicateIcon,
   ChatBubbleLeftRightIcon,
   PencilSquareIcon,
+  PencilIcon,
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
   BoltIcon,
@@ -44,6 +45,8 @@ interface CampaignEngagement {
   clickRate: number;
   bounces: number;
   bounceRate: number;
+  /** Recipients Loomi could not dispatch to, from the same aggregate. */
+  failed?: number;
 }
 
 function formatPct(value: number): string {
@@ -58,6 +61,13 @@ import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avata
 import BulkActionDock from '@/components/bulk-action-dock';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { SentBlastDrawer } from '@/components/campaigns/sent-blast-drawer';
+import {
+  bulkSkipSummary,
+  isInFlightBlastStatus,
+  partitionBulkTargets,
+  pausedSendReason,
+  renameBlast,
+} from '@/lib/messaging/blast-list-actions';
 
 // ── Types ──
 
@@ -75,6 +85,13 @@ interface Campaign {
   sentCount?: number;
   /** Recipients the send hard-failed on. Non-zero on 'partial' and 'failed'. */
   failedCount?: number;
+  /**
+   * The blast's `error` column. On a blast still scheduled/queued/sending, a
+   * value starting "Paused:" means the send engine has held it (provider
+   * outage, rejected key, a preflight blocker at send time) — see
+   * pausedSendReason.
+   */
+  error?: string;
   /** Audience size at send time — the denominator for sent/failed. */
   totalRecipients?: number;
   /** Set when the blast is parked by its sending domain's daily warm-up
@@ -547,6 +564,7 @@ function CampaignTableRow({
   onRestore,
   onDelete,
   onDuplicate,
+  onRename,
   onCancel,
   onOpenSentDetail,
   showRestore,
@@ -570,6 +588,7 @@ function CampaignTableRow({
   onRestore: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
   onDuplicate: (item: Campaign) => void;
+  onRename: (item: Campaign) => void;
   onCancel: (item: Campaign) => void;
   onOpenSentDetail: (item: Campaign) => void;
   /** When true, the row sits in the archived view — show Restore in
@@ -591,31 +610,27 @@ function CampaignTableRow({
   // Flow wrappers are owned by their flow — archiving or deleting one
   // would orphan the step's recipient rows (and it'd be recreated on the
   // next send anyway). Manage the flow instead.
-  const canMutate =
-    isLoomi &&
-    !item.isFlow &&
-    normalizedStatus !== 'scheduled' &&
-    item.status !== 'queued' &&
-    item.status !== 'processing';
+  // The name is a label, not part of what gets sent, so any Loomi-native blast
+  // can be renamed whatever its status. Flow wrappers take their flow step's
+  // name and are renamed there.
+  const canRename = isLoomi && !item.isFlow;
+  // Same rule the bulk dock applies (isInFlightBlastStatus), so the two can't
+  // drift: the dock used to archive scheduled blasts the menu refused.
+  const canMutate = isLoomi && !item.isFlow && !isInFlightBlastStatus(item.status);
+  const pausedReason = pausedSendReason(item.status, item.error);
   // Cancel is the exact inverse of canMutate: it applies to the rows Archive
   // and Delete refuse, because those are the ones with a send still ahead of
-  // them. Written out as the same three conditions rather than derived from
-  // normalizedStatus — 'processing' does NOT normalize to 'scheduled' (none of
-  // that function's substrings match it), so a single normalized check silently
-  // dropped Cancel from a blast that was actively sending, which is the case
-  // this exists for.
+  // them — so it asks the same predicate. (Not normalizedStatus alone:
+  // 'processing' does NOT normalize to 'scheduled', and a normalized check
+  // once silently dropped Cancel from a blast that was actively sending.)
   //
   // 'processing' covers both an in-flight send and one parked on the warm-up
-  // cap or a text's quiet-hours hold — all three need a way to stop.
+  // cap or a text's quiet-hours hold — all three need a way to stop. So does a
+  // send the engine has paused.
   //
   // Flow wrappers are excluded for the same reason they can't be archived —
   // the flow owns them, and the next enrollment would recreate the send.
-  const canCancel =
-    isLoomi &&
-    !item.isFlow &&
-    (normalizedStatus === 'scheduled' ||
-      item.status === 'queued' ||
-      item.status === 'processing');
+  const canCancel = isLoomi && !item.isFlow && isInFlightBlastStatus(item.status);
   // A blast that went out — cleanly ('sent'/'completed'), with some
   // recipients erroring ('partial'), or erroring outright ('failed').
   // All three are past the point of editing, so all three open the
@@ -639,7 +654,9 @@ function CampaignTableRow({
   // locked outright rather than pretending to be editable.
   const rowClickable = Boolean(loomiEditUrl) || hasSendResult;
   const isLocked = isLoomi && !loomiEditUrl && !hasSendResult;
-  const failedCount = item.failedCount ?? 0;
+  // The engagement aggregate's count when there is one, so the note agrees
+  // with the Sent figure beside it; the row's own counter otherwise.
+  const failedCount = engagement?.failed ?? item.failedCount ?? 0;
   const failedNote = failedCount > 0 ? `${formatNum(failedCount)} failed` : null;
 
   function handleRowClick() {
@@ -697,6 +714,17 @@ function CampaignTableRow({
                 Warming up
                 {item.warmupHold.day !== null &&
                   ` · Day ${item.warmupHold.day}/${item.warmupHold.totalDays}`}
+              </span>
+            </Tooltip>
+          )}
+          {/* The send engine held this blast rather than failing it. Its status
+              still reads Scheduled/Sending, so without this nobody could tell
+              why the send time came and went with nothing sent. */}
+          {pausedReason && (
+            <Tooltip label={`Paused: ${pausedReason} It resumes once that’s fixed — no one gets a duplicate.`}>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-orange-500/10 text-orange-400 cursor-help animate-fade-in-up">
+                <PauseCircleIcon className="w-3 h-3" />
+                Paused
               </span>
             </Tooltip>
           )}
@@ -796,6 +824,17 @@ function CampaignTableRow({
                   >
                     Edit
                     <LockClosedIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                )}
+
+                {canRename && (
+                  <button
+                    type="button"
+                    onClick={() => onRename(item)}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                  >
+                    Rename
+                    <PencilIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                   </button>
                 )}
 
@@ -968,7 +1007,7 @@ function PaginationBar({
 // ── Component ──
 
 export function BlastPageList({
-  campaigns,
+  campaigns: campaignsProp,
   loading,
   accountNames,
   accountMeta,
@@ -981,8 +1020,22 @@ export function BlastPageList({
   onSearchChange,
   hideToolbar = false,
 }: CampaignPageListProps) {
-  const { alert, confirm } = useLoomiDialog();
+  const { alert, confirm, prompt } = useLoomiDialog();
   const router = useRouter();
+
+  // Renames made from the row menu, laid over the parent's array so the row
+  // updates in place instead of reloading the whole list.
+  const [renamedById, setRenamedById] = useState<Map<string, string>>(new Map());
+  const campaigns = useMemo(
+    () =>
+      renamedById.size === 0
+        ? campaignsProp
+        : campaignsProp.map((c) => {
+            const renamed = renamedById.get(c.campaignId || c.id);
+            return renamed === undefined ? c : { ...c, name: renamed };
+          }),
+    [campaignsProp, renamedById],
+  );
 
   // Search — controlled when the caller wires the props, otherwise
   // falls back to internal state so existing call sites keep working.
@@ -1077,6 +1130,9 @@ export function BlastPageList({
     let cancelled = false;
     const params = new URLSearchParams();
     if (engagementAccountKey) params.set('accountKey', engagementAccountKey);
+    // Rows only: without this the route also aggregates account-wide totals,
+    // a chart series and a link list, none of which the list reads.
+    params.set('only', 'campaigns');
     const qs = params.toString();
     fetch(`/api/blasts/loomi/engagement${qs ? `?${qs}` : ''}`)
       .then((r) => (r.ok ? r.json() : null))
@@ -1093,6 +1149,7 @@ export function BlastPageList({
           clickRate: number;
           bounces: number;
           bounceRate: number;
+          failed?: number;
         }>) {
           next.set(row.campaignId, {
             sent: row.sent,
@@ -1103,6 +1160,7 @@ export function BlastPageList({
             clickRate: row.clickRate,
             bounces: row.bounces,
             bounceRate: row.bounceRate,
+            failed: typeof row.failed === 'number' ? row.failed : undefined,
           });
         }
         setEngagementById(next);
@@ -1463,6 +1521,39 @@ export function BlastPageList({
     if (typeof window !== 'undefined') window.location.reload();
   }
 
+  async function handleRenameCampaign(campaign: Campaign) {
+    setOpenMenuId(null);
+    if (!isLoomiCampaign(campaign) || campaign.isFlow) return;
+    const next = await prompt({
+      title: 'Rename blast',
+      defaultValue: campaign.name || '',
+      placeholder: 'Spring Service Offer',
+      confirmLabel: 'Rename',
+      required: true,
+    });
+    const trimmed = next?.trim();
+    if (!trimmed || trimmed === campaign.name) return;
+    const id = campaign.campaignId || campaign.id;
+    // A multi row is anchored on its email half, which is the name it shows —
+    // and its hidden text half is renamed too (the server doesn't cascade
+    // names), or it keeps the old name wherever it surfaces.
+    const channel = campaign.channel === 'multi' ? 'multi' : isLoomiEmail(campaign) ? 'email' : 'sms';
+    let partnerError: string | undefined;
+    try {
+      ({ partnerError } = await renameBlast(channel, id, trimmed));
+    } catch (err) {
+      await alert({
+        title: 'Rename failed',
+        message: err instanceof Error ? err.message : 'Failed to rename blast.',
+      });
+      return;
+    }
+    setRenamedById((prev) => new Map(prev).set(id, trimmed));
+    if (partnerError) {
+      await alert({ title: 'Partly renamed', message: partnerError });
+    }
+  }
+
   async function handleCancelCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
@@ -1519,19 +1610,38 @@ export function BlastPageList({
     if (typeof window !== 'undefined') window.location.reload();
   }
 
+  /**
+   * Run one row's archive / restore / delete on its own route.
+   *
+   * An Email + Text row goes through its EMAIL half's route only: the server
+   * applies the action to the linked text half itself (lib/services/
+   * blast-linked), and calling the text route as well would 404 or act twice.
+   * Returns the server's `partnerError` when the linked half didn't follow.
+   */
+  async function rowAction(
+    campaign: Campaign,
+    action: 'archive' | 'restore' | 'delete',
+  ): Promise<string | null> {
+    const id = campaign.campaignId || campaign.id;
+    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    const url =
+      action === 'delete'
+        ? `/api/blasts/${path}/${encodeURIComponent(id)}`
+        : `/api/blasts/${path}/${encodeURIComponent(id)}/${action}`;
+    const res = await fetch(url, { method: action === 'delete' ? 'DELETE' : 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
+    }
+    return typeof data?.partnerError === 'string' && data.partnerError ? data.partnerError : null;
+  }
+
   async function handleArchiveCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
-    const id = campaign.campaignId || campaign.id;
-    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    let partnerError: string | null = null;
     try {
-      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/archive`, {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
-      }
+      partnerError = await rowAction(campaign, 'archive');
     } catch (err) {
       await alert({
         title: 'Archive failed',
@@ -1539,22 +1649,21 @@ export function BlastPageList({
       });
       return;
     }
+    if (partnerError) {
+      await alert({
+        title: 'Partly archived',
+        message: `The email was archived, but its linked text was not: ${partnerError}`,
+      });
+    }
     if (typeof window !== 'undefined') window.location.reload();
   }
 
   async function handleRestoreCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
-    const id = campaign.campaignId || campaign.id;
-    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    let partnerError: string | null = null;
     try {
-      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}/restore`, {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
-      }
+      partnerError = await rowAction(campaign, 'restore');
     } catch (err) {
       await alert({
         title: 'Restore failed',
@@ -1562,29 +1671,31 @@ export function BlastPageList({
       });
       return;
     }
+    if (partnerError) {
+      await alert({
+        title: 'Partly restored',
+        message: `The email was restored, but its linked text was not: ${partnerError}`,
+      });
+    }
     if (typeof window !== 'undefined') window.location.reload();
   }
 
   async function handleDeleteCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
+    const isMulti = campaign.channel === 'multi';
     const confirmed = await confirm({
       title: 'Delete this blast?',
-      message: `This will permanently delete "${campaign.name || '(Untitled)'}" and any draft recipient data. This cannot be undone.`,
+      message: `This will permanently delete "${campaign.name || '(Untitled)'}"${
+        isMulti ? ' — both the email and the text —' : ''
+      } and any draft recipient data. This cannot be undone.`,
       destructive: true,
       confirmLabel: 'Delete',
     });
     if (!confirmed) return;
-    const id = campaign.campaignId || campaign.id;
-    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    let partnerError: string | null = null;
     try {
-      const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
-      }
+      partnerError = await rowAction(campaign, 'delete');
     } catch (err) {
       await alert({
         title: 'Delete failed',
@@ -1592,139 +1703,33 @@ export function BlastPageList({
       });
       return;
     }
-    if (typeof window !== 'undefined') window.location.reload();
-  }
-
-  async function handleBulkRestore() {
-    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
-    if (targets.length === 0) {
+    if (partnerError) {
       await alert({
-        title: 'Restore not supported',
-        message: 'Only Loomi-created campaigns can be restored from here.',
-      });
-      return;
-    }
-    setBulkBusy(true);
-    const failed: string[] = [];
-    try {
-      for (const c of targets) {
-        const id = c.campaignId || c.id;
-        const path = isLoomiEmail(c) ? 'email' : 'sms';
-        try {
-          const res = await fetch(
-            `/api/blasts/${path}/${encodeURIComponent(id)}/restore`,
-            { method: 'POST' },
-          );
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } catch (err) {
-          console.error('Bulk restore failed for', c.name, err);
-          failed.push(c.name || '(Untitled)');
-        }
-      }
-    } finally {
-      setBulkBusy(false);
-    }
-    clearSelection();
-    if (failed.length > 0) {
-      await alert({
-        title: 'Restore summary',
-        message: `${targets.length - failed.length} restored, ${failed.length} failed.`,
+        title: 'Partly deleted',
+        message: `The email was deleted, but its linked text was not: ${partnerError}`,
       });
     }
     if (typeof window !== 'undefined') window.location.reload();
   }
 
-  async function handleBulkArchive() {
-    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
-    const skipped = selectedKeys.size - targets.length;
-    if (targets.length === 0) {
-      await alert({
-        title: 'Archive not supported',
-        message: 'Only Loomi-created campaigns can be archived from here. ESP-imported rows must be managed in their provider.',
-      });
-      return;
-    }
-    const confirmed = await confirm({
-      title: 'Archive selected campaigns?',
-      message: `${targets.length} campaign${targets.length === 1 ? '' : 's'} will be hidden from the live list and auto-deleted in 30 days. Active sends finish on the next tick.`,
-      confirmLabel: 'Archive',
-      destructive: true,
-    });
-    if (!confirmed) return;
-    setBulkBusy(true);
-    const failed: string[] = [];
-    try {
-      for (const c of targets) {
-        const id = c.campaignId || c.id;
-        const path = isLoomiEmail(c) ? 'email' : 'sms';
-        try {
-          const res = await fetch(
-            `/api/blasts/${path}/${encodeURIComponent(id)}/archive`,
-            { method: 'POST' },
-          );
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        } catch (err) {
-          console.error('Bulk archive failed for', c.name, err);
-          failed.push(c.name || '(Untitled)');
-        }
-      }
-    } finally {
-      setBulkBusy(false);
-    }
-    clearSelection();
-    if (failed.length > 0 || skipped > 0) {
-      await alert({
-        title: 'Archive summary',
-        message: [
-          `${targets.length - failed.length} archived.`,
-          failed.length > 0 ? `${failed.length} failed.` : '',
-          skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped.` : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
-      });
-    }
-    if (typeof window !== 'undefined') window.location.reload();
-  }
-
-  async function handleBulkDelete() {
-    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
-    const skipped = selectedKeys.size - targets.length;
-    if (targets.length === 0) {
-      await alert({
-        title: 'Delete not supported',
-        message: 'Only Loomi-created campaigns can be deleted from here. ESP-imported rows must be managed in their provider.',
-      });
-      return;
-    }
-    const confirmed = await confirm({
-      title: 'Delete selected campaigns?',
-      message: `This will permanently delete ${targets.length} campaign${targets.length === 1 ? '' : 's'} and any draft recipient data. This cannot be undone.`,
-      destructive: true,
-      confirmLabel: 'Delete',
-    });
-    if (!confirmed) return;
-    setBulkBusy(true);
-    // Keep the server's reason with each failure — a bulk delete that only
-    // reports a count leaves the user with no way to tell a permission
-    // problem from an in-flight send.
+  /**
+   * Run a bulk action one row at a time, collecting failures with the
+   * server's reason and any linked half that didn't follow.
+   */
+  async function runBulk(
+    rows: Campaign[],
+    action: 'archive' | 'restore' | 'delete',
+  ): Promise<{ failed: { name: string; reason: string }[]; partial: string[] }> {
     const failed: { name: string; reason: string }[] = [];
+    const partial: string[] = [];
+    setBulkBusy(true);
     try {
-      for (const c of targets) {
-        const id = c.campaignId || c.id;
-        const path = isLoomiEmail(c) ? 'email' : 'sms';
+      for (const c of rows) {
         try {
-          const res = await fetch(`/api/blasts/${path}/${encodeURIComponent(id)}`, {
-            method: 'DELETE',
-          });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            throw new Error(
-              typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`,
-            );
-          }
+          const partnerError = await rowAction(c, action);
+          if (partnerError) partial.push(`${c.name || '(Untitled)'} — ${partnerError}`);
         } catch (err) {
-          console.error('Bulk delete failed for', c.name, err);
+          console.error(`Bulk ${action} failed for`, c.name, err);
           failed.push({
             name: c.name || '(Untitled)',
             reason: err instanceof Error ? err.message : 'Unknown error',
@@ -1734,21 +1739,118 @@ export function BlastPageList({
     } finally {
       setBulkBusy(false);
     }
+    return { failed, partial };
+  }
+
+  function bulkSummary(
+    doneLabel: string,
+    done: number,
+    result: { failed: { name: string; reason: string }[]; partial: string[] },
+    skipped: string[],
+  ): string {
+    return [
+      `${done} blast${done === 1 ? '' : 's'} ${doneLabel}.`,
+      result.failed.length > 0
+        ? `${result.failed.length} failed:\n${result.failed.map((f) => `• ${f.name} — ${f.reason}`).join('\n')}`
+        : '',
+      result.partial.length > 0
+        ? `The linked text didn’t follow for:\n${result.partial.map((line) => `• ${line}`).join('\n')}`
+        : '',
+      ...skipped,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  async function handleBulkRestore() {
+    const part = partitionBulkTargets(getSelectedCampaigns());
+    // Archived blasts are never mid-send (archive refuses those), so only
+    // rows Loomi doesn't manage are held back here.
+    const targets = [...part.actionable, ...part.inFlight];
+    if (targets.length === 0) {
+      await alert({
+        title: 'Restore not supported',
+        message: 'Only Loomi-created blasts can be restored from here.',
+      });
+      return;
+    }
+    const result = await runBulk(targets, 'restore');
     clearSelection();
-    if (failed.length > 0 || skipped > 0) {
+    const skipped = bulkSkipSummary({ inFlight: [], unmanaged: part.unmanaged });
+    if (result.failed.length > 0 || result.partial.length > 0 || skipped.length > 0) {
+      await alert({
+        title: 'Restore summary',
+        message: bulkSummary('restored', targets.length - result.failed.length, result, skipped),
+      });
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
+  async function handleBulkArchive() {
+    // Scheduled and sending blasts are held back, exactly as the row menu
+    // holds them: archiving one hid it from the list while it still went out,
+    // leaving nothing on screen to cancel it from.
+    const part = partitionBulkTargets(getSelectedCampaigns());
+    const skipped = bulkSkipSummary(part);
+    if (part.actionable.length === 0) {
+      await alert({
+        title: 'Nothing to archive',
+        message: skipped.join('\n') || 'Only Loomi-created blasts can be archived from here.',
+      });
+      return;
+    }
+    const n = part.actionable.length;
+    const confirmed = await confirm({
+      title: 'Archive selected blasts?',
+      message: `${n} blast${n === 1 ? '' : 's'} will be hidden from the live list and auto-deleted in 30 days.${
+        skipped.length > 0 ? `\n\n${skipped.join('\n')}` : ''
+      }`,
+      confirmLabel: 'Archive',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    const result = await runBulk(part.actionable, 'archive');
+    clearSelection();
+    if (result.failed.length > 0 || result.partial.length > 0 || skipped.length > 0) {
+      await alert({
+        title: 'Archive summary',
+        message: bulkSummary('archived', n - result.failed.length, result, skipped),
+      });
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
+  async function handleBulkDelete() {
+    // Same hold-back as Archive: a blast with a send ahead of it has to be
+    // canceled first, and the server refuses it anyway.
+    const part = partitionBulkTargets(getSelectedCampaigns());
+    const skipped = bulkSkipSummary(part);
+    if (part.actionable.length === 0) {
+      await alert({
+        title: 'Nothing to delete',
+        message: skipped.join('\n') || 'Only Loomi-created blasts can be deleted from here.',
+      });
+      return;
+    }
+    const n = part.actionable.length;
+    const confirmed = await confirm({
+      title: 'Delete selected blasts?',
+      message: `This will permanently delete ${n} blast${n === 1 ? '' : 's'} and any draft recipient data — for an Email + Text blast, both halves. This cannot be undone.${
+        skipped.length > 0 ? `\n\n${skipped.join('\n')}` : ''
+      }`,
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed) return;
+    // Keep the server's reason with each failure — a bulk delete that only
+    // reports a count leaves the user with no way to tell a permission
+    // problem from an in-flight send.
+    const result = await runBulk(part.actionable, 'delete');
+    clearSelection();
+    if (result.failed.length > 0 || result.partial.length > 0 || skipped.length > 0) {
       await alert({
         title: 'Delete summary',
-        message: [
-          `${targets.length - failed.length} campaign${targets.length - failed.length === 1 ? '' : 's'} deleted.`,
-          failed.length > 0
-            ? `${failed.length} failed:\n${failed
-                .map((f) => `• ${f.name} — ${f.reason}`)
-                .join('\n')}`
-            : '',
-          skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped (managed by provider).` : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
+        message: bulkSummary('deleted', n - result.failed.length, result, skipped),
       });
     }
     if (typeof window !== 'undefined') window.location.reload();
@@ -2052,6 +2154,7 @@ export function BlastPageList({
                           onRestore={handleRestoreCampaign}
                           onDelete={handleDeleteCampaign}
                           onDuplicate={handleDuplicateCampaign}
+                          onRename={handleRenameCampaign}
                           onCancel={handleCancelCampaign}
                           onOpenSentDetail={openSentDetail}
                           showRestore={statusFilter === 'archived'}
@@ -2217,10 +2320,13 @@ export function BlastPageList({
       )}
 
       {/* Sent-campaign detail drawer */}
+      {/* Scoped like the row's numbers, so a blast sent to several accounts
+          reads the same in its row and its drawer. */}
       <SentBlastDrawer
         open={sentDetailOpen}
         campaign={sentDetailCampaign}
         onClose={closeSentDetail}
+        accountKey={engagementAccountKey}
       />
     </>
   );

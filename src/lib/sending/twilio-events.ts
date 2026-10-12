@@ -12,8 +12,11 @@
 // from future batches.
 
 import { prisma } from '@/lib/prisma';
-import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import { recordSmsOptOut } from '@/lib/sending/opt-outs';
 import { normalizePhoneNumber } from '@/lib/contact-hygiene';
+
+/** Twilio undelivered codes that are a verdict on the number itself. */
+const NUMBER_LEVEL_FAILURES = new Set(['30004', '30005', '30006']);
 
 /** Status callback payload shape — Twilio sends these as form data. */
 export interface TwilioStatusCallbackPayload {
@@ -146,11 +149,19 @@ export async function processTwilioStatusCallback(
       });
     }
 
-    // Undelivered messages often indicate a bad/dormant phone — auto-suppress
-    // so we don't retry. errorCode 30003 = unreachable, 30005 = unknown
-    // number, 30006 = landline. Distinguish from carrier-blocked (30007)
-    // which still warrants a suppression entry.
-    if (status === 'undelivered' && payload.To && payload.accountKey) {
+    // Suppress only when the failure is a fact about the NUMBER: 30005
+    // (unknown/inactive number), 30006 (landline — can't take texts), 30004
+    // (the handset has blocked this sender). Every other undelivered code says
+    // nothing permanent about the number — 30003 is a phone that's off or out
+    // of coverage, 30007 is carrier filtering of OUR message — and suppressing
+    // on those used to drop good numbers from every account in the group after
+    // one bad afternoon. (The same rule the email side applies to blocks.)
+    if (
+      status === 'undelivered' &&
+      payload.To &&
+      payload.accountKey &&
+      NUMBER_LEVEL_FAILURES.has(String(payload.ErrorCode || ''))
+    ) {
       await persistSmsSuppression(payload.accountKey, payload.To, 'undelivered', payload);
     }
   }
@@ -237,8 +248,12 @@ export async function processTwilioInbound(
     }
   }
 
+  // Recorded on EVERY STOP, not only a first-seen one. The event row is
+  // written first; if the opt-out write after it failed, a redelivery used to
+  // read as a duplicate and the STOP was never recorded. The writer is
+  // idempotent and never downgrades a reason, so repeating it is free.
   let suppressed = false;
-  if (logged && isStop && payload.From && payload.accountKey) {
+  if (isStop && payload.From && payload.accountKey) {
     await persistSmsSuppression(payload.accountKey, payload.From, 'stop', payload);
     suppressed = true;
   }
@@ -249,28 +264,17 @@ export async function processTwilioInbound(
 async function persistSmsSuppression(
   accountKey: string,
   phone: string,
-  reason: string,
+  reason: 'stop' | 'undelivered',
   raw: unknown,
 ): Promise<void> {
-  const rawJson = JSON.stringify(raw);
-  // Org-wide cascade: a STOP / undelivered signal for a phone is authoritative
-  // for the whole organization, so mirror the suppression onto every sibling
-  // rooftop. Standalone accounts (no org) get siblingKeys = [] → single write.
-  const siblingKeys = await getRelatedAccountKeys(accountKey);
-  for (const key of [accountKey, ...siblingKeys]) {
-    await prisma.smsSuppression.upsert({
-      where: { accountKey_phone: { accountKey: key, phone } },
-      create: {
-        accountKey: key,
-        phone,
-        reason,
-        source: 'twilio',
-        raw: rawJson,
-      },
-      update: {
-        reason,
-        raw: rawJson,
-      },
-    });
-  }
+  // Normalized phone, cascaded to the whole group, and never downgrading a
+  // stronger reason (a STOP stays a STOP when a later undelivered arrives) —
+  // the shared writer every opt-out path uses.
+  await recordSmsOptOut({
+    accountKey,
+    phone,
+    reason,
+    source: 'twilio',
+    raw: JSON.stringify(raw),
+  });
 }

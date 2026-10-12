@@ -21,13 +21,20 @@ import PrimaryButton from '@/components/primary-button';
 import { Select } from '@/components/select';
 import { TagInput, tagColorClass } from '@/components/ui/tag-input';
 import { HelpTip } from '@/components/ui/help-tip';
-import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
+import {
+  CONTACT_FIELDS,
+  IGNORE_FIELD,
+  OPT_OUT_TARGETS,
+  isOptOutTarget,
+  type ContactField,
+  type OptOutTarget,
+} from '@/lib/contacts/normalize';
 import { consumePendingImportFile } from '@/lib/contacts/pending-import';
 import type { CustomFieldDto } from '@/lib/contacts/custom-field-types';
 
 // ── Types ──
 
-type MappingTarget = ContactField | typeof IGNORE_FIELD | `custom:${string}`;
+type MappingTarget = ContactField | typeof IGNORE_FIELD | `custom:${string}` | OptOutTarget;
 type Mapping = Record<string, MappingTarget>;
 
 interface ParseResponse {
@@ -35,8 +42,9 @@ interface ParseResponse {
   totalRows: number;
   sampleRows: Record<string, string>[];
   // Canonical field name OR a "custom:<key>" reference when the server
-  // matched a header against a declared custom field's csvAliases.
-  suggestedMapping: Record<string, ContactField | `custom:${string}`>;
+  // matched a header against a declared custom field's csvAliases — or an
+  // opt-out target for a column like "DND" or "Unsubscribed".
+  suggestedMapping: Record<string, ContactField | `custom:${string}` | OptOutTarget>;
   canonicalFields: readonly ContactField[];
 }
 
@@ -47,6 +55,8 @@ interface ImportSummary {
   skipped: number;
   issues: { rowNumber: number; reason: string }[];
   listMembershipsAdded?: number;
+  /** Rows whose opt-out columns said yes, per channel. */
+  optedOut?: { email: number; sms: number };
 }
 
 interface ListTarget {
@@ -78,7 +88,7 @@ function validateMapping(mapping: Mapping): string | null {
     if (typeof target !== 'string' || !target) {
       return `Column "${header}" has no field selected — pick a field or choose "Ignore".`;
     }
-    if (target === IGNORE_FIELD) continue;
+    if (target === IGNORE_FIELD || isOptOutTarget(target)) continue;
     if (target.startsWith('custom:')) {
       if (!target.slice('custom:'.length).trim()) {
         return `Column "${header}" is mapped to a custom field with no name.`;
@@ -117,6 +127,16 @@ const FIELD_LABELS: Record<ContactField, string> = {
   leaseEndDate: 'Lease End Date',
   warrantyEndDate: 'Warranty End Date',
   purchaseDate: 'Purchase Date',
+};
+
+// Opt-out columns (an export's "DND", "Email DND", "Unsubscribed"…). Mapped
+// here, a yes in the column opts the contact out — the dnd flag plus the
+// suppression list, for every account in the group. Left unmapped, those
+// columns used to land in custom fields and everyone on them stayed mailable.
+const OPT_OUT_LABELS: Record<OptOutTarget, string> = {
+  'optout:all': 'Opted out (email & SMS)',
+  'optout:email': 'Opted out of email',
+  'optout:sms': 'Opted out of SMS',
 };
 
 export default function ContactsImportPage() {
@@ -856,6 +876,29 @@ export default function ContactsImportPage() {
             </div>
           )}
 
+          {dryRun && dryRun.optedOut && dryRun.optedOut.email + dryRun.optedOut.sms > 0 && (
+            <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/25 p-3 mb-4 animate-fade-in-up">
+              <div className="text-xs font-semibold text-[var(--foreground)] mb-1 flex items-center gap-1">
+                Opt-outs in this file
+                <HelpTip title="Opt-outs in this file" iconClassName="w-3.5 h-3.5">
+                  <p>
+                    Rows the mapped opt-out columns mark as opted out go on the suppression list
+                    for every account in this group, as well as being flagged on the contact.
+                  </p>
+                  <p>
+                    An import can opt someone out but never back in: a &ldquo;no&rdquo; in the
+                    file leaves an existing opt-out alone. Imported opt-outs can&apos;t be turned
+                    off from a contact&apos;s page.
+                  </p>
+                </HelpTip>
+              </div>
+              <p className="text-[11px] text-[var(--muted-foreground)]">
+                {dryRun.optedOut.email.toLocaleString()} opted out of email ·{' '}
+                {dryRun.optedOut.sms.toLocaleString()} opted out of SMS
+              </p>
+            </div>
+          )}
+
           {dryRun && dryRun.issues.length > 0 && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
               <p className="text-xs font-semibold text-amber-300 mb-2">
@@ -905,7 +948,15 @@ function FieldSelect({
     const out: Partial<Record<ContactField, string>> = {};
     for (const [otherHeader, target] of Object.entries(mapping)) {
       if (otherHeader === header) continue;
-      if (typeof target === 'string' && !target.startsWith('custom:') && target !== IGNORE_FIELD) {
+      // Opt-out targets aren't claimed: several columns can each say
+      // "opted out" ("DND Email" and "Email Unsubscribed"), and every one
+      // of them is honored.
+      if (
+        typeof target === 'string' &&
+        !target.startsWith('custom:') &&
+        target !== IGNORE_FIELD &&
+        !isOptOutTarget(target)
+      ) {
         out[target as ContactField] = otherHeader;
       }
     }
@@ -970,6 +1021,8 @@ function FieldSelect({
       onChange(`custom:${next.slice(SELECT_DECLARED_PREFIX.length)}`);
     } else if (next === IGNORE_FIELD) {
       onChange(IGNORE_FIELD);
+    } else if (isOptOutTarget(next)) {
+      onChange(next);
     } else {
       onChange(next as ContactField);
     }
@@ -984,6 +1037,9 @@ function FieldSelect({
   const declaredOptions = declaredCustoms.filter((cf) =>
     !q || cf.label.toLowerCase().includes(q) || cf.key.toLowerCase().includes(q)
   );
+  const optOutOptions = OPT_OUT_TARGETS.filter((t) =>
+    !q || OPT_OUT_LABELS[t].toLowerCase().includes(q) || 'dnd unsubscribed opt-out'.includes(q)
+  );
   const showAdHoc = !q || 'custom field'.includes(q);
 
   const selectedLabel =
@@ -993,7 +1049,9 @@ function FieldSelect({
         ? 'Custom field (ad-hoc)…'
         : selectValue.startsWith(SELECT_DECLARED_PREFIX)
           ? (declaredCustoms.find((c) => c.key === selectValue.slice(SELECT_DECLARED_PREFIX.length))?.label ?? selectValue)
-          : FIELD_LABELS[selectValue as ContactField] ?? selectValue;
+          : isOptOutTarget(selectValue)
+            ? OPT_OUT_LABELS[selectValue]
+            : FIELD_LABELS[selectValue as ContactField] ?? selectValue;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -1043,6 +1101,17 @@ function FieldSelect({
                   })}
                 </>
               )}
+              {optOutOptions.length > 0 && (
+                <>
+                  <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">Opt-outs</p>
+                  {optOutOptions.map((target) => (
+                    <button key={target} type="button" onClick={() => handleSelect(target)}
+                      className={`w-full text-left px-3 py-1.5 text-xs hover:bg-[var(--muted)] transition-colors ${selectValue === target ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>
+                      {OPT_OUT_LABELS[target]}
+                    </button>
+                  ))}
+                </>
+              )}
               {declaredOptions.length > 0 && (
                 <>
                   <p className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">Custom fields</p>
@@ -1064,7 +1133,7 @@ function FieldSelect({
                   Custom field (ad-hoc)…
                 </button>
               )}
-              {canonicalOptions.length === 0 && declaredOptions.length === 0 && !showAdHoc && (
+              {canonicalOptions.length === 0 && optOutOptions.length === 0 && declaredOptions.length === 0 && !showAdHoc && (
                 <p className="px-3 py-3 text-xs text-[var(--muted-foreground)] italic">No matches</p>
               )}
             </div>

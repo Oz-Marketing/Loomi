@@ -58,6 +58,8 @@ import {
   type NodeType,
   type TriggerType,
 } from '@/lib/flows/validation';
+import { htmlToText } from '@/lib/sending/html-to-text';
+import { sanitizeDisplayName } from '@/lib/sending/send-failures';
 
 // Re-export so existing callers keep working.
 export {
@@ -2827,18 +2829,19 @@ async function executeEmailNode(
   const flowBody = sender.unsubscribeFooter
     ? injectUnsubscribeFooter({
         html,
-        text: stripHtml(html),
+        text: htmlToText(html),
         account: sender.unsubscribeFooter,
         config: sender.footerConfig,
       })
-    : { html, text: stripHtml(html) };
+    : { html, text: htmlToText(html) };
 
   try {
     const result = await sendEmailViaSendGrid({
       apiKey: sender.sendgridApiKey,
-      from: { email: sender.senderEmail, name: sender.senderName || undefined },
+      // Display names without `,` or `;` — SendGrid rejects those with a 400.
+      from: { email: sender.senderEmail, name: sanitizeDisplayName(sender.senderName) },
       replyTo: sender.replyTo ? { email: sender.replyTo } : undefined,
-      to: { email: recipientEmail, name: recipient.fullName || undefined },
+      to: { email: recipientEmail, name: sanitizeDisplayName(recipient.fullName) },
       subject,
       html: flowBody.html,
       text: flowBody.text,
@@ -2867,14 +2870,22 @@ async function executeEmailNode(
     // wait.
     await recordWarmupSends(sendingDomain(sender.senderEmail), 1);
 
-    await prisma.emailBlastRecipient.update({
-      where: { id: recipient.id },
+    // Guarded: a bounce or drop webhook can land before this write, and an
+    // unguarded update flipped that recipient back to `sent`.
+    const marked = await prisma.emailBlastRecipient.updateMany({
+      where: { id: recipient.id, status: { not: 'bounced' } },
       data: {
         status: 'sent',
         messageId: result.messageId || null,
         sentAt: new Date(),
       },
     });
+    if (marked.count === 0) {
+      await prisma.emailBlastRecipient.update({
+        where: { id: recipient.id },
+        data: { messageId: result.messageId || null, sentAt: new Date() },
+      });
+    }
     await prisma.loomiFlowEnrollmentStep.create({
       data: {
         enrollmentId: enrollment.id,
@@ -3084,15 +3095,6 @@ async function resolveSenderForAccount(
     unsubscribeFooter,
     footerConfig,
   };
-}
-
-function stripHtml(value: string): string {
-  return value
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 // ─────────────────────────────────────────────────────

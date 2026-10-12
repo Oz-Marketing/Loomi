@@ -8,6 +8,7 @@ import {
 } from '@react-email/components';
 import type { Block, EmailSettings, EmailTemplate } from './types';
 import { BLOCK_COMPONENTS } from './components';
+import { truncatePreheader } from '@/lib/sending/preheader';
 
 interface DocumentProps {
   template: EmailTemplate;
@@ -76,7 +77,10 @@ export const EmailDocument: React.FC<DocumentProps> = ({ template }) => {
         `}</style>
       </Head>
       <Body style={bodyStyle}>
-        {preheader && <Preview>{preheader}</Preview>}
+        {/* <Preview> cuts at 150 characters with a plain substring, before
+            merge tags are filled — which could split a {{tag}} or an emoji.
+            Cut safely first so its cut never lands. */}
+        {preheader && <Preview>{truncatePreheader(preheader)}</Preview>}
         <Container style={containerStyle}>
           {blocks.map((block, i) => renderBlock(block, settings, i))}
         </Container>

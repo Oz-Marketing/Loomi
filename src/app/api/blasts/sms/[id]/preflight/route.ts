@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
+import { resolveDraftRecipients } from '@/lib/segments/draft-recipients';
 import { preflightSmsBlast } from '@/lib/sending/sms-preflight';
 import { getSmsBlast } from '@/lib/services/sms-blasts';
 
@@ -13,10 +14,10 @@ interface RouteParams {
  * Read-only compliance + deliverability report for a draft.
  *
  * POST rather than GET because quiet hours can only be assessed against the
- * actual recipient phone numbers (area code → local timezone), and the
- * Schedule step holds that list client-side before it is ever persisted. The
- * body carries the same `recipients` and `scheduledFor` the send would use, so
- * this and the POST /schedule gate answer identically — this one is advisory,
+ * actual recipient phone numbers (area code → local timezone) at a proposed
+ * send time. The body carries the `scheduledFor` the send would use, and the
+ * route resolves the draft's saved audience exactly as POST /schedule does,
+ * so the two answer identically — this one is advisory,
  * and exists so a TCPA problem surfaces while the user is still choosing a time
  * rather than at the final click.
  *
@@ -43,30 +44,24 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
   const body = await req.json().catch(() => ({}));
 
-  const rawRecipients = Array.isArray(body?.recipients) ? body.recipients : [];
-  const recipients = rawRecipients
-    .map((r: unknown) => {
-      const row = r as { phone?: unknown; accountKey?: unknown };
-      return {
-        phone: typeof row?.phone === 'string' ? row.phone : null,
-        accountKey: typeof row?.accountKey === 'string' ? row.accountKey : '',
-      };
-    })
-    .filter((r: { accountKey: string }) => Boolean(r.accountKey));
+  // Assess the audience the draft saved, resolved exactly as POST /schedule
+  // resolves it. A draft with no audience yet reports "pending" below.
+  const resolved = await resolveDraftRecipients(blast, 'sms');
+  const recipients = resolved.ok
+    ? resolved.recipients.map((r) => ({ phone: r.phone, accountKey: r.accountKey }))
+    : [];
 
   // Admins scoped to specific accounts can't preflight outside their scope —
   // the report names dealers and their configuration state.
   const userAccountKeys: string[] = session!.user.accountKeys ?? [];
   if (session!.user.role === 'admin' && userAccountKeys.length > 0) {
     const allowed = new Set(userAccountKeys);
-    if (recipients.some((r: { accountKey: string }) => !allowed.has(r.accountKey))) {
+    if (recipients.some((r) => !allowed.has(r.accountKey))) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
   }
 
-  const accountKeys = [
-    ...new Set(recipients.map((r: { accountKey: string }) => r.accountKey)),
-  ] as string[];
+  const accountKeys = [...new Set(recipients.map((r) => r.accountKey))];
 
   // Nothing selected yet — report "not ready" without inventing issues.
   if (accountKeys.length === 0) {

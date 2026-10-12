@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIENCE_CONFIRMED_KEY,
   builderBlastId,
   builderChannel,
+  builderCompletion,
   builderStep,
   builderStepHref,
+  isAudienceConfirmed,
   isBuilderPath,
+  isEditableBlastStatus,
+  lockedBlastMessage,
   parseBuilderPath,
   reachableSteps,
 } from './blast-builder-steps';
@@ -178,5 +183,92 @@ describe('reachableSteps', () => {
     const r = reachableSteps({ hasRecipients: false, hasMessage: true });
     expect(r.has('schedule')).toBe(false);
     expect(r.has('message')).toBe(false);
+  });
+});
+
+// The Recipients step used to count as done the moment a draft had an
+// account — which is at creation — so the header let you skip straight past
+// it, and an untouched draft resolves to the whole account. These pin the
+// replacement signal.
+describe('isAudienceConfirmed', () => {
+  const confirmed = JSON.stringify({ [AUDIENCE_CONFIRMED_KEY]: true });
+  const base = { accountKeys: ['acct'], metadata: confirmed };
+
+  it('is false for a fresh draft that only has its account stamped', () => {
+    expect(isAudienceConfirmed({ accountKeys: ['acct'], metadata: '' })).toBe(false);
+    expect(
+      isAudienceConfirmed({ accountKeys: ['acct'], metadata: JSON.stringify({ multiChannel: true }) }),
+    ).toBe(false);
+  });
+
+  it('is true once the Recipients step saved "All Contacts"', () => {
+    expect(isAudienceConfirmed(base)).toBe(true);
+  });
+
+  it('is true for a saved list, segment, or hand-picked contacts', () => {
+    expect(isAudienceConfirmed({ ...base, sourceListId: 'l1' })).toBe(true);
+    expect(isAudienceConfirmed({ ...base, sourceContactIds: '["c1"]' })).toBe(true);
+    expect(
+      isAudienceConfirmed({
+        ...base,
+        sourceFilter: JSON.stringify({ version: 1, groups: [] }),
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for an empty hand-picked selection even with the flag', () => {
+    expect(isAudienceConfirmed({ ...base, sourceContactIds: '[]' })).toBe(false);
+  });
+
+  it('is false for a segment that cannot be read (it resolves to nobody)', () => {
+    expect(isAudienceConfirmed({ ...base, sourceFilter: 'not json' })).toBe(false);
+  });
+
+  it('is false without an account, or with the flag set to anything but true', () => {
+    expect(isAudienceConfirmed({ accountKeys: [], metadata: confirmed })).toBe(false);
+    expect(
+      isAudienceConfirmed({ accountKeys: ['a'], metadata: JSON.stringify({ [AUDIENCE_CONFIRMED_KEY]: 'yes' }) }),
+    ).toBe(false);
+    expect(isAudienceConfirmed(null)).toBe(false);
+  });
+});
+
+describe('builderCompletion', () => {
+  const audience = { accountKeys: ['a'], metadata: JSON.stringify({ [AUDIENCE_CONFIRMED_KEY]: true }) };
+
+  it('needs a subject AND a body for email', () => {
+    expect(builderCompletion('email', { ...audience, subject: 'Hi', htmlContent: '' }).hasMessage).toBe(false);
+    expect(builderCompletion('email', { ...audience, subject: ' ', htmlContent: '<p>x</p>' }).hasMessage).toBe(false);
+    expect(builderCompletion('multi', { ...audience, subject: 'Hi', htmlContent: '<p>x</p>' })).toEqual({
+      hasRecipients: true,
+      hasMessage: true,
+    });
+  });
+
+  it('needs the message for a text', () => {
+    expect(builderCompletion('sms', { ...audience, message: '  ' }).hasMessage).toBe(false);
+    expect(builderCompletion('sms', { ...audience, message: 'Sale!' }).hasMessage).toBe(true);
+  });
+
+  it('reports recipients only when confirmed', () => {
+    expect(builderCompletion('sms', { accountKeys: ['a'], message: 'x' }).hasRecipients).toBe(false);
+  });
+});
+
+describe('isEditableBlastStatus', () => {
+  it('only lets a draft change', () => {
+    expect(isEditableBlastStatus('draft')).toBe(true);
+    for (const s of ['queued', 'scheduled', 'processing', 'completed', 'partial', 'failed', 'canceled', '', undefined]) {
+      expect(isEditableBlastStatus(s)).toBe(false);
+    }
+  });
+});
+
+describe('lockedBlastMessage', () => {
+  it('offers Cancel only while there is still a send to cancel', () => {
+    expect(lockedBlastMessage('scheduled')).toMatch(/Cancel it to make changes/);
+    expect(lockedBlastMessage('processing')).toMatch(/Cancel it/);
+    expect(lockedBlastMessage('canceled')).not.toMatch(/Cancel it/);
+    expect(lockedBlastMessage('completed')).toMatch(/Duplicate it/);
   });
 });

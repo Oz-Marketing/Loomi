@@ -1,5 +1,25 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { blastSourceWhere, type BlastSourceFilter } from './email-blasts';
+import { chunk, DB_CHUNK } from '@/lib/db/chunk';
+import { normalisePhone } from '@/lib/contacts/normalize';
+import { loadSmsSuppressions, phoneMatchKey } from '@/lib/sending/suppression-lookup';
+import { isSendStopRequested } from '@/lib/sending/send-control';
+import { recordSmsOptOut } from '@/lib/sending/opt-outs';
+import { loadBlastAccountData } from '@/lib/sending/blast-account-data';
+import {
+  attemptsSoFar,
+  classifyTwilioFailure,
+  MAX_ATTEMPTS,
+  PreSendError,
+  temporaryFailureNote,
+} from '@/lib/sending/send-failures';
+import {
+  BlastNotDraftError,
+  blastSourceWhere,
+  LONG_TX_OPTIONS,
+  MAX_LIST_LIMIT,
+  type BlastSourceFilter,
+} from './email-blasts';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
@@ -9,7 +29,6 @@ import {
 import {
   applyBlastMergetags,
   buildBlastMergetagContext,
-  type BlastAccountData,
   type BlastContactData,
 } from '@/lib/sending/blast-mergetags';
 import {
@@ -82,7 +101,7 @@ import {
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
 
-type SmsBlastStatus =
+export type SmsBlastStatus =
   | 'draft'
   | 'queued'
   | 'scheduled'
@@ -97,20 +116,6 @@ export interface SmsRecipientInput {
   accountKey: string;
   phone?: string;
   fullName?: string;
-}
-
-export interface CreateSmsBlastInput {
-  name?: string;
-  message: string;
-  channel?: OutboundMessageChannel;
-  mediaUrls?: string[];
-  recipients: SmsRecipientInput[];
-  scheduledFor?: string | null;
-  createdByUserId?: string;
-  createdByRole?: string;
-  sourceAudienceId?: string | null;
-  sourceFilter?: string | null;
-  metadata?: string | null;
 }
 
 export interface SmsBlastSummary {
@@ -202,6 +207,9 @@ function dedupeRecipients(recipients: SmsRecipientInput[]): SmsRecipientInput[] 
     }
   }
 
+  // One text per handset. Compared by phoneMatchKey, not the stored string:
+  // "(801) 555-0101" and "+1 801 555 0101" are the same phone, and two
+  // contacts in one household used to get the same text twice.
   const seenPhones = new Set<string>();
   const deduped: SmsRecipientInput[] = [];
   for (const recipient of byContactKey.values()) {
@@ -209,22 +217,12 @@ function dedupeRecipients(recipients: SmsRecipientInput[]): SmsRecipientInput[] 
       deduped.push(recipient);
       continue;
     }
-    if (seenPhones.has(recipient.phone)) continue;
-    seenPhones.add(recipient.phone);
+    const key = phoneMatchKey(recipient.phone);
+    if (seenPhones.has(key)) continue;
+    seenPhones.add(key);
     deduped.push(recipient);
   }
   return deduped;
-}
-
-function parseDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date;
-}
-
-function sanitizeMessage(value: string): string {
-  return value.replace(/\r\n/g, '\n').trim();
 }
 
 function normalizeChannel(value: unknown): OutboundMessageChannel {
@@ -239,15 +237,6 @@ function normalizeMediaUrls(raw: unknown): string[] {
     .filter(Boolean)
     .filter((url) => /^https?:\/\/\S+$/i.test(url));
   return [...new Set(urls)];
-}
-
-function buildCampaignMetadata(input: CreateSmsBlastInput): string | null {
-  const payload = {
-    channel: normalizeChannel(input.channel),
-    mediaUrls: normalizeMediaUrls(input.mediaUrls),
-    sourceMetadata: input.metadata || '',
-  };
-  return JSON.stringify(payload);
 }
 
 function parseCampaignMetadata(raw: string | null | undefined): {
@@ -396,6 +385,14 @@ export async function updateSmsBlastDraft(
     status?: SmsBlastStatus;
     metadata?: string | null;
   },
+  options?: {
+    /**
+     * Only write if the blast is still a draft — atomically, in the update
+     * itself. A status check before the write leaves a window in which a
+     * schedule commits and the edit then lands on a blast that is sending.
+     */
+    requireDraft?: boolean;
+  },
 ): Promise<SmsBlastSummary> {
   const data: Record<string, unknown> = {};
   if (patch.name !== undefined) data.name = patch.name;
@@ -409,6 +406,16 @@ export async function updateSmsBlastDraft(
   if (patch.status !== undefined) data.status = patch.status;
   if (patch.metadata !== undefined) data.metadata = patch.metadata;
 
+  if (options?.requireDraft) {
+    const written = await prisma.smsBlast.updateMany({
+      where: { id: campaignId, status: 'draft' },
+      data,
+    });
+    if (written.count === 0) throw new BlastNotDraftError();
+    return toSummary(
+      await prisma.smsBlast.findUniqueOrThrow({ where: { id: campaignId }, select: smsCampaignSummarySelect }),
+    );
+  }
   const updated = await prisma.smsBlast.update({
     where: { id: campaignId },
     data,
@@ -419,9 +426,135 @@ export async function updateSmsBlastDraft(
 
 const INVALID_PHONE_ERROR = 'Recipient phone is missing or blocked by hygiene policy';
 
+/** Everything an SMS schedule writes, worked out before the transaction opens. */
+export interface SmsSchedulePlan {
+  campaignId: string;
+  status: SmsBlastStatus;
+  scheduledFor: Date | null;
+  rows: Prisma.SmsBlastRecipientCreateManyInput[];
+  totalRecipients: number;
+  accountKeys: string[];
+}
+
+/**
+ * Build the recipient rows for an SMS schedule. Reads only — the write is
+ * writeSmsBlastSchedule.
+ *
+ * Deduped on the normalized phone as well as the contact: a household where
+ * two contacts share one number gets one text, not two.
+ */
+export async function planSmsBlastSchedule(
+  campaignId: string,
+  input: {
+    recipients: SmsRecipientInput[];
+    scheduledFor: Date | null;
+  },
+): Promise<SmsSchedulePlan> {
+  const recipients = dedupeRecipients(input.recipients || []);
+  if (recipients.length === 0) throw new Error('At least one recipient is required');
+  const sendable = recipients.filter((r) => Boolean(r.phone));
+  if (sendable.length === 0) {
+    throw new Error('No recipients with valid phone numbers were provided');
+  }
+
+  // ── Suppression filter ──
+  // Phones that opted out via STOP (or were manually suppressed) are written
+  // as status='skipped' rather than silently dropped, so the audit log shows
+  // why nothing got sent. Group-wide and format-insensitive — the same lookup
+  // the send uses (see ./sending/suppression-lookup.ts).
+  const isSuppressed = await loadSmsSuppressions(
+    sendable.map((r) => ({ accountKey: r.accountKey, phone: r.phone })),
+  );
+
+  const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= Date.now();
+
+  const rows: Prisma.SmsBlastRecipientCreateManyInput[] = recipients.map((r) => {
+    if (!r.phone) {
+      return {
+        campaignId,
+        contactId: r.contactId,
+        accountKey: r.accountKey,
+        phone: null,
+        fullName: r.fullName || null,
+        status: 'failed',
+        error: INVALID_PHONE_ERROR,
+      };
+    }
+    const reason = isSuppressed(r.accountKey, r.phone);
+    if (reason) {
+      return {
+        campaignId,
+        contactId: r.contactId,
+        accountKey: r.accountKey,
+        phone: r.phone,
+        fullName: r.fullName || null,
+        status: 'skipped',
+        error: `Suppressed (${reason})`,
+      };
+    }
+    return {
+      campaignId,
+      contactId: r.contactId,
+      accountKey: r.accountKey,
+      phone: r.phone,
+      fullName: r.fullName || null,
+      status: 'pending',
+      error: null,
+    };
+  });
+
+  return {
+    campaignId,
+    status: isImmediate ? 'queued' : 'scheduled',
+    scheduledFor: isImmediate ? null : input.scheduledFor,
+    rows,
+    totalRecipients: recipients.length,
+    accountKeys: [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))],
+  };
+}
+
+/**
+ * Commit a planned SMS schedule inside `tx`. Claims the draft first, exactly
+ * as writeEmailBlastSchedule does and for the same reason: re-scheduling a
+ * blast that is already sending would recreate its sent rows as pending.
+ */
+export async function writeSmsBlastSchedule(
+  tx: Prisma.TransactionClient,
+  plan: SmsSchedulePlan,
+) {
+  const claimed = await tx.smsBlast.updateMany({
+    where: { id: plan.campaignId, status: 'draft' },
+    data: { status: plan.status },
+  });
+  if (claimed.count === 0) throw new BlastNotDraftError();
+
+  await tx.smsBlastRecipient.deleteMany({ where: { campaignId: plan.campaignId } });
+
+  // Inserted in slices — one INSERT per slice keeps each statement under
+  // Postgres's bind-parameter limit for audiences of any size.
+  for (const slice of chunk(plan.rows, DB_CHUNK)) {
+    await tx.smsBlastRecipient.createMany({ data: slice });
+  }
+
+  return tx.smsBlast.update({
+    where: { id: plan.campaignId },
+    data: {
+      status: plan.status,
+      scheduledFor: plan.scheduledFor,
+      totalRecipients: plan.totalRecipients,
+      accountKeys: JSON.stringify(plan.accountKeys),
+      startedAt: null,
+      completedAt: null,
+      error: null,
+    },
+    select: smsCampaignSummarySelect,
+  });
+}
+
 /**
  * Transitions an SMS draft into 'scheduled' or 'queued' and persists
  * recipient rows. The pg-boss worker picks it up once scheduledFor passes.
+ * Only a draft can be scheduled — see BlastNotDraftError.
  */
 export async function scheduleSmsBlastDraft(
   campaignId: string,
@@ -430,160 +563,12 @@ export async function scheduleSmsBlastDraft(
     scheduledFor: Date | null;
   },
 ): Promise<SmsBlastSummary> {
-  // Dedupe on (contactId, accountKey)
-  const seen = new Set<string>();
-  const recipients: SmsRecipientInput[] = [];
-  for (const r of input.recipients || []) {
-    const key = `${r.contactId}::${r.accountKey}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    recipients.push(r);
-  }
-  if (recipients.length === 0) throw new Error('At least one recipient is required');
-  const sendable = recipients.filter((r) => Boolean(r.phone));
-  if (sendable.length === 0) {
-    throw new Error('No recipients with valid phone numbers were provided');
-  }
-
-  // ── Suppression filter ──
-  // Phones that opted out via STOP (or were manually suppressed) land
-  // in SmsSuppression. We drop them into status='skipped' rather than
-  // silently filtering, so the audit log shows why nothing got sent.
-  const accountKeysInBatch = [
-    ...new Set(sendable.map((r) => r.accountKey).filter(Boolean)),
-  ];
-  const phonesInBatch = [
-    ...new Set(sendable.map((r) => (r.phone || '').trim()).filter(Boolean)),
-  ];
-  const suppressed =
-    accountKeysInBatch.length > 0 && phonesInBatch.length > 0
-      ? await prisma.smsSuppression.findMany({
-          where: {
-            accountKey: { in: accountKeysInBatch },
-            phone: { in: phonesInBatch },
-          },
-          select: { accountKey: true, phone: true, reason: true },
-        })
-      : [];
-  const suppressionKey = (accountKey: string, phone: string) =>
-    `${accountKey}|${phone.trim()}`;
-  const suppressedByKey = new Map(
-    suppressed.map((s) => [suppressionKey(s.accountKey, s.phone), s.reason]),
+  const plan = await planSmsBlastSchedule(campaignId, input);
+  const updated = await prisma.$transaction(
+    (tx) => writeSmsBlastSchedule(tx, plan),
+    LONG_TX_OPTIONS,
   );
-
-  const now = Date.now();
-  const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
-  const status: SmsBlastStatus = isImmediate ? 'queued' : 'scheduled';
-
-  const updated = await prisma.$transaction(async (tx) => {
-    await tx.smsBlastRecipient.deleteMany({ where: { campaignId } });
-
-    await tx.smsBlastRecipient.createMany({
-      data: recipients.map((r) => {
-        if (!r.phone) {
-          return {
-            campaignId,
-            contactId: r.contactId,
-            accountKey: r.accountKey,
-            phone: null,
-            fullName: r.fullName || null,
-            status: 'failed',
-            error: INVALID_PHONE_ERROR,
-          };
-        }
-        const reason = suppressedByKey.get(suppressionKey(r.accountKey, r.phone));
-        if (reason) {
-          return {
-            campaignId,
-            contactId: r.contactId,
-            accountKey: r.accountKey,
-            phone: r.phone,
-            fullName: r.fullName || null,
-            status: 'skipped',
-            error: `Suppressed (${reason})`,
-          };
-        }
-        return {
-          campaignId,
-          contactId: r.contactId,
-          accountKey: r.accountKey,
-          phone: r.phone,
-          fullName: r.fullName || null,
-          status: 'pending',
-          error: null,
-        };
-      }),
-    });
-
-    const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
-
-    return tx.smsBlast.update({
-      where: { id: campaignId },
-      data: {
-        status,
-        scheduledFor: isImmediate ? null : input.scheduledFor,
-        totalRecipients: recipients.length,
-        accountKeys: JSON.stringify(accountKeys),
-        startedAt: null,
-        completedAt: null,
-        error: null,
-      },
-      select: smsCampaignSummarySelect,
-    });
-  });
-
   return toSummary(updated);
-}
-
-export async function createSmsBlast(input: CreateSmsBlastInput): Promise<SmsBlastSummary> {
-  const message = sanitizeMessage(input.message || '');
-  const channel = normalizeChannel(input.channel);
-  const mediaUrls = normalizeMediaUrls(input.mediaUrls);
-  if (!message && mediaUrls.length === 0) throw new Error('Message or media URLs are required');
-  if (message.length > 640) throw new Error(`${channel} must be 640 characters or fewer`);
-
-  const recipients = dedupeRecipients(input.recipients || []);
-  if (recipients.length === 0) throw new Error('At least one recipient is required');
-
-  const scheduledDate = parseDate(input.scheduledFor || undefined);
-  const now = Date.now();
-  const status: SmsBlastStatus =
-    scheduledDate && scheduledDate.getTime() > now
-      ? 'scheduled'
-      : 'queued';
-  const accountKeys = [...new Set(recipients.map((recipient) => recipient.accountKey))];
-
-  const created = await prisma.$transaction(async (tx) => {
-    const campaign = await tx.smsBlast.create({
-      data: {
-        name: input.name?.trim() || null,
-        message,
-        status,
-        scheduledFor: scheduledDate,
-        createdByUserId: input.createdByUserId || null,
-        createdByRole: input.createdByRole || null,
-        sourceAudienceId: input.sourceAudienceId || null,
-        sourceFilter: input.sourceFilter || null,
-        accountKeys: JSON.stringify(accountKeys),
-        totalRecipients: recipients.length,
-        metadata: buildCampaignMetadata(input),
-      },
-    });
-
-    await tx.smsBlastRecipient.createMany({
-      data: recipients.map((recipient) => ({
-        campaignId: campaign.id,
-        contactId: recipient.contactId,
-        accountKey: recipient.accountKey,
-        phone: recipient.phone || null,
-        fullName: recipient.fullName || null,
-      })),
-    });
-
-    return campaign;
-  });
-
-  return toSummary(created);
 }
 
 export async function getSmsBlast(campaignId: string): Promise<SmsBlastSummary | null> {
@@ -595,8 +580,9 @@ export async function getSmsBlast(campaignId: string): Promise<SmsBlastSummary |
 }
 
 /**
- * Delete an SMS campaign + its recipient rows. Blocked while in-flight
- * (queued/processing) so we don't yank the row out from under the worker.
+ * Delete an SMS campaign + its recipient rows. Refused for anything that can
+ * still send — queued, scheduled or processing; cancel first. (Mirror of
+ * deleteEmailBlast.)
  */
 export async function deleteSmsBlast(campaignId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
@@ -605,12 +591,12 @@ export async function deleteSmsBlast(campaignId: string): Promise<void> {
       select: { status: true },
     });
     if (!row) return;
-    if (row.status === 'queued' || row.status === 'processing') {
-      throw new Error('Cannot delete a campaign that is currently sending.');
+    if (PROCESSABLE_STATUSES.includes(row.status as SmsBlastStatus)) {
+      throw new Error('This blast is scheduled or sending. Cancel it first, then delete it.');
     }
     await tx.smsBlastRecipient.deleteMany({ where: { campaignId } });
     await tx.smsBlast.delete({ where: { id: campaignId } });
-  });
+  }, LONG_TX_OPTIONS);
 }
 
 /**
@@ -653,6 +639,7 @@ export async function cancelSmsBlast(
     );
   }
 
+  // Long timeout: a timed-out cancel rolls back and the blast keeps sending.
   await prisma.$transaction(async (tx) => {
     await tx.smsBlastRecipient.updateMany({
       where: { campaignId, status: 'pending' },
@@ -662,7 +649,7 @@ export async function cancelSmsBlast(
       where: { id: campaignId },
       data: { status: 'canceled', completedAt: new Date() },
     });
-  });
+  }, LONG_TX_OPTIONS);
 
   const counts = await summarizeCampaign(campaignId);
   const updated = await prisma.smsBlast.update({
@@ -694,8 +681,9 @@ export async function setSmsBlastArchived(
     select: { status: true, metadata: true },
   });
   if (!existing) throw new Error('Campaign not found');
-  if (existing.status === 'queued' || existing.status === 'processing') {
-    throw new Error('Cannot archive a campaign that is currently sending.');
+  // Scheduled included — see setEmailBlastArchived.
+  if (archived && PROCESSABLE_STATUSES.includes(existing.status as SmsBlastStatus)) {
+    throw new Error('This blast is scheduled or sending. Cancel it first, then archive it.');
   }
   let meta: Record<string, unknown> = {};
   try {
@@ -746,18 +734,24 @@ export async function purgeOldArchivedSmsBlasts(
 ): Promise<number> {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
   const rows = await prisma.smsBlast.findMany({
-    where: { archivedAt: { not: null, lt: cutoff } },
+    where: {
+      archivedAt: { not: null, lt: cutoff },
+      status: { notIn: PROCESSABLE_STATUSES },
+    },
     select: { id: true },
   });
   if (rows.length === 0) return 0;
-  await prisma.$transaction(async (tx) => {
-    await tx.smsBlastRecipient.deleteMany({
-      where: { campaignId: { in: rows.map((r) => r.id) } },
-    });
-    await tx.smsBlast.deleteMany({
-      where: { id: { in: rows.map((r) => r.id) } },
-    });
-  });
+  // In slices with the long timeout — see purgeOldArchivedEmailBlasts.
+  for (const slice of chunk(rows.map((r) => r.id), 50)) {
+    await prisma.$transaction(async (tx) => {
+      await tx.smsBlastRecipient.deleteMany({
+        where: { campaignId: { in: slice } },
+      });
+      await tx.smsBlast.deleteMany({
+        where: { id: { in: slice } },
+      });
+    }, LONG_TX_OPTIONS);
+  }
   return rows.length;
 }
 
@@ -772,12 +766,37 @@ function parseArchivedMetadata(raw: string | null | undefined): boolean {
 }
 
 /**
- * Clone an SMS campaign into a new draft. Status resets, recipient rows
- * are not copied — the user re-picks an audience in the Recipients step.
+ * Metadata an SMS copy inherits — the message's own settings, not the
+ * original send's pairing, archive state, quiet-hours decision or saved send
+ * time. See metadataForCopy in email-blasts.ts for what copying it all broke.
+ */
+const COPYABLE_SMS_METADATA_KEYS = ['channel', 'mediaUrls', 'sourceMetadata', 'campaignSource'] as const;
+
+export function smsMetadataForCopy(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const source = parsed as Record<string, unknown>;
+  const copy: Record<string, unknown> = {};
+  for (const key of COPYABLE_SMS_METADATA_KEYS) {
+    if (source[key] !== undefined) copy[key] = source[key];
+  }
+  return Object.keys(copy).length > 0 ? JSON.stringify(copy) : null;
+}
+
+/**
+ * Clone an SMS campaign into a new draft. Status resets, recipient rows are
+ * not copied; the audience SELECTION is, every mode of it. A multi-channel
+ * pair is copied as a pair by duplicateBlastWithLinkedChannels.
  */
 export async function duplicateSmsBlast(
   campaignId: string,
-  options?: { createdByUserId?: string; createdByRole?: string },
+  options?: { createdByUserId?: string; createdByRole?: string; metadata?: string | null },
 ): Promise<SmsBlastSummary> {
   const source = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
@@ -795,8 +814,10 @@ export async function duplicateSmsBlast(
       accountKeys: source.accountKeys || JSON.stringify([]),
       sourceAudienceId: source.sourceAudienceId || null,
       sourceFilter: source.sourceFilter || null,
+      sourceListId: source.sourceListId || null,
       sourceContactIds: source.sourceContactIds || null,
-      metadata: source.metadata || null,
+      metadata:
+        options?.metadata !== undefined ? options.metadata : smsMetadataForCopy(source.metadata),
       createdByUserId: options?.createdByUserId || null,
       createdByRole: options?.createdByRole || null,
     },
@@ -819,35 +840,39 @@ export async function listSmsBlasts(options?: {
   /** Defaults to 'blasts' — flow wrapper rows are hidden. */
   source?: BlastSourceFilter;
 }): Promise<SmsBlastSummary[]> {
-  const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
+  const limit = Math.max(1, Math.min(MAX_LIST_LIMIT, options?.limit ?? 25));
   const statusFilter = options?.statusFilter ?? 'all';
+  const accountKeys = (options?.accountKeys ?? []).filter(Boolean);
+  // Account filter in the database — see listEmailBlasts for why it can't
+  // run after the `take`.
   const where = {
     ...(statusFilter === 'archived'
       ? { archivedAt: { not: null } }
       : { archivedAt: null }),
     ...blastSourceWhere(options?.source ?? 'blasts'),
+    ...(accountKeys.length > 0
+      ? {
+          OR: [
+            ...accountKeys.map((key) => ({ accountKeys: { contains: JSON.stringify(key) } })),
+          ],
+        }
+      : {}),
   };
   const rows = await prisma.smsBlast.findMany({
     where,
     select: smsCampaignSummarySelect,
     orderBy: { createdAt: 'desc' },
-    take: limit * 4,
+    take: limit,
   });
 
-  const allowedAccountKeys = options?.accountKeys && options.accountKeys.length > 0
-    ? new Set(options.accountKeys)
-    : null;
-
-  const summaries = rows
+  const allowedAccountKeys = accountKeys.length > 0 ? new Set(accountKeys) : null;
+  return rows
     .filter((row) => {
       if (!allowedAccountKeys) return true;
       const keys = parseAccountKeys(row.accountKeys);
       return keys.some((key) => allowedAccountKeys.has(key));
     })
-    .slice(0, limit)
     .map(toSummary);
-
-  return summaries;
 }
 
 /**
@@ -870,48 +895,44 @@ async function updateUnlessCanceled(
   });
 }
 
-async function summarizeCampaign(campaignId: string) {
-  const recipients = await prisma.smsBlastRecipient.findMany({
+/**
+ * Recipient counts for a blast, by status, in one grouped query. `skipped` is
+ * terminal (a STOP is a decision, not unfinished work) and `undelivered` stays
+ * out of `firstError` — see the email twin for both.
+ */
+async function summarizeCampaign(campaignId: string): Promise<SmsBlastCounts> {
+  const groups = await prisma.smsBlastRecipient.groupBy({
+    by: ['status'],
     where: { campaignId },
-    select: { status: true, error: true },
+    _count: { _all: true },
   });
 
+  let total = 0;
   let pending = 0;
   let sent = 0;
   let failed = 0;
   let undelivered = 0;
   let skipped = 0;
-  let firstError = '';
-
-  for (const row of recipients) {
-    if (row.status === 'sent') sent += 1;
-    else if (row.status === 'undelivered') {
-      // Kept out of firstError: that string is the blast's `error` column and
-      // the failure banner's headline, and "unknown number" about one stale
-      // contact should not headline a send that otherwise worked.
-      undelivered += 1;
-    } else if (row.status === 'failed') {
-      failed += 1;
-      if (!firstError && row.error) firstError = row.error;
-    } else if (row.status === 'skipped') {
-      // TERMINAL, not pending. A recipient who replied STOP is a decision, not
-      // unfinished work. Counting them as pending left the blast permanently
-      // un-completable: the sweep re-picked it every minute while its recipient
-      // query — which only loads status='pending' — came back empty. A blast
-      // whose whole audience had opted out looped forever.
-      skipped += 1;
-    } else pending += 1;
+  for (const group of groups) {
+    const n = group._count._all;
+    total += n;
+    if (group.status === 'sent') sent += n;
+    else if (group.status === 'undelivered') undelivered += n;
+    else if (group.status === 'failed') failed += n;
+    else if (group.status === 'skipped') skipped += n;
+    else pending += n;
   }
 
-  return {
-    total: recipients.length,
-    pending,
-    sent,
-    failed,
-    undelivered,
-    skipped,
-    firstError,
-  };
+  const firstFailure =
+    failed > 0
+      ? await prisma.smsBlastRecipient.findFirst({
+          where: { campaignId, status: 'failed', error: { not: null } },
+          select: { error: true },
+          orderBy: { id: 'asc' },
+        })
+      : null;
+
+  return { total, pending, sent, failed, undelivered, skipped, firstError: firstFailure?.error ?? '' };
 }
 
 export interface SmsBlastCounts {
@@ -959,29 +980,35 @@ async function loadSmsContacts(
   const ids = [...new Set(refs.map((r) => r.contactId).filter(Boolean))];
   if (ids.length === 0) return map;
 
-  const rows = await prisma.contact.findMany({
-    where: { id: { in: ids } },
-    select: {
-      id: true,
-      accountKey: true,
-      firstName: true,
-      lastName: true,
-      fullName: true,
-      email: true,
-      phone: true,
-      city: true,
-      state: true,
-      vehicleYear: true,
-      vehicleMake: true,
-      vehicleModel: true,
-      lastServiceDate: true,
-      nextServiceDate: true,
-      leaseEndDate: true,
-      purchaseDate: true,
-      customFields: true,
-      dnd: true,
-    },
-  });
+  const rows = (
+    await Promise.all(
+      chunk(ids, DB_CHUNK).map((slice) =>
+        prisma.contact.findMany({
+          where: { id: { in: slice } },
+          select: {
+            id: true,
+            accountKey: true,
+            firstName: true,
+            lastName: true,
+            fullName: true,
+            email: true,
+            phone: true,
+            city: true,
+            state: true,
+            vehicleYear: true,
+            vehicleMake: true,
+            vehicleModel: true,
+            lastServiceDate: true,
+            nextServiceDate: true,
+            leaseEndDate: true,
+            purchaseDate: true,
+            customFields: true,
+            dnd: true,
+          },
+        }),
+      ),
+    )
+  ).flat();
 
   for (const row of rows) {
     let dndSms = false;
@@ -993,402 +1020,554 @@ async function loadSmsContacts(
   return map;
 }
 
-/** `accountKey|phone` → suppression reason, for the whole batch in one query. */
-async function loadSmsSuppressionSet(
-  refs: { accountKey: string; phone: string | null }[],
-): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
-  const accountKeys = [...new Set(refs.map((r) => r.accountKey).filter(Boolean))];
-  const phones = [...new Set(refs.map((r) => (r.phone || '').trim()).filter(Boolean))];
-  if (accountKeys.length === 0 || phones.length === 0) return map;
 
-  const rows = await prisma.smsSuppression.findMany({
-    where: { accountKey: { in: accountKeys }, phone: { in: phones } },
-    select: { accountKey: true, phone: true, reason: true },
+/** Recipients one SMS blast sends in one pass. */
+export const SMS_SEND_BATCH_SIZE = 500;
+/** Wall-clock budget for one sweep across every due SMS blast. */
+export const SMS_SWEEP_TIME_BUDGET_MS = 50_000;
+/** Consecutive failures that say Twilio itself is unwell. */
+const SMS_BREAKER_THRESHOLD = 10;
+
+/**
+ * Close out an SMS blast with nothing left pending.
+ */
+async function finalizeSmsBlast(campaignId: string): Promise<SmsBlastSummary> {
+  const counts = await summarizeCampaign(campaignId);
+  const status = resolveSmsBlastStatus(counts);
+  const updated = await updateUnlessCanceled(campaignId, {
+    status,
+    totalRecipients: counts.total,
+    sentCount: counts.sent,
+    failedCount: counts.failed,
+    undeliveredCount: counts.undelivered,
+    completedAt: status === 'processing' ? null : new Date(),
+    error: counts.firstError || null,
   });
-  for (const row of rows) {
-    map.set(`${row.accountKey}|${row.phone.trim()}`, row.reason);
-  }
-  return map;
+  return toSummary(updated);
 }
 
-/** Account-level values behind the {{location.*}} mergetags, plus timezone. */
-async function loadSmsAccountData(
-  accountKeys: string[],
-): Promise<Map<string, BlastAccountData & { timezone: string | null }>> {
-  const map = new Map<string, BlastAccountData & { timezone: string | null }>();
-  if (accountKeys.length === 0) return map;
+/**
+ * Record that Twilio accepted a text. Guarded so a status callback that beat
+ * this write (an `undelivered` from the carrier) isn't flipped back to `sent`;
+ * retried briefly — see recordSent in email-blasts.ts.
+ */
+async function recordSmsSent(recipientId: string, messageSid: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const updated = await prisma.smsBlastRecipient.updateMany({
+        where: { id: recipientId, status: { not: 'undelivered' } },
+        data: { status: 'sent', messageId: messageSid, sentAt: new Date(), error: null },
+      });
+      if (updated.count === 0) {
+        await prisma.smsBlastRecipient.update({
+          where: { id: recipientId },
+          data: { messageId: messageSid, sentAt: new Date() },
+        });
+      }
+      return;
+    } catch (err) {
+      if (attempt >= 3) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
+}
 
-  const rows = await prisma.account.findMany({
-    where: { key: { in: accountKeys } },
-    select: {
-      key: true,
-      dealer: true,
-      phone: true,
-      address: true,
-      city: true,
-      state: true,
-      postalCode: true,
-      website: true,
-      timezone: true,
-    },
-  });
-  for (const row of rows) map.set(row.key, row);
-  return map;
+/**
+ * Send one pass of an SMS blast: up to `batchSize` recipients whose local
+ * quiet hours are over. Same pass model as processEmailBlast.
+ *
+ * Quiet hours make the batch selection different from email's: a pass loads
+ * the (lightweight) pending list, holds the rows still inside their local
+ * window, and sends up to `batchSize` of the rest. Taking the first N pending
+ * rows instead would let a batch of held Eastern numbers block Pacific ones
+ * whose window is open. A hold note is only rewritten when it changes, rather
+ * than on every held row every minute.
+ */
+interface SmsSendPassOptions {
+  concurrency?: number;
+  batchSize?: number;
+  deadline?: number;
 }
 
 export async function processSmsBlast(
   campaignId: string,
-  options?: { concurrency?: number },
+  options?: SmsSendPassOptions,
 ): Promise<SmsBlastSummary> {
+  return (await processSmsBlastPass(campaignId, options)).summary;
+}
+
+/** One pass, plus whether it got anywhere — see processEmailBlastPass. */
+async function processSmsBlastPass(
+  campaignId: string,
+  options?: SmsSendPassOptions,
+): Promise<{ summary: SmsBlastSummary; progressed: boolean }> {
   const concurrency = Math.max(1, Math.min(8, options?.concurrency ?? 4));
+  const batchSize = Math.max(1, options?.batchSize ?? SMS_SEND_BATCH_SIZE);
+  const deadline = options?.deadline ?? Number.POSITIVE_INFINITY;
+
   const campaign = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
-    include: {
-      recipients: {
-        where: { status: 'pending' },
-        select: {
-          id: true,
-          contactId: true,
-          accountKey: true,
-          phone: true,
-          // Needed to cap how long a quiet-hours hold can last.
-          createdAt: true,
-        },
-      },
-    },
+    select: smsCampaignSummarySelect,
   });
-
   if (!campaign) throw new Error('SMS campaign not found');
-  if (TERMINAL_STATUSES.includes(campaign.status as SmsBlastStatus)) {
-    return toSummary(campaign);
+  if (
+    campaign.status === 'draft' ||
+    TERMINAL_STATUSES.includes(campaign.status as SmsBlastStatus)
+  ) {
+    return { summary: toSummary(campaign), progressed: false };
   }
-  if (campaign.recipients.length === 0) {
-    const counts = await summarizeCampaign(campaign.id);
-    const status = resolveSmsBlastStatus(counts);
-    const updated = await updateUnlessCanceled(campaign.id, {
-      status,
-      totalRecipients: counts.total,
-      sentCount: counts.sent,
-      failedCount: counts.failed,
-      undeliveredCount: counts.undelivered,
-      completedAt: status === 'processing' ? null : new Date(),
-      error: counts.firstError || null,
-    });
-    return toSummary(updated);
+
+  const pending = await prisma.smsBlastRecipient.findMany({
+    where: { campaignId, status: 'pending' },
+    select: {
+      id: true,
+      contactId: true,
+      accountKey: true,
+      phone: true,
+      error: true,
+      // Needed to cap how long a quiet-hours hold can last.
+      createdAt: true,
+    },
+    orderBy: { id: 'asc' },
+  });
+  if (pending.length === 0) {
+    return { summary: await finalizeSmsBlast(campaignId), progressed: false };
   }
 
   // Claim the blast. Guarded so a cancel landing between the read above and
   // this write isn't put straight back into 'processing' — see the email twin.
   const claimed = await prisma.smsBlast.updateMany({
-    where: { id: campaign.id, status: { notIn: TERMINAL_STATUSES } },
+    where: { id: campaignId, status: { in: PROCESSABLE_STATUSES } },
     data: {
       status: 'processing',
       startedAt: campaign.startedAt || new Date(),
       completedAt: null,
-      error: null,
     },
   });
   if (claimed.count === 0) {
-    return toSummary(
-      await prisma.smsBlast.findUniqueOrThrow({
-        where: { id: campaign.id },
-        select: smsCampaignSummarySelect,
-      }),
-    );
+    return {
+      summary: toSummary(
+        await prisma.smsBlast.findUniqueOrThrow({
+          where: { id: campaignId },
+          select: smsCampaignSummarySelect,
+        }),
+      ),
+      progressed: false,
+    };
   }
 
-  // Polled between sends so a cancel stops the loop rather than only the next
-  // sweep. One query per second at most, shared across the concurrent tasks.
-  const isCanceled = createCancelGate(async () => {
-    const row = await prisma.smsBlast.findUnique({
-      where: { id: campaign.id },
-      select: { status: true },
-    });
-    return row?.status === 'canceled';
-  });
-
-  const campaignMessageOptions = parseCampaignMetadata(campaign.metadata);
-  const runtimeByAccount = new Map<string, ResolvedMessagingRuntime>();
-
-  const uniqueAccountKeys = [...new Set(campaign.recipients.map((r) => r.accountKey))];
-
-  // Batch the per-recipient data instead of querying inside the send loop.
-  const contactById = await loadSmsContacts(
-    campaign.recipients.map((r) => ({
-      contactId: r.contactId,
-      accountKey: r.accountKey,
-    })),
-  );
-
-  // Re-read suppressions HERE, not just at schedule time. A STOP reply is a
-  // legal opt-out; honouring it only as of the moment a blast was drafted means
-  // texting someone who told you to stop three days ago. The send is the only
-  // checkpoint that can be authoritative.
-  const suppressedAtSend = await loadSmsSuppressionSet(
-    campaign.recipients.map((r) => ({
-      accountKey: r.accountKey,
-      phone: r.phone,
-    })),
-  );
-
-  const accountDataByKey = await loadSmsAccountData(uniqueAccountKeys);
+  // The shared loader: account custom values, branding and timezone, the
+  // same data an email blast's merge tags read.
+  const accountDataByKey = await loadBlastAccountData([
+    ...new Set(pending.map((r) => r.accountKey)),
+  ]);
   const sendInstant = new Date();
 
-  async function resolveMessagingRuntime(accountKey: string): Promise<ResolvedMessagingRuntime> {
-    const cached = runtimeByAccount.get(accountKey);
-    if (cached) return cached;
-
-    // ── Twilio (the only SMS transport) ──
-    // We send through the sub-account's Twilio creds directly for
-    // proper deliverability, A2P 10DLC compliance, and status
-    // callbacks via webhook.
-    try {
-      const twilio = await resolveTwilioConfig(accountKey);
-      if (twilio && (twilio.phoneNumber || twilio.messagingServiceSid)) {
-        const resolved: ResolvedMessagingRuntime = {
-          kind: 'twilio',
-          provider: 'twilio',
-          config: twilio,
-        };
-        runtimeByAccount.set(accountKey, resolved);
-        return resolved;
-      }
-    } catch (err) {
-      // Bad ciphertext / decryption failure. Don't silently fall back
-      // — the user expects Twilio behaviour, surface the error.
-      const message = err instanceof Error ? err.message : 'Failed to load Twilio config';
-      const failed: ResolvedMessagingRuntime = {
-        kind: 'error',
-        error: `Twilio: ${message}`,
-      };
-      runtimeByAccount.set(accountKey, failed);
-      return failed;
-    }
-
-    // No Twilio creds = no SMS. There's no other transport.
-    const missingTwilio: ResolvedMessagingRuntime = {
-      kind: 'error',
-      error: `Twilio is not configured for ${accountKey}. Add credentials in Email & SMS settings.`,
-    };
-    runtimeByAccount.set(accountKey, missingTwilio);
-    return missingTwilio;
-  }
-
-  const tasks = campaign.recipients.map((recipient) => async () => {
-    // Stop the remaining tasks the moment someone cancels. The row itself is
-    // left alone — cancelSmsBlast already flipped every pending recipient to
-    // 'skipped', and re-writing it here would race that transaction.
-    if (await isCanceled()) return;
-
-    const { id, accountKey } = recipient;
-
-    // ── Opt-out re-checks, as of NOW ──
-    // Recorded as `skipped`, not `failed`: nothing went wrong, we deliberately
-    // did not send, and the two mean different things in the analytics.
-    const phoneKey = (recipient.phone || '').trim();
-    const suppressionReason = phoneKey
-      ? suppressedAtSend.get(`${accountKey}|${phoneKey}`)
-      : undefined;
-    if (suppressionReason) {
-      await prisma.smsBlastRecipient.update({
-        where: { id },
-        data: { status: 'skipped', error: `Suppressed (${suppressionReason})` },
-      });
-      return;
-    }
-
-    const contact = contactById.get(`${accountKey}|${recipient.contactId}`);
-
-    // Contact.dnd.sms is a hard, human-set opt-out. It was honoured only by the
-    // segment-eligibility helper behind the on-screen recipient count, never by
-    // the sender — so an opted-out contact in a posted recipient list went out.
-    if (contact?.dndSms) {
-      await prisma.smsBlastRecipient.update({
-        where: { id },
-        data: { status: 'skipped', error: 'Suppressed (contact opted out of SMS)' },
-      });
-      return;
-    }
-
-    const accountData = accountDataByKey.get(accountKey) || null;
-
-    // ── TCPA quiet hours ──
-    // The window is the recipient's local one, derived from their area code, so
-    // a single blast across four timezones has four different legal windows.
-    // Outside it we HOLD the row as pending rather than failing it: the sweep
-    // runs every minute, so each tranche goes out the moment its own window
-    // opens. That is what makes "schedule it, let it land at 8am" work.
+  // ── TCPA quiet hours ──
+  // The window is the recipient's local one, derived from their area code, so
+  // a single blast across four timezones has four different legal windows.
+  // Outside it the row is HELD as pending rather than failed: the sweep runs
+  // every minute, so each tranche goes out the moment its own window opens.
+  const eligible: typeof pending = [];
+  for (const recipient of pending) {
+    const accountData = accountDataByKey.get(recipient.accountKey) || null;
     const { zones } = resolveRecipientZones({
       phone: recipient.phone,
       accountTimezone: accountData?.timezone ?? null,
     });
-    if (!isWithinQuietHours(sendInstant, zones)) {
-      const heldFor = sendInstant.getTime() - recipient.createdAt.getTime();
-      if (heldFor > MAX_DEFERRAL_MS) {
-        // Without this cap a row whose window somehow never opens would keep
-        // the blast in `processing` and re-swept forever.
-        await prisma.smsBlastRecipient.update({
-          where: { id },
+    if (isWithinQuietHours(sendInstant, zones)) {
+      if (eligible.length < batchSize) eligible.push(recipient);
+      continue;
+    }
+    const heldFor = sendInstant.getTime() - recipient.createdAt.getTime();
+    if (heldFor > MAX_DEFERRAL_MS) {
+      // Without this cap a row whose window somehow never opens would keep the
+      // blast in `processing` and re-swept forever.
+      await prisma.smsBlastRecipient.updateMany({
+        where: { id: recipient.id, status: 'pending' },
+        data: {
+          status: 'failed',
+          error:
+            'Not sent: still inside TCPA quiet hours 48h after being queued. Reschedule this blast.',
+        },
+      });
+      continue;
+    }
+    const resume = nextPermittedInstant(sendInstant, zones);
+    const note = resume
+      ? `Holding until ${QUIET_HOURS_START_HOUR}am local (quiet hours) — next attempt ${resume.toISOString()}`
+      : 'Holding until local quiet hours end';
+    if (recipient.error !== note) {
+      await prisma.smsBlastRecipient.updateMany({
+        where: { id: recipient.id, status: 'pending' },
+        // Stays pending on purpose — this is a hold, not an outcome.
+        data: { error: note },
+      });
+    }
+  }
+
+  const campaignMessageOptions = parseCampaignMetadata(campaign.metadata);
+  let consecutiveFailures = 0;
+  let pausedReason: string | null = null;
+  // Recipients brought to an outcome this pass — see processEmailBlastPass.
+  let resolved = 0;
+
+  if (eligible.length > 0) {
+    const runtimeByAccount = new Map<string, ResolvedMessagingRuntime>();
+    const contactById = await loadSmsContacts(eligible);
+
+    // Re-read opt-outs HERE, for every batch. A STOP reply is a legal opt-out;
+    // honoring it only as of the moment a blast was scheduled means texting
+    // someone who told you to stop three days ago — or ten minutes ago, on a
+    // blast that takes an hour to send. Group-wide and format-insensitive (see
+    // ./sending/suppression-lookup.ts).
+    const suppressedAtSend = await loadSmsSuppressions(
+      eligible.map((r) => ({ accountKey: r.accountKey, phone: r.phone })),
+    );
+
+    // Polled between sends so a cancel stops the loop rather than only the
+    // next sweep. One query per second at most, shared across the tasks.
+    const isCanceled = createCancelGate(async () => {
+      const row = await prisma.smsBlast.findUnique({
+        where: { id: campaignId },
+        select: { status: true },
+      });
+      return row?.status === 'canceled';
+    });
+    const shouldStop = async () =>
+      pausedReason !== null ||
+      Date.now() >= deadline ||
+      isSendStopRequested() ||
+      (await isCanceled());
+
+    const resolveMessagingRuntime = async (
+      accountKey: string,
+    ): Promise<ResolvedMessagingRuntime> => {
+      const cached = runtimeByAccount.get(accountKey);
+      if (cached) return cached;
+
+      // ── Twilio (the only SMS transport) ──
+      try {
+        const twilio = await resolveTwilioConfig(accountKey);
+        if (twilio && (twilio.phoneNumber || twilio.messagingServiceSid)) {
+          const resolved: ResolvedMessagingRuntime = {
+            kind: 'twilio',
+            provider: 'twilio',
+            config: twilio,
+          };
+          runtimeByAccount.set(accountKey, resolved);
+          return resolved;
+        }
+      } catch (err) {
+        // Bad ciphertext / decryption failure. Don't silently fall back — the
+        // user expects Twilio behavior, surface the error.
+        const message = err instanceof Error ? err.message : 'Failed to load Twilio config';
+        const failed: ResolvedMessagingRuntime = { kind: 'error', error: `Twilio: ${message}` };
+        runtimeByAccount.set(accountKey, failed);
+        return failed;
+      }
+
+      // No Twilio creds = no SMS. There's no other transport.
+      const missingTwilio: ResolvedMessagingRuntime = {
+        kind: 'error',
+        error: `Twilio is not configured for ${accountKey}. Add credentials in Email & SMS settings.`,
+      };
+      runtimeByAccount.set(accountKey, missingTwilio);
+      return missingTwilio;
+    };
+
+    const skip = async (recipientId: string, error: string) => {
+      resolved += 1;
+      await prisma.smsBlastRecipient.updateMany({
+        where: { id: recipientId, status: 'pending' },
+        data: { status: 'skipped', error },
+      });
+    };
+
+    const handleFailure = async (
+      recipient: (typeof eligible)[number],
+      err: unknown,
+    ): Promise<void> => {
+      const kind = classifyTwilioFailure(err);
+      const message =
+        err instanceof TwilioError
+          ? `Twilio: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : 'Twilio send failed';
+
+      if (kind === 'optout') {
+        // Twilio refused because this handset replied STOP to the sender. That
+        // is a legal opt-out whether or not our inbound webhook saw it —
+        // record it, group-wide, so no later blast tries again.
+        consecutiveFailures = 0;
+        await skip(recipient.id, 'Suppressed (opted out at the carrier)');
+        if (recipient.phone) {
+          await recordSmsOptOut({
+            accountKey: recipient.accountKey,
+            phone: recipient.phone,
+            reason: 'stop',
+            source: 'twilio',
+          }).catch((err) =>
+            console.error(`[sms-blasts] ${campaignId}: could not record a carrier opt-out`, err),
+          );
+        }
+        return;
+      }
+      if (kind === 'auth') {
+        pausedReason ??=
+          `Paused: Twilio rejected this account's credentials (${message}). Update them in ` +
+          'Settings → Email & Texts; sending resumes on its own.';
+        return;
+      }
+      if (kind === 'retry') {
+        consecutiveFailures += 1;
+        const attempt = attemptsSoFar(recipient.error) + 1;
+        if (attempt >= MAX_ATTEMPTS) resolved += 1;
+        await prisma.smsBlastRecipient.updateMany({
+          where: { id: recipient.id, status: 'pending' },
+          data:
+            attempt >= MAX_ATTEMPTS
+              ? { status: 'failed', error: `${message} (gave up after ${attempt} attempts)` }
+              : { error: temporaryFailureNote(attempt, message) },
+        });
+      } else if (kind === 'ambiguous') {
+        consecutiveFailures += 1;
+        resolved += 1;
+        await prisma.smsBlastRecipient.updateMany({
+          where: { id: recipient.id, status: 'pending' },
           data: {
             status: 'failed',
             error:
-              'Not sent: still inside TCPA quiet hours 48h after being queued. Reschedule this blast.',
+              `${message} — Twilio didn't confirm this text, so it may or may not have ` +
+              'been sent. It was not retried, to avoid sending it twice.',
           },
         });
+      } else {
+        consecutiveFailures = 0;
+        resolved += 1;
+        await prisma.smsBlastRecipient.updateMany({
+          where: { id: recipient.id, status: 'pending' },
+          data: { status: 'failed', error: message },
+        });
+      }
+
+      if (consecutiveFailures >= SMS_BREAKER_THRESHOLD) {
+        pausedReason ??=
+          `Paused: Twilio stopped accepting texts (${message}). ` +
+          'The rest of this blast is waiting and will retry on its own.';
+      }
+    };
+
+    const tasks = eligible.map((recipient) => async () => {
+      if (await shouldStop()) return;
+      const { id, accountKey } = recipient;
+
+      // ── Opt-out re-checks, as of NOW ──
+      // Recorded as `skipped`, not `failed`: nothing went wrong, we
+      // deliberately did not send.
+      const suppressionReason = recipient.phone
+        ? suppressedAtSend(accountKey, recipient.phone)
+        : null;
+      if (suppressionReason) {
+        await skip(id, `Suppressed (${suppressionReason})`);
         return;
       }
 
-      const resume = nextPermittedInstant(sendInstant, zones);
-      await prisma.smsBlastRecipient.update({
-        where: { id },
-        data: {
-          // Stays pending on purpose — this is a hold, not an outcome.
-          status: 'pending',
-          error: resume
-            ? `Holding until ${QUIET_HOURS_START_HOUR}am local (quiet hours) — next attempt ${resume.toISOString()}`
-            : 'Holding until local quiet hours end',
-        },
-      });
-      return;
-    }
+      const contact = contactById.get(`${accountKey}|${recipient.contactId}`);
+      // Deleted after the blast was scheduled — removed on purpose.
+      if (!contact) {
+        await skip(id, 'Skipped (contact no longer exists)');
+        return;
+      }
+      // Contact.dnd.sms is a hard, human-set opt-out.
+      if (contact.dndSms) {
+        await skip(id, 'Suppressed (contact opted out of SMS)');
+        return;
+      }
 
-    const runtime = await resolveMessagingRuntime(accountKey);
-    if (runtime.kind === 'error') {
-      await prisma.smsBlastRecipient.update({
-        where: { id },
-        data: { status: 'failed', error: runtime.error },
-      });
-      return;
-    }
+      const runtime = await resolveMessagingRuntime(accountKey);
+      if (runtime.kind === 'error') {
+        // A configuration problem, not this recipient's: failing the whole
+        // audience one by one meant re-creating the blast once Twilio was
+        // fixed. Pause with everyone still pending instead.
+        pausedReason ??= `Paused: ${runtime.error} Sending resumes on its own once this is fixed.`;
+        return;
+      }
+      if (runtime.kind !== 'twilio') return;
 
-    // Twilio path: needs the recipient's phone (already persisted on
-    // the row at schedule time). Missing phone = recipient was scheduled
-    // before phone hygiene caught the bad value, which shouldn't happen
-    // but we guard anyway.
-    if (runtime.kind === 'twilio') {
+      // Missing phone = the row was scheduled before phone hygiene caught the
+      // bad value; shouldn't happen, guarded anyway.
       if (!recipient.phone) {
-        await prisma.smsBlastRecipient.update({
-          where: { id },
+        resolved += 1;
+        await prisma.smsBlastRecipient.updateMany({
+          where: { id, status: 'pending' },
           data: { status: 'failed', error: 'No phone number on file for this recipient.' },
         });
         return;
       }
+
+      let body: string;
       try {
-        // Per-recipient personalization. The body used to be passed straight
-        // through, so any {{contact.first_name}} a user carried over from the
-        // email editor shipped to the handset with its braces intact — while
-        // the same tag in a FLOW text personalized correctly.
+        // Per-recipient personalization: a {{contact.first_name}} carried over
+        // from the email editor used to ship to the handset with its braces.
         const mergeCtx = buildBlastMergetagContext({
           contact,
-          account: accountData,
-          recipientEmail: contact?.email ?? null,
+          account: accountDataByKey.get(accountKey) || null,
+          recipientEmail: contact.email ?? null,
           // SMS opts out by replying STOP; there is no unsubscribe URL.
           unsubscribeToken: '',
         });
-        const personalizedBody = applyBlastMergetags(campaign.message, mergeCtx, {
-          // No HTML here — escaping would put &amp; on someone's phone.
-          escape: false,
-        });
+        // No HTML here — escaping would put &amp; on someone's phone.
+        body = applyBlastMergetags(campaign.message, mergeCtx, { escape: false });
+      } catch (err) {
+        await handleFailure(
+          recipient,
+          new PreSendError(
+            `Couldn't build this text: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+        return;
+      }
 
-        const sent = await sendSmsViaTwilio({
+      let sent: { messageSid: string };
+      try {
+        sent = await sendSmsViaTwilio({
           accountSid: runtime.config.accountSid,
           authToken: runtime.config.authToken,
           from: {
             phoneNumber: runtime.config.phoneNumber,
             messagingServiceSid: runtime.config.messagingServiceSid,
           },
-          to: recipient.phone,
-          body: personalizedBody,
+          // E.164, so Twilio never has to guess the country.
+          to: normalisePhone(recipient.phone) || recipient.phone,
+          body,
           mediaUrls: campaignMessageOptions.mediaUrls,
           // Status callback routes the accountKey through the URL so the
-          // webhook handler can resolve the right per-sub-account Auth
-          // Token for signature verification.
+          // webhook handler can resolve the right Auth Token for signature
+          // verification.
           statusCallback: buildStatusCallbackUrl(accountKey),
         });
-        await prisma.smsBlastRecipient.update({
-          where: { id },
-          data: {
-            status: 'sent',
-            messageId: sent.messageSid,
-            sentAt: new Date(),
-            error: null,
-          },
-        });
       } catch (err) {
-        const errorMessage =
-          err instanceof TwilioError
-            ? `Twilio: ${err.message}`
-            : err instanceof Error
-              ? err.message
-              : 'Twilio send failed';
-        await prisma.smsBlastRecipient.update({
-          where: { id },
-          data: { status: 'failed', error: errorMessage },
-        });
+        await handleFailure(recipient, err);
+        return;
       }
-      return;
-    }
 
-  });
+      consecutiveFailures = 0;
+      resolved += 1;
+      try {
+        await recordSmsSent(id, sent.messageSid);
+      } catch (err) {
+        console.error(
+          `[sms-blasts] ${campaignId}: sent to recipient ${id} but could not record it`,
+          err,
+        );
+        pausedReason ??=
+          'Paused: Loomi could not record a sent text (database error). Sending resumes on the next pass.';
+      }
+    });
 
-  await withConcurrencyLimit(tasks, concurrency);
+    await withConcurrencyLimit(tasks, concurrency);
+  }
 
-  const counts = await summarizeCampaign(campaign.id);
+  const counts = await summarizeCampaign(campaignId);
   const nextStatus = resolveSmsBlastStatus(counts);
-
-  const updated = await updateUnlessCanceled(campaign.id, {
+  const updated = await updateUnlessCanceled(campaignId, {
     status: nextStatus,
     totalRecipients: counts.total,
     sentCount: counts.sent,
     failedCount: counts.failed,
     undeliveredCount: counts.undelivered,
     completedAt: nextStatus === 'processing' ? null : new Date(),
-    error: counts.firstError || null,
+    error: pausedReason ?? (counts.firstError || null),
   });
 
-  return toSummary(updated);
+  if (updated.status === 'canceled') {
+    // Record what this pass's in-flight texts did after the cancel's own
+    // count write — counts only, status stays canceled.
+    const final = await prisma.smsBlast.update({
+      where: { id: campaignId },
+      data: {
+        totalRecipients: counts.total,
+        sentCount: counts.sent,
+        failedCount: counts.failed,
+        undeliveredCount: counts.undelivered,
+      },
+      select: smsCampaignSummarySelect,
+    });
+    return { summary: toSummary(final), progressed: false };
+  }
+
+  return {
+    summary: toSummary(updated),
+    progressed: resolved > 0 && pausedReason === null,
+  };
 }
 
+/**
+ * One SMS sweep: rotate passes across every due blast until the time budget
+ * runs out. Same rotation, rounds and isolation as processDueEmailBlasts; a
+ * blast whose remaining texts are all inside quiet hours sits out the rest of
+ * the tick.
+ */
 export async function processDueSmsBlasts(options?: {
   limit?: number;
   accountKeys?: string[];
   concurrency?: number;
+  timeBudgetMs?: number;
 }): Promise<SmsBlastSummary[]> {
-  const limit = Math.max(1, Math.min(20, options?.limit ?? 5));
-  const now = new Date();
-
-  const rows = await prisma.smsBlast.findMany({
-    where: {
-      status: { in: PROCESSABLE_STATUSES },
-      // Never sweep a flow's wrapper shell — see the email equivalent in
-      // processDueEmailBlasts. The flow engine owns the send.
-      ...blastSourceWhere('blasts'),
-      OR: [
-        { scheduledFor: null },
-        { scheduledFor: { lte: now } },
-      ],
-    },
-    orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
-    take: limit * 4,
-  });
-
+  const limit = Math.max(1, Math.min(200, options?.limit ?? 50));
+  const deadline = Date.now() + (options?.timeBudgetMs ?? SMS_SWEEP_TIME_BUDGET_MS);
   const allowedAccountKeys = options?.accountKeys && options.accountKeys.length > 0
     ? new Set(options.accountKeys)
     : null;
 
-  const queue = rows
-    .filter((row) => {
+  const summaries: SmsBlastSummary[] = [];
+  const sittingOut = new Set<string>();
+
+  while (Date.now() < deadline && !isSendStopRequested()) {
+    const now = new Date();
+    const rows = await prisma.smsBlast.findMany({
+      where: {
+        status: { in: PROCESSABLE_STATUSES },
+        archivedAt: null,
+        // Never sweep a flow's wrapper shell — see the email equivalent in
+        // processDueEmailBlasts. The flow engine owns the send.
+        ...blastSourceWhere('blasts'),
+        ...(sittingOut.size > 0 ? { id: { notIn: [...sittingOut] } } : {}),
+        OR: [
+          { scheduledFor: null },
+          { scheduledFor: { lte: now } },
+        ],
+      },
+      orderBy: [{ updatedAt: 'asc' }, { createdAt: 'asc' }],
+      take: limit,
+      select: { id: true, accountKeys: true },
+    });
+    const queue = rows.filter((row) => {
       if (!allowedAccountKeys) return true;
       const keys = parseAccountKeys(row.accountKeys);
       return keys.some((key) => allowedAccountKeys.has(key));
-    })
-    .slice(0, limit);
+    });
+    if (queue.length === 0) break;
 
-  const summaries: SmsBlastSummary[] = [];
-  for (const row of queue) {
-    const summary = await processSmsBlast(row.id, { concurrency: options?.concurrency });
-    summaries.push(summary);
+    let progressed = false;
+    for (const row of queue) {
+      if (Date.now() >= deadline || isSendStopRequested()) break;
+      try {
+        const pass = await processSmsBlastPass(row.id, {
+          concurrency: options?.concurrency,
+          deadline,
+        });
+        summaries.push(pass.summary);
+        if (pass.progressed) progressed = true;
+        else sittingOut.add(row.id);
+      } catch (err) {
+        console.error(`[sms-blasts] ${row.id}: send pass failed`, err);
+        sittingOut.add(row.id);
+      }
+    }
+    if (!progressed) break;
   }
 
   return summaries;

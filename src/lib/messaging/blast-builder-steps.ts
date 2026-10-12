@@ -12,6 +12,16 @@
 //
 // One exported list, one place to change, and unit tests that fail the moment
 // a route folder is renamed without updating it.
+//
+// Pure and free of Prisma on purpose: the schedule routes read
+// isAudienceConfirmed from here too, so "done" means the same thing to the
+// header nav and to the send.
+
+import {
+  audienceSelectionFromDraft,
+  type AudienceDraftFields,
+} from '@/lib/segments/selection';
+import { parseBlastMetadata } from './blast-metadata';
 
 export const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
@@ -139,10 +149,100 @@ export function builderStepHref(
 }
 
 export interface BuilderCompletion {
-  /** An audience has been saved (any mode stamps accountKeys). */
+  /** The Recipients step has saved an audience with someone in it. */
   hasRecipients: boolean;
   /** There is something to send. */
   hasMessage: boolean;
+}
+
+/**
+ * Metadata key the Recipients step writes, `true`, when it saves an audience.
+ *
+ * WHY A FLAG. Neither of the obvious signals can tell "chose everyone" from
+ * "never chose": every draft is created with its account already stamped in
+ * accountKeys, and "All Contacts" is stored as all three source columns empty
+ * — exactly what a brand-new draft looks like. Reading accountKeys as "done"
+ * let the header jump straight past Recipients, and the blast went to the
+ * whole account.
+ *
+ * Server code reads it through isAudienceConfirmed below, so it is one key.
+ */
+export const AUDIENCE_CONFIRMED_KEY = 'audienceConfirmed';
+
+export interface AudienceConfirmationFields extends AudienceDraftFields {
+  accountKeys?: string[] | null;
+  metadata?: string | null;
+}
+
+/**
+ * Has someone actually chosen this draft's audience on the Recipients step?
+ *
+ * All three must hold: an account, the Recipients step's flag, and a saved
+ * audience that isn't empty — a hand-picked selection with nobody in it (or a
+ * segment that can't be read) resolves to no one, so it is not "done" even if
+ * the flag is set. The emptiness test is audienceSelectionFromDraft's, the
+ * same reading the send uses.
+ */
+export function isAudienceConfirmed(
+  draft: AudienceConfirmationFields | null | undefined,
+): boolean {
+  if (!draft) return false;
+  if (!Array.isArray(draft.accountKeys) || draft.accountKeys.length === 0) return false;
+  if (parseBlastMetadata(draft.metadata)[AUDIENCE_CONFIRMED_KEY] !== true) return false;
+  const selection = audienceSelectionFromDraft(draft);
+  if (!selection) return false;
+  return !(selection.kind === 'contacts' && selection.ids.length === 0);
+}
+
+/** What the header needs off a draft to work out which steps are open. */
+export interface BuilderDraftFields extends AudienceConfirmationFields {
+  subject?: string | null;
+  htmlContent?: string | null;
+  message?: string | null;
+}
+
+/**
+ * Completion facts for a draft. `hasMessage` mirrors the server's send gate:
+ * an email needs a subject and a body, a text needs its message.
+ */
+export function builderCompletion(
+  channel: BuilderChannel,
+  draft: BuilderDraftFields,
+): BuilderCompletion {
+  return {
+    hasRecipients: isAudienceConfirmed(draft),
+    hasMessage:
+      channel === 'sms'
+        ? Boolean(String(draft.message || '').trim())
+        : Boolean(String(draft.subject || '').trim()) &&
+          Boolean(String(draft.htmlContent || '').trim()),
+  };
+}
+
+/**
+ * Only a draft may change. Once a blast is queued, scheduled or sending, its
+ * audience, content and send time are what the worker will deliver, and once
+ * it has finished or been canceled it is a record of what went out. The PATCH
+ * routes refuse everything but a rename past this point, and the builder
+ * pages show a locked state instead of the editor.
+ */
+export function isEditableBlastStatus(status: string | null | undefined): boolean {
+  return status === 'draft';
+}
+
+/** Statuses with a send still ahead of them, which Cancel can stop. */
+const PENDING_SEND_STATUSES = new Set(['queued', 'scheduled', 'processing']);
+
+/**
+ * Why a blast can't be edited, in words that say what to do about it. A
+ * canceled blast never becomes a draft again, so "cancel it" is only offered
+ * while there is still a send to cancel; after that the way forward is a copy.
+ */
+export function lockedBlastMessage(status: string | null | undefined): string {
+  if (PENDING_SEND_STATUSES.has(String(status || ''))) {
+    return 'This blast is already scheduled or sent. Cancel it to make changes.';
+  }
+  return 'This blast has already been sent or canceled, so it can’t be changed. Duplicate it from the Blasts list to send a new version.';
 }
 
 /**

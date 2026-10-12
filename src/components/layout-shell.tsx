@@ -12,6 +12,7 @@ import {
   BUILDER_STEPS,
   builderBlastId,
   builderChannel,
+  builderCompletion,
   builderStep,
   builderStepHref,
   isBuilderPath,
@@ -20,6 +21,31 @@ import {
   type BuilderChannel,
   type BuilderStepKey,
 } from '@/lib/messaging/blast-builder-steps';
+import { BLAST_DRAFT_SAVED_EVENT, flushBuilderSaves } from '@/lib/messaging/builder-autosave';
+import { toast } from '@/lib/toast';
+
+/** The draft the header reads: the email half for an Email + Text blast. */
+function builderDraftEndpoint(channel: BuilderChannel, id: string): string {
+  return channel === 'sms'
+    ? `/api/blasts/sms/${encodeURIComponent(id)}`
+    : `/api/blasts/email/${encodeURIComponent(id)}`;
+}
+
+/** Which steps a draft has unlocked, read fresh; null when it can't be read. */
+async function fetchReachableSteps(
+  channel: BuilderChannel,
+  id: string,
+): Promise<Set<BuilderStepKey> | null> {
+  const res = await fetch(builderDraftEndpoint(channel, id), { cache: 'no-store' });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  const c = data?.campaign;
+  if (!c) return null;
+  // Recipients counts as done only once the Recipients step has saved a
+  // non-empty audience — see isAudienceConfirmed. "Has an account" was the
+  // old test, and every draft has one from the moment it's created.
+  return reachableSteps(builderCompletion(channel, c));
+}
 
 /**
  * Which builder steps the user may jump to.
@@ -31,8 +57,12 @@ import {
  * subject or no body). Letting someone reach Schedule early would only
  * hand them a dead Send button.
  *
+ * Re-checked on every step change and whenever a step announces a save, so
+ * choosing an audience unlocks Message without leaving the page.
+ *
  * Fails OPEN: if the draft can't be read we unlock everything rather than
- * trapping the user in step 1. The server gate is the real guarantee.
+ * trapping the user in step 1. The navigation itself re-checks, and the
+ * server gate is the real guarantee.
  */
 function useBuilderReachableSteps(
   channel: BuilderChannel,
@@ -41,54 +71,55 @@ function useBuilderReachableSteps(
   const [reachable, setReachable] = useState<Set<BuilderStepKey>>(
     () => new Set(BUILDER_STEPS.map((s) => s.key)),
   );
-  // Re-check on every step change: the user just saved the step they came
-  // from, so what's reachable has probably grown.
   const pathname = usePathname();
+  const [savedTick, setSavedTick] = useState(0);
+
+  useEffect(() => {
+    const onSaved = (e: Event) => {
+      if ((e as CustomEvent<{ id?: string }>).detail?.id === id) setSavedTick((n) => n + 1);
+    };
+    window.addEventListener(BLAST_DRAFT_SAVED_EVENT, onSaved);
+    return () => window.removeEventListener(BLAST_DRAFT_SAVED_EVENT, onSaved);
+  }, [id]);
 
   useEffect(() => {
     if (!id) return;
     let canceled = false;
-
-    // Multi-channel drafts carry an email id, so they hydrate from the
-    // email endpoint; SMS-only drafts have their own.
-    const endpoint =
-      channel === 'sms'
-        ? `/api/blasts/sms/${encodeURIComponent(id)}`
-        : `/api/blasts/email/${encodeURIComponent(id)}`;
-
-    (async () => {
-      try {
-        const res = await fetch(endpoint);
-        if (!res.ok) return;
-        const data = await res.json();
-        const c = data?.campaign;
-        if (!c || canceled) return;
-
-        // Recipients is done once an audience has been saved. Every
-        // selection mode — including "All contacts", which deliberately
-        // clears the three source fields — stamps accountKeys.
-        const hasRecipients =
-          Array.isArray(c.accountKeys) && c.accountKeys.length > 0;
-        // Message is done when there is something to send. Mirrors the
-        // server-side gate exactly.
-        const hasMessage =
-          channel === 'sms'
-            ? Boolean(String(c.message || '').trim())
-            : Boolean(String(c.subject || '').trim())
-              && Boolean(String(c.htmlContent || '').trim());
-
-        setReachable(reachableSteps({ hasRecipients, hasMessage }));
-      } catch {
+    fetchReachableSteps(channel, id)
+      .then((next) => {
+        if (next && !canceled) setReachable(next);
+      })
+      .catch(() => {
         // Network hiccup — leave the permissive default in place.
-      }
-    })();
-
+      });
     return () => {
       canceled = true;
     };
-  }, [channel, id, pathname]);
+  }, [channel, id, pathname, savedTick]);
 
   return reachable;
+}
+
+/**
+ * Finish the current step's saves, then leave. Returns false (and says why)
+ * when a save failed, so the caller stays put instead of navigating away from
+ * work that isn't stored. Blurring first lets a field that saves on blur
+ * start its save before the flush runs.
+ */
+async function flushBeforeLeaving(): Promise<boolean> {
+  const el = document.activeElement as HTMLElement | null;
+  if (el && typeof el.blur === 'function') el.blur();
+  try {
+    await flushBuilderSaves();
+    return true;
+  } catch (err) {
+    toast.error(
+      `Your latest changes couldn’t be saved, so you’re still on this step. ${
+        err instanceof Error ? err.message : ''
+      }`.trim(),
+    );
+    return false;
+  }
 }
 
 function CampaignBuilderProgress({
@@ -104,6 +135,32 @@ function CampaignBuilderProgress({
   const id = builderBlastId(path);
   const reachable = useBuilderReachableSteps(channel, id);
   const activeIndex = BUILDER_STEPS.findIndex((s) => s.key === current);
+  const [leaving, setLeaving] = useState(false);
+
+  const goToStep = async (target: BuilderStepKey) => {
+    if (leaving) return;
+    setLeaving(true);
+    try {
+      // The step being left saves first — the header used to navigate
+      // immediately, dropping an audience the Recipients step hadn't saved.
+      if (!(await flushBeforeLeaving())) return;
+      // Then re-check against what was just saved: the button was enabled on
+      // what the draft looked like a moment ago, and a step that has since
+      // become empty (say, every contact unchecked) must not be jumped past.
+      const fresh = await fetchReachableSteps(channel, id).catch(() => null);
+      if (fresh && !fresh.has(target)) {
+        toast.error(
+          target === 'message'
+            ? 'Choose who should receive this blast first.'
+            : 'Choose recipients and add a subject and message first.',
+        );
+        return;
+      }
+      router.push(builderStepHref(path, channel, target));
+    } finally {
+      setLeaving(false);
+    }
+  };
 
   return (
     <nav className="hidden md:flex items-center gap-2" aria-label="Campaign builder progress">
@@ -117,7 +174,7 @@ function CampaignBuilderProgress({
           <div key={step.key} className="flex items-center gap-2">
             <button
               type="button"
-              disabled={!canVisit}
+              disabled={!canVisit || leaving}
               aria-current={isActive ? 'step' : undefined}
               title={
                 locked
@@ -128,12 +185,7 @@ function CampaignBuilderProgress({
               }
               onClick={() => {
                 if (!canVisit) return;
-                // Flush a focused field's onBlur so the step we're
-                // leaving persists before the route changes — same
-                // reasoning as the exit button below.
-                const el = document.activeElement as HTMLElement | null;
-                if (el && typeof el.blur === 'function') el.blur();
-                router.push(builderStepHref(path, channel, step.key));
+                void goToStep(step.key);
               }}
               className={`flex items-center gap-2 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${
                 isActive
@@ -304,13 +356,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
             {!isEmbed && (
               <button
                 type="button"
-                onClick={() => {
-                  // Best-effort: flush any focused input's onBlur so the
-                  // currently-typed value gets persisted before we navigate.
-                  // Autosave handles the rest, so no exit-confirmation
-                  // prompt — work is already preserved as a draft.
-                  const active = document.activeElement as HTMLElement | null;
-                  if (active && typeof active.blur === 'function') active.blur();
+                onClick={async () => {
+                  // Finish the step's pending saves first, so leaving is never
+                  // how a choice gets lost. No exit-confirmation prompt — once
+                  // saved, the work is preserved as a draft.
+                  if (!(await flushBeforeLeaving())) return;
                   router.push('/messaging/blasts');
                 }}
                 className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"

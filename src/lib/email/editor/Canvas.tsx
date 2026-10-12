@@ -6,6 +6,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { useDroppable } from '@dnd-kit/core';
+import { applyPreviewVariables } from '@/lib/preview-variables';
 import { useEditor } from './EditorContext';
 import { EditableBlock } from './EditableBlock';
 import { BlockDropGap } from './BlockDropGap';
@@ -23,11 +24,11 @@ function applyPreviewSubstitution(
   value: string,
   values: Record<string, string>,
 ): string {
-  return value.replace(/\{\{([^}]+)\}\}/g, (match, rawKey) => {
-    const key = String(rawKey).trim();
-    if (key in values) return values[key];
-    return match;
-  });
+  if (Object.keys(values).length === 0 || !value.includes('{{')) return value;
+  // The sender's engine (filters, `default:` fallbacks, case-insensitive
+  // custom keys), so the canvas shows what the inbox will. Unescaped: React
+  // escapes text itself.
+  return applyPreviewVariables(value, values, { escape: false });
 }
 
 function substituteProps(

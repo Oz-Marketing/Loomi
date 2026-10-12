@@ -24,16 +24,39 @@ const smsUpdate = vi.fn();
 const smsRecipientFindMany = vi.fn();
 const smsRecipientUpdateMany = vi.fn();
 
+const emailCounterWrite = vi.fn();
+
 const txClient = {
-  emailBlast: { update: (...a: unknown[]) => emailUpdate(...a) },
+  // The row lock recomputeEmailBlastCounters takes before recounting.
+  $queryRaw: vi.fn(async () => []),
+  emailBlast: {
+    update: (...a: unknown[]) => emailUpdate(...a),
+    updateMany: (...a: unknown[]) => emailCounterWrite(...a),
+  },
   emailBlastRecipient: {
     updateMany: (...a: unknown[]) => emailRecipientUpdateMany(...a),
+    groupBy: async (...a: unknown[]) => groupByStatus(await emailRecipientFindMany(...a)),
   },
   smsBlast: { update: (...a: unknown[]) => smsUpdate(...a) },
   smsBlastRecipient: {
     updateMany: (...a: unknown[]) => smsRecipientUpdateMany(...a),
   },
 };
+
+/**
+ * The services count recipients with one grouped query; the fixtures below
+ * describe recipients as rows. Derive the grouped answer from those rows so
+ * each test keeps saying what the recipients look like, not how they're
+ * counted.
+ */
+function groupByStatus(rows: { status: string }[] | undefined) {
+  const counts = new Map<string, number>();
+  for (const row of rows ?? []) counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
+  return [...counts].map(([status, n]) => ({ status, _count: { _all: n } }));
+}
+function firstFailure(rows: { status: string; error?: string | null }[] | undefined) {
+  return (rows ?? []).find((r) => r.status === 'failed' && r.error) ?? null;
+}
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
@@ -47,6 +70,8 @@ vi.mock('@/lib/prisma', () => ({
     emailBlastRecipient: {
       findMany: (...a: unknown[]) => emailRecipientFindMany(...a),
       updateMany: (...a: unknown[]) => emailRecipientUpdateMany(...a),
+      groupBy: async (...a: unknown[]) => groupByStatus(await emailRecipientFindMany(...a)),
+      findFirst: async (...a: unknown[]) => firstFailure(await emailRecipientFindMany(...a)),
     },
     smsBlast: {
       findUnique: (...a: unknown[]) => smsFindUnique(...a),
@@ -57,6 +82,8 @@ vi.mock('@/lib/prisma', () => ({
     smsBlastRecipient: {
       findMany: (...a: unknown[]) => smsRecipientFindMany(...a),
       updateMany: (...a: unknown[]) => smsRecipientUpdateMany(...a),
+      groupBy: async (...a: unknown[]) => groupByStatus(await smsRecipientFindMany(...a)),
+      findFirst: async (...a: unknown[]) => firstFailure(await smsRecipientFindMany(...a)),
     },
   },
 }));
@@ -103,12 +130,15 @@ function summaryRow(overrides?: Record<string, unknown>) {
 
 beforeEach(() => {
   for (const fn of [
+    emailCounterWrite,
     emailFindUnique, emailFindUniqueOrThrow, emailUpdate, emailUpdateMany,
     emailRecipientFindMany, emailRecipientUpdateMany,
     smsFindUnique, smsFindUniqueOrThrow, smsUpdate,
     smsRecipientFindMany, smsRecipientUpdateMany,
   ]) fn.mockReset();
   emailUpdate.mockResolvedValue(summaryRow());
+  emailCounterWrite.mockResolvedValue({ count: 1 });
+  emailFindUniqueOrThrow.mockResolvedValue(summaryRow());
   smsUpdate.mockResolvedValue(summaryRow());
   emailRecipientUpdateMany.mockResolvedValue({ count: 0 });
   smsRecipientUpdateMany.mockResolvedValue({ count: 0 });
@@ -156,13 +186,13 @@ describe('cancelEmailBlast', () => {
 
     await cancelEmailBlast('blast-1');
 
-    // The second update carries the recomputed counts. Mail that left is
-    // still counted as sent — cancelling does not un-send it.
-    const countsWrite = emailUpdate.mock.calls[1][0];
+    // The counters are recounted from the rows, under the blast's row lock.
+    // Mail that left is still counted as sent — cancelling does not un-send it.
+    const countsWrite = emailCounterWrite.mock.calls.at(-1)?.[0];
     expect(countsWrite.data).toMatchObject({
-      totalRecipients: 5,
       sentCount: 2,
       failedCount: 1,
+      bouncedCount: 0,
     });
   });
 

@@ -13,9 +13,11 @@ import {
   ArrowTopRightOnSquareIcon,
   EnvelopeIcon,
   DevicePhoneMobileIcon,
+  LockClosedIcon,
   TagIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
+import type { OptOutLock } from '@/lib/sending/opt-outs';
 import {
   InlineEditableField,
   type EditableFieldType,
@@ -90,6 +92,18 @@ interface ConvoStats {
 interface DndState {
   email: boolean;
   sms: boolean;
+}
+
+/** One channel of GET /api/contacts/:id/suppression's `optOuts`. */
+interface ChannelOptOut {
+  optedOut: boolean;
+  /** Set when something staff can't clear holds the channel — why. */
+  lockedBy: OptOutLock | null;
+}
+
+interface OptOutState {
+  email: ChannelOptOut;
+  sms: ChannelOptOut;
 }
 
 // ── Helpers ──
@@ -205,6 +219,54 @@ function parseDndPayload(value: unknown): DndState {
   return out;
 }
 
+const OPT_OUT_LOCKS: readonly OptOutLock[] = ['unsubscribed', 'spam', 'bounced', 'imported', 'other'];
+
+function parseChannelOptOut(value: unknown): ChannelOptOut {
+  const row = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const lockedBy = OPT_OUT_LOCKS.find((lock) => lock === row.lockedBy) ?? null;
+  return { optedOut: row.optedOut === true, lockedBy };
+}
+
+function parseOptOutState(value: unknown): OptOutState | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  return { email: parseChannelOptOut(row.email), sms: parseChannelOptOut(row.sms) };
+}
+
+/**
+ * Why a channel can't be turned back on from here. Staff can only undo what
+ * staff (or the dealer's CRM) recorded: a person's own unsubscribe, spam
+ * report or STOP can't be undone for them (CAN-SPAM, TCPA), a bounced address
+ * stays suppressed, and an imported opt-out may have been the person's own in
+ * the system it came from.
+ */
+function optOutLockMessage(channel: 'email' | 'sms', lock: OptOutLock): string {
+  if (channel === 'email') {
+    switch (lock) {
+      case 'unsubscribed':
+        return "This person unsubscribed themselves, so they can't be resubscribed here.";
+      case 'spam':
+        return "This person reported an email as spam, so they can't be resubscribed here.";
+      case 'bounced':
+        return 'Email to this address bounced, so it stays suppressed.';
+      case 'imported':
+        return "This opt-out was imported from another system, so it can't be turned off here. If it was imported by mistake, remove it in Settings → Email & Texts → Suppressions.";
+      default:
+        return "This address is on the suppression list for another reason, so it can't be turned off here.";
+    }
+  }
+  switch (lock) {
+    case 'unsubscribed':
+      return "This person texted STOP, so they can't be resubscribed here.";
+    case 'bounced':
+      return "Texts to this number couldn't be delivered, so it stays suppressed.";
+    case 'imported':
+      return "This opt-out was imported from another system, so it can't be turned off here.";
+    default:
+      return "This number is on the suppression list for another reason, so it can't be turned off here.";
+  }
+}
+
 function normalizeAccountSummary(value: unknown): AccountSummary | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as Record<string, unknown>;
@@ -275,6 +337,9 @@ export default function ContactDetailPage() {
   const [dndSaving, setDndSaving] = useState(false);
   const [dndError, setDndError] = useState<string | null>(null);
   const [dndSuccess, setDndSuccess] = useState<string | null>(null);
+  // Suppression rows as well as the flag, from the suppression route. Null
+  // until it loads (or if it fails), and the toggles fall back to the flag.
+  const [optOuts, setOptOuts] = useState<OptOutState | null>(null);
 
   useEffect(() => {
     if (!contactId || !accountKey) {
@@ -309,6 +374,24 @@ export default function ContactDetailPage() {
         setAccount(normalizeAccountSummary(contactData.account));
         setDnd(parseDndPayload(contactData.contact?.dnd ?? contactData.dnd));
         setContactLoading(false);
+
+        // The flag alone misses an opt-out that only wrote a suppression row —
+        // a webhook unsubscribe, a STOP reply, a bounce — so the toggles read
+        // the suppression route's view, which counts both. Runs alongside the
+        // activity fetch below and is non-fatal: on failure the flag stands.
+        void (async () => {
+          try {
+            const optOutRes = await fetch(
+              `/api/contacts/${encodeURIComponent(contactId)}/suppression?accountKey=${encodeURIComponent(accountKey)}`,
+            );
+            const optOutData = await optOutRes.json().catch(() => ({}));
+            if (!active || !optOutRes.ok) return;
+            setOptOuts(parseOptOutState(optOutData.optOuts));
+            setDnd(parseDndPayload(optOutData.dnd));
+          } catch {
+            // Keep the flag-based state.
+          }
+        })();
 
         const activityRes = await fetch(
           `/api/contacts/${encodeURIComponent(contactId)}/activity?accountKey=${encodeURIComponent(accountKey)}`,
@@ -562,9 +645,16 @@ export default function ContactDetailPage() {
       if (!res.ok) {
         throw new Error(typeof data.error === 'string' ? data.error : 'Failed to update suppression');
       }
-      // Server is authoritative.
+      // Server is authoritative. A channel turned off can come back still on:
+      // what holds it isn't staff's to clear, and the lock line under the
+      // toggles says why — so no "unsuppressed" for it.
       setDnd(parseDndPayload(data.dnd ?? data.contact?.dnd));
-      setDndSuccess(enabled ? `${channel === 'email' ? 'Email' : 'SMS'} suppressed.` : `${channel === 'email' ? 'Email' : 'SMS'} unsuppressed.`);
+      const nextOptOuts = parseOptOutState(data.optOuts);
+      if (nextOptOuts) setOptOuts(nextOptOuts);
+      const stillOptedOut = !enabled && nextOptOuts?.[channel].optedOut === true;
+      if (!stillOptedOut) {
+        setDndSuccess(enabled ? `${channel === 'email' ? 'Email' : 'SMS'} suppressed.` : `${channel === 'email' ? 'Email' : 'SMS'} unsuppressed.`);
+      }
     } catch (err) {
       setDnd(previous);
       setDndError(err instanceof Error ? err.message : 'Failed to update suppression');
@@ -862,6 +952,7 @@ export default function ContactDetailPage() {
                   label="Email"
                   enabled={dnd.email}
                   disabled={!contact.email || dndSaving}
+                  locked={Boolean(dnd.email && optOuts?.email.lockedBy)}
                   hint={contact.email || 'No email on file'}
                   icon={EnvelopeIcon}
                   onToggle={() => toggleSuppression('email', !dnd.email)}
@@ -870,11 +961,30 @@ export default function ContactDetailPage() {
                   label="SMS"
                   enabled={dnd.sms}
                   disabled={!contact.phone || dndSaving}
+                  locked={Boolean(dnd.sms && optOuts?.sms.lockedBy)}
                   hint={contact.phone || 'No phone on file'}
                   icon={DevicePhoneMobileIcon}
                   onToggle={() => toggleSuppression('sms', !dnd.sms)}
                 />
               </div>
+              {(['email', 'sms'] as const).map((channel) => {
+                const lock = dnd[channel] ? optOuts?.[channel].lockedBy : null;
+                if (!lock) return null;
+                return (
+                  <p
+                    key={channel}
+                    className="mt-2 flex items-start gap-1.5 text-[11px] text-[var(--muted-foreground)] animate-fade-in-up"
+                  >
+                    <LockClosedIcon className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
+                    <span>
+                      <span className="font-medium text-[var(--foreground)]">
+                        {channel === 'email' ? 'Email' : 'SMS'}:
+                      </span>{' '}
+                      {optOutLockMessage(channel, lock)}
+                    </span>
+                  </p>
+                );
+              })}
               {dndError && <p className="mt-2 text-[11px] text-red-300">{dndError}</p>}
               {dndSuccess && !dndError && (
                 <p className="mt-2 text-[11px] text-emerald-300">{dndSuccess}</p>
@@ -962,6 +1072,7 @@ function SuppressionTile({
   label,
   enabled,
   disabled,
+  locked = false,
   hint,
   icon: Icon,
   onToggle,
@@ -969,6 +1080,12 @@ function SuppressionTile({
   label: string;
   enabled: boolean;
   disabled?: boolean;
+  /**
+   * On, and held there by something staff can't clear (the line under the
+   * toggles says what). Not dimmed like `disabled` — the opt-out is real and
+   * should read as on — but it can't be clicked off.
+   */
+  locked?: boolean;
   hint: string;
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   onToggle: () => void;
@@ -976,9 +1093,12 @@ function SuppressionTile({
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={locked ? undefined : onToggle}
       disabled={disabled}
+      aria-disabled={locked || disabled}
       className={`rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+        locked ? 'cursor-not-allowed' : ''
+      } ${
         enabled
           ? 'border-[var(--primary)]/45 bg-[var(--primary)]/10'
           : 'border-[var(--border)] bg-[var(--muted)]/25 hover:border-[var(--primary)]/30'
@@ -989,6 +1109,12 @@ function SuppressionTile({
         <div className="flex items-center gap-2 min-w-0">
           <Icon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
           <span className="text-sm truncate">{label}</span>
+          {locked && (
+            <LockClosedIcon
+              className="w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0"
+              aria-label="Can't be turned off here"
+            />
+          )}
         </div>
         <span
           className={`inline-flex w-8 h-4 rounded-full border transition-colors ${

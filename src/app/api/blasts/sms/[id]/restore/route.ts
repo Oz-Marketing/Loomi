@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import {
-  getSmsBlast,
-  restoreSmsBlast,
-} from '@/lib/services/sms-blasts';
+import { getSmsBlast } from '@/lib/services/sms-blasts';
+import { restoreBlastWithLinkedChannels } from '@/lib/services/blast-linked';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -38,8 +36,8 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const updated = await restoreSmsBlast(id);
-    return NextResponse.json({ campaign: updated });
+    const result = await restoreBlastWithLinkedChannels('sms', id);
+    return NextResponse.json({ campaign: result.primary, partnerError: result.partnerError });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to restore campaign';
     return NextResponse.json({ error: message }, { status: 400 });

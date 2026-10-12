@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { canAccessPacer, decorateActivityEntry } from '@/lib/meta-ads-pacer';
 import { uploadToS3 } from '@/lib/s3';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 const PACER_ACTIVITY_MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // 25 MB
 
@@ -94,7 +95,7 @@ export async function POST(
     try {
       await uploadToS3(key, buffer, mime);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
+      const message = clientErrorMessage(err, 'Upload failed');
       return NextResponse.json({ error: message }, { status: 500 });
     }
     attachmentKey = key;

@@ -22,6 +22,7 @@ import { resolveRequestedAccountKeys } from '@/lib/segments/api-scope';
 import { previewSegmentForAccounts, SegmentLookupError } from '@/lib/segments/lookup';
 import { SegmentScanOverflowError } from '@/lib/segments/resolve';
 import type { FilterDefinition } from '@/lib/smart-list-types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 const MAX_SAMPLE = 100;
 
@@ -113,7 +114,7 @@ export async function POST(req: Request) {
     if (err instanceof SegmentLookupError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    const message = err instanceof Error ? err.message : 'Failed to resolve segment';
+    const message = clientErrorMessage(err, 'Failed to resolve segment');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

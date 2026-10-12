@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // GET /api/contacts/:id/activity?accountKey=&limit=
 //
@@ -207,7 +208,7 @@ export async function GET(
       stats,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch contact activity';
+    const message = clientErrorMessage(err, 'Failed to fetch contact activity');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

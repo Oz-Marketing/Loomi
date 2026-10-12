@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { canAccessPacer, isValidPeriod } from '@/lib/meta-ads-pacer';
 import { getPeriodManagement, setPeriodManaged } from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET  /api/meta-ads-pacer/[accountKey]/budget-managed?period=YYYY-MM
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ acc
     // A frozen month / missing pacer plan is the caller's situation to fix, not
     // a server fault.
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to change budget management' },
+      { error: clientErrorMessage(err, 'Failed to change budget management') },
       { status: 400 },
     );
   }

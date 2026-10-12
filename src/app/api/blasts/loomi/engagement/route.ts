@@ -5,6 +5,7 @@ import {
   getEngagementReport,
   type EngagementSource,
 } from '@/lib/services/email-analytics';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/blasts/loomi/engagement?accountKey=&start=&end=&source=&only=
@@ -79,7 +80,7 @@ export async function GET(req: NextRequest) {
     // Aggregations are best-effort — if the DB shape has shifted or a
     // query is malformed, surface a 500 with the error message so the
     // UI can show something more useful than a generic 'HTTP 500'.
-    const message = err instanceof Error ? err.message : 'Failed to load engagement metrics';
+    const message = clientErrorMessage(err, 'Failed to load engagement metrics');
     console.error('[campaigns:engagement] aggregation failed:', err);
     return NextResponse.json({ error: message }, { status: 500 });
   }

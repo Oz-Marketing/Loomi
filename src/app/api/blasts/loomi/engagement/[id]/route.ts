@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { getCampaignEngagementById } from '@/lib/services/email-analytics';
 import { getEmailBlast } from '@/lib/services/email-blasts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -59,7 +60,7 @@ export async function GET(req: NextRequest, { params }: RouteParams) {
     const row = await getCampaignEngagementById(id, recipientScope);
     return NextResponse.json({ campaign: row });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to load engagement';
+    const message = clientErrorMessage(err, 'Failed to load engagement');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

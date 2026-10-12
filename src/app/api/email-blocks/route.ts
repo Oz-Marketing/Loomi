@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ block: row }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to save block';
+    const message = clientErrorMessage(err, 'Failed to save block');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

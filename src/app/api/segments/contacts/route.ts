@@ -26,6 +26,7 @@ import {
 } from '@/lib/segments/lookup';
 import { SegmentRefError } from '@/lib/segments/refs';
 import { SegmentScanOverflowError } from '@/lib/segments/resolve';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 const MAX_PAGE_SIZE = 200;
 const DEFAULT_PAGE_SIZE = 50;
@@ -119,5 +120,5 @@ function statusFor(err: unknown): number {
 }
 
 function messageFor(err: unknown): string {
-  return err instanceof Error ? err.message : 'Failed to resolve segment';
+  return clientErrorMessage(err, 'Failed to resolve segment');
 }

@@ -29,6 +29,7 @@ import {
 } from '@/lib/segments/lookup';
 import { SegmentRefError } from '@/lib/segments/refs';
 import { SegmentScanOverflowError } from '@/lib/segments/resolve';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /** Matches /api/contacts/export. A bigger segment has to be narrowed. */
 const MAX_ROWS = 50_000;
@@ -117,5 +118,5 @@ function statusFor(err: unknown): number {
 }
 
 function messageFor(err: unknown): string {
-  return err instanceof Error ? err.message : 'Failed to export segment';
+  return clientErrorMessage(err, 'Failed to export segment');
 }

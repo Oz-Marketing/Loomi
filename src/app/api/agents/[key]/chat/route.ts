@@ -14,6 +14,7 @@ import { appendMessage } from '@/lib/ai/conversation-store';
 import { attachmentBlocks, type WireAttachment } from '@/lib/ai/attachments';
 import { resolveProfile } from '@/lib/ai/agent-profile-store';
 import { suggestFollowUps } from '@/lib/ai/follow-ups';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * One route for every specialist.
@@ -197,9 +198,7 @@ export async function POST(
           error:
             err instanceof AgentRunError
               ? err.message
-              : err instanceof Error
-                ? err.message
-                : 'Request failed',
+              : clientErrorMessage(err, 'Request failed'),
         });
       } finally {
         controller.close();

@@ -8,6 +8,7 @@ import {
   loadPreviewAccountData,
   resolvePreviewTokens,
 } from '@/lib/email/preview-substitute';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 function sanitizeFileName(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to generate screenshot';
+    const message = clientErrorMessage(err, 'Failed to generate screenshot');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

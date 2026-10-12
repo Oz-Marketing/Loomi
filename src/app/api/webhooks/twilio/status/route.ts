@@ -6,6 +6,7 @@ import {
   processTwilioStatusCallback,
   type TwilioStatusCallbackPayload,
 } from '@/lib/sending/twilio-events';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 const SIGNATURE_HEADER = 'x-twilio-signature';
 
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
     const created = await processTwilioStatusCallback(payload);
     return NextResponse.json({ processed: true, fresh: created });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to process callback';
+    const message = clientErrorMessage(err, 'Failed to process callback');
     console.error('[twilio:status] failed to process:', message);
     // Return 200 even on internal errors so Twilio doesn't infinitely
     // retry malformed payloads. We've already logged the failure.

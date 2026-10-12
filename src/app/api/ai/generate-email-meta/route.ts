@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // Subject / preview-text variant generator. Returns N candidates so
 // the UI can show a picker — single-result calls (the original
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest) {
       result: deduped[0],
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to generate email meta';
+    const message = clientErrorMessage(err, 'Failed to generate email meta');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

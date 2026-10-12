@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { updateChannel } from '@/lib/services/budget-channels';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * PATCH /api/budget-channels/[id] — update one channel's label, display group,
@@ -36,7 +37,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     });
     return NextResponse.json({ channel });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not save that channel.';
+    const message = clientErrorMessage(err, 'Could not save that channel.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

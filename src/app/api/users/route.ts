@@ -21,6 +21,7 @@ import {
   legacyTierFor,
 } from '@/lib/permissions/legacy';
 import type { UserRole } from '@/lib/roles';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 function parseAccountKeys(raw: string): string[] {
   try {
@@ -225,7 +226,7 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       invite = {
         sent: false,
-        error: err instanceof Error ? err.message : 'Failed to send invite email',
+        error: clientErrorMessage(err, 'Failed to send invite email'),
       };
     }
   }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { completePasswordReset } from '@/lib/users/password-reset';
 import { validatePassword } from '@/lib/users/password-policy';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /** Burn the reset token and set the new password. */
 export async function POST(req: NextRequest) {
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, email: completed.user.email });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unable to reset your password';
+    const message = clientErrorMessage(err, 'Unable to reset your password');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

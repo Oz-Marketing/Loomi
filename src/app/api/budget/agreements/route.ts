@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET  /api/budget/agreements?accountKey=…&year=… — agreements OVERLAPPING the
@@ -60,7 +61,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ agreement }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to create the agreement' },
+      { error: clientErrorMessage(err, 'Failed to create the agreement') },
       { status: 400 },
     );
   }

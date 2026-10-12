@@ -31,6 +31,7 @@ import {
   runOfferCampaign,
 } from '@/lib/ad-generator/automation/offer-run';
 import { gateOfferRun as gate, sanitizeScope } from '@/lib/ad-generator/automation/route-gate';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     console.error('[api/adgen/automation/shadow] GET failed:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not build the shadow report' },
+      { error: clientErrorMessage(err, 'Could not build the shadow report') },
       { status: 500 },
     );
   }
@@ -338,7 +339,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error(`[api/adgen/automation/shadow] ${body.action} failed:`, err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Action failed' },
+      { error: clientErrorMessage(err, 'Action failed') },
       { status: 500 },
     );
   }

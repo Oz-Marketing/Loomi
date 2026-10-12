@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { filterAccountKeysByAccess } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // GET /api/contacts/stats?accountKeys=
 //
@@ -83,7 +84,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch contact stats';
+    const message = clientErrorMessage(err, 'Failed to fetch contact stats');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

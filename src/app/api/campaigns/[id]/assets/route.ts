@@ -19,6 +19,7 @@ import { createLandingPage } from '@/lib/services/landing-pages';
 import { createForm } from '@/lib/services/forms';
 import { createFlow } from '@/lib/services/loomi-flows';
 import { createHandBuiltAd } from '@/lib/ad-generator/create-ad';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -162,7 +163,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({ error: 'Unsupported asset kind' }, { status: 400 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create asset';
+    const message = clientErrorMessage(err, 'Failed to create asset');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

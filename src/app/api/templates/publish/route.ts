@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import * as templateService from '@/lib/services/templates';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/templates/publish
@@ -37,7 +38,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, updated: result.count, published });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to update publish state';
+    const message = clientErrorMessage(err, 'Failed to update publish state');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

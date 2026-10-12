@@ -17,6 +17,7 @@ import { resolveRequestedAccountKeys } from '@/lib/segments/api-scope';
 import { countSegmentForAccounts } from '@/lib/segments/lookup';
 import { type SegmentStrategy } from '@/lib/segments/resolve';
 import type { FilterDefinition } from '@/lib/smart-list-types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // Counting is one indexed query for the SQL strategy but a full scan for
 // the fallback, so cap how many a single request can ask for.
@@ -113,7 +114,7 @@ export async function POST(req: Request) {
         id,
         count: null,
         strategy: null,
-        error: err instanceof Error ? err.message : 'Failed to count segment',
+        error: clientErrorMessage(err, 'Failed to count segment'),
       });
     }
   }

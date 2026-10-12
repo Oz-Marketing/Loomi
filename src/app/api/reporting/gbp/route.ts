@@ -30,6 +30,7 @@ import {
   parseMetrics,
 } from '@/lib/integrations/gbp';
 import { getConnectionStatus, withAccessToken } from '@/lib/integrations/gbp-connection';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const dynamic = 'force-dynamic';
 
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest) {
           kwMonth.getUTCMonth() + 1,
         );
       } catch (err) {
-        keywordsError = err instanceof Error ? err.message : 'Unavailable';
+        keywordsError = clientErrorMessage(err, 'Unavailable');
       }
 
       return {

@@ -5,7 +5,7 @@
 // caller cannot parse and a user cannot report.
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { apiError, withRouteErrors, newTraceId } from './api-errors';
+import { apiError, withRouteErrors, newTraceId, clientErrorMessage } from './api-errors';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -127,5 +127,33 @@ describe('newTraceId', () => {
     const ids = new Set(Array.from({ length: 500 }, newTraceId));
     expect(ids.size).toBeGreaterThan(495);
     for (const id of ids) expect(id).toMatch(/^[a-z0-9]{1,10}$/);
+  });
+});
+
+describe('clientErrorMessage', () => {
+  it('passes our own error messages through', () => {
+    expect(clientErrorMessage(new Error('accountKey is required'), 'Failed')).toBe('accountKey is required');
+  });
+
+  it('uses the fallback for non-errors', () => {
+    expect(clientErrorMessage('boom', 'Failed to fetch contacts')).toBe('Failed to fetch contacts');
+  });
+
+  it('turns connection exhaustion into a busy message, never the Prisma dump', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = Object.assign(
+      new Error('\nInvalid `prisma.contact.findMany()` invocation:\n\nToo many database connections opened: remaining connection slots are reserved for roles with the SUPERUSER attribute'),
+      { name: 'PrismaClientKnownRequestError', code: 'P2037' },
+    );
+    const msg = clientErrorMessage(err, 'Failed to fetch contacts');
+    expect(msg).toMatch(/^The database is busy right now\. Please try again in a moment\. \(ref [a-z0-9]+\)$/);
+    expect(msg).not.toMatch(/prisma|SUPERUSER/i);
+    expect(console.error).toHaveBeenCalled();
+  });
+
+  it('hides other database errors behind the fallback and a ref', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = Object.assign(new Error('relation "Contact" does not exist'), { name: 'DatabaseError' });
+    expect(clientErrorMessage(err, 'Failed to fetch contacts')).toMatch(/^Failed to fetch contacts \(ref [a-z0-9]+\)$/);
   });
 });

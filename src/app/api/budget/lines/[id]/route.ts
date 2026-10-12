@@ -3,6 +3,7 @@ import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
 import { isBudgetLineType } from '@/lib/budget/channels';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET    /api/budget/lines/[id] — one line plus its event trail.
@@ -75,7 +76,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ line });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to update budget line' },
+      { error: clientErrorMessage(err, 'Failed to update budget line') },
       { status: 400 },
     );
   }
@@ -104,7 +105,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     return NextResponse.json({ ok });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to cancel budget line' },
+      { error: clientErrorMessage(err, 'Failed to cancel budget line') },
       { status: 400 },
     );
   }

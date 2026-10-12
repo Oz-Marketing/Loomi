@@ -11,6 +11,7 @@ import {
   type DndFlags,
 } from '@/lib/sending/opt-outs';
 import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 type RouteContext = { params: Promise<{ contactId: string }> };
 
@@ -266,7 +267,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
         { status: 409 },
       );
     }
-    const message = err instanceof Error ? err.message : 'Failed to update contact';
+    const message = clientErrorMessage(err, 'Failed to update contact');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

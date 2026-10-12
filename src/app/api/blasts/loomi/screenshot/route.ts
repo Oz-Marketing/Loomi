@@ -6,6 +6,7 @@ import {
   loadPreviewAccountData,
   resolvePreviewTokens,
 } from '@/lib/email/preview-substitute';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/blasts/loomi/screenshot?campaignId=xxx
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to render screenshot';
+    const message = clientErrorMessage(err, 'Failed to render screenshot');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

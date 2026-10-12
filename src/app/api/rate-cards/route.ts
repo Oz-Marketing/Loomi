@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { createRateCard, listRateCards, reorderRateCards } from '@/lib/services/rate-cards';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * Rate cards — the agency's billing categories and their markups. This is the
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ rateCard: card }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not create that rate card.';
+    const message = clientErrorMessage(err, 'Could not create that rate card.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

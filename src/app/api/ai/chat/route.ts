@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { getChatSystemPrompt } from '@/lib/ai-knowledge';
 import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
 import { attachmentBlocks, type WireAttachment } from '@/lib/ai/attachments';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 type MessageParam = Anthropic.MessageParam;
 
@@ -127,7 +128,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(normalized);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to run AI chat';
+    const message = clientErrorMessage(err, 'Failed to run AI chat');
     return NextResponse.json(
       { error: message },
       { status: 500 },

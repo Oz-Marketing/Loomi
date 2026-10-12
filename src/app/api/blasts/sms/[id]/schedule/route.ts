@@ -3,6 +3,7 @@ import { requireAllPermissions } from '@/lib/permissions/require';
 import { parseSendTime, prepareSmsSchedule } from '@/lib/services/blast-schedule';
 import { BlastNotDraftError } from '@/lib/services/email-blasts';
 import { getSmsBlast, scheduleSmsBlastDraft } from '@/lib/services/sms-blasts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     if (err instanceof BlastNotDraftError) {
       return NextResponse.json({ error: err.message }, { status: 409 });
     }
-    const message = err instanceof Error ? err.message : 'Failed to schedule campaign';
+    const message = clientErrorMessage(err, 'Failed to schedule campaign');
     const status = message.includes('required') || message.includes('valid') ? 400 : 500;
     return NextResponse.json({ error: message }, { status });
   }

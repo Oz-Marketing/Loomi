@@ -13,6 +13,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getMetaConfig, listAdSetsForPublish } from '@/lib/integrations/meta-ads';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,7 +48,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ acc
   } catch (err) {
     return NextResponse.json({
       adSets: [],
-      blocked: err instanceof Error ? err.message : 'Could not list ad sets.',
+      blocked: clientErrorMessage(err, 'Could not list ad sets.'),
     });
   }
 }

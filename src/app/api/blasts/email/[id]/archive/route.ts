@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { getEmailBlast } from '@/lib/services/email-blasts';
 import { archiveBlastWithLinkedChannels } from '@/lib/services/blast-linked';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     const result = await archiveBlastWithLinkedChannels('email', id, archived);
     return NextResponse.json({ campaign: result.primary, partnerError: result.partnerError });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to archive campaign';
+    const message = clientErrorMessage(err, 'Failed to archive campaign');
     return NextResponse.json({ error: message }, { status: 409 });
   }
 }

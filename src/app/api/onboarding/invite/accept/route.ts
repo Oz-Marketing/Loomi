@@ -3,6 +3,7 @@ import {
   acceptInviteAndSetPassword,
   validateInvitePassword,
 } from '@/lib/users/invitations';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
@@ -29,7 +30,7 @@ export async function POST(req: NextRequest) {
       email: accepted.user.email,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unable to accept invite';
+    const message = clientErrorMessage(err, 'Unable to accept invite');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

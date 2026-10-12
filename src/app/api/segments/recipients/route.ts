@@ -22,6 +22,7 @@ import {
   validateFilterDefinition,
 } from '@/lib/smart-list-validate';
 import { projectAudienceCount, requestedSampleSize } from '@/lib/messaging/audience-count';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export async function POST(req: Request) {
   const { session, error } = await requirePermission('studio.segments.edit');
@@ -102,7 +103,7 @@ export async function POST(req: Request) {
     return NextResponse.json(projectAudienceCount(result, sampleSize));
   } catch (err) {
     const message =
-      err instanceof Error ? err.message : 'Failed to resolve recipients';
+      clientErrorMessage(err, 'Failed to resolve recipients');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

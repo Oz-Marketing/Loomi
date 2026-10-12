@@ -20,6 +20,7 @@ import { resolveTemplateDoc } from '@/lib/ad-generator/resolve-template';
 import { motionExportAvailable, renderMotionSizes } from '@/lib/ad-generator/render-motion';
 import { FfmpegUnavailableError } from '@/lib/render/ffmpeg';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -134,7 +135,7 @@ export async function POST(req: NextRequest) {
     // eslint-disable-next-line no-console
     console.error('[ad-generator/render-motion] failed', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Video render failed' },
+      { error: clientErrorMessage(err, 'Video render failed') },
       { status: 500 },
     );
   }

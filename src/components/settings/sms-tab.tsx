@@ -17,6 +17,7 @@ import {
   XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import PrimaryButton from '@/components/primary-button';
 
 interface SmsTabProps {
@@ -35,6 +36,7 @@ const inputClass = 'w-full rounded-lg bg-[var(--input)] border border-[var(--bor
 const helpTextClass = 'text-xs text-[var(--muted-foreground)] mt-1.5';
 
 export function SmsTab({ accountKey }: SmsTabProps) {
+  const { markCleanWithin } = useUnsavedChanges();
   const [state, setState] = useState<TwilioState>({
     configured: false,
     phoneNumber: null,
@@ -125,6 +127,10 @@ export function SmsTab({ accountKey }: SmsTabProps) {
       setServiceSidInput(data.messagingServiceSid || '');
       setPhoneDirty(false);
       setServiceDirty(false);
+      // Every successful save rewrites the Sender fields with what's stored,
+      // so they're clean now. Scoped: credentials typed but not saved are a
+      // separate section and stay guarded.
+      markCleanWithin('sms-sender');
       toast.success('Twilio settings saved');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
@@ -303,7 +309,7 @@ export function SmsTab({ accountKey }: SmsTabProps) {
 
       {/* ── Routing (phone number / messaging service) ── */}
       {showAdvancedFields && (
-        <section className={sectionCardClass}>
+        <section className={sectionCardClass} data-unsaved-scope="sms-sender">
           <div className="flex items-start gap-3 mb-4">
             <div className="w-10 h-10 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center">
               <ChatBubbleLeftRightIcon className="w-5 h-5" />

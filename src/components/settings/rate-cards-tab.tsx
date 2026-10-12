@@ -31,6 +31,7 @@ import {
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import PrimaryButton from '@/components/primary-button';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useBudgetChannels } from '@/contexts/budget-channels-context';
 
 type RateCard = {
@@ -43,6 +44,7 @@ type RateCard = {
 };
 
 export function RateCardsTab() {
+  const { markCleanWithin } = useUnsavedChanges();
   const { channels: ch } = useBudgetChannels();
   const [cards, setCards] = useState<RateCard[] | null>(null);
   /** Margin-percent drafts, keyed by card id. */
@@ -96,6 +98,8 @@ export function RateCardsTab() {
         return;
       }
       mergeCard(data.rateCard as RateCard);
+      // Only this row — another rate card edited but not yet saved stays guarded.
+      markCleanWithin(`rate-card:${card.id}`);
       setJustSaved(card.id);
       setTimeout(() => setJustSaved((c) => (c === card.id ? null : c)), 2000);
       toast.success(note);
@@ -249,6 +253,7 @@ export function RateCardsTab() {
             return (
               <div
                 key={card.id}
+                data-unsaved-scope={`rate-card:${card.id}`}
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 px-3 py-3"
               >
                 <div className="flex flex-shrink-0 flex-col">

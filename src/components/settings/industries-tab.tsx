@@ -20,12 +20,14 @@ import {
 } from '@heroicons/react/24/outline';
 import PrimaryButton from '@/components/primary-button';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 
 // Industries that carry built-in behavior keyed off their exact string —
 // flagged in the UI so they aren't renamed/removed without realizing it.
 const BEHAVIOR_INDUSTRIES = new Set(['automotive', 'powersports']);
 
 export function IndustriesTab() {
+  const { markClean } = useUnsavedChanges();
   const [list, setList] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,6 +110,7 @@ export function IndustriesTab() {
       const arr = Array.isArray(data.industries) ? (data.industries as string[]) : list;
       setList(arr);
       setSaved(arr);
+      markClean();
       // Refresh every mounted account dropdown (useIndustries).
       void mutate('/api/industries');
       toast.success('Industries saved.');

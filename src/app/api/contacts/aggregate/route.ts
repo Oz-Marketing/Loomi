@@ -4,6 +4,7 @@ import { filterAccountKeysByAccess } from '@/lib/roles';
 import { prisma } from '@/lib/prisma';
 import { listContactsForAccount } from '@/lib/contacts/queries';
 import type { Contact as ApiContact } from '@/lib/contacts/types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // GET /api/contacts/aggregate?accountKeys=&limitPerAccount=&includeMessaging=
 //
@@ -92,7 +93,7 @@ export async function GET(req: NextRequest) {
           provider: 'loomi',
         };
       } catch (err) {
-        errors[accountKey] = err instanceof Error ? err.message : 'Failed to fetch';
+        errors[accountKey] = clientErrorMessage(err, 'Failed to fetch');
         perAccount[accountKey] = {
           dealer,
           count: 0,
@@ -123,7 +124,7 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch aggregate contacts';
+    const message = clientErrorMessage(err, 'Failed to fetch aggregate contacts');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

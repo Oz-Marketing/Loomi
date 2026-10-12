@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/budget/flights — book a media buy as a date range.
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ lines, flightId: lines[0]?.flightId ?? null }, { status: 201 });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not book the flight' },
+      { error: clientErrorMessage(err, 'Could not book the flight') },
       { status: 400 },
     );
   }

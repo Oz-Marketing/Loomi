@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { issueAndSendUserInvite } from '@/lib/users/invitations';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export async function POST(req: NextRequest) {
   const { error, session } = await requirePermission('agency.users.invite');
@@ -25,7 +26,7 @@ export async function POST(req: NextRequest) {
       expiresAt: result.expiresAt.toISOString(),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to send invite';
+    const message = clientErrorMessage(err, 'Failed to send invite');
     const status = message.startsWith('Invite email is not configured') ? 400 : 500;
     return NextResponse.json({ error: message }, { status });
   }

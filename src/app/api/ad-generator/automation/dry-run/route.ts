@@ -17,6 +17,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { dryRunOneVehicle } from '@/lib/ad-generator/automation/dry-run';
 import type { SelectableOfferType } from '@/lib/ad-generator/automation/select-offer';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('[api/ad-generator/automation/dry-run] failed:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Dry run failed' },
+      { error: clientErrorMessage(err, 'Dry run failed') },
       { status: 500 },
     );
   }

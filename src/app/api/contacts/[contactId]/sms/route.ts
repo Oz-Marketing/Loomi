@@ -6,6 +6,7 @@ import {
   sendSmsViaTwilio,
   TwilioError,
 } from '@/lib/sending/twilio';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // POST /api/contacts/:id/sms?accountKey=
 //
@@ -141,7 +142,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     if (err instanceof TwilioError) {
       return NextResponse.json({ error: err.message }, { status: err.status >= 400 ? err.status : 502 });
     }
-    const errMessage = err instanceof Error ? err.message : 'Twilio send failed';
+    const errMessage = clientErrorMessage(err, 'Twilio send failed');
     return NextResponse.json({ error: errMessage }, { status: 502 });
   }
 

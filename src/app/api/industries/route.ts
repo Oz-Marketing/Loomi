@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { getIndustries, setIndustries } from '@/lib/services/industries';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * The account "Industry" option list (AppSetting-backed; see
@@ -37,7 +38,7 @@ export async function PUT(req: NextRequest) {
     const industries = await setIndustries(body.industries);
     return NextResponse.json({ industries });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not save industries.';
+    const message = clientErrorMessage(err, 'Could not save industries.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

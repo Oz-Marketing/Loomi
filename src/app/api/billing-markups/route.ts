@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { getBillingMarkups, setBillingMarkup } from '@/lib/services/markup';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * Per-billing-category markup — the rate card. One rate per category (Digital,
@@ -31,7 +32,7 @@ export async function PUT(req: NextRequest) {
     const markup = await setBillingMarkup(String(body.category ?? ''), Number(body.markup));
     return NextResponse.json({ category: body.category, markup });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not save that rate.';
+    const message = clientErrorMessage(err, 'Could not save that rate.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

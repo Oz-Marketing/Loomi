@@ -17,14 +17,22 @@
 //
 // WHAT COUNTS AS COVERED
 // ──────────────────────
-// SendGrid signs with the authenticated domain that MATCHES the From domain;
-// its docs are explicit that "subdomains don't inherit authentication
-// permissions from their parent domain". When nothing matches, it falls back
-// to the account's DEFAULT authenticated domain. So the From domain is
-// covered by an exact, valid match — or by a valid default domain in the same
-// organization (a parent or child of the From domain), whose signature still
-// aligns under DMARC's relaxed mode. A valid parent that is NOT the default
-// does not sign the subdomain's mail and does not count.
+// The From domain is covered by an exact, valid match, by a valid PARENT
+// domain, or by a valid default domain in the same organization. A parent or
+// same-organization signature aligns under DMARC's relaxed mode, which is the
+// default and what every rooftop publishes.
+//
+// The parent case is from observed mail, not SendGrid's docs. The docs say
+// "subdomains don't inherit authentication permissions from their parent
+// domain", and this check first shipped believing them — so it blocked every
+// rooftop sending From `send.<domain>`. But a real 2026-10-12 send From
+// communications@send.youngchev.com, with only youngchev.com authenticated
+// (`send` being its custom return path), arrived `DKIM-Signature:
+// d=youngchev.com`, dkim=pass, dmarc=pass at Gmail. SendGrid signs a
+// subdomain with its authenticated parent. Trust the headers over the docs.
+//
+// Not handled: a domain publishing DMARC `adkim=s` (strict) would fail a
+// parent signature. None of ours do; check `_dmarc` before assuming that.
 //
 // Results are cached per key + domain for ten minutes: preflight runs on every
 // Schedule-step render, and the answer changes only when someone edits DNS.
@@ -157,6 +165,20 @@ export function evaluateDomainAuth(
       authenticatedDomain: null,
       availableDomains,
       detail: `${fromDomain} is set up in SendGrid, but its DNS records don't validate, so mail can't be DKIM-signed for it.`,
+    };
+  }
+
+  // Most specific valid parent wins — that is the one SendGrid signs with.
+  const parent = domains
+    .filter((d) => d.valid && d.domain !== fromDomain && isWithin(fromDomain, d.domain))
+    .sort((a, b) => b.domain.length - a.domain.length)[0];
+  if (parent) {
+    return {
+      status: 'authenticated',
+      fromDomain,
+      authenticatedDomain: parent.domain,
+      availableDomains,
+      detail: `${fromDomain} is signed with its authenticated parent domain ${parent.domain}, which aligns.`,
     };
   }
 

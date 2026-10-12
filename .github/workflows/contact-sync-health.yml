@@ -123,6 +123,12 @@ jobs:
             echo "::warning::${never} account(s) have never received a batch — expected for feed-less parent accounts, but check the summary if that number grows."
           fi
 
+          # Feeds whose Oz Reports producer isn't built yet. A warning, not a
+          # failure — see `awaitingProducer` in src/lib/contacts/sync-feed-health.ts.
+          # Each one arms itself the first time it delivers a batch.
+          jq -r '.feeds[] | select(.status == "awaiting-producer") |
+            "::warning::Reporting feed \"\(.label)\" is awaiting its Oz Reports producer — \(.note)"' /tmp/health.json
+
           if [ "${healthy}" = "true" ]; then
             echo "All ${checked} account(s) with an active feed synced within the freshness window, and every reporting feed reported in."
             exit 0

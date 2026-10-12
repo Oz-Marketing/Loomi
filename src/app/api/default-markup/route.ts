@@ -4,6 +4,7 @@ import {
   getGlobalDefaultMarkup,
   setGlobalDefaultMarkup,
 } from '@/lib/services/markup';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * The agency-wide default markup (gross→spend factor) applied to any account
@@ -43,7 +44,7 @@ export async function PUT(req: NextRequest) {
     const markup = await setGlobalDefaultMarkup(value);
     return NextResponse.json({ markup });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not save markup.';
+    const message = clientErrorMessage(err, 'Could not save markup.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

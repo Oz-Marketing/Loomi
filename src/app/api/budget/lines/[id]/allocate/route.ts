@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/budget/lines/[id]/allocate — split money off a pool line onto a
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // than it holds) — distinct from over-allocating the account's declared
     // total, which is only ever a warning (docs §8.3).
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to allocate' },
+      { error: clientErrorMessage(err, 'Failed to allocate') },
       { status: 400 },
     );
   }

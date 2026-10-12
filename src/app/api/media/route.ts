@@ -14,6 +14,7 @@ import {
   mediaSearchWhere,
   serializeMediaAsset,
 } from '@/lib/services/media';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // ── Access helpers ──
 
@@ -40,7 +41,7 @@ function canAccessAccount(
 }
 
 function describeMediaUploadError(err: unknown): { status: number; error: string } {
-  const message = err instanceof Error ? err.message : 'Failed to upload media';
+  const message = clientErrorMessage(err, 'Failed to upload media');
 
   if (
     message.includes('S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY are required')

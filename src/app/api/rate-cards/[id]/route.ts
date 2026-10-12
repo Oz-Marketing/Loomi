@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { updateRateCard } from '@/lib/services/rate-cards';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * PATCH /api/rate-cards/[id] — update one card's { label, markup, archived }.
@@ -25,7 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     });
     return NextResponse.json({ rateCard: card });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not save that rate card.';
+    const message = clientErrorMessage(err, 'Could not save that rate card.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

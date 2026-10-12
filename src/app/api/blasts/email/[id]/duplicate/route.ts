@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { getEmailBlast } from '@/lib/services/email-blasts';
 import { duplicateBlastWithLinkedChannels } from '@/lib/services/blast-linked';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -44,7 +45,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
     });
     return NextResponse.json({ campaign: copies.email ?? copies.sms });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to duplicate campaign';
+    const message = clientErrorMessage(err, 'Failed to duplicate campaign');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

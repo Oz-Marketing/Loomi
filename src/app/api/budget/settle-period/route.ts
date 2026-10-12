@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/budget/settle-period
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to settle the period' },
+      { error: clientErrorMessage(err, 'Failed to settle the period') },
       { status: 400 },
     );
   }

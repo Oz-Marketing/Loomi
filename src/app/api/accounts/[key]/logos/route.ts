@@ -4,6 +4,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import * as accountService from '@/lib/services/accounts';
 import { uploadToS3, deleteFromS3, s3PublicUrl, s3KeyFromPublicUrl, isS3Configured } from '@/lib/s3';
 import { syncAccountBrandAssets } from '@/lib/services/brand-assets';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml', 'image/webp'];
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
@@ -131,7 +132,7 @@ export async function POST(
   } catch (err) {
     console.error('Logo upload error:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Upload failed' },
+      { error: clientErrorMessage(err, 'Upload failed') },
       { status: 500 },
     );
   }

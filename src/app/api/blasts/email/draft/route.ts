@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parseBlastAccountKeys } from '@/lib/services/blast-account-keys';
 import { requirePermission } from '@/lib/permissions/require';
 import { createDraftEmailBlast } from '@/lib/services/email-blasts';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * POST /api/blasts/email/draft
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ campaign }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to create campaign draft';
+    const message = clientErrorMessage(err, 'Failed to create campaign draft');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

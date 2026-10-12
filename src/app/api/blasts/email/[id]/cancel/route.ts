@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { getEmailBlast } from '@/lib/services/email-blasts';
 import { cancelBlastWithLinkedChannels } from '@/lib/services/blast-cancel';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -53,7 +54,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
       ...(result.partnerError ? { partnerError: result.partnerError } : {}),
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to cancel campaign';
+    const message = clientErrorMessage(err, 'Failed to cancel campaign');
     return NextResponse.json({ error: message }, { status: 409 });
   }
 }

@@ -16,6 +16,7 @@ import { requirePermission } from '@/lib/permissions/require';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getMetaConfig, setObjectStatus } from '@/lib/integrations/meta-ads';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     } catch (err) {
       return NextResponse.json(
         {
-          error: `Facebook refused to set ${adId} to ${status}: ${err instanceof Error ? err.message : 'unknown error'}`,
+          error: `Facebook refused to set ${adId} to ${status}: ${clientErrorMessage(err, 'unknown error')}`,
           activated: done,
         },
         { status: 502 },

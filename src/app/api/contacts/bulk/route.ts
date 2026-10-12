@@ -10,6 +10,7 @@ import {
   bulkDelete,
   type BulkResult,
 } from '@/lib/services/contact-bulk';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // POST /api/contacts/bulk
 //
@@ -156,7 +157,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ...result });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Bulk action failed';
+    const message = clientErrorMessage(err, 'Bulk action failed');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

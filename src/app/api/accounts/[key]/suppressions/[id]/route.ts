@@ -5,6 +5,7 @@ import {
   clearSendGridSuppression,
   resolveSendGridConfig,
 } from '@/lib/sending/sendgrid';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 interface RouteParams {
   params: Promise<{ key: string; id: string }>;
@@ -74,7 +75,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
       if (!sendgridCleared) sendgridError = outcome.errors.join('; ');
     }
   } catch (err) {
-    sendgridError = err instanceof Error ? err.message : 'Unknown error';
+    sendgridError = clientErrorMessage(err, 'Unknown error');
   }
 
   if (sendgridError) {

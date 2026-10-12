@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAccountScope, forbidden } from '@/lib/api-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import * as budget from '@/lib/services/budget';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * PATCH  /api/budget/agreements/[id] — edit term, commitment, or fees.
@@ -49,7 +50,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return NextResponse.json({ agreement: updated });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to update the agreement' },
+      { error: clientErrorMessage(err, 'Failed to update the agreement') },
       { status: 400 },
     );
   }
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ generated: lines });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Failed to generate fee lines' },
+      { error: clientErrorMessage(err, 'Failed to generate fee lines') },
       { status: 400 },
     );
   }

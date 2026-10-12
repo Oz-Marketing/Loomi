@@ -8,6 +8,7 @@ import {
   setUserAvatar,
   clearUserAvatar,
 } from '@/lib/services/avatars';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export async function POST(req: NextRequest) {
   const { session, error } = await requireAuth();
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error('Avatar upload failed:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Upload failed' },
+      { error: clientErrorMessage(err, 'Upload failed') },
       { status: 500 },
     );
   }
@@ -63,7 +64,7 @@ export async function DELETE() {
   } catch (err) {
     console.error('Avatar delete failed:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Delete failed' },
+      { error: clientErrorMessage(err, 'Delete failed') },
       { status: 500 },
     );
   }

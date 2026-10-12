@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { getAnthropicClient, ANTHROPIC_MODEL, lastTextBlock, parseAiJson } from '@/lib/anthropic';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // Body-copy variant generator for individual template blocks
 // (heading / text / button). Returns N distinct rewrites informed by:
@@ -163,7 +164,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ results: deduped });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to generate block copy';
+    const message = clientErrorMessage(err, 'Failed to generate block copy');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

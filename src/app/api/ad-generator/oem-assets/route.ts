@@ -39,6 +39,7 @@ import { offerKind } from '@/lib/ad-generator/offer-kinds';
 import { parseCoopPack } from '@/lib/ad-generator/coop-rules';
 import { getGuidelineDoc, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     console.error('[api/adgen/oem-assets] GET failed:', err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not load OEM assets' },
+      { error: clientErrorMessage(err, 'Could not load OEM assets') },
       { status: 500 },
     );
   }
@@ -595,7 +596,7 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     console.error(`[api/adgen/oem-assets] ${body.action} failed:`, err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Action failed' },
+      { error: clientErrorMessage(err, 'Action failed') },
       { status: 500 },
     );
   }

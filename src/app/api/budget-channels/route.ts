@@ -7,6 +7,7 @@ import {
   listChannelsForAdmin,
   reorderChannels,
 } from '@/lib/services/budget-channels';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * The budget channel list.
@@ -61,7 +62,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ channel }, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Could not create that channel.';
+    const message = clientErrorMessage(err, 'Could not create that channel.');
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }

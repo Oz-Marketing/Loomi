@@ -7,6 +7,7 @@ import {
   generateRenditions,
   listRenditions,
 } from '@/lib/services/media-renditions';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * GET /api/media/[id]/renditions
@@ -104,7 +105,7 @@ export async function POST(
     const result = await generateRenditions(id, requests, session!.user.id);
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to generate renditions';
+    const message = clientErrorMessage(err, 'Failed to generate renditions');
     // Missing S3 config is the common local failure and deserves its own status —
     // it isn't a bad request and retrying won't help.
     const storage = message.includes('S3_BUCKET') || message.includes('S3_ACCESS_KEY_ID');

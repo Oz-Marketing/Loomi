@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { coerceAudience, publishChangelogEntries } from '@/lib/changelog-publish';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 /**
  * PUT /api/changelog/[id]
@@ -51,7 +52,7 @@ export async function PUT(
     const entry = await prisma.changelogEntry.findUnique({ where: { id } });
     return NextResponse.json({ entry });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to update changelog entry';
+    const message = clientErrorMessage(err, 'Failed to update changelog entry');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -80,7 +81,7 @@ export async function DELETE(
     await prisma.changelogEntry.delete({ where: { id } });
     return NextResponse.json({ deleted: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Failed to delete changelog entry';
+    const message = clientErrorMessage(err, 'Failed to delete changelog entry');
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

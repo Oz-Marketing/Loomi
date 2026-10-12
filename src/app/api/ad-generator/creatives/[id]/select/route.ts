@@ -39,6 +39,7 @@ import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdData } from '@/lib/ad-generator/types';
 import { renderCreativeToS3 } from '@/lib/ad-generator/render-creative';
 import { creativeCampaignIsBuilding } from '@/lib/ad-generator/automation/offer-campaign';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -205,7 +206,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // dealer's choice of design — but the failure is both returned and recorded,
     // because the whole point of deferring these renders was that generation
     // could no longer prove they work.
-    const detail = err instanceof Error ? err.message : 'Unknown render error';
+    const detail = clientErrorMessage(err, 'Unknown render error');
     console.error(`[api/ad-generator/creatives/${ad.id}/select] render failed:`, err);
     const notes = parseNotes(ad.reviewNotes).filter((n) => !n.startsWith(RENDER_FAILED_NOTE));
     notes.unshift(`${RENDER_FAILED_NOTE} ${detail}`);

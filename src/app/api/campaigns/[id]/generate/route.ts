@@ -26,6 +26,7 @@ import { createFlow, updateFlowGraph } from '@/lib/services/loomi-flows';
 import { prisma } from '@/lib/prisma';
 import type { NodeType } from '@/lib/flows/validation';
 import type { CampaignBuildEvent } from '@/lib/campaigns/types';
+import { clientErrorMessage } from '@/lib/api-errors';
 
 // Uses Prisma + the Anthropic SDK + react-email's renderer — must be Node, and
 // the SSE stream must never be cached. Allow plenty of time: emails are
@@ -166,7 +167,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               type: 'asset_error',
               kind: 'email',
               key: spec.key,
-              message: err instanceof Error ? err.message : 'Failed to generate email',
+              message: clientErrorMessage(err, 'Failed to generate email'),
             });
           }
         });
@@ -201,7 +202,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               type: 'asset_error',
               kind: 'sms',
               key: spec.key,
-              message: err instanceof Error ? err.message : 'Failed to create SMS',
+              message: clientErrorMessage(err, 'Failed to create SMS'),
             });
           }
         }
@@ -229,7 +230,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               type: 'asset_error',
               kind: 'form',
               key: spec.key,
-              message: err instanceof Error ? err.message : 'Failed to create form',
+              message: clientErrorMessage(err, 'Failed to create form'),
             });
           }
         }
@@ -260,7 +261,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               type: 'asset_error',
               kind: 'landingPage',
               key: spec.key,
-              message: err instanceof Error ? err.message : 'Failed to create landing page',
+              message: clientErrorMessage(err, 'Failed to create landing page'),
             });
           }
         }
@@ -347,7 +348,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               type: 'asset_error',
               kind: 'flow',
               key: spec.key,
-              message: err instanceof Error ? err.message : 'Failed to create flow',
+              message: clientErrorMessage(err, 'Failed to create flow'),
             });
           }
         }
@@ -369,7 +370,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
         }
         send({
           type: 'error',
-          message: err instanceof Error ? err.message : 'Generation failed',
+          message: clientErrorMessage(err, 'Generation failed'),
         });
       } finally {
         closed = true;

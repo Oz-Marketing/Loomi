@@ -91,6 +91,12 @@ module.exports = {
         // database call would otherwise stall every blast and text silently.
         PG_STATEMENT_TIMEOUT_MS: '300000',
         PG_CONNECTION_TIMEOUT_MS: '30000',
+        // Connection budget — see dbPoolMax() in src/lib/prisma.ts. Not
+        // lower than 8: email and SMS sweeps each run 3 at once beside a
+        // dozen queues, and PG_CONNECTION_TIMEOUT_MS above also bounds the
+        // wait for a free pooled connection, so a starved pool would error.
+        PG_POOL_MAX: '8',
+        PGBOSS_POOL_MAX: '4',
       },
     },
   ],

@@ -16,6 +16,13 @@ interface UnsavedChangesContextValue {
   hasUnsavedChanges: boolean;
   markDirty: () => void;
   markClean: () => void;
+  /**
+   * After saving PART of a screen: forget the fields inside the element
+   * tagged `data-unsaved-scope="<scope>"` and keep guarding the rest. Use it
+   * where a screen saves one row or section at a time, so saving one row
+   * doesn't wipe the warning for another row edited but not yet saved.
+   */
+  markCleanWithin: (scope: string) => void;
   confirmNavigation: (action: () => void, destination?: string | null) => boolean;
 }
 
@@ -94,6 +101,27 @@ export function pruneResolvedElements(
   }
 }
 
+/**
+ * Forget every field inside `root`: out of the dirty set, and no recorded
+ * first-seen value, so its next focus records a fresh one.
+ *
+ * Forgetting, rather than re-recording the current value, is deliberate. A
+ * save handler calls this straight after its own setState, before React has
+ * written the saved values into the DOM, so "current" would still be stale.
+ */
+export function forgetElementsWithin(
+  root: Element,
+  dirtyElements: Set<TrackableElement>,
+  initialValues: WeakMap<TrackableElement, string>,
+): void {
+  for (const element of Array.from(dirtyElements)) {
+    if (root.contains(element)) dirtyElements.delete(element);
+  }
+  root
+    .querySelectorAll<TrackableElement>('input, textarea, select, [contenteditable]')
+    .forEach((element) => initialValues.delete(element));
+}
+
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -138,6 +166,13 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     hasUnsavedChangesRef.current = false;
     setHasUnsavedChanges(false);
   }, []);
+
+  const markCleanWithin = useCallback((scope: string) => {
+    const root = document.querySelector(`[data-unsaved-scope="${CSS.escape(scope)}"]`);
+    if (!root) return;
+    forgetElementsWithin(root, dirtyElementsRef.current, initialValuesRef.current);
+    syncDirtyState();
+  }, [syncDirtyState]);
 
   const markDirty = useCallback(() => {
     manualDirtyRef.current = true;
@@ -310,8 +345,9 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
     hasUnsavedChanges,
     markDirty,
     markClean,
+    markCleanWithin,
     confirmNavigation,
-  }), [confirmNavigation, hasUnsavedChanges, markClean, markDirty]);
+  }), [confirmNavigation, hasUnsavedChanges, markClean, markCleanWithin, markDirty]);
 
   return (
     <UnsavedChangesContext.Provider value={contextValue}>

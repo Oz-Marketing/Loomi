@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import PrimaryButton from '@/components/primary-button';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 
 interface AlertRule {
   id: string;
@@ -72,6 +73,7 @@ function toDraft(r: AlertRule): Draft {
 }
 
 export function AlertRulesTab() {
+  const { markCleanWithin } = useUnsavedChanges();
   const [rules, setRules] = useState<AlertRule[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -154,6 +156,8 @@ export function AlertRulesTab() {
       const updated: AlertRule = data.rule;
       setRules((rs) => rs?.map((r) => (r.id === rule.id ? updated : r)) ?? rs);
       setDrafts((dm) => ({ ...dm, [rule.id]: toDraft(updated) }));
+      // Only this card — another rule edited but not yet saved stays guarded.
+      markCleanWithin(`alert-rule:${rule.id}`);
       toast.success(`Saved "${updated.name}".`);
     } catch {
       toast.error('Failed to save rule');
@@ -258,7 +262,7 @@ function RuleCard({
   onSave: () => void;
 }) {
   return (
-    <section className="glass-section-card rounded-xl p-5">
+    <section className="glass-section-card rounded-xl p-5" data-unsaved-scope={`alert-rule:${rule.id}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">

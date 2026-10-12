@@ -36,6 +36,7 @@ import { LINE_TYPES, PACER_PLATFORMS } from '@/lib/budget/channels';
 import { KIND_OPTIONS } from '@/lib/projects/ui';
 import { useBudgetChannels } from '@/contexts/budget-channels-context';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 
 type AdminChannel = {
   id: string;
@@ -59,6 +60,7 @@ const NONE = '';
 const NEW_GROUP = '__new__';
 
 export function BudgetChannelsTab() {
+  const { markCleanWithin } = useUnsavedChanges();
   const { refresh } = useBudgetChannels();
   const [channels, setChannels] = useState<AdminChannel[] | null>(null);
   const [lineCounts, setLineCounts] = useState<Record<string, number>>({});
@@ -114,6 +116,8 @@ export function BudgetChannelsTab() {
       const updated = data.channel as AdminChannel;
       setChannels((prev) => (prev ?? []).map((c) => (c.id === updated.id ? updated : c)));
       setLabelDrafts((l) => ({ ...l, [updated.id]: updated.label }));
+      // Only this row — another channel edited but not yet saved stays guarded.
+      markCleanWithin(`budget-channel:${updated.id}`);
       // Every budget screen holds the registry — without this they keep the old
       // label until a reload.
       void refresh();
@@ -337,6 +341,7 @@ export function BudgetChannelsTab() {
                     return (
                       <div
                         key={channel.id}
+                        data-unsaved-scope={`budget-channel:${channel.id}`}
                         className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 px-3 py-2.5"
                       >
                         <div className="flex flex-shrink-0 flex-col">

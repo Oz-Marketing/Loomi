@@ -33,6 +33,7 @@ import {
   DocumentTextIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import PrimaryButton from '@/components/primary-button';
 import { Collapse } from '@/components/ui/collapse';
@@ -602,6 +603,7 @@ function ImportOptOutsPanel({
   onClose: () => void;
   onImported: () => void;
 }) {
+  const { markCleanWithin } = useUnsavedChanges();
   const [text, setText] = useState('');
   const [fileName, setFileName] = useState<string | null>(null);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -708,6 +710,9 @@ function ImportOptOutsPanel({
       }
       setResult(totals);
       setPreview(null);
+      // The panel stays open to show the result, pasted list and all — but it's
+      // imported, so leaving now loses nothing.
+      markCleanWithin('suppressions-import');
       const added = totals.email.added + totals.sms.added;
       toast.success(`Imported ${added.toLocaleString()} new opt-out${added === 1 ? '' : 's'}.`);
     } catch (err) {
@@ -727,7 +732,10 @@ function ImportOptOutsPanel({
   const pct = progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
 
   return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 p-4 mb-3 space-y-3">
+    <div
+      data-unsaved-scope="suppressions-import"
+      className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 p-4 mb-3 space-y-3"
+    >
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1 text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
           Import opt-outs

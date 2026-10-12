@@ -14,6 +14,11 @@ export function getBoss(): Promise<PgBoss> {
       connectionString,
       schema: 'pgboss',
       monitorIntervalSeconds: 30,
+      // pg-boss keeps its own pool, separate from Prisma's, and defaults it
+      // to 10. The web app only enqueues, so 2 is plenty; the worker, which
+      // polls and completes jobs, raises it in ecosystem.config.js. See
+      // dbPoolMax() in src/lib/prisma.ts for the whole connection budget.
+      max: Number(process.env.PGBOSS_POOL_MAX) || 2,
     });
     boss.on('error', (err: unknown) => {
       console.error('[pg-boss] error', err);

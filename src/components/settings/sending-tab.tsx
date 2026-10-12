@@ -5,6 +5,7 @@ import { EnvelopeIcon, KeyIcon, CheckCircleIcon, XCircleIcon, MapPinIcon } from 
 import { toast } from '@/lib/toast';
 import { WarmupPanel } from '@/components/settings/warmup-panel';
 import PrimaryButton from '@/components/primary-button';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 
 interface SendingTabProps {
   accountKey: string;
@@ -53,6 +54,7 @@ function isValidEmail(value: string): boolean {
 }
 
 export function SendingTab({ accountKey }: SendingTabProps) {
+  const { markClean, markDirty } = useUnsavedChanges();
   const [config, setConfig] = useState<SendingConfig>(empty);
   const [initial, setInitial] = useState<SendingConfig>(empty);
   const [loading, setLoading] = useState(true);
@@ -239,6 +241,12 @@ export function SendingTab({ accountKey }: SendingTabProps) {
       }
 
       setInitial(config);
+      // The guard compares each field to the value it had when first focused,
+      // and the saved values still differ from those — so without this, every
+      // navigation after a successful save asked about "unsaved changes".
+      // A typed-but-unsaved API key is saved separately, so keep guarding it.
+      markClean();
+      if (apiKeyInput.trim()) markDirty();
       toast.success('Sending config saved');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');

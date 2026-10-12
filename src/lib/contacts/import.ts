@@ -15,20 +15,35 @@
 // merging the two records into one). We don't try to be clever about
 // conflict resolution — first-write-wins, last-write-wins for fields,
 // and a single email match wins over a phone match.
+//
+// Opt-out columns are the exception to last-write-wins. A column mapped to
+// an opt-out target can turn a contact's dnd ON but never off (see
+// mergeStickyDnd), and every opt-out it carries is also written to the
+// suppression list for the whole group — that list, not the flag, is what
+// the send path enforces.
 
 import Papa from 'papaparse';
 import { prisma } from '@/lib/prisma';
 import { addContactsToList } from '@/lib/services/contact-lists';
 import {
+  OPT_OUT_SOURCE,
+  mergeStickyDnd,
+  recordEmailOptOuts,
+  recordSmsOptOuts,
+} from '@/lib/sending/opt-outs';
+import {
+  ADDITIONAL_EMAILS_FIELD,
   CONTACT_FIELDS,
-  IGNORE_FIELD,
   type ContactField,
+  type ImportTarget,
+  type OptOutTarget,
   type ParsedContact,
   type RowIssue,
   autoMapHeaders,
   mergeTags,
   normaliseRow,
   parseDateCell,
+  parseEmailCell,
   readTagsArray,
 } from './normalize';
 
@@ -39,7 +54,7 @@ export interface CsvParseResult {
   totalRows: number;
   sampleRows: Record<string, string>[];
   /** Auto-mapping suggestion for the column-mapping UI. */
-  suggestedMapping: Record<string, ContactField>;
+  suggestedMapping: Record<string, ContactField | OptOutTarget>;
 }
 
 const SAMPLE_ROW_COUNT = 5;
@@ -68,10 +83,7 @@ export function parseCsv(text: string): CsvParseResult {
 
 // ── Phase 2: import ──
 
-export type ImportMapping = Record<
-  string,
-  ContactField | typeof IGNORE_FIELD | `custom:${string}`
->;
+export type ImportMapping = Record<string, ImportTarget>;
 
 export interface ImportSummary {
   totalRows: number;
@@ -81,6 +93,12 @@ export interface ImportSummary {
   issues: RowIssue[];
   /** Set when an import was targeted at a list — how many new memberships were added. */
   listMembershipsAdded?: number;
+  /**
+   * Rows whose opt-out columns said yes, per channel. Counted on a dry-run
+   * too, so the preview can say how many people the file opts out before
+   * anything is written.
+   */
+  optedOut: { email: number; sms: number };
 }
 
 interface ImportContactsOptions {
@@ -118,6 +136,8 @@ interface ImportContactsOptions {
    * silently turn off field updates.
    */
   preserveExistingOnMatch?: boolean;
+  /** The user running the import — kept on the suppression rows it writes, for the audit trail. */
+  importedBy?: string;
 }
 
 const MAX_ISSUES_RETURNED = 50;
@@ -130,6 +150,7 @@ export async function importContacts({
   listId,
   applyTags,
   preserveExistingOnMatch = false,
+  importedBy,
 }: ImportContactsOptions): Promise<ImportSummary> {
   const tagsToApply = mergeTags(applyTags);
   const parsed = Papa.parse<Record<string, string>>(csvText, {
@@ -162,6 +183,11 @@ export async function importContacts({
   // Collected during commit so we can bulk-attach to a list at the end.
   // Skipped when the caller didn't ask for list attachment.
   const upsertedContactIds: string[] = [];
+  // Addresses the file opts out, written to the suppression list in one
+  // set-based pass after the loop.
+  const optedOut = { email: 0, sms: 0 };
+  const optOutEmails: string[] = [];
+  const optOutPhones: string[] = [];
 
   // Pre-fetch existing contacts for this account so we know whether
   // each row is a create or update without hitting the DB per row.
@@ -193,6 +219,21 @@ export async function importContacts({
     }
 
     const parsedRow = result.row;
+
+    // Collected whether or not the upsert below succeeds: the opt-out belongs
+    // to the address, and a contact row that failed to save (a phone already
+    // taken by another contact, say) is no reason to keep mailing it.
+    if (parsedRow.dnd?.email) {
+      const emails = rowEmails(parsedRow);
+      if (emails.length > 0) {
+        optedOut.email += 1;
+        optOutEmails.push(...emails);
+      }
+    }
+    if (parsedRow.dnd?.sms && parsedRow.phone) {
+      optedOut.sms += 1;
+      optOutPhones.push(parsedRow.phone);
+    }
 
     // Normalize date-typed custom-field values to ISO date-only (UTC).
     if (parsedRow.customFields && dateCustomFieldKeys.size > 0) {
@@ -239,12 +280,34 @@ export async function importContacts({
     }
   }
 
+  // Reason 'manual' (a deliberate opt-out, not a bounce), source 'import' — an
+  // export can't say whether the person opted out themselves, so the contact
+  // toggle won't clear these. See OPT_OUT_SOURCE.import.
+  if (!dryRun && (optOutEmails.length > 0 || optOutPhones.length > 0)) {
+    const raw = JSON.stringify({ via: 'contact-import', ...(importedBy ? { userId: importedBy } : {}) });
+    const shared = { accountKey, reason: 'manual' as const, source: OPT_OUT_SOURCE.import, raw };
+    if (optOutEmails.length > 0) await recordEmailOptOuts({ ...shared, emails: optOutEmails });
+    if (optOutPhones.length > 0) await recordSmsOptOuts({ ...shared, phones: optOutPhones });
+  }
+
   let listMembershipsAdded: number | undefined;
   if (listId && upsertedContactIds.length > 0) {
     listMembershipsAdded = await addContactsToList(listId, upsertedContactIds);
   }
 
-  return { totalRows, imported, updated, skipped, issues, listMembershipsAdded };
+  return { totalRows, imported, updated, skipped, issues, listMembershipsAdded, optedOut };
+}
+
+/**
+ * Every address an opted-out row names: the contact's email and the
+ * alternates a packed cell carried. They all belong to the person who opted out.
+ */
+function rowEmails(row: ParsedContact): string[] {
+  const alternates = row.customFields?.[ADDITIONAL_EMAILS_FIELD];
+  return [
+    ...(row.email ? [row.email] : []),
+    ...(alternates ? parseEmailCell(alternates).addresses : []),
+  ];
 }
 
 // ── Upsert ──
@@ -252,7 +315,7 @@ export async function importContacts({
 type UpsertResult = { action: 'created' | 'updated'; id: string };
 
 /** The fields we need off an already-existing contact to decide what to write. */
-type MatchedContact = { id: string; tags: unknown };
+type MatchedContact = { id: string; tags: unknown; dnd: unknown };
 
 /**
  * Find the contact this row refers to, preferring an email match and
@@ -265,7 +328,7 @@ async function findMatch(
   if (row.email) {
     const byEmail = await prisma.contact.findUnique({
       where: { accountKey_email: { accountKey, email: row.email } },
-      select: { id: true, tags: true },
+      select: { id: true, tags: true, dnd: true },
     });
     if (byEmail) return byEmail;
   }
@@ -273,7 +336,7 @@ async function findMatch(
   if (row.phone) {
     const byPhone = await prisma.contact.findUnique({
       where: { accountKey_phone: { accountKey, phone: row.phone } },
-      select: { id: true, tags: true },
+      select: { id: true, tags: true, dnd: true },
     });
     if (byPhone) return byPhone;
   }
@@ -309,17 +372,26 @@ async function upsertContact(
   if (matched) {
     const existingTags = readTagsArray(matched.tags);
     const tags = mergeTags(existingTags, row.tags, applyTags);
+    // Opt-outs land in BOTH modes: a roster upload that names someone as
+    // opted out is still telling us they opted out. Sticky, so the file can
+    // add an opt-out but never take one away.
+    const dnd = row.dnd ? mergeStickyDnd(matched.dnd, row.dnd) : null;
+    const dndChanged = dnd !== null && !sameDnd(matched.dnd, dnd);
 
     if (overwriteOnMatch) {
       await prisma.contact.update({
         where: { id: matched.id },
-        data: { ...toPrismaData(row), tags },
+        data: { ...toPrismaData(row), tags, ...(dndChanged ? { dnd } : {}) },
       });
-    } else if (tags.length !== existingTags.length) {
+    } else if (tags.length !== existingTags.length || dndChanged) {
       // Match-only import. The merge is a superset of what was there, so
-      // an unchanged length means nothing to write — skip it rather than
-      // bump updatedAt across the whole roster on a re-upload.
-      await prisma.contact.update({ where: { id: matched.id }, data: { tags } });
+      // an unchanged length (and no new opt-out) means nothing to write —
+      // skip it rather than bump updatedAt across the whole roster on a
+      // re-upload.
+      await prisma.contact.update({
+        where: { id: matched.id },
+        data: { tags, ...(dndChanged ? { dnd } : {}) },
+      });
     }
 
     return { action: 'updated', id: matched.id };
@@ -331,10 +403,17 @@ async function upsertContact(
       dateAdded: new Date(),
       ...toPrismaData(row),
       tags: mergeTags(row.tags, applyTags),
+      ...(row.dnd ? { dnd: row.dnd } : {}),
     },
     select: { id: true },
   });
   return { action: 'created', id: created.id };
+}
+
+/** Do two dnd cells say the same thing for email and sms? */
+function sameDnd(a: unknown, b: Readonly<Record<string, unknown>>): boolean {
+  const prior = a && typeof a === 'object' && !Array.isArray(a) ? (a as Record<string, unknown>) : {};
+  return prior.email === b.email && prior.sms === b.sms;
 }
 
 /**

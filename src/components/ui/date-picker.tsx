@@ -167,6 +167,7 @@ interface CalendarMonthProps {
   hoverEnd: IsoDate | null;
   focusedIso: IsoDate | null;
   isRange: boolean;
+  minDate?: IsoDate;
   onDayClick: (iso: IsoDate) => void;
   onDayMouseEnter: (iso: IsoDate) => void;
 }
@@ -178,6 +179,7 @@ function CalendarMonth({
   hoverEnd,
   focusedIso,
   isRange,
+  minDate,
   onDayClick,
   onDayMouseEnter,
 }: CalendarMonthProps) {
@@ -253,12 +255,15 @@ function CalendarMonth({
           const isSelectedSingle = !isRange && selectedStart === iso;
           const highlighted = isStart || isEnd || isSelectedSingle;
           const isFocused = focusedIso === iso;
+          // ISO strings compare lexically in date order.
+          const beforeMin = !!minDate && iso < minDate;
 
           return (
             <button
               key={i}
               type="button"
               tabIndex={-1}
+              disabled={beforeMin}
               onClick={(e) => {
                 e.preventDefault();
                 onDayClick(iso);
@@ -272,7 +277,9 @@ function CalendarMonth({
                 cell.inMonth
                   ? 'text-[var(--foreground)]'
                   : 'text-[var(--muted-foreground)]/50'
-              } ${highlighted ? '' : 'hover:bg-[var(--muted)]'}`}
+              } ${highlighted || beforeMin ? '' : 'hover:bg-[var(--muted)]'} ${
+                beforeMin ? 'opacity-30 cursor-not-allowed' : ''
+              }`}
               style={{
                 background: highlighted
                   ? 'var(--primary)'
@@ -326,6 +333,8 @@ interface BaseProps {
   triggerContent?: ReactNode;
   /** Pin the trigger to a specific min width. */
   minWidth?: number | string;
+  /** Earliest selectable day; earlier days render disabled. */
+  minDate?: IsoDate;
 }
 
 interface SingleProps extends BaseProps {
@@ -473,6 +482,7 @@ export function DatePicker(props: DatePickerProps) {
    * second click is earlier than the first, we swap so start ≤ end.
    */
   const handleDayClick = (iso: IsoDate) => {
+    if (props.minDate && iso < props.minDate) return;
     if (!isRange) {
       commitSingle(iso);
       return;
@@ -779,6 +789,7 @@ export function DatePicker(props: DatePickerProps) {
                   hoverEnd={hoverIso}
                   focusedIso={focusedIso}
                   isRange={isRange}
+                  minDate={props.minDate}
                   onDayClick={handleDayClick}
                   onDayMouseEnter={handleDayMouseEnter}
                 />
@@ -819,10 +830,12 @@ export function DatePicker(props: DatePickerProps) {
                   <input
                     type="date"
                     value={singleText}
+                    min={props.minDate}
                     onChange={(e) => {
                       const v = e.target.value;
                       setSingleText(v);
                       const iso = tryCommitText(v);
+                      if (iso && props.minDate && iso < props.minDate) return;
                       (props as SingleProps).onChange(iso);
                     }}
                     className="w-full px-2 py-1 text-xs rounded border border-[var(--border)] bg-[var(--input)]"

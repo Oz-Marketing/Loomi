@@ -136,24 +136,6 @@ export function CreateBlastModal({
             />
           </div>
 
-          {/* Campaign type (always Single Channel for now) */}
-          <div>
-            <label className="block text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
-              Blast Type
-            </label>
-            <div className="rounded-xl border-2 border-[var(--primary)] bg-[var(--primary)]/[0.05] p-4 flex items-start gap-3">
-              <div className="w-10 h-10 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center flex-shrink-0">
-                <Squares2X2Icon className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[var(--foreground)]">Single channel</p>
-                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                  Send a one-time message to a specific audience.
-                </p>
-              </div>
-            </div>
-          </div>
-
           {/* Channel type */}
           <div>
             <label className="block text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
@@ -174,7 +156,7 @@ export function CreateBlastModal({
                 onSelect={setChannel}
                 icon={ChatBubbleLeftRightIcon}
                 label="Text Messaging"
-                description="Send an SMS/MMS blast through your subaccount's Twilio connection."
+                description="Send an SMS/MMS blast through your account's Twilio connection."
               />
               <ChannelOption
                 value="both"

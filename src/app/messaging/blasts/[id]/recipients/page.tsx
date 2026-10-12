@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -17,12 +17,37 @@ import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
-import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
+import { isLikelyDeliverableEmail } from '@/lib/contact-hygiene';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { Select } from '@/components/select';
 import { FilterBuilder } from '@/components/contacts/filter-builder';
 import { ContactsPicker } from '@/components/contacts/contacts-picker';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import {
+  AUDIENCE_CONFIRMED_KEY,
+  isEditableBlastStatus,
+} from '@/lib/messaging/blast-builder-steps';
+import { parseBlastMetadata } from '@/lib/messaging/blast-metadata';
+import {
+  announceDraftSaved,
+  patchJson,
+  useDraftAutosave,
+} from '@/lib/messaging/builder-autosave';
+import {
+  EMPTY_AUDIENCE_MESSAGE,
+  NOBODY,
+  audienceAfterAccountChange,
+  audienceFromDraft,
+  audiencePatch,
+  audienceTab,
+  isAudienceEmpty,
+  toServerSelection,
+  type AudienceTab,
+  type BuilderAudience,
+} from '@/lib/messaging/recipients-step';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -39,6 +64,7 @@ interface DraftCampaign {
   /** JSON-stringified array of Contact IDs for manual selection mode.
    *  Mutually exclusive with sourceListId and sourceAudienceId+sourceFilter. */
   sourceContactIds: string;
+  metadata: string;
 }
 
 interface SavedAudience {
@@ -56,17 +82,6 @@ interface ListSummary {
   memberCount: number;
 }
 
-type AudienceTab = 'lists' | 'segments' | 'contacts';
-
-type AudienceSelection =
-  | { kind: 'all' }
-  | { kind: 'list'; id: string; name: string }
-  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition }
-  // Manual mode — caller curates an arbitrary set of Contact IDs from
-  // the Contacts tab. Used for canary/test sends. Persisted as
-  // sourceContactIds (JSON array) on the campaign draft.
-  | { kind: 'contacts'; ids: string[] };
-
 function parseFilterDefinition(raw: string): FilterDefinition | null {
   if (!raw) return null;
   try {
@@ -78,8 +93,10 @@ function parseFilterDefinition(raw: string): FilterDefinition | null {
   }
 }
 
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value);
+// The picker offers the contacts the send would actually email — the same
+// predicate the sender and the server-side count use, not a lookalike regex.
+function isEmailDeliverable(c: Contact): boolean {
+  return isLikelyDeliverableEmail(String(c.email || '').trim());
 }
 
 export default function RecipientsStepPage({ params }: PageProps) {
@@ -90,22 +107,27 @@ export default function RecipientsStepPage({ params }: PageProps) {
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [draftLoading, setDraftLoading] = useState(true);
+  // True once the draft's saved audience is in state. Nothing is autosaved
+  // before this, so the page's defaults never overwrite a saved choice.
+  const [hydrated, setHydrated] = useState(false);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
-  // Custom fields for the source sub-account — folded into the filter
+  // Custom fields for the source account — folded into the filter
   // engine so saved audiences referencing custom keys (last_purchase_date,
   // etc.) evaluate correctly at recipient-count time.
   const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
   const [tab, setTab] = useState<AudienceTab>('segments');
-  const [selection, setSelection] = useState<AudienceSelection>({ kind: 'all' });
+  const [selection, setSelection] = useState<BuilderAudience>({ kind: 'all' });
+  // Whether someone has actually chosen on this step (AUDIENCE_CONFIRMED_KEY).
+  // A fresh draft shows "All Contacts" highlighted, but that is a default,
+  // not a choice — it takes a click or Continue to make it one.
+  const [confirmed, setConfirmed] = useState(false);
 
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
 
   const [lists, setLists] = useState<ListSummary[]>([]);
-  // Member IDs for the currently-selected list — fetched on demand so the
-  // sendable count can intersect them with the deliverable contact set.
 
   const [saving, setSaving] = useState(false);
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
@@ -118,6 +140,14 @@ export default function RecipientsStepPage({ params }: PageProps) {
   const [contactsSearch, setContactsSearch] = useState('');
   const [contactsPage, setContactsPage] = useState(0);
 
+  const locked = draft !== null && !isEditableBlastStatus(draft.status);
+
+  /** A user's pick: becomes the selection AND counts as a choice. */
+  function choose(next: BuilderAudience) {
+    setSelection(next);
+    setConfirmed(true);
+  }
+
   // Hydrate draft on mount.
   // NOTE: router / subHref are intentionally NOT in the dep array.
   // useSubaccountHref() returns a fresh function reference on every render,
@@ -129,7 +159,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
     let cancelled = false;
     setDraftLoading(true);
     fetch(`/api/blasts/email/${encodeURIComponent(id)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load campaign'))))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load blast'))))
       .then((data: { campaign?: DraftCampaign }) => {
         if (cancelled) return;
         const campaign = data.campaign;
@@ -139,44 +169,20 @@ export default function RecipientsStepPage({ params }: PageProps) {
           return;
         }
         setDraft(campaign);
-        if (campaign.accountKeys.length > 0) {
-          setSelectedAccountKey(campaign.accountKeys[0]);
-        }
-        // Hydrate whichever selection mode the draft was saved with.
-        // The three modes are mutually exclusive — sourceContactIds wins,
-        // then sourceListId, then sourceAudienceId+sourceFilter.
-        if (campaign.sourceContactIds) {
-          let ids: string[] = [];
-          try {
-            const parsed = JSON.parse(campaign.sourceContactIds);
-            if (Array.isArray(parsed)) {
-              ids = parsed.map((v) => String(v).trim()).filter(Boolean);
-            }
-          } catch {
-            ids = [];
-          }
-          if (ids.length > 0) {
-            setSelection({ kind: 'contacts', ids });
-            setTab('contacts');
-          }
-        } else if (campaign.sourceListId) {
-          // Name is resolved once the lists fetch completes (effect below).
-          setSelection({ kind: 'list', id: campaign.sourceListId, name: 'List' });
-          setTab('lists');
-        } else if (campaign.sourceAudienceId && campaign.sourceFilter) {
-          const parsed = parseFilterDefinition(campaign.sourceFilter);
-          if (parsed) {
-            const preset = LIFECYCLE_PRESETS.find((p) => p.id === campaign.sourceAudienceId);
-            const name = preset?.name || 'Saved Segment';
-            setSelection({
-              kind: 'segment',
-              id: campaign.sourceAudienceId,
-              name,
-              filter: parsed,
-            });
-            setTab('segments');
-          }
-        }
+        // Read through the same function the send uses, so what's shown is
+        // what would go out — including a saved-but-empty selection, which
+        // used to come back as "All Contacts".
+        const audience = audienceFromDraft(campaign);
+        setSelection(audience);
+        setTab(audienceTab(audience));
+        setConfirmed(parseBlastMetadata(campaign.metadata)[AUDIENCE_CONFIRMED_KEY] === true);
+        // The draft's own account, set together with its audience. It used
+        // to be preceded by a default (the first account in the list), and
+        // the account-change reset then fired on the switch to the real one
+        // — flipping a hand-picked audience on any other account to "All
+        // Contacts".
+        setSelectedAccountKey(campaign.accountKeys[0] || '');
+        setHydrated(true);
       })
       .catch((err: Error) => {
         if (!cancelled) toast.error(err.message);
@@ -197,30 +203,26 @@ export default function RecipientsStepPage({ params }: PageProps) {
       .sort((a, b) => a.dealer.localeCompare(b.dealer));
   }, [isAccount, accountKey, accounts]);
 
+  // Only a draft with no account of its own takes a default — and only once
+  // it has loaded, so the default can never race the draft's real account.
   useEffect(() => {
-    if (!selectedAccountKey && accountOptions.length > 0) {
-      setSelectedAccountKey(accountOptions[0].key);
-    }
-  }, [accountOptions, selectedAccountKey]);
+    if (!hydrated || selectedAccountKey || accountOptions.length === 0) return;
+    setSelectedAccountKey(accountOptions[0].key);
+  }, [hydrated, selectedAccountKey, accountOptions]);
 
-  // Reset Contacts-tab state when the selected subaccount *changes*
-  // post-mount. The selected IDs belong to a specific account's contact
-  // pool; keeping them across an account switch would silently send a
-  // campaign to a mismatched audience (or, more likely, zero recipients).
-  //
-  // The ref guard ensures the first set (initial hydration from
-  // accountOptions / a draft) does NOT clobber a freshly-hydrated
-  // contacts-mode selection from sourceContactIds. We only reset on
-  // explicit user-driven changes after the page has settled.
-  const prevAccountKeyRef = useRef<string>('');
-  useEffect(() => {
-    const prev = prevAccountKeyRef.current;
-    prevAccountKeyRef.current = selectedAccountKey;
-    if (!prev || prev === selectedAccountKey) return;
+  /**
+   * The user moved this blast to another account. Hand-picked contacts and
+   * lists belong to the old one, so they reset — to nobody, never to "All
+   * Contacts" — and the user picks again. Done here, in the handler, rather
+   * than in an effect watching the account, so loading a draft can't trip it.
+   */
+  function changeAccount(next: string) {
+    if (!next || next === selectedAccountKey) return;
+    setSelectedAccountKey(next);
     setContactsSearch('');
     setContactsPage(0);
-    setSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
-  }, [selectedAccountKey]);
+    setSelection((current) => audienceAfterAccountChange(current));
+  }
 
   // Load contacts for the selected account so we can preview audience sizes
   useEffect(() => {
@@ -293,7 +295,8 @@ export default function RecipientsStepPage({ params }: PageProps) {
   );
 
   // Hydrate selection name once the lists arrive (we set kind:'list' with a
-  // placeholder name before the fetch resolves).
+  // placeholder name before the fetch resolves). A name isn't part of what's
+  // saved, so this never triggers an autosave.
   useEffect(() => {
     if (selection.kind !== 'list') return;
     const match = scopedLists.find((l) => l.id === selection.id);
@@ -301,6 +304,29 @@ export default function RecipientsStepPage({ params }: PageProps) {
       setSelection({ kind: 'list', id: match.id, name: match.name });
     }
   }, [scopedLists, selection]);
+
+  // ── Autosave ──
+  // The audience is saved shortly after every change, and the header's step
+  // links wait for it (see builder-autosave). It used to be saved only by
+  // Continue and Back here, so picking an audience and clicking "2 Message"
+  // in the header dropped the pick — and an unsaved draft goes to everyone.
+  const autosaveKey = useMemo(
+    () => JSON.stringify(audiencePatch(selection, selectedAccountKey, confirmed)),
+    [selection, selectedAccountKey, confirmed],
+  );
+  const autosave = useDraftAutosave({
+    key: autosaveKey,
+    ready: hydrated && !locked && Boolean(selectedAccountKey),
+    save: async (key, { keepalive }) => {
+      await patchJson(
+        `/api/blasts/email/${encodeURIComponent(id)}`,
+        JSON.parse(key) as Record<string, unknown>,
+        { keepalive, fallbackError: 'Failed to save recipients' },
+      );
+      announceDraftSaved(id);
+    },
+    onError: (err) => toast.error(`Couldn’t save recipients: ${err.message}`),
+  });
 
   // Sendable count resolved SERVER-side, over the whole roster.
   //
@@ -311,20 +337,17 @@ export default function RecipientsStepPage({ params }: PageProps) {
   const [sendableCount, setSendableCount] = useState(0);
   const [sendableLoading, setSendableLoading] = useState(false);
 
-  const serverSelection = useMemo(() => {
-    if (selection.kind === 'all') return { kind: 'all' as const };
-    if (selection.kind === 'list') return { kind: 'list' as const, listId: selection.id };
-    if (selection.kind === 'contacts') return { kind: 'contacts' as const, ids: selection.ids };
-    return { kind: 'filter' as const, definition: selection.filter };
-  }, [selection]);
   const serverSelectionKey = useMemo(
-    () => JSON.stringify(serverSelection),
-    [serverSelection],
+    () => JSON.stringify(toServerSelection(selection)),
+    [selection],
   );
+  const empty = isAudienceEmpty(selection);
 
   useEffect(() => {
-    if (!selectedAccountKey) {
+    // Nobody selected is zero by definition — no need to ask.
+    if (!selectedAccountKey || empty) {
       setSendableCount(0);
+      setSendableLoading(false);
       return;
     }
     let cancelled = false;
@@ -336,7 +359,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           accountKey: selectedAccountKey,
-          selection: serverSelection,
+          selection: JSON.parse(serverSelectionKey),
           channel: 'email',
         }),
       })
@@ -360,73 +383,36 @@ export default function RecipientsStepPage({ params }: PageProps) {
       cancelled = true;
       clearTimeout(timer);
     };
-    // `serverSelectionKey` stands in for `serverSelection`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverSelectionKey, selectedAccountKey]);
+  }, [serverSelectionKey, selectedAccountKey, empty]);
 
-  async function persistSelection() {
-    if (!draft) return;
+  async function handleContinue() {
+    if (!draft || !selectedAccountKey) return;
+    if (empty) {
+      toast.error(EMPTY_AUDIENCE_MESSAGE);
+      return;
+    }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
-        accountKeys: [selectedAccountKey],
-      };
-      // Mutually exclusive: a draft holds at most one of (list reference,
-      // segment audience+filter, manual contact IDs). We always clear
-      // the unused fields so stale state from a different selection mode
-      // doesn't linger after a mode switch.
-      if (selection.kind === 'all') {
-        payload.sourceAudienceId = null;
-        payload.sourceFilter = null;
-        payload.sourceListId = null;
-        payload.sourceContactIds = null;
-      } else if (selection.kind === 'list') {
-        payload.sourceListId = selection.id;
-        payload.sourceAudienceId = null;
-        payload.sourceFilter = null;
-        payload.sourceContactIds = null;
-      } else if (selection.kind === 'contacts') {
-        payload.sourceContactIds = JSON.stringify(selection.ids);
-        payload.sourceListId = null;
-        payload.sourceAudienceId = null;
-        payload.sourceFilter = null;
-      } else {
-        payload.sourceAudienceId = selection.id;
-        payload.sourceFilter = JSON.stringify(selection.filter);
-        payload.sourceListId = null;
-        payload.sourceContactIds = null;
-      }
-      const res = await fetch(`/api/blasts/email/${encodeURIComponent(draft.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data?.error || 'Failed to save selection');
-      }
-    } finally {
+      // Continue IS the choice — on a fresh draft it's what turns the
+      // highlighted default into the audience. Saved explicitly, after any
+      // autosave still in flight.
+      setConfirmed(true);
+      await autosave.saveNow(JSON.stringify(audiencePatch(selection, selectedAccountKey, true)));
+      router.push(`${subHref('/messaging/blasts')}/${encodeURIComponent(draft.id)}/template`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save recipients');
       setSaving(false);
     }
   }
 
-  async function handleContinue() {
-    if (!draft || !selectedAccountKey) return;
-    try {
-      await persistSelection();
-      router.push(`${subHref('/messaging/blasts')}/${encodeURIComponent(draft.id)}/template`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save selection');
-    }
-  }
-
   async function handleBack() {
-    if (draft) {
-      try {
-        await persistSelection();
-      } catch {
-        // non-fatal — drafts are user-editable; user can return
-      }
+    try {
+      // Saves only what changed — Back is not a choice, so an untouched
+      // default is not written as one.
+      await autosave.flush();
+    } catch (err) {
+      toast.error(`Couldn’t save recipients: ${err instanceof Error ? err.message : 'unknown error'}`);
+      return;
     }
     router.push(subHref('/messaging/blasts'));
   }
@@ -440,6 +426,10 @@ export default function RecipientsStepPage({ params }: PageProps) {
         </p>
       </div>
     );
+  }
+
+  if (draft && locked) {
+    return <BlastLockedNotice status={draft.status} name={draft.name} />;
   }
 
   const tabButton = (key: AudienceTab, label: string, icon: React.ComponentType<{ className?: string }>) => {
@@ -470,7 +460,9 @@ export default function RecipientsStepPage({ params }: PageProps) {
             <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
               Recipients
             </p>
-            <h1 className="text-2xl font-bold">{draft?.name || 'Blast'}</h1>
+            <h1>
+              <BlastNameField id={id} channel="email" variant="title" initialName={draft?.name ?? ''} />
+            </h1>
             <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
               Choose who should receive this blast.
             </p>
@@ -486,35 +478,30 @@ export default function RecipientsStepPage({ params }: PageProps) {
               )}
             </p>
             <p className="text-xs text-[var(--muted-foreground)] mt-1.5">
-              Sendable recipients
+              {empty ? 'No one selected' : 'Sendable recipients'}
             </p>
           </div>
         </div>
 
-        {/* Subaccount picker */}
+        {/* Account picker */}
         {accountOptions.length > 1 && !isAccount && (
           <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)] mb-5">
             <label className="block text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
-              Sending Subaccount
+              Sending account
             </label>
-            <select
+            <Select
               value={selectedAccountKey}
-              onChange={(e) => setSelectedAccountKey(e.target.value)}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-            >
-              {accountOptions.map((opt) => (
-                <option key={opt.key} value={opt.key}>
-                  {opt.dealer}
-                </option>
-              ))}
-            </select>
+              onChange={changeAccount}
+              options={accountOptions.map((opt) => ({ value: opt.key, label: opt.dealer }))}
+              ariaLabel="Sending account"
+            />
           </div>
         )}
 
         {/* "All Contacts" option */}
         <button
           type="button"
-          onClick={() => setSelection({ kind: 'all' })}
+          onClick={() => choose({ kind: 'all' })}
           className={`w-full text-left rounded-2xl border-2 p-5 mb-5 flex items-start gap-4 transition-all ${
             selection.kind === 'all'
               ? 'border-[var(--primary)] bg-[var(--primary)]/[0.05]'
@@ -533,7 +520,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-[var(--foreground)]">All Contacts</p>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Send to every deliverable contact in this subaccount.
+              Send to every deliverable contact in this account.
             </p>
           </div>
           {selection.kind === 'all' && (
@@ -588,7 +575,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
                           icon={ListBulletIcon}
                           active={active}
                           onClick={() =>
-                            setSelection({ kind: 'list', id: list.id, name: list.name })
+                            choose({ kind: 'list', id: list.id, name: list.name })
                           }
                         />
                       );
@@ -627,7 +614,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
                             icon={RectangleStackIcon}
                             active={active}
                             onClick={() =>
-                              setSelection({ kind: 'segment', id: a.id, name: a.name, filter })
+                              choose({ kind: 'segment', id: a.id, name: a.name, filter })
                             }
                           />
                         );
@@ -659,17 +646,12 @@ export default function RecipientsStepPage({ params }: PageProps) {
                 onPageChange={setContactsPage}
                 selectedIds={selection.kind === 'contacts' ? selection.ids : []}
                 onSelectionChange={(ids) => {
-                  // Switching to manual mode → flip the top-level
-                  // selection. Empty ids fall back to 'all' so the
-                  // sendable count never strands at zero just because
-                  // the user unchecked everything.
-                  if (ids.length === 0) {
-                    setSelection({ kind: 'all' });
-                  } else {
-                    setSelection({ kind: 'contacts', ids });
-                  }
+                  // Unchecking everyone leaves NOBODY selected. It used to
+                  // fall back to "All Contacts" so the count wouldn't sit at
+                  // zero — which turned an empty pick into the whole account.
+                  choose(ids.length === 0 ? NOBODY : { kind: 'contacts', ids });
                 }}
-                isDeliverable={(c) => isValidEmail(String(c.email || '').trim())}
+                isDeliverable={isEmailDeliverable}
                 emptyNoun="deliverable email contacts"
               />
             )}
@@ -689,7 +671,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
               { id: list.id, name: list.name, description: list.description, accountKey: list.accountKey, memberCount: 0 },
               ...prev,
             ]);
-            setSelection({ kind: 'list', id: list.id, name: list.name });
+            choose({ kind: 'list', id: list.id, name: list.name });
             setShowNewListModal(false);
             void refreshLists();
             toast.success(`List "${list.name}" created. Populate it on the Lists page.`);
@@ -707,7 +689,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
           offerSave
           onApply={(definition) => {
             // Use it as an ad-hoc segment for this campaign without saving.
-            setSelection({
+            choose({
               kind: 'segment',
               id: `ad-hoc-${Date.now()}`,
               name: 'Custom segment',
@@ -730,7 +712,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
               if (!res.ok) {
                 throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
               }
-              setSelection({
+              choose({
                 kind: 'segment',
                 id: data.audience.id,
                 name: data.audience.name,
@@ -759,12 +741,19 @@ export default function RecipientsStepPage({ params }: PageProps) {
             Back
           </button>
 
-          <PrimaryButton
-            onClick={handleContinue}
-            disabled={!selectedAccountKey || saving || contactsLoading}
-          >
-            {saving ? 'Saving…' : 'Continue'}
-          </PrimaryButton>
+          <div className="flex items-center gap-4 min-w-0">
+            {empty && (
+              <p className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">
+                {EMPTY_AUDIENCE_MESSAGE}
+              </p>
+            )}
+            <PrimaryButton
+              onClick={handleContinue}
+              disabled={!selectedAccountKey || saving || empty}
+            >
+              {saving ? 'Saving…' : 'Continue'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>

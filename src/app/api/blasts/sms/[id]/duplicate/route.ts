@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import {
-  duplicateSmsBlast,
-  getSmsBlast,
-} from '@/lib/services/sms-blasts';
+import { getSmsBlast } from '@/lib/services/sms-blasts';
+import { duplicateBlastWithLinkedChannels } from '@/lib/services/blast-linked';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -33,11 +31,12 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const copy = await duplicateSmsBlast(id, {
+    // An Email + Text pair is copied as a new pair — see blast-linked.ts.
+    const copies = await duplicateBlastWithLinkedChannels('sms', id, {
       createdByUserId: session!.user.id,
       createdByRole: session!.user.role,
     });
-    return NextResponse.json({ campaign: copy });
+    return NextResponse.json({ campaign: copies.sms ?? copies.email });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to duplicate campaign';
     return NextResponse.json({ error: message }, { status: 500 });

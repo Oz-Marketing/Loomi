@@ -21,7 +21,9 @@ import {
   CheckCircleIcon,
   EnvelopeIcon,
   ChatBubbleLeftRightIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 
 // ── Types ──
 
@@ -107,7 +109,27 @@ interface SentBlastDrawerProps {
   open: boolean;
   campaign: CampaignSummary | null;
   onClose: () => void;
+  /**
+   * The account the list is showing, when it is showing one. A blast can span
+   * several accounts; passing the same key the list row was counted with keeps
+   * the drawer's numbers equal to the row's. Omitted, the server scopes to the
+   * viewer's own accounts (or the whole blast for unscoped staff).
+   */
+  accountKey?: string | null;
 }
+
+/**
+ * What each email tile counts, shown in a tooltip by its label. The same
+ * definitions as lib/services/email-analytics.ts, in plain words.
+ */
+const EMAIL_KPI_HINTS = {
+  sent: 'Messages SendGrid accepted for delivery, including any that bounced afterwards. Skipped and failed recipients are not included.',
+  delivered: "Confirmed by the recipient's mail server, as a share of sent. A message that bounced after delivery counts as bounced, not delivered.",
+  openRate: 'People who opened, as a share of delivered. Each person counts once, and automatic opens by mail privacy features are not counted.',
+  clickRate: 'People who clicked a link, as a share of delivered. Each person counts once.',
+  bounced: "Refused by the recipient's mail server, or dropped by SendGrid before sending, as a share of sent. Each bounced address is suppressed automatically.",
+  unsubscribes: 'People who unsubscribed, as a share of delivered.',
+} as const;
 
 // ── Helpers ──
 
@@ -138,7 +160,7 @@ function getChannel(c: CampaignSummary): 'email' | 'sms' | 'multi' {
 
 // ── Component ──
 
-export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProps) {
+export function SentBlastDrawer({ open, campaign, onClose, accountKey }: SentBlastDrawerProps) {
   const [mounted, setMounted] = useState(false);
   const [engagement, setEngagement] = useState<EngagementRow | null>(null);
   const [engagementLoading, setEngagementLoading] = useState(false);
@@ -200,7 +222,8 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
     let cancelled = false;
     setEngagementLoading(true);
     setEngagementError(null);
-    fetch(`/api/blasts/loomi/engagement/${encodeURIComponent(campaignId)}`)
+    const scopeQuery = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
+    fetch(`/api/blasts/loomi/engagement/${encodeURIComponent(campaignId)}${scopeQuery}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -222,7 +245,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
     return () => {
       cancelled = true;
     };
-  }, [open, campaignId, channel]);
+  }, [open, campaignId, channel, accountKey]);
 
   // Fetch the preview payload. Email -> HTML for iframe; SMS -> raw
   // message text. Multi-channel campaigns are anchored on the email
@@ -458,12 +481,14 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                 <KpiTile
                   icon={PaperAirplaneIcon}
                   label="Sent"
+                  hint={EMAIL_KPI_HINTS.sent}
                   primary={num(engagement.sent)}
                   tone="primary"
                 />
                 <KpiTile
                   icon={CheckCircleIcon}
                   label="Delivered"
+                  hint={EMAIL_KPI_HINTS.delivered}
                   primary={num(engagement.delivered)}
                   secondary={pct(engagement.deliveryRate)}
                   tone="emerald"
@@ -471,6 +496,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                 <KpiTile
                   icon={EnvelopeOpenIcon}
                   label="Open rate"
+                  hint={EMAIL_KPI_HINTS.openRate}
                   primary={pct(engagement.openRate)}
                   secondary={`${num(engagement.uniqueOpens)} unique`}
                   tone="sky"
@@ -478,6 +504,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                 <KpiTile
                   icon={CursorArrowRaysIcon}
                   label="Click rate"
+                  hint={EMAIL_KPI_HINTS.clickRate}
                   primary={pct(engagement.clickRate)}
                   secondary={`${num(engagement.uniqueClicks)} unique`}
                   tone="violet"
@@ -489,6 +516,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                 <KpiTile
                   icon={ArrowUturnLeftIcon}
                   label="Bounced"
+                  hint={EMAIL_KPI_HINTS.bounced}
                   primary={num(engagement.bounces)}
                   secondary={pct(engagement.bounceRate)}
                   tone="zinc"
@@ -496,6 +524,7 @@ export function SentBlastDrawer({ open, campaign, onClose }: SentBlastDrawerProp
                 <KpiTile
                   icon={NoSymbolIcon}
                   label="Unsubscribes"
+                  hint={EMAIL_KPI_HINTS.unsubscribes}
                   primary={num(engagement.unsubscribes)}
                   secondary={pct(engagement.unsubscribeRate)}
                   tone="zinc"
@@ -550,12 +579,15 @@ const TONE_CLASSES: Record<string, { bg: string; text: string }> = {
 function KpiTile({
   icon: Icon,
   label,
+  hint,
   primary,
   secondary,
   tone,
 }: {
   icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   label: string;
+  /** What the number counts — shown in a tooltip by the label. */
+  hint?: string;
   primary: string;
   secondary?: string;
   tone: keyof typeof TONE_CLASSES;
@@ -570,6 +602,17 @@ function KpiTile({
         <span className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)]">
           {label}
         </span>
+        {hint && (
+          <Tooltip label={hint}>
+            <span
+              tabIndex={0}
+              aria-label={hint}
+              className="inline-flex text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors cursor-help"
+            >
+              <InformationCircleIcon className="w-3.5 h-3.5" />
+            </span>
+          </Tooltip>
+        )}
       </div>
       <p className="mt-2 text-lg font-semibold tabular-nums text-[var(--foreground)]">
         {primary}

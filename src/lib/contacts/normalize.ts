@@ -7,7 +7,8 @@
 // This is intentionally schema-rigid: anything that doesn't map to a
 // canonical column gets stashed under `customFields` so the API can
 // surface it without a schema migration. DND state is limited to
-// `dnd.email` / `dnd.sms` — the channels Loomi sends on.
+// `dnd.email` / `dnd.sms` — the channels Loomi sends on — and arrives
+// through the opt-out targets below, never through customFields.
 
 // ── Canonical field names ──
 
@@ -46,6 +47,132 @@ export type ContactField = (typeof CONTACT_FIELDS)[number];
 // equivalent). The UI surfaces this so we don't silently swallow
 // columns into `customFields`.
 export const IGNORE_FIELD = '__ignore' as const;
+
+// ── Opt-out columns ──
+
+// An export from another system — GoHighLevel, as every blast moves off it —
+// carries each contact's opt-outs as columns ("DND", "Email DND",
+// "Unsubscribed"…). With no target to map them to, those columns fell into
+// customFields: the import "succeeded" and every person on it who had opted out
+// stayed mailable. An opt-out column maps to one of these targets instead, which
+// sets Contact.dnd AND writes the suppression rows the send path enforces.
+export const OPT_OUT_TARGETS = ['optout:all', 'optout:email', 'optout:sms'] as const;
+
+export type OptOutTarget = (typeof OPT_OUT_TARGETS)[number];
+
+export type OptOutChannel = 'email' | 'sms';
+
+export function isOptOutTarget(value: unknown): value is OptOutTarget {
+  return typeof value === 'string' && (OPT_OUT_TARGETS as readonly string[]).includes(value);
+}
+
+/** The channels an opt-out target covers. */
+export function optOutChannels(target: OptOutTarget): OptOutChannel[] {
+  if (target === 'optout:email') return ['email'];
+  if (target === 'optout:sms') return ['sms'];
+  return ['email', 'sms'];
+}
+
+// Matched against the same normalized header key as HEADER_ALIASES (lowercase,
+// no spaces, underscores, dashes or dots). A channel-less column — "DND", "Do
+// Not Disturb", "Opted Out" — means EVERY channel: in GoHighLevel the plain DND
+// switch blocks them all. "Unsubscribed" is email's word, so it covers email.
+const OPT_OUT_HEADER_ALIASES: Record<OptOutTarget, readonly string[]> = {
+  'optout:all': [
+    'dnd',
+    'donotdisturb',
+    'dndall',
+    'alldnd',
+    'dndallchannels',
+    'optedout',
+    'optout',
+    'donotcontact',
+  ],
+  'optout:email': [
+    'emaildnd',
+    'dndemail',
+    'emaildonotdisturb',
+    'unsubscribed',
+    'emailunsubscribed',
+    'unsubscribedemail',
+    'emailunsubscribe',
+    'emailoptout',
+    'emailoptedout',
+    'optoutemail',
+    'optedoutemail',
+    'donotemail',
+  ],
+  'optout:sms': [
+    'smsdnd',
+    'dndsms',
+    'smsdonotdisturb',
+    'smsoptout',
+    'smsoptedout',
+    'optoutsms',
+    'optedoutsms',
+    'smsunsubscribed',
+    'textdnd',
+    'dndtext',
+    'textoptout',
+    'donottext',
+  ],
+};
+
+/** The opt-out target a CSV header names, or null when it isn't an opt-out column. */
+export function optOutTargetForHeader(header: string): OptOutTarget | null {
+  const key = normaliseHeaderKey(header);
+  if (!key) return null;
+  for (const target of OPT_OUT_TARGETS) {
+    if (OPT_OUT_HEADER_ALIASES[target].includes(key)) return target;
+  }
+  return null;
+}
+
+// What an opt-out column says when the answer is yes. Exports disagree on how to
+// write it — booleans, yes/no, 1/0, an X — and GoHighLevel's per-channel DND
+// status reads "active" (or "permanent") while the block is on. Anything not
+// recognized as a yes — blank, false, no, 0, "inactive" — is not an opt-out.
+const OPT_OUT_YES = new Set([
+  'true',
+  't',
+  'yes',
+  'y',
+  '1',
+  'x',
+  'on',
+  'checked',
+  'active',
+  'permanent',
+  'dnd',
+  'do not disturb',
+  'unsubscribed',
+  'unsubscribe',
+  'opted out',
+  'opted-out',
+  'optedout',
+  'opt out',
+  'opt-out',
+  'optout',
+  'stop',
+  'stopped',
+  'blocked',
+  'suppressed',
+]);
+
+// A date is a yes too: a column like "Unsubscribed" holding WHEN the person
+// unsubscribed is answering the question. Deliberately strict shapes — a loose
+// Date parse would read "1" or "12" as years and turn noise into opt-outs.
+const DATE_LIKE = /^(\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})(?!\d)/;
+
+/** Does an opt-out column's cell say this person opted out? */
+export function isOptOutValue(raw: unknown): boolean {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') return raw === 1;
+  if (typeof raw !== 'string') return false;
+  const value = raw.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!value) return false;
+  return OPT_OUT_YES.has(value) || DATE_LIKE.test(value);
+}
 
 // Which canonical fields are DateTime in the DB — drives coercion.
 const DATE_FIELDS: ReadonlySet<ContactField> = new Set([
@@ -88,7 +215,7 @@ const HEADER_ALIASES: Record<ContactField, string[]> = {
   purchaseDate: ['purchasedate', 'purchasedon', 'datepurchased', 'soldon', 'datesold'],
 };
 
-function normaliseHeaderKey(header: string): string {
+export function normaliseHeaderKey(header: string): string {
   return header.toLowerCase().replace(/[\s_\-.]+/g, '');
 }
 
@@ -98,14 +225,26 @@ function normaliseHeaderKey(header: string): string {
  * can show the original). Unmatched headers are absent; the UI
  * decides whether to assign them to a canonical field, stash them
  * under customFields, or IGNORE_FIELD them.
+ *
+ * Opt-out columns are suggested too, and unlike a canonical field
+ * several columns may share one opt-out target ("DND Email" and
+ * "Email Unsubscribed" both say email) — every one of them is honored.
  */
-export function autoMapHeaders(headers: readonly string[]): Record<string, ContactField> {
-  const out: Record<string, ContactField> = {};
+export function autoMapHeaders(
+  headers: readonly string[],
+): Record<string, ContactField | OptOutTarget> {
+  const out: Record<string, ContactField | OptOutTarget> = {};
   const used = new Set<ContactField>();
 
   for (const header of headers) {
     const key = normaliseHeaderKey(header);
     if (!key) continue;
+
+    const optOut = optOutTargetForHeader(header);
+    if (optOut) {
+      out[header] = optOut;
+      continue;
+    }
 
     for (const field of CONTACT_FIELDS) {
       if (used.has(field)) continue;
@@ -377,7 +516,17 @@ export interface ParsedContact {
   warrantyEndDate: Date | null;
   purchaseDate: Date | null;
   customFields: Record<string, string> | null;
+  /**
+   * The channels this row's opt-out columns said yes to — only ever `true`,
+   * never `false`. A "no" in an export means "not opted out THERE", which is no
+   * reason to clear an opt-out recorded anywhere else; null when no opt-out
+   * column said yes.
+   */
+  dnd: { email?: true; sms?: true } | null;
 }
+
+/** Where a CSV column can be mapped. */
+export type ImportTarget = ContactField | typeof IGNORE_FIELD | `custom:${string}` | OptOutTarget;
 
 export interface RowIssue {
   rowNumber: number;
@@ -394,11 +543,11 @@ export interface NormaliseRowResult {
  * ParsedContact ready for upsert. Unmapped headers (mapping absent
  * or set to a non-canonical key starting with `custom:`) flow into
  * `customFields`. Headers explicitly mapped to IGNORE_FIELD are
- * dropped silently.
+ * dropped silently. Headers mapped to an opt-out target set `dnd`.
  */
 export function normaliseRow(
   row: Record<string, unknown>,
-  mapping: Record<string, ContactField | typeof IGNORE_FIELD | `custom:${string}`>,
+  mapping: Record<string, ImportTarget>,
   rowNumber: number,
 ): NormaliseRowResult {
   const parsed: ParsedContact = {
@@ -426,6 +575,7 @@ export function normaliseRow(
     warrantyEndDate: null,
     purchaseDate: null,
     customFields: null,
+    dnd: null,
   };
 
   const customFields: Record<string, string> = {};
@@ -438,6 +588,15 @@ export function normaliseRow(
 
     const value = rawValue == null ? '' : String(rawValue).trim();
     if (!value) continue;
+
+    if (isOptOutTarget(target)) {
+      if (isOptOutValue(value)) {
+        const dnd = parsed.dnd ?? {};
+        for (const channel of optOutChannels(target)) dnd[channel] = true;
+        parsed.dnd = dnd;
+      }
+      continue;
+    }
 
     if (target.startsWith('custom:')) {
       customFields[target.slice('custom:'.length)] = value;

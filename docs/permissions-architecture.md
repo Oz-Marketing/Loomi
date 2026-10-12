@@ -388,8 +388,8 @@ three routes do not — they admitted `client` and no longer do:
 
 | Route | Now guarded by | Why |
 | --- | --- | --- |
-| `POST /api/blasts/email` | `studio.email.edit` | Created a blast and, with `processNow`, sent it immediately. A dealer-role user could email a contact list. |
-| `POST /api/blasts/email/process` | `studio.email.edit` | Drains the send queue. |
+| `POST /api/blasts/email` | `studio.email.edit` — **removed 2026-10-12** | Created a blast and, with `processNow`, sent it immediately. A dealer-role user could email a contact list. |
+| `POST /api/blasts/email/process` | `studio.email.edit` — **removed 2026-10-12** | Drains the send queue. |
 | `POST /api/flows/[id]/duplicate` | `studio.flows.edit` | Client-reachable write to a Studio resource. Harmless, but the same shape. |
 
 Closed on an explicit decision (Connor, 2026-08-15: "clients shouldn't be able
@@ -406,10 +406,12 @@ only normal validation errors.
 Phase 4's `blast.send` capability then narrows sending further — from "any staff"
 to the people who should actually be sending.
 
-One loose end: `POST /api/blasts/email` still contains a
-`session.user.role === 'client'` recipient-scoping branch that is now
-unreachable. Harmless defence-in-depth; delete it whenever that file is next
-touched.
+**Both blast routes above were later removed outright (2026-10-12).** Nothing
+in the app called them, and each was a way to send that skipped the schedule
+routes' guarantees: no preflight, no suppression check on creation, an audience
+supplied by the request, a scheduled send that never checked `blast.send`, and
+(for `/process`) a second sender running in the web process alongside the
+worker. `migration.test.ts` now asserts they stay gone.
 
 ### Where the subject comes from
 
@@ -473,7 +475,7 @@ The six capabilities no sector role confers, and where each is enforced:
 
 | Capability | Enforced at |
 | --- | --- |
-| `blast.send` | `POST /api/blasts/email` (only when `processNow`), `/blasts/email/process`, and both `[id]/schedule` routes |
+| `blast.send` | The three schedule routes: `POST /api/blasts/{email,sms,multi}/[id]/schedule` |
 | `contacts.pii.export` | `POST /api/contacts/export` |
 | `finance.markup.manage` | `PUT /api/default-markup`, `PUT /api/billing-markups` |
 | `integrations.credentials.manage` | Per-account CRM / SendGrid / Twilio, and Google Business Profile OAuth |
@@ -484,9 +486,8 @@ Sending layers the capability on top of the sector role via
 `requireAllPermissions(['studio.email.edit', 'blast.send'])`. Both matter:
 `blast.send` alone would admit someone holding the grant but no Studio role, and
 `studio.email.edit` alone is exactly the status quo the capability exists to
-tighten. Note the split on `POST /api/blasts/email` — saving a draft needs only
-the sector role; the capability is checked inside the handler, because whether
-the request sends depends on the body.
+tighten. Saving a draft needs only the sector role; the capability is checked
+only where a send is committed — scheduling.
 
 ### Contact export needed an endpoint to exist first
 

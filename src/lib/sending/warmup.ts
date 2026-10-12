@@ -209,29 +209,31 @@ export async function recordWarmupSends(
   now: Date = new Date(),
 ): Promise<void> {
   if (!domain || count <= 0) return;
-  const today = utcDayStart(now);
-
-  // Same-day increment first: this is the common path and it's atomic, so
-  // concurrent senders can't lose each other's counts.
-  const bumped = await prisma.emailWarmup.updateMany({
-    where: { domain: domain.toLowerCase(), countedOn: today },
-    data: { sentToday: { increment: count } },
-  });
-  if (bumped.count > 0) return;
-
-  // First send of the day (or ever): roll the counter over. The race window
-  // here is one statement wide and can only mis-count sends that land in the
-  // same instant as a midnight rollover, which is not worth a lock.
-  await prisma.emailWarmup.updateMany({
-    where: { domain: domain.toLowerCase() },
-    data: { sentToday: count, countedOn: today },
-  });
+  // One statement: a same-day increment, or the day's rollover, atomically.
+  // It used to be two (increment; if nothing matched, reset) — and the reset
+  // ran as an absolute write, so when a blast and a flow made the first send
+  // of a new UTC day together, the later write erased the earlier sender's
+  // reservation and the domain sent past its cap. The day is cast explicitly
+  // so the comparison never depends on the database session's time zone.
+  const today = utcDayStart(now).toISOString();
+  await prisma.$executeRaw`UPDATE "EmailWarmup"
+    SET "sentToday" = CASE
+          WHEN "countedOn" = CAST(${today} AS timestamp) THEN "sentToday" + ${count}
+          ELSE ${count}
+        END,
+        "countedOn" = CAST(${today} AS timestamp),
+        "updatedAt" = NOW()
+    WHERE domain = ${domain.toLowerCase()}`;
 }
 
 /**
  * Hand back budget that was reserved but not spent — recipients that turned out
  * to be suppressed, opted out, or otherwise skipped never reached an inbox, so
  * they must not consume a warm-up day.
+ *
+ * An atomic decrement, and only against today's counter: a read-then-write
+ * here could erase a concurrent sender's increment, and a release that arrives
+ * after midnight must not dent the new day.
  */
 export async function releaseWarmupSends(
   domain: string | null,
@@ -239,18 +241,12 @@ export async function releaseWarmupSends(
   now: Date = new Date(),
 ): Promise<void> {
   if (!domain || count <= 0) return;
-  const today = utcDayStart(now);
-  const row = await prisma.emailWarmup.findUnique({
-    where: { domain: domain.toLowerCase() },
-    select: { sentToday: true, countedOn: true },
-  });
-  if (!row || !row.countedOn || utcDayStart(row.countedOn).getTime() !== today.getTime()) {
-    return;
-  }
-  await prisma.emailWarmup.update({
-    where: { domain: domain.toLowerCase() },
-    data: { sentToday: Math.max(0, row.sentToday - count) },
-  });
+  const today = utcDayStart(now).toISOString();
+  await prisma.$executeRaw`UPDATE "EmailWarmup"
+    SET "sentToday" = GREATEST(0, "sentToday" - ${count}),
+        "updatedAt" = NOW()
+    WHERE domain = ${domain.toLowerCase()}
+      AND "countedOn" = CAST(${today} AS timestamp)`;
 }
 
 /**

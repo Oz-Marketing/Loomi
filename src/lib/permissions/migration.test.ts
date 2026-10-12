@@ -316,10 +316,30 @@ describe('guard migration', () => {
    */
   it('keeps clients out of blast creation and sending', () => {
     const closed: [string, string, string][] = [
-      ['blasts/email/route.ts', 'POST', 'studio.email.edit'],
-      ['blasts/email/process/route.ts', 'POST', 'studio.email.edit'],
       ['flows/[id]/duplicate/route.ts', 'POST', 'studio.flows.edit'],
     ];
+    // The two send paths this used to pin were removed outright on 2026-10-12
+    // (they bypassed preflight and the worker). Keep them gone: a blast is
+    // only ever sent through a schedule route.
+    for (const [file, method] of [
+      ['blasts/email/route.ts', 'POST'],
+      ['blasts/email/process/route.ts', 'POST'],
+    ]) {
+      expect(
+        GUARDS.find((g) => g.file === file && g.method === method),
+        `${file} ${method} must not come back`,
+      ).toBeUndefined();
+    }
+    // Every route that schedules a send needs blast.send.
+    for (const file of [
+      'blasts/email/[id]/schedule/route.ts',
+      'blasts/sms/[id]/schedule/route.ts',
+      'blasts/multi/[id]/schedule/route.ts',
+    ]) {
+      const guard = GUARDS.find((g) => g.file === file && g.method === 'POST');
+      expect(guard, `${file} POST should be guarded`).toBeDefined();
+      expect(guard!.permissions, `${file} POST`).toContain('blast.send');
+    }
     for (const [file, method, expected] of closed) {
       const guard = GUARDS.find((g) => g.file === file && g.method === method);
       expect(guard, `${file} ${method} should be guarded`).toBeDefined();

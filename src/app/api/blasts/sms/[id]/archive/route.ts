@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import {
-  getSmsBlast,
-  setSmsBlastArchived,
-} from '@/lib/services/sms-blasts';
+import { getSmsBlast } from '@/lib/services/sms-blasts';
+import { archiveBlastWithLinkedChannels } from '@/lib/services/blast-linked';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -36,8 +34,9 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   const archived = typeof body?.archived === 'boolean' ? body.archived : true;
 
   try {
-    const updated = await setSmsBlastArchived(id, archived);
-    return NextResponse.json({ campaign: updated });
+    // An Email + Text pair is archived as a pair — see blast-linked.ts.
+    const result = await archiveBlastWithLinkedChannels('sms', id, archived);
+    return NextResponse.json({ campaign: result.primary, partnerError: result.partnerError });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to archive campaign';
     return NextResponse.json({ error: message }, { status: 409 });

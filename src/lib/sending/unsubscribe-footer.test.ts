@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildUnsubscribeFooter,
+  contrastRatio,
   DEFAULT_FOOTER_CONFIG,
+  footerContrastProblems,
   hasUnsubscribeToken,
   injectUnsubscribeFooter,
   resolveFooterConfig,
@@ -304,5 +306,112 @@ describe('injectUnsubscribeFooter — includeUnsubscribeLink override', () => {
       account: ACCOUNT,
     });
     expect(out.html.split(UNSUBSCRIBE_TOKEN).length - 1).toBe(1);
+  });
+});
+
+describe('injectUnsubscribeFooter — the text part always carries the unsubscribe URL', () => {
+  // The bug: "already linked?" was decided from EITHER part, so a designer's
+  // {{unsubscribe_link}} button in the HTML switched the footer link off in
+  // BOTH parts — and the text part shipped with no unsubscribe URL at all.
+  it('adds the link to the text part when only the HTML has the designer\'s link', () => {
+    const out = injectUnsubscribeFooter({
+      html: `<html><body><a href="${UNSUBSCRIBE_TOKEN}">Opt out</a></body></html>`,
+      text: 'Deals this week!',
+      account: ACCOUNT,
+    });
+    expect(out.html.split(UNSUBSCRIBE_TOKEN).length - 1).toBe(1);
+    expect(out.text).toContain(`Unsubscribe: ${UNSUBSCRIBE_TOKEN}`);
+  });
+
+  it('does not repeat the link in a text part that already has it', () => {
+    const out = injectUnsubscribeFooter({
+      html: `<a href="${UNSUBSCRIBE_TOKEN}">Opt out</a>`,
+      text: `Opt out (${UNSUBSCRIBE_TOKEN})`,
+      account: ACCOUNT,
+    });
+    expect(out.text.split(UNSUBSCRIBE_TOKEN).length - 1).toBe(1);
+  });
+
+  it('gives an empty text part the full footer, link included', () => {
+    const out = injectUnsubscribeFooter({
+      html: `<a href="${UNSUBSCRIBE_TOKEN}">Opt out</a>`,
+      text: '',
+      account: ACCOUNT,
+    });
+    expect(out.text).toContain(UNSUBSCRIBE_TOKEN);
+    expect(out.text).toContain('1080 W Riverdale Rd');
+  });
+
+  it('still keeps the link out of both parts when forced off', () => {
+    const out = injectUnsubscribeFooter({
+      html: '<p>Deals</p>',
+      text: 'Deals',
+      account: ACCOUNT,
+      includeUnsubscribeLink: false,
+    });
+    expect(out.text).not.toContain(UNSUBSCRIBE_TOKEN);
+    expect(out.html).not.toContain(UNSUBSCRIBE_TOKEN);
+  });
+
+  it('treats a forced-ON override like the default: never a second link', () => {
+    const out = injectUnsubscribeFooter({
+      html: `<a href="${UNSUBSCRIBE_TOKEN}">Opt out</a>`,
+      text: '',
+      account: ACCOUNT,
+      includeUnsubscribeLink: true,
+    });
+    expect(out.html.split(UNSUBSCRIBE_TOKEN).length - 1).toBe(1);
+  });
+});
+
+describe('footer legibility', () => {
+  it('computes WCAG contrast', () => {
+    expect(contrastRatio('#000000', '#ffffff')).toBeCloseTo(21, 0);
+    expect(contrastRatio('#ffffff', '#ffffff')).toBeCloseTo(1, 5);
+    expect(contrastRatio('#fff', '#000')).toBeCloseTo(21, 0);
+    expect(contrastRatio('nope', '#fff')).toBeNull();
+  });
+
+  // A valid config can still hide the CAN-SPAM address: text the same color
+  // as the background passes hex validation.
+  it('falls back to the default colors when text matches the background', () => {
+    const html = buildUnsubscribeFooter(ACCOUNT, {
+      config: { textColor: '#222222', linkColor: '#222222', backgroundColor: '#222222' },
+    }).html;
+    // A text color, not the background-color declaration that contains it.
+    expect(html).not.toMatch(/[;"]color:#222222/);
+    expect(html).toContain('background-color:#222222');
+    // The default gray reads on near-black, so that is what renders.
+    expect(html).toContain(`color:${DEFAULT_FOOTER_CONFIG.textColor}`);
+  });
+
+  it('uses black or white when even the default would disappear', () => {
+    const html = buildUnsubscribeFooter(ACCOUNT, {
+      config: { textColor: '#6b7280', linkColor: '#6b7280', backgroundColor: '#6b7280' },
+    }).html;
+    expect(html).toMatch(/color:#(?:000000|ffffff);/);
+  });
+
+  it('judges a transparent footer against white', () => {
+    const html = buildUnsubscribeFooter(ACCOUNT, {
+      config: { textColor: '#ffffff', linkColor: '#fefefe', backgroundColor: null },
+    }).html;
+    expect(html).not.toContain('color:#ffffff');
+    expect(html).not.toContain('color:#fefefe');
+  });
+
+  it('keeps a legible custom color', () => {
+    const html = buildUnsubscribeFooter(ACCOUNT, { config: { textColor: '#111111', linkColor: '#0055ff' } }).html;
+    expect(html).toContain('color:#111111');
+    expect(html).toContain('color:#0055ff');
+  });
+
+  it('reports which colors are unreadable, for preflight', () => {
+    expect(footerContrastProblems(null)).toEqual([]);
+    expect(footerContrastProblems({ textColor: '#111111' })).toEqual([]);
+    const problems = footerContrastProblems({ textColor: '#fafafa', linkColor: '#0055ff', backgroundColor: null });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatchObject({ field: 'textColor', color: '#fafafa', background: '#ffffff' });
+    expect(problems[0].ratio).toBeLessThan(3);
   });
 });

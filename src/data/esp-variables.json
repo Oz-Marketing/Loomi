@@ -1,6 +1,7 @@
 {
   "Contact": [
     { "variable": "{{contact.first_name}}", "label": "First Name", "description": "Contact's first name" },
+    { "variable": "{{contact.first_name | default: \"there\"}}", "label": "First Name or \"there\"", "description": "Contact's first name, or \"there\" when it's blank" },
     { "variable": "{{contact.last_name}}", "label": "Last Name", "description": "Contact's last name" },
     { "variable": "{{contact.full_name}}", "label": "Full Name", "description": "Contact's full name" },
     { "variable": "{{contact.email}}", "label": "Email", "description": "Contact's email address" },
@@ -38,7 +39,7 @@
     { "variable": "{{custom_values.sales_phone}}", "label": "Sales Phone", "description": "Sales department phone number" },
     { "variable": "{{custom_values.service_phone}}", "label": "Service Phone", "description": "Service department phone number" },
     { "variable": "{{custom_values.parts_phone}}", "label": "Parts Phone", "description": "Parts department phone number" },
-    { "variable": "{{custom_values.crm_name}}", "label": "CRM Name", "description": "CRM / sub-account name" },
+    { "variable": "{{custom_values.crm_name}}", "label": "CRM Name", "description": "CRM / account name" },
     { "variable": "{{custom_values.dealer_name}}", "label": "Dealer Name", "description": "Dealership display name" },
     { "variable": "{{custom_values.facebook}}", "label": "Facebook", "description": "Facebook page URL" },
     { "variable": "{{custom_values.instagram}}", "label": "Instagram", "description": "Instagram profile URL" },
@@ -54,7 +55,6 @@
     { "variable": "{{custom_values.specials_url}}", "label": "Specials URL", "description": "Current specials/offers page" }
   ],
   "System": [
-    { "variable": "{{unsubscribe_link}}", "label": "Unsubscribe Link", "description": "Opt-out/unsubscribe URL" },
-    { "variable": "{{message.id}}", "label": "Message ID", "description": "Unique message identifier" }
+    { "variable": "{{unsubscribe_link}}", "label": "Unsubscribe Link", "description": "Opt-out/unsubscribe URL" }
   ]
 }

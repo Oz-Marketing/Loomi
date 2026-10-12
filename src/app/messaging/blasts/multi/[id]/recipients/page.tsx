@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -17,15 +17,45 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
-import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import type { FilterDefinition } from '@/lib/smart-list-types';
-import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
+import {
+  isLikelyDeliverableEmail,
+  isLikelyDialablePhone,
+  normalizePhoneNumber,
+} from '@/lib/contact-hygiene';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { Select } from '@/components/select';
 import { FilterBuilder } from '@/components/contacts/filter-builder';
 import { ContactsPicker } from '@/components/contacts/contacts-picker';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import {
+  AUDIENCE_CONFIRMED_KEY,
+  isEditableBlastStatus,
+} from '@/lib/messaging/blast-builder-steps';
+import { parseBlastMetadata, readLinkedSmsId } from '@/lib/messaging/blast-metadata';
+import {
+  announceDraftSaved,
+  patchJson,
+  useDraftAutosave,
+} from '@/lib/messaging/builder-autosave';
+import {
+  EMPTY_AUDIENCE_MESSAGE,
+  NOBODY,
+  audienceAfterAccountChange,
+  audienceFromDraft,
+  audiencePatch,
+  audienceTab,
+  isAudienceEmpty,
+  sameAudience,
+  toServerSelection,
+  type AudienceTab,
+  type BuilderAudience,
+} from '@/lib/messaging/recipients-step';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -34,6 +64,7 @@ interface PageProps {
 interface CampaignDraftCore {
   id: string;
   name: string;
+  status: string;
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
@@ -46,11 +77,10 @@ interface CampaignDraftCore {
 type EmailDraft = CampaignDraftCore;
 type SmsDraft = CampaignDraftCore;
 
-// Channel deliverability checks reused by the picker (selection gating)
-// and the sendable count (header math). Email = valid address;
-// SMS = dialable phone.
+// Channel deliverability checks reused by the picker (selection gating) —
+// the same predicates the sender and the server-side counts use.
 function isEmailDeliverable(c: Contact): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(c.email || '').trim());
+  return isLikelyDeliverableEmail(String(c.email || '').trim());
 }
 
 function isSmsDeliverable(c: Contact): boolean {
@@ -72,16 +102,8 @@ interface ListSummary {
   memberCount: number;
 }
 
-type AudienceTab = 'lists' | 'segments' | 'contacts';
 type Rail = 'email' | 'sms';
-
-type AudienceSelection =
-  | { kind: 'all' }
-  | { kind: 'list'; id: string; name: string }
-  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition }
-  // Manual mode — caller curates an arbitrary set of Contact IDs from
-  // the Contacts tab. Persisted as sourceContactIds on the draft.
-  | { kind: 'contacts'; ids: string[] };
+type AudienceSelection = BuilderAudience;
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
   if (!raw) return null;
@@ -94,83 +116,35 @@ function parseFilterDefinition(raw: string): FilterDefinition | null {
   }
 }
 
-function parseLinkedSmsId(rawMetadata: string): string | null {
-  if (!rawMetadata) return null;
-  try {
-    const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    const value = parsed?.linkedSmsBlastId;
-    return typeof value === 'string' ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function audienceFromCampaign(c: {
-  sourceListId?: string;
-  sourceAudienceId?: string;
-  sourceFilter?: string;
-  sourceContactIds?: string;
-}): AudienceSelection {
-  // Mutually exclusive — contacts wins, then list, then segment.
-  if (c.sourceContactIds) {
-    try {
-      const parsed = JSON.parse(c.sourceContactIds);
-      if (Array.isArray(parsed)) {
-        const ids = parsed.map((v) => String(v).trim()).filter(Boolean);
-        if (ids.length > 0) return { kind: 'contacts', ids };
-      }
-    } catch {
-      // fall through
-    }
-  }
-  if (c.sourceListId) {
-    return { kind: 'list', id: c.sourceListId, name: 'List' };
-  }
-  if (c.sourceAudienceId && c.sourceFilter) {
-    const parsed = parseFilterDefinition(c.sourceFilter);
-    if (parsed) {
-      const preset = LIFECYCLE_PRESETS.find((p) => p.id === c.sourceAudienceId);
-      return {
-        kind: 'segment',
-        id: c.sourceAudienceId,
-        name: preset?.name || 'Saved Segment',
-        filter: parsed,
-      };
-    }
-  }
-  return { kind: 'all' };
-}
-
-function selectionsEqual(a: AudienceSelection, b: AudienceSelection): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'all') return true;
-  if (a.kind === 'list' && b.kind === 'list') return a.id === b.id;
-  if (a.kind === 'segment' && b.kind === 'segment') return a.id === b.id;
-  if (a.kind === 'contacts' && b.kind === 'contacts') {
-    if (a.ids.length !== b.ids.length) return false;
-    const aSet = new Set(a.ids);
-    return b.ids.every((id) => aSet.has(id));
-  }
-  return false;
-}
-
-function preferredTab(sel: AudienceSelection): AudienceTab {
-  if (sel.kind === 'list') return 'lists';
-  if (sel.kind === 'contacts') return 'contacts';
-  return 'segments';
+/** Why the pair can't continue, or null when both rails have someone. */
+function emptyRailMessage(
+  email: AudienceSelection,
+  sms: AudienceSelection,
+  split: boolean,
+): string | null {
+  if (!split) return isAudienceEmpty(email) ? EMPTY_AUDIENCE_MESSAGE : null;
+  // The pair is scheduled as one, and the server refuses a pair with an empty
+  // side — so each rail needs someone.
+  if (isAudienceEmpty(email)) return `Email: ${EMPTY_AUDIENCE_MESSAGE}`;
+  if (isAudienceEmpty(sms)) return `SMS: ${EMPTY_AUDIENCE_MESSAGE}`;
+  return null;
 }
 
 export default function MultiRecipientsStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { isAccount, accountKey, accounts } = useAccount();
+  const subHref = useSubaccountHref();
 
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
-  const [linkedSmsId, setLinkedSmsId] = useState<string | null>(null);
+  const [smsDraft, setSmsDraft] = useState<SmsDraft | null>(null);
   const [loading, setLoading] = useState(true);
+  // True once both halves' saved audiences are in state; nothing autosaves
+  // before then, so defaults never overwrite a saved choice.
+  const [hydrated, setHydrated] = useState(false);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
-  // Source sub-account's custom fields — still needed by the inline
+  // Source account's custom fields — still needed by the inline
   // filter builder's field dropdown. Counting itself resolves
   // server-side, where the same catalogue is rebuilt per request.
   const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
@@ -184,15 +158,15 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [smsSelection, setSmsSelection] = useState<AudienceSelection>({ kind: 'all' });
   const [emailTab, setEmailTab] = useState<AudienceTab>('segments');
   const [smsTab, setSmsTab] = useState<AudienceTab>('segments');
+  // Whether someone has chosen on this step — see AUDIENCE_CONFIRMED_KEY.
+  // One flag for the pair, written to both halves.
+  const [confirmed, setConfirmed] = useState(false);
 
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
 
   const [lists, setLists] = useState<ListSummary[]>([]);
-  // Shared list-member cache so a list referenced by both rails doesn't
-  // double-fetch when split is off (or when both rails happen to point
-  // at the same list in split mode).
 
   const [saving, setSaving] = useState(false);
   const [modalRail, setModalRail] = useState<Rail>('email');
@@ -207,6 +181,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [smsContactsSearch, setSmsContactsSearch] = useState('');
   const [smsContactsPage, setSmsContactsPage] = useState(0);
 
+  // Either half past draft locks the pair: they're scheduled as one.
+  const lockedDraft =
+    emailDraft && !isEditableBlastStatus(emailDraft.status)
+      ? emailDraft
+      : smsDraft && !isEditableBlastStatus(smsDraft.status)
+        ? smsDraft
+        : null;
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
@@ -215,13 +197,13 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         const emailRes = await fetch(`/api/blasts/email/${encodeURIComponent(id)}`);
         const emailData = await emailRes.json().catch(() => ({}));
         if (!emailRes.ok || !emailData?.campaign) {
-          throw new Error(emailData?.error || 'Multi-channel campaign not found');
+          throw new Error(emailData?.error || 'Blast not found');
         }
         const email = emailData.campaign as EmailDraft;
-        const smsId = parseLinkedSmsId(email.metadata || '');
+        const smsId = readLinkedSmsId(email.metadata || '');
         if (!smsId) {
           toast.error('Linked SMS draft missing — opening the email-only flow.');
-          router.push(`/messaging/blasts/${encodeURIComponent(id)}/recipients`);
+          router.push(subHref(`/messaging/blasts/${encodeURIComponent(id)}/recipients`));
           return;
         }
         const smsRes = await fetch(`/api/blasts/sms/${encodeURIComponent(smsId)}`);
@@ -233,22 +215,27 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         if (cancelled) return;
 
         setEmailDraft(email);
-        setLinkedSmsId(smsId);
-        if (email.accountKeys.length > 0) {
-          setSelectedAccountKey(email.accountKeys[0]);
-        }
+        setSmsDraft(sms);
+        // The draft's own account, set together with its audiences — never
+        // after a default, which made the account-change reset fire on load
+        // and flip hand-picked audiences to "All Contacts".
+        setSelectedAccountKey(email.accountKeys[0] || '');
 
-        const eSel = audienceFromCampaign(email);
-        const sSel = audienceFromCampaign(sms);
+        // Read through the same function the send uses, so what's shown is
+        // what would go out — a saved-but-empty selection stays empty.
+        const eSel = audienceFromDraft(email);
+        const sSel = audienceFromDraft(sms);
         setEmailSelection(eSel);
         setSmsSelection(sSel);
-        setEmailTab(preferredTab(eSel));
-        setSmsTab(preferredTab(sSel));
-        setSplitAudiences(!selectionsEqual(eSel, sSel));
+        setEmailTab(audienceTab(eSel));
+        setSmsTab(audienceTab(sSel));
+        setSplitAudiences(!sameAudience(eSel, sSel));
+        setConfirmed(parseBlastMetadata(email.metadata)[AUDIENCE_CONFIRMED_KEY] === true);
+        setHydrated(true);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
-          router.push('/messaging/blasts');
+          toast.error(err instanceof Error ? err.message : 'Failed to load blast');
+          router.push(subHref('/messaging/blasts'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -267,29 +254,28 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
       .sort((a, b) => a.dealer.localeCompare(b.dealer));
   }, [isAccount, accountKey, accounts]);
 
+  // Only a draft with no account of its own takes a default, and only once
+  // it has loaded.
   useEffect(() => {
-    if (!selectedAccountKey && accountOptions.length > 0) {
-      setSelectedAccountKey(accountOptions[0].key);
-    }
-  }, [accountOptions, selectedAccountKey]);
+    if (!hydrated || selectedAccountKey || accountOptions.length === 0) return;
+    setSelectedAccountKey(accountOptions[0].key);
+  }, [hydrated, selectedAccountKey, accountOptions]);
 
-  // Reset Contacts-tab state on subaccount change (post-mount). Selected
-  // IDs belong to a specific account's pool; keeping them across an
-  // account switch would silently send to a mismatched audience. The
-  // ref guard ensures initial hydration of a saved contacts-mode draft
-  // isn't clobbered.
-  const prevAccountKeyRef = useRef<string>('');
-  useEffect(() => {
-    const prev = prevAccountKeyRef.current;
-    prevAccountKeyRef.current = selectedAccountKey;
-    if (!prev || prev === selectedAccountKey) return;
+  /**
+   * The user moved the pair to another account. Hand-picked contacts and
+   * lists belong to the old one, so they reset to nobody — never to "All
+   * Contacts". In the handler, not an effect, so loading can't trip it.
+   */
+  function changeAccount(next: string) {
+    if (!next || next === selectedAccountKey) return;
+    setSelectedAccountKey(next);
     setEmailContactsSearch('');
     setEmailContactsPage(0);
     setSmsContactsSearch('');
     setSmsContactsPage(0);
-    setEmailSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
-    setSmsSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
-  }, [selectedAccountKey]);
+    setEmailSelection((current) => audienceAfterAccountChange(current));
+    setSmsSelection((current) => audienceAfterAccountChange(current));
+  }
 
   useEffect(() => {
     if (!selectedAccountKey) {
@@ -356,7 +342,8 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     [lists, selectedAccountKey],
   );
 
-  // Hydrate the placeholder list name once the lists fetch completes.
+  // Hydrate the placeholder list name once the lists fetch completes. Names
+  // aren't saved, so this never triggers an autosave.
   useEffect(() => {
     setEmailSelection((prev) => {
       if (prev.kind !== 'list') return prev;
@@ -373,6 +360,43 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   // When the rails aren't split, SMS follows the email selection.
   const effectiveSmsSelection = splitAudiences ? smsSelection : emailSelection;
 
+  // ── Autosave ──
+  // Both halves saved together shortly after any change; the header's step
+  // links wait for it. The pair used to be saved only by Continue and Back,
+  // which also never checked whether either save worked and moved on
+  // regardless — leaving one half, or both, on an audience nobody chose.
+  const autosaveKey = useMemo(
+    () =>
+      JSON.stringify({
+        email: audiencePatch(emailSelection, selectedAccountKey, confirmed),
+        sms: audiencePatch(effectiveSmsSelection, selectedAccountKey, confirmed),
+      }),
+    [emailSelection, effectiveSmsSelection, selectedAccountKey, confirmed],
+  );
+  const smsId = smsDraft?.id ?? null;
+  const autosave = useDraftAutosave({
+    key: autosaveKey,
+    ready: hydrated && !lockedDraft && Boolean(selectedAccountKey) && Boolean(smsId),
+    save: async (key, { keepalive }) => {
+      if (!smsId) throw new Error('The linked text draft is missing.');
+      const body = JSON.parse(key) as { email: Record<string, unknown>; sms: Record<string, unknown> };
+      // Both checked: one half failing must not read as saved.
+      const [email, sms] = await Promise.allSettled([
+        patchJson(`/api/blasts/email/${encodeURIComponent(id)}`, body.email, { keepalive }),
+        patchJson(`/api/blasts/sms/${encodeURIComponent(smsId)}`, body.sms, { keepalive }),
+      ]);
+      const failures = [
+        email.status === 'rejected' ? `email: ${(email.reason as Error)?.message || 'failed'}` : '',
+        sms.status === 'rejected' ? `text: ${(sms.reason as Error)?.message || 'failed'}` : '',
+      ].filter(Boolean);
+      if (failures.length > 0) {
+        throw new Error(`Couldn’t save the audience (${failures.join('; ')}).`);
+      }
+      announceDraftSaved(id);
+    },
+    onError: (err) => toast.error(err.message),
+  });
+
   // Both rails' sendable counts resolved SERVER-side, over the whole
   // roster. Counting `contacts` meant counting inside the 5,000
   // most-recently-added rows, which under-reports any segment that isn't
@@ -382,20 +406,13 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [smsSendable, setSmsSendable] = useState(0);
   const [sendableLoading, setSendableLoading] = useState(false);
 
-  const toServerSelection = useCallback((sel: AudienceSelection) => {
-    if (sel.kind === 'all') return { kind: 'all' as const };
-    if (sel.kind === 'list') return { kind: 'list' as const, listId: sel.id };
-    if (sel.kind === 'contacts') return { kind: 'contacts' as const, ids: sel.ids };
-    return { kind: 'filter' as const, definition: sel.filter };
-  }, []);
-
   const sendableKey = useMemo(
     () =>
       JSON.stringify([
         toServerSelection(emailSelection),
         toServerSelection(effectiveSmsSelection),
       ]),
-    [emailSelection, effectiveSmsSelection, toServerSelection],
+    [emailSelection, effectiveSmsSelection],
   );
 
   useEffect(() => {
@@ -407,9 +424,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     let cancelled = false;
     setSendableLoading(true);
 
-    const [emailSel, smsSel] = JSON.parse(sendableKey);
+    const [emailSel, smsSel] = JSON.parse(sendableKey) as [
+      ReturnType<typeof toServerSelection>,
+      ReturnType<typeof toServerSelection>,
+    ];
 
-    const count = async (selection: unknown, channel: 'email' | 'sms') => {
+    const count = async (selection: ReturnType<typeof toServerSelection>, channel: 'email' | 'sms') => {
+      // Nobody selected is zero by definition — no need to ask.
+      if (selection.kind === 'contacts' && selection.ids.length === 0) return 0;
       const res = await fetch('/api/segments/recipients', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -443,76 +465,41 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     };
   }, [sendableKey, selectedAccountKey]);
 
-  function buildPayload(sel: AudienceSelection): Record<string, unknown> {
-    const payload: Record<string, unknown> = {
-      accountKeys: [selectedAccountKey],
-    };
-    // Mutually exclusive — always clear unused fields so stale state
-    // from a previous mode doesn't linger.
-    if (sel.kind === 'all') {
-      payload.sourceAudienceId = null;
-      payload.sourceFilter = null;
-      payload.sourceListId = null;
-      payload.sourceContactIds = null;
-    } else if (sel.kind === 'list') {
-      payload.sourceListId = sel.id;
-      payload.sourceAudienceId = null;
-      payload.sourceFilter = null;
-      payload.sourceContactIds = null;
-    } else if (sel.kind === 'contacts') {
-      payload.sourceContactIds = JSON.stringify(sel.ids);
-      payload.sourceListId = null;
-      payload.sourceAudienceId = null;
-      payload.sourceFilter = null;
-    } else {
-      payload.sourceAudienceId = sel.id;
-      payload.sourceFilter = JSON.stringify(sel.filter);
-      payload.sourceListId = null;
-      payload.sourceContactIds = null;
-    }
-    return payload;
-  }
+  const emptyMessage = emptyRailMessage(emailSelection, effectiveSmsSelection, splitAudiences);
 
-  async function persistSelection() {
-    if (!emailDraft || !linkedSmsId) return;
+  async function handleContinue() {
+    if (!emailDraft || !selectedAccountKey) return;
+    if (emptyMessage) {
+      toast.error(emptyMessage);
+      return;
+    }
     setSaving(true);
     try {
-      await Promise.all([
-        fetch(`/api/blasts/email/${encodeURIComponent(emailDraft.id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildPayload(emailSelection)),
+      // Continue IS the choice — saved explicitly, after any autosave still in
+      // flight. A failure on either half keeps the user here.
+      setConfirmed(true);
+      await autosave.saveNow(
+        JSON.stringify({
+          email: audiencePatch(emailSelection, selectedAccountKey, true),
+          sms: audiencePatch(effectiveSmsSelection, selectedAccountKey, true),
         }),
-        fetch(`/api/blasts/sms/${encodeURIComponent(linkedSmsId)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(buildPayload(effectiveSmsSelection)),
-        }),
-      ]);
-    } finally {
+      );
+      router.push(subHref(`/messaging/blasts/multi/${encodeURIComponent(emailDraft.id)}/message`));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save the audience');
       setSaving(false);
     }
   }
 
-  async function handleContinue() {
-    if (!emailDraft || !selectedAccountKey) return;
-    try {
-      await persistSelection();
-      router.push(`/messaging/blasts/multi/${encodeURIComponent(emailDraft.id)}/message`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save selection');
-    }
-  }
-
   async function handleBack() {
-    if (emailDraft && linkedSmsId) {
-      try {
-        await persistSelection();
-      } catch {
-        // non-fatal
-      }
+    try {
+      // Only what changed — Back is not a choice.
+      await autosave.flush();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save the audience');
+      return;
     }
-    router.push('/messaging/blasts');
+    router.push(subHref('/messaging/blasts'));
   }
 
   function handleToggleSplit(next: boolean) {
@@ -520,14 +507,16 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     // picker doesn't snap to a stale value from earlier in the session.
     if (next && !splitAudiences) {
       setSmsSelection(emailSelection);
-      setSmsTab(preferredTab(emailSelection));
+      setSmsTab(audienceTab(emailSelection));
     }
     setSplitAudiences(next);
   }
 
+  /** A user's pick on one rail: the selection AND a choice. */
   function applySelection(rail: Rail, next: AudienceSelection) {
     if (rail === 'email') setEmailSelection(next);
     else setSmsSelection(next);
+    setConfirmed(true);
   }
 
   if (loading) {
@@ -535,10 +524,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
+  }
+
+  if (lockedDraft) {
+    return <BlastLockedNotice status={lockedDraft.status} name={emailDraft?.name} />;
   }
 
   const emailCountsLoading = sendableLoading;
@@ -552,7 +545,9 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
             <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
               Recipients
             </p>
-            <h1 className="text-2xl font-bold">{emailDraft?.name || 'Blast'}</h1>
+            <h1>
+              <BlastNameField id={id} channel="multi" variant="title" initialName={emailDraft?.name ?? ''} />
+            </h1>
             <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
               {splitAudiences
                 ? 'Email and SMS each get their own audience. Counts shown for each rail.'
@@ -586,19 +581,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         {accountOptions.length > 1 && !isAccount && (
           <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)] mb-5">
             <label className="block text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
-              Sending Subaccount
+              Sending account
             </label>
-            <select
+            <Select
               value={selectedAccountKey}
-              onChange={(e) => setSelectedAccountKey(e.target.value)}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-            >
-              {accountOptions.map((opt) => (
-                <option key={opt.key} value={opt.key}>
-                  {opt.dealer}
-                </option>
-              ))}
-            </select>
+              onChange={changeAccount}
+              options={accountOptions.map((opt) => ({ value: opt.key, label: opt.dealer }))}
+              ariaLabel="Sending account"
+            />
           </div>
         )}
 
@@ -630,7 +620,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
             scopedLists={scopedLists}
             scopedAudiences={scopedAudiences}
             allLabel="All Contacts"
-            allDescription="Send to every deliverable contact in this subaccount. Email and SMS will resolve to their respective sendable subsets at send time."
+            allDescription="Send to every deliverable contact in this account. Email and SMS will resolve to their respective sendable subsets at send time."
             onRequestNewList={() => {
               setModalRail('email');
               setShowNewListModal(true);
@@ -672,7 +662,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
                 scopedLists={scopedLists}
                 scopedAudiences={scopedAudiences}
                 allLabel="All Contacts (email)"
-                allDescription="Send to every contact with a valid email address in this subaccount."
+                allDescription="Send to every contact with a valid email address in this account."
                 onRequestNewList={() => {
                   setModalRail('email');
                   setShowNewListModal(true);
@@ -706,7 +696,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
                 scopedLists={scopedLists}
                 scopedAudiences={scopedAudiences}
                 allLabel="All Contacts (SMS)"
-                allDescription="Send to every contact with a dialable phone number in this subaccount."
+                allDescription="Send to every contact with a dialable phone number in this account."
                 onRequestNewList={() => {
                   setModalRail('sms');
                   setShowNewListModal(true);
@@ -810,12 +800,17 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
             <ArrowLeftIcon className="w-4 h-4" />
             Back
           </button>
-          <PrimaryButton
-            onClick={handleContinue}
-            disabled={!selectedAccountKey || saving || contactsLoading}
-          >
-            {saving ? 'Saving…' : 'Continue'}
-          </PrimaryButton>
+          <div className="flex items-center gap-4 min-w-0">
+            {emptyMessage && (
+              <p className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">{emptyMessage}</p>
+            )}
+            <PrimaryButton
+              onClick={handleContinue}
+              disabled={!selectedAccountKey || saving || Boolean(emptyMessage)}
+            >
+              {saving ? 'Saving…' : 'Continue'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>
@@ -1023,11 +1018,10 @@ function AudiencePicker({
               onPageChange={onContactsPageChange}
               selectedIds={selection.kind === 'contacts' ? selection.ids : []}
               onSelectionChange={(ids) => {
-                if (ids.length === 0) {
-                  onChange({ kind: 'all' });
-                } else {
-                  onChange({ kind: 'contacts', ids });
-                }
+                // Unchecking everyone leaves NOBODY selected. It used to
+                // fall back to "All Contacts", which turned an empty pick
+                // into the whole account.
+                onChange(ids.length === 0 ? NOBODY : { kind: 'contacts', ids });
               }}
               isDeliverable={contactsDeliverableCheck}
               emptyNoun={contactsEmptyNoun}

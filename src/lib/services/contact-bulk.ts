@@ -1,6 +1,18 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { addContactsToList } from '@/lib/services/contact-lists';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import {
+  OPT_OUT_SOURCE,
+  clearStaffEmailOptOuts,
+  clearStaffSmsOptOuts,
+  normalizeOptOutEmail,
+  normalizeOptOutPhone,
+  readDndFlags,
+  recordEmailOptOuts,
+  recordSmsOptOuts,
+  type SuppressionRowRef,
+} from '@/lib/sending/opt-outs';
 
 // Bulk operations for the contacts table. Every helper accepts the
 // accountKey it should scope to and the list of contact IDs the
@@ -13,6 +25,12 @@ import { addContactsToList } from '@/lib/services/contact-lists';
 
 export interface BulkResult {
   affected: number;
+  /**
+   * "DND off" only: contacts left opted out on a channel because what holds
+   * them there isn't staff's to clear — they unsubscribed themselves, their
+   * address bounced, or the opt-out was imported.
+   */
+  stillOptedOut?: number;
 }
 
 async function fetchOwnedIds(accountKey: string, ids: string[]): Promise<string[]> {
@@ -131,15 +149,18 @@ export interface DndPatch {
   sms?: boolean;
 }
 
-function readDndObject(raw: Prisma.JsonValue | null | undefined): { email?: boolean; sms?: boolean } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  const obj = raw as Record<string, unknown>;
-  const out: { email?: boolean; sms?: boolean } = {};
-  if (typeof obj.email === 'boolean') out.email = obj.email;
-  if (typeof obj.sms === 'boolean') out.sms = obj.sms;
-  return out;
-}
-
+/**
+ * Bulk "Set DND". The dnd flag alone used to be all this wrote — but the flag
+ * is the UI's copy, honored only for that one contact. The suppression rows
+ * are what every send path checks and what reaches the rest of the group, so
+ * they're written first, and the flags follow.
+ *
+ * DND on  → a 'manual' opt-out for each contact's address, across the group.
+ * DND off → clears only what staff may clear (see isStaffClearable). A
+ *           contact who unsubscribed themselves, bounced, or came over in an
+ *           import stays opted out, flag included, and is counted in
+ *           `stillOptedOut` so the caller can say so.
+ */
 export async function bulkSetDnd(
   accountKey: string,
   ids: string[],
@@ -150,16 +171,49 @@ export async function bulkSetDnd(
 
   const rows = await prisma.contact.findMany({
     where: { id: { in: ids }, accountKey },
-    select: { id: true, dnd: true },
+    select: { id: true, dnd: true, email: true, phone: true },
   });
+  if (rows.length === 0) return { affected: 0 };
+
+  // Suppression rows first. If the flag writes below fail part-way, everyone
+  // the action was meant to opt out is already opted out where it counts.
+  const shared = { accountKey, relatedAccountKeys: await getRelatedAccountKeys(accountKey) };
+  const emails = rows.map((r) => r.email);
+  const phones = rows.map((r) => r.phone);
+  let heldEmails = new Set<string>();
+  let heldPhones = new Set<string>();
+
+  if (patch.email === true) {
+    await recordEmailOptOuts({ ...shared, emails, reason: 'manual', source: OPT_OUT_SOURCE.manual });
+  } else if (patch.email === false) {
+    const cleared = await clearStaffEmailOptOuts({ ...shared, emails });
+    heldEmails = heldAt(accountKey, cleared.remaining, normalizeOptOutEmail);
+  }
+  if (patch.sms === true) {
+    await recordSmsOptOuts({ ...shared, phones, reason: 'manual', source: OPT_OUT_SOURCE.manual });
+  } else if (patch.sms === false) {
+    const cleared = await clearStaffSmsOptOuts({ ...shared, phones });
+    heldPhones = heldAt(accountKey, cleared.remaining, normalizeOptOutPhone);
+  }
 
   let affected = 0;
+  let stillOptedOut = 0;
   await Promise.all(
     rows.map(async (row) => {
-      const existing = readDndObject(row.dnd);
+      const existing = readDndFlags(row.dnd);
       const next = { ...existing };
-      if (patch.email !== undefined) next.email = patch.email;
-      if (patch.sms !== undefined) next.sms = patch.sms;
+      let held = false;
+      if (patch.email !== undefined) {
+        const keep = !patch.email && isHeld(heldEmails, row.email, normalizeOptOutEmail);
+        next.email = patch.email || keep;
+        held ||= keep;
+      }
+      if (patch.sms !== undefined) {
+        const keep = !patch.sms && isHeld(heldPhones, row.phone, normalizeOptOutPhone);
+        next.sms = patch.sms || keep;
+        held ||= keep;
+      }
+      if (held) stillOptedOut += 1;
       // Skip when state already matches the patch.
       if (next.email === existing.email && next.sms === existing.sms) return;
       await prisma.contact.update({
@@ -169,7 +223,32 @@ export async function bulkSetDnd(
       affected += 1;
     }),
   );
-  return { affected };
+  return { affected, ...(stillOptedOut > 0 ? { stillOptedOut } : {}) };
+}
+
+/** The addresses still suppressed at this account, normalized for lookup. */
+function heldAt(
+  accountKey: string,
+  remaining: SuppressionRowRef[],
+  normalize: (raw: string) => string | null,
+): Set<string> {
+  const out = new Set<string>();
+  for (const row of remaining) {
+    if (row.accountKey !== accountKey) continue;
+    const key = normalize(row.address);
+    if (key) out.add(key);
+  }
+  return out;
+}
+
+function isHeld(
+  held: Set<string>,
+  address: string | null,
+  normalize: (raw: string) => string | null,
+): boolean {
+  if (!address || held.size === 0) return false;
+  const key = normalize(address);
+  return key !== null && held.has(key);
 }
 
 export async function bulkDelete(accountKey: string, ids: string[]): Promise<BulkResult> {

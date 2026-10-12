@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
-  CalendarDaysIcon,
   ChatBubbleLeftRightIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -16,13 +15,31 @@ import {
 import { toast } from '@/lib/toast';
 import { WarmupNotice } from '@/components/campaigns/warmup-notice';
 import { useAccount } from '@/contexts/account-context';
-import {
-  audienceSelectionFromDraft,
-  type AudienceSelection,
-  type RecipientRow,
-} from '@/lib/segments/selection';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import PrimaryButton from '@/components/primary-button';
+import { Collapse } from '@/components/ui/collapse';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
+import {
+  restoreSchedule,
+  scheduleInstantValue,
+  useScheduleStepAutosave,
+} from '@/lib/messaging/schedule-step-autosave';
+import { isAudienceConfirmed, isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
+import { readLinkedSmsId } from '@/lib/messaging/blast-metadata';
+import { formatFromLine } from '@/lib/messaging/blast-sender';
+import { syncEmailDraftFromTemplate } from '@/lib/messaging/blast-template';
+import { submitSchedule } from '@/lib/messaging/schedule-submit';
+import {
+  accountLocalEquivalent,
+  browserTimeZone,
+  instantFromWallClock,
+  timeZoneLabel,
+  wallClockInZone,
+} from '@/lib/messaging/send-time';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -31,6 +48,7 @@ interface PageProps {
 interface EmailDraft {
   id: string;
   name: string;
+  status: string;
   accountKeys: string[];
   subject: string;
   previewText: string;
@@ -45,6 +63,7 @@ interface EmailDraft {
 interface SmsDraft {
   id: string;
   name: string;
+  status: string;
   accountKeys: string[];
   message: string;
   sourceFilter: string;
@@ -69,50 +88,94 @@ function parseSmsMediaUrls(rawMetadata: string): string[] {
 
 type SendMode = 'now' | 'later';
 
-function toLocalDateTimeInputValue(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
+/** "Tue, Oct 14, 2026, 9:00 AM MDT" — with the zone, so nobody has to guess. */
 function formatDateTime(iso: string): string {
   const value = new Date(iso);
   if (Number.isNaN(value.getTime())) return iso;
-  return value.toLocaleString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return value
+    .toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    })
+    .replace(/ /g, ' ');
 }
 
-function parseLinkedSmsId(rawMetadata: string): string | null {
-  if (!rawMetadata) return null;
-  try {
-    const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    const value = parsed?.linkedSmsBlastId;
-    return typeof value === 'string' ? value : null;
-  } catch {
-    return null;
-  }
+/** `{ total, reason }` from a blast's audience endpoint. */
+async function fetchAudienceTotal(url: string): Promise<{ total: number; reason: string | null }> {
+  const res = await fetch(url, { cache: 'no-store' });
+  const data = (await res.json().catch(() => ({}))) as { total?: number; reason?: string; error?: string };
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return {
+    total: Number(data.total) || 0,
+    reason: typeof data.reason === 'string' && data.reason ? data.reason : null,
+  };
 }
 
 export default function MultiScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
 
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [smsDraft, setSmsDraft] = useState<SmsDraft | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Either half past draft locks the pair — they're scheduled as one.
+  const lockedDraft =
+    emailDraft && !isEditableBlastStatus(emailDraft.status)
+      ? emailDraft
+      : smsDraft && !isEditableBlastStatus(smsDraft.status)
+        ? smsDraft
+        : null;
+
+  // The pickers edit a wall clock in the BROWSER's zone; it's named next to
+  // them, and the account's own zone is spelled out when it differs.
+  const browserZone = useMemo(() => browserTimeZone(), []);
   const [sendMode, setSendMode] = useState<SendMode>('later');
   const [previewTab, setPreviewTab] = useState<'email' | 'sms'>('email');
-  const [sendAtLocal, setSendAtLocal] = useState(
-    toLocalDateTimeInputValue(new Date(Date.now() + 30 * 60_000)),
-  );
+  const [sendAtLocal, setSendAtLocal] = useState(() => {
+    const wall = wallClockInZone(new Date(Date.now() + 30 * 60_000), browserTimeZone());
+    return `${wall.date}T${wall.time}`;
+  });
   const [submitting, setSubmitting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  // Restore "When should this send?" once per blast, then autosave it so
+  // stepping back to Recipients or Message and returning keeps it.
+  const [hydratedId, setHydratedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!emailDraft || hydratedId === emailDraft.id) return;
+    const saved = restoreSchedule(emailDraft.metadata, new Date(), browserZone);
+    if (saved) {
+      setSendMode(saved.mode);
+      if (saved.at) setSendAtLocal(saved.at);
+    }
+    setHydratedId(emailDraft.id);
+  }, [emailDraft, hydratedId, browserZone]);
+
+  const sendInstant = useMemo(
+    () => instantFromWallClock(sendAtLocal.slice(0, 10), sendAtLocal.slice(11, 16), browserZone),
+    [sendAtLocal, browserZone],
+  );
+
+  const autosave = useScheduleStepAutosave({
+    endpoint: `/api/blasts/email/${encodeURIComponent(id)}`,
+    settings: {
+      schedule: {
+        mode: sendMode,
+        at: scheduleInstantValue(sendAtLocal.slice(0, 10), sendAtLocal.slice(11, 16), browserZone),
+      },
+    },
+    // A pair that isn't a draft must not change — so nothing autosaves.
+    ready: hydratedId !== null && !lockedDraft,
+    onSaved: (metadata) => setEmailDraft((prev) => (prev ? { ...prev, metadata } : prev)),
+  });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -124,21 +187,36 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
         if (!emailRes.ok || !emailData?.campaign) {
           throw new Error(emailData?.error || 'Blast not found');
         }
-        const email = emailData.campaign as EmailDraft;
-        const smsId = parseLinkedSmsId(email.metadata || '');
+        let email = emailData.campaign as EmailDraft;
+        const smsId = readLinkedSmsId(email.metadata || '');
         if (!smsId) throw new Error('Linked SMS draft missing');
         const smsRes = await fetch(`/api/blasts/sms/${encodeURIComponent(smsId)}`);
         const smsData = await smsRes.json().catch(() => ({}));
         if (!smsRes.ok || !smsData?.campaign) {
           throw new Error(smsData?.error || 'Linked SMS draft not loadable');
         }
+        const sms = smsData.campaign as SmsDraft;
+
+        // Re-sync the email from its template — arriving from the editor's
+        // Done, the stored html is otherwise a stale snapshot, and this pair
+        // never re-synced at all. Drafts only; a failed save keeps the stored
+        // html on screen rather than previewing one the send won't use.
+        if (isEditableBlastStatus(email.status) && isEditableBlastStatus(sms.status)) {
+          const synced = await syncEmailDraftFromTemplate(email);
+          if (synced.error) {
+            toast.error(
+              `Couldn’t refresh the email from its template, so the last saved version is shown. ${synced.error}`,
+            );
+          }
+          email = synced.draft;
+        }
         if (cancelled) return;
         setEmailDraft(email);
-        setSmsDraft(smsData.campaign);
+        setSmsDraft(sms);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
-          router.push('/messaging/blasts');
+          toast.error(err instanceof Error ? err.message : 'Failed to load blast');
+          router.push(subHref('/messaging/blasts'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -152,159 +230,105 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
 
   const accountKey = emailDraft?.accountKeys[0] || smsDraft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // Both rails resolved SERVER-side, over the whole contact roster.
-  //
-  // These used to filter `contacts` — the 5,000 most-recently-added rows —
-  // which applied the per-campaign ceiling BEFORE the segment filter
-  // instead of after it. A segment uncorrelated with recency reached only
-  // the fraction of its members that happened to be recent, and nothing
-  // in the UI said anyone had been left out.
-  const [emailRecipients, setEmailRecipients] = useState<RecipientRow[]>([]);
-  const [smsRecipients, setSmsRecipients] = useState<RecipientRow[]>([]);
-  const [recipientsLoading, setRecipientsLoading] = useState(true);
-  const [emailTruncated, setEmailTruncated] = useState(false);
-  const [smsTruncated, setSmsTruncated] = useState(false);
+  // The Recipients step confirms the pair on both halves; the header reads the
+  // email half, so that's the one this step trusts too.
+  const audienceChosen = isAudienceConfirmed(emailDraft) && isAudienceConfirmed(smsDraft);
+
+  // Both halves counted by the same server code the schedule route runs, so
+  // these numbers and the send agree by construction. Counts only.
   const [emailTotal, setEmailTotal] = useState(0);
   const [smsTotal, setSmsTotal] = useState(0);
-
-  const emailSelection = useMemo(
-    () => audienceSelectionFromDraft(emailDraft),
-    [emailDraft],
-  );
-  const smsSelection = useMemo(
-    () => audienceSelectionFromDraft(smsDraft),
-    [smsDraft],
-  );
-  const selectionKey = useMemo(
-    () => JSON.stringify([emailSelection, smsSelection]),
-    [emailSelection, smsSelection],
-  );
+  const [audienceReason, setAudienceReason] = useState<string | null>(null);
+  const [recipientsLoading, setRecipientsLoading] = useState(true);
 
   useEffect(() => {
-    if (!accountKey || (!emailSelection && !smsSelection)) {
-      setEmailRecipients([]);
-      setSmsRecipients([]);
+    if (!emailDraft?.id || !smsDraft?.id || lockedDraft) return;
+    if (!audienceChosen) {
+      setEmailTotal(0);
+      setSmsTotal(0);
       setRecipientsLoading(false);
       return;
     }
     let cancelled = false;
     setRecipientsLoading(true);
-
-    async function resolve(
-      selection: AudienceSelection | null,
-      channel: 'email' | 'sms',
-    ) {
-      if (!selection) return { recipients: [], total: 0, truncated: false };
-      const res = await fetch('/api/segments/recipients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, selection, channel }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-      return data;
-    }
-
     Promise.all([
-      resolve(emailSelection, 'email'),
-      resolve(smsSelection, 'sms'),
+      fetchAudienceTotal(`/api/blasts/email/${encodeURIComponent(emailDraft.id)}/audience`),
+      fetchAudienceTotal(`/api/blasts/sms/${encodeURIComponent(smsDraft.id)}/audience`),
     ])
       .then(([email, sms]) => {
         if (cancelled) return;
-        setEmailRecipients(Array.isArray(email.recipients) ? email.recipients : []);
-        setEmailTotal(Number(email.total) || 0);
-        setEmailTruncated(Boolean(email.truncated));
-        setSmsRecipients(Array.isArray(sms.recipients) ? sms.recipients : []);
-        setSmsTotal(Number(sms.total) || 0);
-        setSmsTruncated(Boolean(sms.truncated));
+        setEmailTotal(email.total);
+        setSmsTotal(sms.total);
+        setAudienceReason(email.reason || sms.reason);
       })
-      .catch(() => {
+      .catch((err: Error) => {
         if (cancelled) return;
-        setEmailRecipients([]);
-        setSmsRecipients([]);
-        setEmailTruncated(false);
-        setSmsTruncated(false);
+        setEmailTotal(0);
+        setSmsTotal(0);
+        setAudienceReason(`Couldn’t count recipients: ${err.message}`);
       })
       .finally(() => {
         if (!cancelled) setRecipientsLoading(false);
       });
-
     return () => {
       cancelled = true;
     };
-    // `selectionKey` stands in for the two selection objects.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectionKey, accountKey]);
+  }, [emailDraft?.id, smsDraft?.id, audienceChosen, lockedDraft]);
 
   async function handleSchedule() {
     if (!emailDraft || !smsDraft) return;
-    if (emailRecipients.length === 0 && smsRecipients.length === 0) {
-      toast.error('No deliverable recipients on either channel.');
+    if (!audienceChosen) {
+      toast.error('Choose who should receive this blast on the Recipients step first.');
       return;
     }
-    if (emailTruncated || smsTruncated) {
-      const which = emailTruncated ? 'email' : 'SMS';
-      const total = emailTruncated ? emailTotal : smsTotal;
+    if (emailTotal === 0 || smsTotal === 0) {
       toast.error(
-        `The ${which} audience has ${total.toLocaleString()} contacts, over the per-campaign limit. Narrow the segment and try again.`,
+        audienceReason ||
+          (emailTotal === 0
+            ? 'No one in this audience has an email address.'
+            : 'No one in this audience has a textable phone number.'),
       );
       return;
     }
-
     let scheduledFor: string | null = null;
     if (sendMode === 'later') {
-      const date = new Date(sendAtLocal);
-      if (Number.isNaN(date.getTime())) {
+      if (!sendInstant) {
         toast.error('Pick a valid send date and time.');
         return;
       }
-      if (date.getTime() <= Date.now() + 30_000) {
+      if (sendInstant.getTime() <= Date.now() + 30_000) {
         toast.error('Send time must be in the future.');
         return;
       }
-      scheduledFor = date.toISOString();
+      scheduledFor = sendInstant.toISOString();
     }
 
     setSubmitting(true);
     try {
-      // Schedule both channels with the same send time. Empty-recipient
-      // sides are skipped so a missing email or phone audience doesn't
-      // block the other channel.
-      const tasks: Promise<Response>[] = [];
-      if (emailRecipients.length > 0) {
-        tasks.push(
-          fetch(`/api/blasts/email/${encodeURIComponent(emailDraft.id)}/schedule`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ recipients: emailRecipients, scheduledFor }),
-          }),
-        );
-      }
-      if (smsRecipients.length > 0) {
-        tasks.push(
-          fetch(`/api/blasts/sms/${encodeURIComponent(smsDraft.id)}/schedule`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ recipients: smsRecipients, scheduledFor }),
-          }),
-        );
-      }
-      const results = await Promise.all(tasks);
-      const failed = results.find((r) => !r.ok);
-      if (failed) {
-        const errData = await failed.json().catch(() => ({}));
-        throw new Error(errData?.error || 'One channel failed to schedule');
-      }
+      await autosave.flush().catch(() => undefined);
+      // One request schedules both halves together — the route runs both
+      // gates and commits the pair in a single transaction, so it is either
+      // fully scheduled or still two drafts. Each half's audience is the one
+      // its draft saved, resolved on the server. A gateway timeout is checked
+      // against the email half (committed in the same transaction).
+      const outcome = await submitSchedule({
+        scheduleUrl: `/api/blasts/multi/${encodeURIComponent(emailDraft.id)}/schedule`,
+        blastUrl: `/api/blasts/email/${encodeURIComponent(emailDraft.id)}`,
+        body: { scheduledFor },
+        onWaiting: () => setConfirming(true),
+      });
+      if (!outcome.ok) throw new Error(outcome.error);
       toast.success(
         sendMode === 'now'
           ? 'Both channels queued — sending starts within ~1 minute.'
           : `Scheduled both channels for ${formatDateTime(scheduledFor!)}`,
       );
-      router.push('/messaging/blasts');
+      router.push(subHref('/messaging/blasts'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to schedule campaign');
+      toast.error(err instanceof Error ? err.message : 'Failed to schedule blast');
     } finally {
       setSubmitting(false);
+      setConfirming(false);
     }
   }
 
@@ -313,14 +337,23 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
   }
 
-  const fromName = account?.senderName || account?.dealer || '';
+  if (lockedDraft) {
+    return <BlastLockedNotice status={lockedDraft.status} name={emailDraft?.name} />;
+  }
+
+  // Exactly what the send puts in the From header — see blast-sender.
+  const fromLine = formatFromLine(account);
   const fromEmail = account?.senderEmail || '';
+  const zoneLabel = timeZoneLabel(browserZone, sendInstant ?? new Date());
+  const accountEquivalent = sendInstant
+    ? accountLocalEquivalent(sendInstant, account?.timezone, browserZone)
+    : null;
 
   return (
     <div className="pb-32">
@@ -329,7 +362,9 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Schedule
           </p>
-          <h1 className="text-2xl font-bold">{emailDraft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="multi" variant="title" initialName={emailDraft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             Both the email and SMS fire at the same time once you schedule.
           </p>
@@ -360,30 +395,53 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                 />
               </div>
 
-              {emailRecipients.length > 0 && accountKey && (
-                <WarmupNotice accountKey={accountKey} recipientCount={emailRecipients.length} />
+              {!recipientsLoading && emailTotal > 0 && accountKey && (
+                <WarmupNotice accountKey={accountKey} recipientCount={emailTotal} />
               )}
 
-              {sendMode === 'later' && (
+              <Collapse open={sendMode === 'later'} mountClosed={false} clip={false}>
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">
-                  <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
-                    Send Date &amp; Time
-                  </label>
-                  <div className="relative">
-                    <CalendarDaysIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-                    <input
-                      type="datetime-local"
-                      value={sendAtLocal}
-                      min={toLocalDateTimeInputValue(new Date())}
-                      onChange={(e) => setSendAtLocal(e.target.value)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Date
+                      </label>
+                      <DatePicker
+                        value={sendAtLocal.slice(0, 10) || null}
+                        onChange={(v) =>
+                          setSendAtLocal(v ? `${v}T${sendAtLocal.slice(11, 16) || '09:00'}` : '')
+                        }
+                        minDate={wallClockInZone(new Date(), browserZone).date}
+                        placeholder="Select date"
+                        className="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Time{' '}
+                        <span className="normal-case tracking-normal font-normal">({zoneLabel})</span>
+                      </label>
+                      <TimePicker
+                        value={sendAtLocal.slice(11, 16) || null}
+                        onChange={(t) =>
+                          setSendAtLocal(
+                            `${sendAtLocal.slice(0, 10) || wallClockInZone(new Date(), browserZone).date}T${t}`,
+                          )
+                        }
+                        className="w-full inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
+                    </div>
                   </div>
                   <p className="text-[11px] text-[var(--muted-foreground)] mt-2">
-                    Will send {sendAtLocal ? formatDateTime(new Date(sendAtLocal).toISOString()) : '—'}
+                    {sendInstant ? `Will send ${formatDateTime(sendInstant.toISOString())}.` : 'Pick a date and time.'}
+                    {accountEquivalent && (
+                      <span className="text-[var(--foreground)]">
+                        {' '}That’s {accountEquivalent} for this account.
+                      </span>
+                    )}
                   </p>
                 </div>
-              )}
+              </Collapse>
             </div>
 
             <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
@@ -396,16 +454,35 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                   <ChannelStat
                     icon={EnvelopeIcon}
                     label="Email"
-                    count={emailRecipients.length}
+                    count={emailTotal}
                     loading={recipientsLoading}
                   />
                   <ChannelStat
                     icon={ChatBubbleLeftRightIcon}
                     label="SMS"
-                    count={smsRecipients.length}
+                    count={smsTotal}
                     loading={recipientsLoading}
                   />
                 </div>
+                {!audienceChosen ? (
+                  <p className="text-[11px] text-amber-400 animate-fade-in-up">
+                    No recipients chosen yet —{' '}
+                    <button
+                      type="button"
+                      onClick={() => router.push(subHref(`/messaging/blasts/multi/${encodeURIComponent(id)}/recipients`))}
+                      className="underline hover:no-underline"
+                    >
+                      choose them on the Recipients step
+                    </button>
+                    .
+                  </p>
+                ) : (
+                  !recipientsLoading &&
+                  (emailTotal === 0 || smsTotal === 0) &&
+                  audienceReason && (
+                    <p className="text-[11px] text-amber-400 animate-fade-in-up">{audienceReason}</p>
+                  )
+                )}
 
                 <div className="flex items-start gap-3 pt-3 border-t border-[var(--border)]">
                   <div className="w-9 h-9 rounded-lg bg-[var(--muted)] text-[var(--muted-foreground)] flex items-center justify-center flex-shrink-0">
@@ -413,7 +490,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                      Subaccount
+                      Account
                     </p>
                     <p className="text-sm font-medium mt-0.5">
                       {account?.dealer || (
@@ -469,15 +546,18 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                   label="Sender email configured (Sending settings)"
                 />
                 <ChecklistItem
-                  ok={emailRecipients.length > 0 || smsRecipients.length > 0}
-                  label={`At least one channel has recipients (${emailRecipients.length.toLocaleString()} email · ${smsRecipients.length.toLocaleString()} SMS)`}
+                  ok={audienceChosen && emailTotal > 0 && smsTotal > 0}
+                  label={
+                    audienceChosen
+                      ? `Both channels have recipients (${emailTotal.toLocaleString()} email · ${smsTotal.toLocaleString()} SMS)`
+                      : 'Recipients chosen'
+                  }
                 />
               </ul>
-              {fromName && (
+              {fromEmail && (
                 <p className="text-[11px] text-[var(--muted-foreground)] mt-3 border-t border-[var(--border)] pt-3">
-                  Email sends as <strong className="text-[var(--foreground)]">{fromName}</strong>{' '}
-                  {fromEmail ? `(${fromEmail})` : ''}. SMS routes through this subaccount&apos;s
-                  Twilio connection.
+                  Email sends from <strong className="text-[var(--foreground)]">{fromLine}</strong>.
+                  SMS routes through this account&apos;s Twilio connection.
                 </p>
               )}
             </div>
@@ -509,7 +589,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                   SMS
                 </button>
               </div>
-              <div className="bg-[var(--muted)]/30 p-4">
+              <div key={previewTab} className="bg-[var(--muted)]/30 p-4 animate-fade-in-up">
                 {previewTab === 'email' ? (
                   emailDraft?.htmlContent ? (
                     <div className="bg-white rounded-lg border border-[var(--border)] overflow-hidden">
@@ -558,30 +638,42 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => router.push(`/messaging/blasts/multi/${encodeURIComponent(id)}/message`)}
+            onClick={() => router.push(subHref(`/messaging/blasts/multi/${encodeURIComponent(id)}/message`))}
             className="inline-flex items-center gap-1.5 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back
           </button>
-          <PrimaryButton
-            onClick={handleSchedule}
-            disabled={
-              submitting ||
-              recipientsLoading ||
-              // Never send an arbitrary prefix of an over-limit audience.
-              emailTruncated ||
-              smsTruncated ||
-              (emailRecipients.length === 0 && smsRecipients.length === 0)
-            }
-          >
-            <PaperAirplaneIcon className="w-4 h-4" />
-            {submitting
-              ? 'Scheduling…'
-              : sendMode === 'now'
-                ? 'Send now'
-                : 'Schedule send'}
-          </PrimaryButton>
+          <div className="flex items-center gap-4 min-w-0">
+            {confirming && (
+              <p className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">
+                Still working — checking whether the schedule went through…
+              </p>
+            )}
+            <PrimaryButton
+              onClick={handleSchedule}
+              disabled={
+                submitting ||
+                recipientsLoading ||
+                !audienceChosen ||
+                // The pair goes out together or not at all — see the route.
+                emailTotal === 0 ||
+                smsTotal === 0 ||
+                // The same content the server's gates require; disabling here
+                // just means the user isn't refused only after clicking.
+                !emailDraft?.subject?.trim() ||
+                !emailDraft?.htmlContent?.trim() ||
+                !smsDraft?.message?.trim()
+              }
+            >
+              <PaperAirplaneIcon className="w-4 h-4" />
+              {submitting
+                ? 'Scheduling…'
+                : sendMode === 'now'
+                  ? 'Send now'
+                  : 'Schedule send'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>
@@ -661,7 +753,7 @@ function ChecklistItem({ ok, label }: { ok: boolean; label: string }) {
   return (
     <li className="flex items-start gap-2.5">
       <CheckCircleIcon
-        className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+        className={`w-4 h-4 mt-0.5 flex-shrink-0 transition-colors ${
           ok ? 'text-emerald-300' : 'text-[var(--muted-foreground)] opacity-40'
         }`}
       />

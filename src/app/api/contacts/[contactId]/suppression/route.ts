@@ -1,49 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Prisma } from '@prisma/client';
+import type { Session } from 'next-auth';
 import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { getRelatedAccountKeys } from '@/lib/services/accounts';
+import {
+  applyContactOptOutChange,
+  dndAfterChange,
+  loadContactOptOutState,
+  normalizeOptOutEmail,
+  normalizeOptOutPhone,
+  readDndFlags,
+  type ContactOptOutState,
+  type DndFlags,
+} from '@/lib/sending/opt-outs';
 
+// GET   /api/contacts/:id/suppression?accountKey=
 // PATCH /api/contacts/:id/suppression?accountKey=
 //
-// Toggle the contact's Email / SMS opt-out. Email and SMS are the
-// only channels Loomi sends on.
+// The contact's Email / SMS opt-out. Email and SMS are the only channels
+// Loomi sends on.
 //
-// We persist suppression two ways:
-//   1. EmailSuppression / SmsSuppression rows — that's what the send
-//      worker checks before queueing a send (reason='manual' so it's
-//      distinguishable from bounce / STOP-driven suppressions).
-//   2. `dnd` Json on the Contact row — gives the UI a fast read
-//      without joining the suppression table for every contact.
+// An opt-out lives in two places:
+//   1. EmailSuppression / SmsSuppression rows — what every send path checks,
+//      cascaded to every account in the group.
+//   2. `dnd` Json on the Contact row — the UI's copy, and a second check for
+//      this one contact.
 //
-// Body shape: { email?: boolean, sms?: boolean }. Missing keys are
-// left unchanged. `true` means "suppress" (i.e. user opted out);
-// `false` clears the suppression.
+// GET reports what the toggle should SHOW, which is either of them: a
+// webhook unsubscribe or a bounce writes a row and never touches the flag,
+// and the toggle used to read the flag alone — so a person who had
+// unsubscribed showed as mailable.
+//
+// PATCH body: { email?: boolean, sms?: boolean }. Missing keys are left
+// unchanged. `true` records a 'manual' opt-out across the group. `false`
+// clears only what staff may clear (see isStaffClearable in
+// lib/sending/opt-outs): a person who unsubscribed, reported spam or texted
+// STOP can't be resubscribed by staff, a bounced address stays suppressed,
+// and an imported opt-out stays until someone removes it in Settings →
+// Suppressions. When something like that is left, the channel stays on and
+// the response's `optOuts.<channel>.lockedBy` says why, so the page can
+// explain it.
 
 type RouteContext = { params: Promise<{ contactId: string }> };
 
-interface DndState {
-  email?: boolean;
-  sms?: boolean;
-}
-
-function parseDndJson(value: Prisma.JsonValue | null): DndState {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const row = value as Record<string, unknown>;
-  const out: DndState = {};
-  if (typeof row.email === 'boolean') out.email = row.email;
-  if (typeof row.sms === 'boolean') out.sms = row.sms;
-  return out;
-}
-
-/** Serialize a DndState for the Contact.dnd JSON column (DbNull when empty). */
-function dndWriteValue(state: DndState): Prisma.InputJsonValue | typeof Prisma.DbNull {
+/** Serialize flags for the Contact.dnd JSON column (DbNull when empty). */
+function dndWriteValue(state: DndFlags): Prisma.InputJsonValue | typeof Prisma.DbNull {
   if (state.email === undefined && state.sms === undefined) return Prisma.DbNull;
   return {
     ...(state.email !== undefined ? { email: state.email } : {}),
     ...(state.sms !== undefined ? { sms: state.sms } : {}),
   };
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+/** What the toggle shows per channel: opted out by the flag OR by a suppression row. */
+function displayedDnd(state: ContactOptOutState): { email: boolean; sms: boolean } {
+  return { email: state.email.optedOut, sms: state.sms.optedOut };
+}
+
+/**
+ * Admins with explicit assignments only reach their own accounts; clients
+ * only theirs. Developers / super_admins have unrestricted reach.
+ */
+function outOfScope(session: Session, accountKey: string): NextResponse | null {
+  const assigned = session.user.accountKeys ?? [];
+  if (session.user.role === 'admin' && assigned.length > 0 && !assigned.includes(accountKey)) {
+    return NextResponse.json({ error: 'Forbidden for this account' }, { status: 403 });
+  }
+  if (session.user.role === 'client' && !assigned.includes(accountKey)) {
+    return NextResponse.json({ error: 'Forbidden for this account' }, { status: 403 });
+  }
+  return null;
+}
+
+export async function GET(req: NextRequest, { params }: RouteContext) {
+  // Same gate as reading the contact itself.
+  const { session, error } = await requirePermission(['studio.contacts.view', 'reporting.report.view']);
+  if (error) return error;
+
+  const { contactId } = await params;
+  const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim() ?? '';
+  if (!accountKey) {
+    return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
+  }
+  const forbidden = outOfScope(session!, accountKey);
+  if (forbidden) return forbidden;
+
+  const contact = await prisma.contact.findFirst({
+    where: { id: contactId, accountKey },
+    select: { accountKey: true, email: true, phone: true, dnd: true },
+  });
+  if (!contact) {
+    return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
+  }
+
+  const optOuts = await loadContactOptOutState(contact);
+  return NextResponse.json({ dnd: displayedDnd(optOuts), optOuts });
 }
 
 export async function PATCH(req: NextRequest, { params }: RouteContext) {
@@ -55,22 +112,18 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
   if (!accountKey) {
     return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
   }
-
-  if (session!.user.role === 'admin') {
-    const assigned = session!.user.accountKeys ?? [];
-    if (assigned.length > 0 && !assigned.includes(accountKey)) {
-      return NextResponse.json({ error: 'Forbidden for this account' }, { status: 403 });
-    }
-  }
+  const forbidden = outOfScope(session!, accountKey);
+  if (forbidden) return forbidden;
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) {
     return NextResponse.json({ error: 'JSON body required' }, { status: 400 });
   }
 
-  const requestEmail = typeof body.email === 'boolean' ? body.email : undefined;
-  const requestSms = typeof body.sms === 'boolean' ? body.sms : undefined;
-  if (requestEmail === undefined && requestSms === undefined) {
+  const patch: DndFlags = {};
+  if (typeof body.email === 'boolean') patch.email = body.email;
+  if (typeof body.sms === 'boolean') patch.sms = body.sms;
+  if (patch.email === undefined && patch.sms === undefined) {
     return NextResponse.json(
       { error: 'Body must include an email or sms boolean' },
       { status: 400 },
@@ -79,103 +132,66 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
 
   const contact = await prisma.contact.findFirst({
     where: { id: contactId, accountKey },
-    select: { id: true, email: true, phone: true, dnd: true },
+    select: { id: true, accountKey: true, email: true, phone: true, dnd: true },
   });
   if (!contact) {
     return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
   }
 
-  const current = parseDndJson(contact.dnd);
-  const next: DndState = {
-    email: requestEmail !== undefined ? requestEmail : current.email,
-    sms: requestSms !== undefined ? requestSms : current.sms,
-  };
+  // Read outside the transaction, so the hierarchy lookup doesn't hold a
+  // second connection while the transaction's waits on it.
+  const relatedAccountKeys = await getRelatedAccountKeys(accountKey);
 
-  // Org-wide suppression cascade: a manual opt-out is a compliance signal that
-  // must apply across every rooftop in the same organization, not just the one
-  // the toggle was flipped in. When the account belongs to an org we mirror the
-  // authoritative suppression rows onto all sibling rooftops (and reflect the
-  // dnd flag on any sibling contact sharing this email/phone so the UI agrees).
-  // Standalone accounts (no org) get siblingKeys = [] and behave as before.
-  const siblingKeys = await getRelatedAccountKeys(accountKey);
-  const suppressionKeys = [accountKey, ...siblingKeys];
-
-  // Suppression table writes happen in transaction with the contact
-  // dnd update so the UI and the send worker can't disagree.
+  // Suppression rows and dnd flags change together, so the UI and the send
+  // path can't disagree.
   await prisma.$transaction(async (tx) => {
-    for (const key of suppressionKeys) {
-      if (requestEmail !== undefined && contact.email) {
-        if (requestEmail) {
-          await tx.emailSuppression.upsert({
-            where: { accountKey_email: { accountKey: key, email: contact.email } },
-            update: { reason: 'manual', source: 'manual' },
-            create: {
-              accountKey: key,
-              email: contact.email,
-              reason: 'manual',
-              source: 'manual',
-            },
-          });
-        } else {
-          await tx.emailSuppression.deleteMany({
-            where: { accountKey: key, email: contact.email },
-          });
-        }
-      }
-
-      if (requestSms !== undefined && contact.phone) {
-        if (requestSms) {
-          await tx.smsSuppression.upsert({
-            where: { accountKey_phone: { accountKey: key, phone: contact.phone } },
-            update: { reason: 'manual', source: 'manual' },
-            create: {
-              accountKey: key,
-              phone: contact.phone,
-              reason: 'manual',
-              source: 'manual',
-            },
-          });
-        } else {
-          await tx.smsSuppression.deleteMany({
-            where: { accountKey: key, phone: contact.phone },
-          });
-        }
-      }
-    }
+    const change = await applyContactOptOutChange({
+      accountKey,
+      email: contact.email,
+      phone: contact.phone,
+      patch,
+      tx,
+      relatedAccountKeys,
+    });
 
     await tx.contact.update({
       where: { id: contact.id },
-      data: { dnd: dndWriteValue(next) },
+      data: { dnd: dndWriteValue(dndAfterChange(contact.dnd, patch, change, accountKey)) },
     });
 
-    // Mirror the flipped channel(s) onto sibling contacts that share this
-    // email/phone. Contact has @@unique([accountKey,email]) and
-    // @@unique([accountKey,phone]), so at most one sibling contact matches per
-    // rooftop per channel.
-    if (siblingKeys.length > 0) {
-      const orFilters: Prisma.ContactWhereInput[] = [];
-      if (requestEmail !== undefined && contact.email) orFilters.push({ email: contact.email });
-      if (requestSms !== undefined && contact.phone) orFilters.push({ phone: contact.phone });
+    // Mirror the change onto contacts elsewhere in the group that share this
+    // email/phone, so their pages and the contacts table agree with the rows
+    // just written. Contact has @@unique([accountKey,email]) and
+    // @@unique([accountKey,phone]), so at most one contact matches per
+    // account per channel. Each keeps its flag on while something it can't
+    // clear still holds the address at ITS account.
+    if (relatedAccountKeys.length === 0) return;
+    const emailMatch = patch.email !== undefined ? normalizeOptOutEmail(contact.email) : null;
+    const phoneMatch = patch.sms !== undefined ? normalizeOptOutPhone(contact.phone) : null;
+    // Both spellings, so a sibling stored before addresses were normalized
+    // still matches — and each stays an exact, indexed lookup.
+    const orFilters: Prisma.ContactWhereInput[] = [];
+    if (emailMatch) orFilters.push({ email: { in: unique([emailMatch, contact.email ?? '']) } });
+    if (phoneMatch) orFilters.push({ phone: { in: unique([phoneMatch, contact.phone ?? '']) } });
+    if (orFilters.length === 0) return;
 
-      if (orFilters.length > 0) {
-        const siblingContacts = await tx.contact.findMany({
-          where: { accountKey: { in: siblingKeys }, OR: orFilters },
-          select: { id: true, email: true, phone: true, dnd: true },
-        });
-        for (const sc of siblingContacts) {
-          const scNext = parseDndJson(sc.dnd);
-          if (requestEmail !== undefined && contact.email && sc.email === contact.email) {
-            scNext.email = requestEmail;
-          }
-          if (requestSms !== undefined && contact.phone && sc.phone === contact.phone) {
-            scNext.sms = requestSms;
-          }
-          await tx.contact.update({
-            where: { id: sc.id },
-            data: { dnd: dndWriteValue(scNext) },
-          });
-        }
+    const siblings = await tx.contact.findMany({
+      where: { accountKey: { in: relatedAccountKeys }, OR: orFilters },
+      select: { id: true, accountKey: true, email: true, phone: true, dnd: true },
+    });
+    for (const sibling of siblings) {
+      const siblingPatch: DndFlags = {};
+      if (emailMatch && normalizeOptOutEmail(sibling.email) === emailMatch) {
+        siblingPatch.email = patch.email;
       }
+      if (phoneMatch && normalizeOptOutPhone(sibling.phone) === phoneMatch) {
+        siblingPatch.sms = patch.sms;
+      }
+      if (siblingPatch.email === undefined && siblingPatch.sms === undefined) continue;
+      const next = dndAfterChange(sibling.dnd, siblingPatch, change, sibling.accountKey);
+      const current = readDndFlags(sibling.dnd);
+      if (next.email === current.email && next.sms === current.sms) continue;
+      await tx.contact.update({ where: { id: sibling.id }, data: { dnd: dndWriteValue(next) } });
     }
   });
 
@@ -183,9 +199,13 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
     where: { id: contact.id },
     select: CONTACT_SELECT,
   });
+  const optOuts = await loadContactOptOutState({ ...contact, dnd: updated.dnd });
 
   return NextResponse.json({
     contact: serializeContact(updated),
-    dnd: next,
+    // What the toggle should show. A channel turned off that is still held
+    // stays true here, with `optOuts.<channel>.lockedBy` saying why.
+    dnd: displayedDnd(optOuts),
+    optOuts,
   });
 }

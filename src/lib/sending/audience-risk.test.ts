@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   audienceRiskIssues,
+  isAddressBounce,
   isHardBounceError,
   AUDIENCE_RISK_CODES,
   type AudienceRisk,
@@ -19,6 +20,9 @@ function risk(overrides: Partial<AudienceRisk> = {}): AudienceRisk {
     unprovenShare: 0,
     warmupDay: null,
     warmupTotalDays: 14,
+    // An established sender with a warm-up history behind it.
+    priorLoomiSends: 100_000,
+    hasWarmup: true,
     ...overrides,
   };
 }
@@ -192,5 +196,83 @@ describe('audienceRiskIssues — suppressed share', () => {
     expect(
       audienceRiskIssues(risk({ total: 1000, suppressed: 20, sendable: 980, withHistory: 980 }), 'x'),
     ).toEqual([]);
+  });
+});
+
+describe('isHardBounceError — sender-side refusals', () => {
+  it('does not blame the address for a reputation or policy block', () => {
+    expect(
+      isHardBounceError('bounce: 550 5.7.1 Message blocked due to sender reputation'),
+    ).toBe(false);
+    expect(isHardBounceError('bounce: 554 5.7.1 Rejected by policy')).toBe(false);
+    expect(isHardBounceError('bounce: 550 Listed on Spamhaus')).toBe(false);
+  });
+
+  it('treats 5.2.2 mailbox-full as soft', () => {
+    expect(isHardBounceError('bounce: 552 5.2.2 Mailbox full')).toBe(false);
+  });
+
+  it('still counts a relaying refusal as a dead address', () => {
+    expect(isHardBounceError('bounce: 550 5.7.1 Relaying denied')).toBe(true);
+  });
+});
+
+describe('audienceRiskIssues — first send from a new sender', () => {
+  const firstSend = {
+    sendable: 12_000,
+    withHistory: 0,
+    neverMailed: 12_000,
+    unprovenShare: 1,
+    historicalBounceRate: null,
+    priorLoomiSends: 0,
+    hasWarmup: false,
+  };
+
+  it('warns on a large never-mailed list from an account new to Loomi with no warm-up', () => {
+    const issues = audienceRiskIssues(risk(firstSend), 'young-powersports');
+    const finding = issues.find((i) => i.code === AUDIENCE_RISK_CODES.UNPROVEN_NEW_SENDER);
+    expect(finding?.severity).toBe('warning');
+  });
+
+  it('never blocks it', () => {
+    const issues = audienceRiskIssues(risk(firstSend), 'young-powersports');
+    expect(issues.some((i) => i.severity === 'blocker')).toBe(false);
+  });
+
+  it('stays quiet for an account that already sends through Loomi', () => {
+    const issues = audienceRiskIssues(risk({ ...firstSend, priorLoomiSends: 50_000 }), 'a');
+    expect(issues.some((i) => i.code === AUDIENCE_RISK_CODES.UNPROVEN_NEW_SENDER)).toBe(false);
+  });
+
+  it('defers to the warm-up warning when the domain is warming', () => {
+    const issues = audienceRiskIssues(
+      risk({ ...firstSend, hasWarmup: true, warmupDay: 3 }),
+      'a',
+    );
+    expect(issues.some((i) => i.code === AUDIENCE_RISK_CODES.UNPROVEN_NEW_SENDER)).toBe(false);
+    expect(issues.some((i) => i.code === AUDIENCE_RISK_CODES.UNPROVEN_ON_WARMUP)).toBe(true);
+  });
+});
+
+describe('isAddressBounce', () => {
+  it('counts verdicts on the address', () => {
+    expect(isAddressBounce('bounce: 550 5.1.1 The email account does not exist')).toBe(true);
+    expect(isAddressBounce('bounce (hard)')).toBe(true);
+    expect(isAddressBounce('dropped: Bounced Address')).toBe(true);
+    expect(isAddressBounce('dropped: Invalid')).toBe(true);
+    // No reason recorded: the worse case.
+    expect(isAddressBounce(null)).toBe(true);
+  });
+
+  it('does not count the receiver refusing the sender', () => {
+    expect(isAddressBounce('bounce (blocked): 550 5.7.1 sender reputation')).toBe(false);
+    expect(isAddressBounce('bounce (reputation): 554 rejected')).toBe(false);
+    expect(isAddressBounce('bounce (expired): gave up after 72h')).toBe(false);
+    expect(isAddressBounce('dropped: Spam Content')).toBe(false);
+    expect(isAddressBounce('dropped: Unsubscribed Address')).toBe(false);
+  });
+
+  it('screens legacy rows for sender-side wording', () => {
+    expect(isAddressBounce('bounce: 550 5.7.1 blocked by Spamhaus')).toBe(false);
   });
 });

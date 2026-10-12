@@ -91,14 +91,9 @@ export async function checkMx(domain: string): Promise<MxVerdict> {
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code === 'ENOTFOUND' || code === 'ENODATA') {
-      // The domain resolves to nothing, or holds no MX. Fall back to an A/AAAA
-      // lookup before calling it dead — implicit MX is rare but real.
-      try {
-        await withTimeout(dns.resolve(key), TIMEOUT_MS);
-        verdict = 'has-mx';
-      } catch {
-        verdict = 'no-mx';
-      }
+      // The domain resolves to nothing, or holds no MX. Fall back to an
+      // address lookup before calling it dead — implicit MX is rare but real.
+      verdict = await implicitMxVerdict(key);
     } else {
       // SERVFAIL, timeout, resolver unreachable — we learned nothing.
       verdict = 'unknown';
@@ -107,6 +102,28 @@ export async function checkMx(domain: string): Promise<MxVerdict> {
 
   remember(key, verdict);
   return verdict;
+}
+
+/**
+ * The implicit-MX fallback: a domain with an address record can receive mail.
+ *
+ * Both families count — an IPv6-only domain is alive. And only a DEFINITIVE
+ * "no such record" from both is `no-mx`: this used to treat any failure of the
+ * fallback, a timeout or SERVFAIL included, as proof the domain was dead, and
+ * cached that for hours — silently skipping a real customer's live address.
+ */
+async function implicitMxVerdict(domain: string): Promise<MxVerdict> {
+  const lookups = [() => dns.resolve4(domain), () => dns.resolve6(domain)];
+  for (const lookup of lookups) {
+    try {
+      const addresses = await withTimeout(lookup(), TIMEOUT_MS);
+      if (addresses.length > 0) return 'has-mx';
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== 'ENOTFOUND' && code !== 'ENODATA') return 'unknown';
+    }
+  }
+  return 'no-mx';
 }
 
 /** The domain half of an address, lowercased, or null if there isn't one. */

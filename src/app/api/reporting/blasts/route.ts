@@ -13,6 +13,18 @@
  * with a reason — never as an error that blanks the page. Loomi's own numbers
  * do not depend on it.
  *
+ * ── ONE-OFF SENDS ONLY ──────────────────────────────────────────────────────
+ * Loomi email is counted with `source: 'blasts'`: flow emails are excluded from
+ * the totals AND the rows. The Reporting page renders flows in their own
+ * section directly below this one, so counting them here too would report the
+ * same message twice — and the totals used to include them while the rows,
+ * whenever a date range was set, did not, so the rows never added up.
+ *
+ * ── CLIENT-FACING: EVERYTHING IS PROJECTED ──────────────────────────────────
+ * Reporting admits the client role. Every object in the response is built
+ * here, field by field, rather than passed through from a service, so a field
+ * added upstream stays out of this payload until someone opts it in.
+ *
  *   ?accountKey=…&start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
  */
 import { NextRequest, NextResponse } from 'next/server';
@@ -25,7 +37,7 @@ import {
   getEmailBlastsNormalized,
   type EmailBlast,
 } from '@/lib/integrations/gohighlevel';
-import { getEngagementTotals, getCampaignEngagement } from '@/lib/services/email-analytics';
+import { getEngagementReport, rate } from '@/lib/services/email-analytics';
 import { getTextTotals, getTextBlasts } from '@/lib/services/sms-analytics';
 import {
   emailRates,
@@ -35,14 +47,67 @@ import {
   sortBlasts,
   foldSources,
   EMPTY_EMAIL_COUNTS,
+  type CombinedTotals,
   type EmailCounts,
+  type EmailTotals,
+  type TextTotals,
   type BlastRow,
 } from '@/lib/reporting/blasts';
 
 export const dynamic = 'force-dynamic';
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-const safe = (num: number, den: number) => (den > 0 ? num / den : 0);
+/**
+ * A rate as a 0–1 fraction. Same clamp as every other engagement surface:
+ * the historical provider's own figures can disagree with themselves (more
+ * opens than deliveries), and no rate on a client's report may read over 100%.
+ */
+const clamp01 = (value: number): number =>
+  Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+
+function projectEmailTotals(t: EmailTotals) {
+  return {
+    campaigns: t.campaigns,
+    sent: t.sent,
+    delivered: t.delivered,
+    uniqueOpens: t.uniqueOpens,
+    totalOpens: t.totalOpens,
+    uniqueClicks: t.uniqueClicks,
+    totalClicks: t.totalClicks,
+    bounces: t.bounces,
+    failed: t.failed,
+    unsubscribes: t.unsubscribes,
+    deliveryRate: clamp01(t.deliveryRate),
+    openRate: clamp01(t.openRate),
+    clickRate: clamp01(t.clickRate),
+    clickToOpenRate: clamp01(t.clickToOpenRate),
+    bounceRate: clamp01(t.bounceRate),
+    unsubscribeRate: clamp01(t.unsubscribeRate),
+  };
+}
+
+function projectTextTotals(t: TextTotals) {
+  return {
+    campaigns: t.campaigns,
+    sent: t.sent,
+    delivered: t.delivered,
+    failed: t.failed,
+    optOuts: t.optOuts,
+    deliveryRate: clamp01(t.deliveryRate),
+    failureRate: clamp01(t.failureRate),
+    optOutRate: clamp01(t.optOutRate),
+  };
+}
+
+function projectCombined(t: CombinedTotals) {
+  return {
+    campaigns: t.campaigns,
+    sent: t.sent,
+    delivered: t.delivered,
+    failed: t.failed,
+    deliveryRate: clamp01(t.deliveryRate),
+  };
+}
 
 /** Historical campaigns within the window. Undated ones pass through — see below. */
 function inWindow(all: EmailBlast[], start: string | null, end: string | null): EmailBlast[] {
@@ -132,16 +197,19 @@ export async function GET(req: NextRequest) {
       }
     })();
 
-    const [loomiEmail, loomiEmailRows, textCounts, textRows, history] = await Promise.all([
-      getEngagementTotals(scope),
-      getCampaignEngagement(scope),
+    const [loomiEmail, textCounts, textRows, history] = await Promise.all([
+      // Totals and rows from ONE aggregate, so the rows add up to the totals.
+      getEngagementReport({ ...scope, source: 'blasts' }),
       getTextTotals(scope),
       getTextBlasts(scope),
       historyPromise,
     ]);
+    const loomiEmailRows = loomiEmail.campaigns;
 
     const loomiEmailCounts: EmailCounts = {
-      campaigns: loomiEmailRows.length,
+      // Every blast with a recipient in the window — not the length of the
+      // row list, which stops at CAMPAIGN_ROW_LIMIT.
+      campaigns: loomiEmail.campaignCount,
       sent: loomiEmail.totals.sent,
       delivered: loomiEmail.totals.delivered,
       uniqueOpens: loomiEmail.totals.uniqueOpens,
@@ -184,7 +252,7 @@ export async function GET(req: NextRequest) {
         opens: null,
         clicks: null,
         failed: t.failed,
-        deliveryRate: safe(t.delivered, t.sent),
+        deliveryRate: rate(t.delivered, t.sent),
         openRate: null,
         clickRate: null,
       })),
@@ -199,9 +267,9 @@ export async function GET(req: NextRequest) {
         opens: c.opened,
         clicks: c.clicked,
         failed: c.failed + c.errors,
-        deliveryRate: safe(c.delivered, c.sent),
-        openRate: safe(c.opened, c.delivered),
-        clickRate: safe(c.clicked, c.delivered),
+        deliveryRate: rate(c.delivered, c.sent),
+        openRate: rate(c.opened, c.delivered),
+        clickRate: rate(c.clicked, c.delivered),
       })),
     ];
 
@@ -210,8 +278,8 @@ export async function GET(req: NextRequest) {
     // would overwrite rather than add, and passing rates into `combine` would
     // defeat the reason it takes counts.
     const mergedEmailCounts = addEmailCounts(loomiEmailCounts, historyCounts);
-    const emailTotals = emailRates(mergedEmailCounts);
-    const combinedCounts = combine(mergedEmailCounts, textCounts);
+    const emailTotals = projectEmailTotals(emailRates(mergedEmailCounts));
+    const combinedCounts = projectCombined(combine(mergedEmailCounts, textCounts));
 
     return NextResponse.json({
       dealer: account.dealer,
@@ -235,17 +303,29 @@ export async function GET(req: NextRequest) {
       },
       combined: combinedCounts,
       email: emailTotals,
-      text: textRates(textCounts),
+      text: projectTextTotals(textRates(textCounts)),
       byChannel: {
-        loomiEmail: emailRates(loomiEmailCounts),
-        historicalEmail: emailRates(historyCounts),
+        loomiEmail: projectEmailTotals(emailRates(loomiEmailCounts)),
+        historicalEmail: projectEmailTotals(emailRates(historyCounts)),
       },
-      sources: foldSources(rows),
+      sources: foldSources(rows).map((s) => ({
+        source: s.source,
+        label: s.label,
+        campaigns: s.campaigns,
+        sent: s.sent,
+        share: s.share,
+      })),
       blasts: sortBlasts(rows),
       // Loomi-only: the historical feed has no per-event rows to place on a
       // calendar. See lib/reporting/blasts.ts.
-      series: loomiEmail.series,
-      topUrls: loomiEmail.topUrls,
+      series: loomiEmail.series.map((p) => ({
+        date: p.date,
+        delivered: p.delivered,
+        opens: p.opens,
+        clicks: p.clicks,
+        bounces: p.bounces,
+      })),
+      topUrls: loomiEmail.topUrls.map((u) => ({ url: u.url, clicks: u.clicks })),
       historyAvailable: history.ok,
       historyNote: history.ok ? null : history.reason,
       seriesIsLoomiOnly: historyCounts.sent > 0,

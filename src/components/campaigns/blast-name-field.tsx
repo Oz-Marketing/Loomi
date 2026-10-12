@@ -16,15 +16,37 @@
  * is; there was real ambiguity about which blast.
  *
  * Two ways in, because people reach for both: the text is a button, and a
- * pencil appears on hover. Same edit either way.
+ * pencil sits beside it. Same edit either way. The pencil used to appear only
+ * on hover, and nobody found it — renaming read as "only possible in the
+ * create modal".
+ *
+ * TWO PLACEMENTS, ONE NAME. The same field renders in the header and as each
+ * step's page title (`variant="title"`). A rename in either broadcasts
+ * BLAST_RENAMED_EVENT so the other updates without a refetch.
  */
 import { useEffect, useRef, useState } from 'react';
 import { PencilSquareIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import type { BuilderChannel } from '@/lib/messaging/blast-builder-steps';
+import { renameBlast } from '@/lib/messaging/blast-list-actions';
 
-export function BlastNameField({ id, channel }: { id: string; channel: BuilderChannel }) {
-  const [name, setName] = useState('');
+export const BLAST_RENAMED_EVENT = 'loomi:blast-renamed';
+
+type BlastRenamedDetail = { id: string; name: string };
+
+export function BlastNameField({
+  id,
+  channel,
+  variant = 'header',
+  initialName,
+}: {
+  id: string;
+  channel: BuilderChannel;
+  variant?: 'header' | 'title';
+  /** The step page already holds the draft; pass its name to skip a fetch. */
+  initialName?: string;
+}) {
+  const [name, setName] = useState(initialName ?? '');
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   // Blur fires when Enter moves focus away, so without this the same rename
@@ -39,7 +61,26 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
       : `/api/blasts/email/${encodeURIComponent(id)}`;
 
   useEffect(() => {
-    if (!id) return;
+    if (initialName !== undefined) setName(initialName);
+  }, [initialName]);
+
+  useEffect(() => {
+    const onRenamed = (e: Event) => {
+      const detail = (e as CustomEvent<BlastRenamedDetail>).detail;
+      if (detail?.id === id) setName(detail.name);
+    };
+    window.addEventListener(BLAST_RENAMED_EVENT, onRenamed);
+    return () => window.removeEventListener(BLAST_RENAMED_EVENT, onRenamed);
+  }, [id]);
+
+  const announce = (next: string) => {
+    window.dispatchEvent(
+      new CustomEvent<BlastRenamedDetail>(BLAST_RENAMED_EVENT, { detail: { id, name: next } }),
+    );
+  };
+
+  useEffect(() => {
+    if (!id || initialName !== undefined) return;
     let canceled = false;
     (async () => {
       try {
@@ -54,6 +95,8 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
     return () => {
       canceled = true;
     };
+    // initialName is only checked to skip the fetch, not tracked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [endpoint, id]);
 
   const commit = async () => {
@@ -66,16 +109,16 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
     if (!trimmed || trimmed === name) return;
 
     const previous = name;
-    setName(trimmed); // optimistic: the header is the only place this shows
+    setName(trimmed);
+    announce(trimmed);
     try {
-      const res = await fetch(endpoint, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmed }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      // An Email + Text blast is two rows; both take the new name (the server
+      // doesn't cascade names), or the text keeps the old one wherever it shows.
+      const { partnerError } = await renameBlast(channel, id, trimmed);
+      if (partnerError) toast.error(partnerError);
     } catch (err) {
       setName(previous);
+      announce(previous);
       toast.error(`Couldn't rename: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   };
@@ -86,10 +129,15 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
     setEditing(true);
   };
 
+  const isTitle = variant === 'title';
+  const textSize = isTitle ? 'text-2xl font-bold' : 'text-sm font-semibold';
+
   if (editing) {
     return (
       <input
         autoFocus
+        // Renaming usually means replacing, so start with it all selected.
+        onFocus={(e) => e.currentTarget.select()}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
@@ -102,7 +150,9 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
           }
         }}
         aria-label="Blast name"
-        className="min-w-0 flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1 text-sm font-semibold text-[var(--foreground)] outline-none"
+        className={`min-w-0 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1 ${textSize} text-[var(--foreground)] outline-none ${
+          isTitle ? '-mx-2 w-full max-w-xl' : 'flex-1'
+        }`}
       />
     );
   }
@@ -112,12 +162,19 @@ export function BlastNameField({ id, channel }: { id: string; channel: BuilderCh
       type="button"
       onClick={start}
       title="Click to rename"
-      className="group/name flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-[var(--muted)]"
+      aria-label={`Rename blast${name ? ` "${name}"` : ''}`}
+      className={`group/name flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left transition-colors hover:bg-[var(--muted)] ${
+        isTitle ? '-mx-2 max-w-full' : ''
+      }`}
     >
-      <span className="truncate text-sm font-semibold text-[var(--foreground)]">
-        {name || 'Untitled blast'}
+      <span className={`truncate ${textSize} text-[var(--foreground)]`}>
+        {name || (isTitle ? 'Blast' : 'Untitled blast')}
       </span>
-      <PencilSquareIcon className="h-3.5 w-3.5 flex-shrink-0 text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover/name:opacity-100" />
+      <PencilSquareIcon
+        className={`flex-shrink-0 text-[var(--muted-foreground)] opacity-60 transition-opacity group-hover/name:opacity-100 ${
+          isTitle ? 'h-4.5 w-4.5' : 'h-3.5 w-3.5'
+        }`}
+      />
     </button>
   );
 }

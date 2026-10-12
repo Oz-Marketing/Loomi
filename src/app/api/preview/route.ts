@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { applyPreviewVariables } from '@/lib/preview-variables';
 import { requireAuth } from '@/lib/api-auth';
 import * as templateService from '@/lib/services/templates';
 import * as accountEmailService from '@/lib/services/account-emails';
@@ -6,27 +7,17 @@ import { compileTemplateContent } from '@/lib/email/compile-template';
 
 // ── Helpers ──
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function applyPreviewValues(
   html: string,
   previewValues?: Record<string, string>,
 ): string {
+  // No values means "compile only": the blast Message step calls this with an
+  // empty map to get the HTML it STORES and sends, so its merge tags must
+  // come back untouched.
   if (!previewValues || Object.keys(previewValues).length === 0) return html;
-
-  let output = html;
-  for (const [rawKey, rawValue] of Object.entries(previewValues)) {
-    if (rawValue === undefined || rawValue === null) continue;
-    const key = rawKey.trim();
-    if (!key) continue;
-    const token = key.startsWith('{{') && key.endsWith('}}')
-      ? key
-      : `{{${key.replace(/^\{+|\}+$/g, '')}}}`;
-    output = output.replace(new RegExp(escapeRegex(token), 'g'), String(rawValue));
-  }
-  return output;
+  // The sender's own engine — filters, `default:` fallbacks, case-insensitive
+  // custom keys — so a preview can't show a tag differently from the inbox.
+  return applyPreviewVariables(html, previewValues);
 }
 
 // ── POST /api/preview — Editor preview ──

@@ -78,11 +78,19 @@ module.exports = {
       // 384M heap ceiling meant pm2 always won the race. Heap now sits under
       // the threshold so the worker GCs instead of being killed mid-job.
       max_memory_restart: WORKER_MEMORY.restart,
-      kill_timeout: 10000,
+      // Long enough for a graceful stop: on SIGINT/SIGTERM the worker stops
+      // starting new sends and waits (up to 25s) for the in-flight ones to be
+      // accepted and recorded. Killed sooner, a message SendGrid accepted but
+      // Loomi never marked sent is mailed again on the next run.
+      kill_timeout: 30000,
       merge_logs: true,
       env: {
         NODE_ENV: 'production',
         NODE_OPTIONS: `--max-old-space-size=${WORKER_MEMORY.heap}`,
+        // Bound every query the worker makes (see src/lib/prisma.ts): a hung
+        // database call would otherwise stall every blast and text silently.
+        PG_STATEMENT_TIMEOUT_MS: '300000',
+        PG_CONNECTION_TIMEOUT_MS: '30000',
       },
     },
   ],

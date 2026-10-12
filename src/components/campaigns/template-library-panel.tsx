@@ -9,11 +9,14 @@ import {
   MagnifyingGlassIcon,
   PlusIcon,
 } from '@heroicons/react/24/outline';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 
 export interface TemplateLibraryItem {
   id: string;
   design: string;
   name: string;
+  /** Owner: an account key, or null for the shared Loomi library. */
+  accountKey?: string | null;
   category?: string | null;
   type?: string;
   published?: boolean;
@@ -29,13 +32,23 @@ function formatUpdated(value?: string): string {
 }
 
 interface TemplateLibraryPanelProps {
-  onSelect: (design: string) => void;
+  /** Called with the whole item: the caller needs its owner to decide
+   *  whether the blast may edit it in place or must take a copy. */
+  onSelect: (template: TemplateLibraryItem) => void;
   /**
    * When provided, renders a "Create New" button that spins up a fresh
    * template scoped to the current sub-account and drops the user straight
    * into the editor. The mode arg picks the builder (drag-and-drop vs HTML).
    */
   onCreateNew?: (mode: 'visual' | 'code') => void;
+  /**
+   * The blast's account. When set, the picker lists everything usable there —
+   * the account's own templates, its group's, and the shared library — and
+   * marks which are shared. Without it, the shared library only.
+   */
+  accountKey?: string;
+  /** A pick is being applied; cards stop taking clicks until it lands. */
+  busy?: boolean;
 }
 
 /**
@@ -44,7 +57,12 @@ interface TemplateLibraryPanelProps {
  * iframe thumbnails, includes search. Calls onSelect with the design slug
  * when the user clicks a card; calls onCreateNew when the user creates one.
  */
-export function TemplateLibraryPanel({ onSelect, onCreateNew }: TemplateLibraryPanelProps) {
+export function TemplateLibraryPanel({
+  onSelect,
+  onCreateNew,
+  accountKey,
+  busy = false,
+}: TemplateLibraryPanelProps) {
   const [templates, setTemplates] = useState<TemplateLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -52,7 +70,7 @@ export function TemplateLibraryPanel({ onSelect, onCreateNew }: TemplateLibraryP
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch('/api/templates')
+    fetch(accountKey ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}` : '/api/templates')
       .then((r) => (r.ok ? r.json() : []))
       .then((items: unknown) => {
         if (cancelled) return;
@@ -67,7 +85,7 @@ export function TemplateLibraryPanel({ onSelect, onCreateNew }: TemplateLibraryP
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountKey]);
 
   const filteredTemplates = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -115,7 +133,13 @@ export function TemplateLibraryPanel({ onSelect, onCreateNew }: TemplateLibraryP
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredTemplates.map((t) => (
-              <TemplateCard key={t.id} template={t} onClick={() => onSelect(t.design)} />
+              <TemplateCard
+                key={t.id}
+                template={t}
+                owner={templateOwner(t, accountKey)}
+                disabled={busy}
+                onClick={() => onSelect(t)}
+              />
             ))}
           </div>
         )}
@@ -179,11 +203,27 @@ function CreateNewMenu({ onCreate }: { onCreate: (mode: 'visual' | 'code') => vo
   );
 }
 
+type TemplateOwner = 'own' | 'library' | 'group' | null;
+
+/** Who a listed template belongs to, relative to the blast's account. */
+function templateOwner(t: TemplateLibraryItem, accountKey: string | undefined): TemplateOwner {
+  if (!accountKey || t.accountKey === undefined) return null;
+  if (t.accountKey === null) return 'library';
+  return t.accountKey === accountKey ? 'own' : 'group';
+}
+
+const SHARED_HINT =
+  'Shared with other accounts. Picking it gives this blast its own copy, so your edits don’t change the shared template.';
+
 function TemplateCard({
   template,
+  owner,
+  disabled,
   onClick,
 }: {
   template: TemplateLibraryItem;
+  owner: TemplateOwner;
+  disabled: boolean;
   onClick: () => void;
 }) {
   const [thumbHtml, setThumbHtml] = useState<string | null>(null);
@@ -218,7 +258,8 @@ function TemplateCard({
     <button
       type="button"
       onClick={onClick}
-      className="text-left rounded-xl border border-[var(--border)] bg-[var(--card)] overflow-hidden hover:border-[var(--primary)]/60 transition-colors group flex flex-col"
+      disabled={disabled}
+      className="text-left rounded-xl border border-[var(--border)] bg-[var(--card)] overflow-hidden hover:border-[var(--primary)]/60 transition-[border-color,opacity] group flex flex-col disabled:opacity-60 disabled:cursor-wait"
     >
       <div className="aspect-[3/4] relative overflow-hidden bg-white border-b border-[var(--border)]">
         {thumbHtml ? (
@@ -246,6 +287,13 @@ function TemplateCard({
           {template.name || template.design}
         </p>
         <div className="flex items-center gap-2 mt-1">
+          {(owner === 'library' || owner === 'group') && (
+            <Tooltip label={SHARED_HINT}>
+              <span className="text-[10px] font-medium rounded px-1.5 py-0.5 bg-[var(--muted)] text-[var(--muted-foreground)]">
+                {owner === 'library' ? 'Library' : 'Group'}
+              </span>
+            </Tooltip>
+          )}
           {template.published && (
             <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300/90">
               <CheckCircleIcon className="w-3 h-3" />

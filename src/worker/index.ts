@@ -51,6 +51,8 @@ import { sweepMediaExpiration } from '@/lib/services/media-expiration';
 import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
 import { runDueAudienceSyncs } from '@/lib/segments/sync/run';
 import { runCoverageSweep } from '@/lib/playbooks/sweep';
+import { singleFlight } from '@/lib/jobs/single-flight';
+import { requestSendStop } from '@/lib/sending/send-control';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
@@ -101,10 +103,21 @@ const MEDIA_RIGHTS_QUEUE = 'loomi.media.rights-sweep';
 // chain, which it has nothing to do with.
 const AUDIENCE_SYNC_QUEUE = 'loomi.audience-sync';
 
-async function runProcessDueCampaigns(): Promise<void> {
+// One sweep at a time. pg-boss abandons a handler that outlives the job's
+// expiry (15 min by default) and moves on to the next per-minute job — but the
+// abandoned sends keep running. Without this, a second sweep would load the
+// same blast's still-`pending` recipients and email them again. Blasts were
+// capped at 5,000 until 2026-10-12, which kept a sweep inside the expiry; an
+// uncapped audience doesn't.
+const runProcessDueCampaigns = singleFlight(sweepDueCampaigns, () =>
+  console.log('[worker] previous campaign sweep still sending — skipping this tick'),
+);
+
+async function sweepDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
   try {
-    const emailResults = await processDueEmailBlasts({ limit: 5, concurrency: 3 });
+    // Time-boxed rotation across every due blast — see processDueEmailBlasts.
+    const emailResults = await processDueEmailBlasts({ concurrency: 3 });
     if (emailResults.length > 0) {
       console.log(
         `[worker] processed ${emailResults.length} email campaign(s) in ${Date.now() - startedAt}ms`,
@@ -551,14 +564,27 @@ async function main(): Promise<void> {
   console.log('[worker] scheduled', DRAFTING_PROOF_QUEUE, 'every 15 minutes');
 
   // Also run once immediately so the first send doesn't have to wait up
-  // to a minute after boot.
-  await runProcessDueCampaigns();
+  // to a minute after boot. Not awaited: resuming a large blast can take
+  // many minutes, and boot (shutdown handlers included) must not wait on it.
+  // singleFlight keeps the per-minute tick from overlapping this run, and the
+  // sweep catches its own errors.
+  void runProcessDueCampaigns();
   await runProcessFlowTriggers();
   await runProcessFlowEnrollments();
 
   const shutdown = async (signal: string) => {
     console.log(`[worker] received ${signal}, shutting down`);
     try {
+      // Stop starting new sends, then let the in-flight ones be accepted and
+      // recorded before exiting. Exiting mid-send loses the gap between
+      // SendGrid accepting a message and the row being marked sent, and the
+      // next run mails those recipients again. pm2's kill_timeout (30s) is
+      // the hard stop behind this.
+      requestSendStop();
+      await Promise.race([
+        runProcessDueCampaigns.whenIdle(),
+        new Promise((resolve) => setTimeout(resolve, 25_000)),
+      ]);
       await stopBoss();
     } finally {
       process.exit(0);

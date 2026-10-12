@@ -1,43 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAllPermissions } from '@/lib/permissions/require';
+import { parseSendTime, prepareEmailSchedule } from '@/lib/services/blast-schedule';
 import {
-  formatPreflightBlockers,
-  preflightEmailBlast,
-} from '@/lib/sending/blast-preflight';
-import {
+  BlastNotDraftError,
   getEmailBlast,
   scheduleEmailBlastDraft,
-  type EmailRecipientInput,
 } from '@/lib/services/email-blasts';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
-}
-
-function normalizeRecipients(raw: unknown): EmailRecipientInput[] {
-  if (!Array.isArray(raw)) return [];
-  const recipients: EmailRecipientInput[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-    const row = item as Record<string, unknown>;
-    const contactId = String(row.contactId || '').trim();
-    const accountKey = String(row.accountKey || '').trim();
-    if (!contactId || !accountKey) continue;
-    recipients.push({
-      contactId,
-      accountKey,
-      email: String(row.email || '').trim(),
-      fullName: String(row.fullName || '').trim(),
-    });
-  }
-  return recipients;
-}
-
-function parseDate(value: unknown): Date | null {
-  if (typeof value !== 'string' || !value.trim()) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return date;
 }
 
 /**
@@ -46,6 +17,10 @@ function parseDate(value: unknown): Date | null {
  * Final step of the campaign builder: transitions the draft to
  * 'scheduled' (or 'queued' if send time is now/past) and persists
  * recipient rows. pg-boss fires it once scheduledFor passes.
+ *
+ * Body: `{ scheduledFor?: string | null }`. The audience is the one the draft
+ * saved on the Recipients step, resolved here — see lib/services/blast-schedule.
+ * Only a draft can be scheduled; anything else is a 409.
  */
 export async function POST(req: NextRequest, { params }: RouteParams) {
   // Scheduling IS sending — pg-boss fires it unattended once the time passes,
@@ -74,71 +49,35 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
     }
   }
 
+  // Fast, friendly refusal. The schedule write re-checks this under a row
+  // lock, which is what actually stops a double-submit.
+  if (existing.status !== 'draft') {
+    return NextResponse.json({ error: new BlastNotDraftError().message }, { status: 409 });
+  }
+
   const body = await req.json().catch(() => ({}));
-  const recipients = normalizeRecipients(body?.recipients);
-  if (recipients.length === 0) {
+  const sendTime = parseSendTime(body?.scheduledFor);
+  if (!sendTime.ok) return NextResponse.json(sendTime.body, { status: sendTime.status });
+
+  const prepared = await prepareEmailSchedule(existing, session!.user);
+  if (!prepared.ok) return NextResponse.json(prepared.body, { status: prepared.status });
+  if (prepared.recipients.length === 0) {
     return NextResponse.json(
-      { error: 'At least one recipient is required to schedule the campaign.' },
+      { error: 'No one in this audience can receive email. Pick recipients on the Recipients step.' },
       { status: 400 },
-    );
-  }
-  if (recipients.length > 5000) {
-    return NextResponse.json(
-      { error: 'Recipient limit is 5000 per email campaign.' },
-      { status: 400 },
-    );
-  }
-
-  // Admins scoped to specific accounts can only schedule for their accounts.
-  if (userRole === 'admin' && userAccountKeys.length > 0) {
-    const allowed = new Set(userAccountKeys);
-    const disallowed = recipients.find((r) => !allowed.has(r.accountKey));
-    if (disallowed) {
-      return NextResponse.json({ error: 'Forbidden recipient account selection' }, { status: 403 });
-    }
-  }
-
-  const scheduledFor = parseDate(body?.scheduledFor);
-
-  // Deliverability + compliance gate. This is the last point at which we can
-  // stop a blast that would land in spam or breach CAN-SPAM, and it is a hard
-  // block: scheduling is sending, and once pg-boss fires there is no undo.
-  //
-  // Preflight is run against the accounts in the RECIPIENT payload rather
-  // than existing.accountKeys, because accountKeys isn't stamped onto the
-  // blast until scheduleEmailBlastDraft runs a few lines below — reading it
-  // here would check an empty list on a first-time send and wave everything
-  // through.
-  const preflight = await preflightEmailBlast({
-    subject: existing.subject || '',
-    htmlContent: existing.htmlContent || '',
-    textContent: existing.textContent,
-    accountKeys: [...new Set(recipients.map((r) => r.accountKey))],
-    // The audience is only knowable here — the draft has no recipient rows
-    // until scheduleEmailBlastDraft writes them below. This is what lets
-    // preflight judge list quality, not just account configuration.
-    recipients: recipients.flatMap((r) =>
-      r.email ? [{ accountKey: r.accountKey, email: r.email }] : [],
-    ),
-  });
-  if (!preflight.ok) {
-    return NextResponse.json(
-      {
-        error: formatPreflightBlockers(preflight),
-        // The Schedule step renders these individually with a settings link.
-        issues: preflight.issues,
-      },
-      { status: 422 },
     );
   }
 
   try {
     const updated = await scheduleEmailBlastDraft(id, {
-      recipients,
-      scheduledFor,
+      recipients: prepared.recipients,
+      scheduledFor: sendTime.scheduledFor,
     });
     return NextResponse.json({ campaign: updated }, { status: 200 });
   } catch (err) {
+    if (err instanceof BlastNotDraftError) {
+      return NextResponse.json({ error: err.message }, { status: 409 });
+    }
     const message = err instanceof Error ? err.message : 'Failed to schedule campaign';
     const status = message.includes('required') || message.includes('valid') ? 400 : 500;
     return NextResponse.json({ error: message }, { status });

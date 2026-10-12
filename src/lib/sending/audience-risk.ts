@@ -26,7 +26,9 @@
 // legitimate campaign is worse than the failure mode of a warning someone
 // reads, so only (1) can block, and only well past the point of doubt.
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { loadEmailSuppressions } from '@/lib/sending/suppression-lookup';
 import { getAllowances } from '@/lib/sending/warmup';
 // Type-only: erased at build, so this does not create an import cycle with
 // blast-preflight, which imports this module's functions.
@@ -36,6 +38,7 @@ import type { PreflightIssue } from './blast-preflight';
 export const AUDIENCE_RISK_CODES = {
   BOUNCE_RATE: 'audience_bounce_rate',
   UNPROVEN_ON_WARMUP: 'audience_unproven_on_warmup',
+  UNPROVEN_NEW_SENDER: 'audience_unproven_new_sender',
   MOSTLY_SUPPRESSED: 'audience_mostly_suppressed',
 } as const;
 
@@ -58,6 +61,8 @@ export const UNPROVEN_MIN_AUDIENCE = 500;
 export const UNPROVEN_SHARE_WARN = 0.8;
 /** A list this far gone is worth saying out loud. */
 export const SUPPRESSED_SHARE_WARN = 0.25;
+/** Below this many accepted Loomi sends, an account counts as a new sender. */
+export const NEW_SENDER_MAX_PRIOR_SENDS = 1000;
 
 /**
  * Is this stored recipient error a PERMANENT delivery failure?
@@ -73,6 +78,30 @@ export const SUPPRESSED_SHARE_WARN = 0.25;
  * address. Undercounting is the safe direction for a check that can block a
  * send.
  */
+/**
+ * Is a `bounced` recipient row a verdict on the ADDRESS — a mailbox that
+ * doesn't exist — rather than the receiver refusing US?
+ *
+ * The webhook writes the row's error so this can be read off it (see
+ * recipientBounceError in sendgrid-events.ts): "bounce: …" / "bounce (hard)"
+ * for a permanent bounce, "bounce (blocked): …" (or reputation, content,
+ * volume, technical, expired) when the receiver refused the sender, and
+ * "dropped: <reason>". Only verdicts on the address belong in a measured
+ * hard-bounce rate — counting a reputation block against the list would turn
+ * a cold IP's bad morning into a refusal to send the next blast. A row with no
+ * recorded reason counts as hard: unknown is the worse case for a domain.
+ */
+export function isAddressBounce(error: string | null | undefined): boolean {
+  const text = (error || '').trim();
+  if (!text) return true;
+  if (/^bounce \(hard\)$/i.test(text)) return true;
+  if (/^dropped: (bounced|invalid)/i.test(text)) return true;
+  // Older rows wrote every bounce as "bounce: …"; screen those for the
+  // sender-side wording the newer format would have bracketed.
+  if (/^bounce: /i.test(text)) return !SOFT_BOUNCE_PATTERNS.some((re) => re.test(text));
+  return false;
+}
+
 export function isHardBounceError(error: string | null | undefined): boolean {
   if (!error) return false;
   const text = error.trim();
@@ -87,6 +116,14 @@ const SOFT_BOUNCE_PATTERNS: RegExp[] = [
   /over quota|quota exceeded/i,
   /try again|temporar|deferred|greylist|throttl|rate limit|too many/i,
   /timed? ?out/i,
+  // A full mailbox is the owner's problem today, not a dead address: 5.2.2
+  // would otherwise match the hard 5.x.x pattern below.
+  /mailbox (is )?full|\b5\.2\.2\b/i,
+  // Refusals aimed at the SENDER — reputation, policy, content, block lists —
+  // say nothing about whether the address exists.
+  // (Not a blanket 5.7.x: "5.7.1 Relaying denied" means the address's own
+  // domain refuses the mail, which IS a dead address.)
+  /\bblock(ed|list)?\b|blacklist|spamhaus|reputation|\bpolicy\b|\bspam\b/i,
 ];
 
 const HARD_BOUNCE_PATTERNS: RegExp[] = [
@@ -123,6 +160,10 @@ export interface AudienceRisk {
   /** 1-based ramp position, or null when the domain is not warming. */
   warmupDay: number | null;
   warmupTotalDays: number;
+  /** Messages this account has ever had accepted through Loomi. */
+  priorLoomiSends: number;
+  /** Whether the sending domain has a warm-up row at all (any status). */
+  hasWarmup: boolean;
 }
 
 /**
@@ -156,46 +197,64 @@ export async function assessAudienceRisk(
     unprovenShare: unique.length > 0 ? 1 : 0,
     warmupDay,
     warmupTotalDays,
+    priorLoomiSends: 0,
+    hasWarmup: Boolean(allowance && allowance.status !== 'none'),
   };
   if (unique.length === 0) return { ...empty, unprovenShare: 0 };
 
-  const suppressedRows = await prisma.emailSuppression.findMany({
-    where: { accountKey, email: { in: unique } },
-    select: { email: true },
-  });
-  const suppressedSet = new Set(suppressedRows.map((r) => r.email.toLowerCase().trim()));
-  const sendableEmails = unique.filter((e) => !suppressedSet.has(e));
+  // Opt-outs the way the sender sees them: group-wide, case-insensitive.
+  const isSuppressed = await loadEmailSuppressions(
+    unique.map((email) => ({ accountKey, email })),
+  );
+  const suppressedCount = unique.filter((e) => isSuppressed(accountKey, e)).length;
+  const sendableEmails = unique.filter((e) => !isSuppressed(accountKey, e));
 
-  // History for the addresses that would actually be attempted.
-  const history = await prisma.emailBlastRecipient.findMany({
-    where: { accountKey, email: { in: sendableEmails } },
-    select: { email: true, status: true, error: true },
-  });
+  // History for the addresses that would actually be attempted — ONE
+  // aggregate over the account's past recipients, not a read of every row.
+  // Only mail that actually LEFT counts as "mailed before" (sent or bounced):
+  // rows still pending behind a warm-up cap, skipped, or canceled used to
+  // count too, so a second blast to an untested list looked proven and its
+  // warning disappeared. Legacy `failed` rows that carry a hard-bounce reason
+  // still count, as before.
+  const history = sendableEmails.length
+    ? await prisma.$queryRaw<
+        {
+          email: string;
+          sentOrBounced: boolean;
+          bouncedErrors: (string | null)[] | null;
+          failedErrors: (string | null)[] | null;
+        }[]
+      >(Prisma.sql`SELECT lower(trim(email)) AS email,
+          bool_or(status IN ('sent', 'bounced')) AS "sentOrBounced",
+          array_agg(error) FILTER (WHERE status = 'bounced') AS "bouncedErrors",
+          array_agg(error) FILTER (WHERE status = 'failed') AS "failedErrors"
+        FROM "EmailCampaignRecipient"
+        WHERE "accountKey" = ${accountKey}
+          AND lower(trim(email)) = ANY(${sendableEmails}::text[])
+          AND status IN ('sent', 'bounced', 'failed')
+        GROUP BY 1`)
+    : [];
 
-  const seen = new Set<string>();
-  const bounced = new Set<string>();
+  let withHistory = 0;
+  let priorHardBounces = 0;
   for (const row of history) {
-    const email = (row.email || '').toLowerCase().trim();
-    if (!email) continue;
-    seen.add(email);
-    // `bounced` is now its own status, so a hard bounce is a fact the row
-    // states outright rather than something inferred from its error text.
-    // The `failed` arm stays for rows written before the split, and for the
-    // backfill's stragglers — losing them would quietly weaken the guard
-    // this whole module exists to provide.
-    const isBounce =
-      row.status === 'bounced' ||
-      (row.status === 'failed' && isHardBounceError(row.error));
-    if (isBounce) bounced.add(email);
+    const hardBounced =
+      (row.bouncedErrors ?? []).some((error) => isAddressBounce(error)) ||
+      (row.failedErrors ?? []).some((error) => isHardBounceError(error));
+    if (row.sentOrBounced || hardBounced) withHistory += 1;
+    if (hardBounced) priorHardBounces += 1;
   }
 
-  const withHistory = seen.size;
-  const priorHardBounces = bounced.size;
-  const sendable = sendableEmails.length;
+  // How much this account has ever sent through Loomi — the signal for "first
+  // blast from a new sender", which no per-address history can express.
+  const priorLoomiSends = await prisma.emailBlastRecipient.count({
+    where: { accountKey, status: { in: ['sent', 'bounced'] } },
+  });
 
+  const sendable = sendableEmails.length;
   return {
     total: unique.length,
-    suppressed: suppressedSet.size,
+    suppressed: suppressedCount,
     sendable,
     withHistory,
     neverMailed: sendable - withHistory,
@@ -205,6 +264,8 @@ export async function assessAudienceRisk(
     unprovenShare: sendable > 0 ? (sendable - withHistory) / sendable : 0,
     warmupDay,
     warmupTotalDays,
+    priorLoomiSends,
+    hasWarmup: Boolean(allowance && allowance.status !== 'none'),
   };
 }
 
@@ -293,6 +354,34 @@ export function audienceRiskIssues(
       remedy:
         'Send to a smaller, recently engaged slice first and check the bounce rate ' +
         'before releasing the rest.',
+    });
+  }
+
+  // ── 2b. A first send from a new sender, with no warm-up at all ──
+  //
+  // The case the warming check above can't see: a domain with NO warm-up row
+  // reports no cap, so a large never-mailed list goes out at full volume. That
+  // is exactly the shape of an account's first blast after moving to Loomi.
+  // A warning, never a block — an established domain is fine to send from.
+  if (
+    !warming &&
+    !risk.hasWarmup &&
+    risk.priorLoomiSends < NEW_SENDER_MAX_PRIOR_SENDS &&
+    risk.sendable >= UNPROVEN_MIN_AUDIENCE &&
+    risk.unprovenShare >= UNPROVEN_SHARE_WARN
+  ) {
+    issues.push({
+      severity: 'warning',
+      code: AUDIENCE_RISK_CODES.UNPROVEN_NEW_SENDER,
+      accountKey,
+      message:
+        `${formatNum(risk.neverMailed)} of these ${formatNum(risk.sendable)} addresses ` +
+        'have never been mailed from this account, and this account has barely sent ' +
+        'through Loomi yet. If this sending domain is new, or hasn\'t sent bulk email ' +
+        'recently, a full-volume first send risks its reputation.',
+      remedy:
+        'Start a warm-up for the sending domain, or send to a smaller, recently engaged ' +
+        'slice first and check the bounce rate.',
     });
   }
 

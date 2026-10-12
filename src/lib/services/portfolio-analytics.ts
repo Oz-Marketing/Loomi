@@ -4,8 +4,24 @@
 // + an optional date range, and returns a slice of data sized for one
 // widget. All queries hit Postgres — no ESP round-trips. Designed to
 // run in parallel from a single /api/dashboard/portfolio handler.
+//
+// Email figures come from lib/services/email-analytics.ts — the same
+// recipients, the same rules (a bounce is a send; opens are unique and never
+// machine opens; rates clamp at 100%) and the same date semantics as the
+// Blasts list and the Reporting page. This file used to count raw events on
+// its own: the open rate divided EVERY open event, repeats included, by
+// deliveries, so a list with habitual re-openers read well over 100%.
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { chunk, DB_CHUNK } from '@/lib/db/chunk';
+import {
+  aggregateEmailCohort,
+  computeRatios,
+  getEmailActivityByDay,
+  rate,
+  sumEngagementCounts,
+} from '@/lib/services/email-analytics';
 
 // Schema note: EmailBlast.accountKeys + SmsBlast.accountKeys are
 // stored as a JSON string (not a relational column). SQL-side scoping
@@ -46,6 +62,89 @@ function parseAccountKeyJson(raw: string): string[] {
 function accountsOverlap(rowKeys: string[], scope: string[] | null): boolean {
   if (!scope || scope.length === 0) return true;
   return rowKeys.some((k) => scope.includes(k));
+}
+
+/** Recipient statuses that mean "SendGrid accepted it" — a bounce included. */
+const DISPATCHED_STATUSES = ['sent', 'bounced'];
+
+// ── Suppression counting ────────────────────────────────────────
+//
+// One opt-out is MANY rows. A bounce, complaint, unsubscribe or STOP — and a
+// manual opt-out — is written at the account where it happened AND copied to
+// every account grouped with it (sendgrid-events.ts, twilio-events.ts, the
+// contact suppression route), so the whole group stops mailing that person.
+// The copies are real suppressions for the accounts that hold them, but they
+// are not growth there: counted as rows, one unsubscribe at one account read
+// as a spike at every account in the group, and the portfolio total
+// multiplied it by the size of the group.
+//
+// So "added" counts each opt-out ONCE, at the account where it started. The
+// rows carry no origin, but the copies are written in the same burst as the
+// original, so a row is a copy when another account's row for the same
+// address was written at or just before it — within a minute, ties going to
+// the lower id, which is the earlier write. An address suppressed at two
+// accounts independently, minutes apart, still counts at both. Totals
+// ("N suppressed") count distinct addresses, for the same reason.
+
+const SUPPRESSION_TABLES = {
+  // Fixed identifiers, never caller input.
+  email: { table: Prisma.raw('"EmailSuppression"'), address: Prisma.raw('"email"') },
+  sms: { table: Prisma.raw('"SmsSuppression"'), address: Prisma.raw('"phone"') },
+} as const;
+
+type SuppressionChannel = keyof typeof SUPPRESSION_TABLES;
+
+/** Suppressions that started in scope and range, grouped by account or reason. */
+export async function countOriginSuppressions(
+  channel: SuppressionChannel,
+  scope: PortfolioScope,
+  by: 'account' | 'reason',
+): Promise<Map<string, number>> {
+  if (scope.accountKeys && scope.accountKeys.length === 0) return new Map();
+  const { table, address } = SUPPRESSION_TABLES[channel];
+  const groupCol = by === 'account' ? Prisma.raw('s."accountKey"') : Prisma.raw('s."reason"');
+  const where: Prisma.Sql[] = [
+    Prisma.sql`NOT EXISTS (
+      SELECT 1
+        FROM ${table} o
+       WHERE o.${address} = s.${address}
+         AND o."accountKey" <> s."accountKey"
+         AND o."createdAt" >= s."createdAt" - INTERVAL '1 minute'
+         AND (o."createdAt" < s."createdAt" OR (o."createdAt" = s."createdAt" AND o.id < s.id))
+    )`,
+  ];
+  if (scope.accountKeys) where.push(Prisma.sql`s."accountKey" = ANY(${scope.accountKeys}::text[])`);
+  if (scope.start) where.push(Prisma.sql`s."createdAt" >= ${scope.start}`);
+  if (scope.end) where.push(Prisma.sql`s."createdAt" <= ${scope.end}`);
+  const rows = await prisma.$queryRaw<Array<{ key: string; added: number | bigint }>>`
+    SELECT ${groupCol} AS "key", COUNT(*)::int AS "added"
+      FROM ${table} s
+     WHERE ${Prisma.join(where, ' AND ')}
+     GROUP BY 1
+  `;
+  return new Map(rows.map((r) => [r.key, Number(r.added) || 0]));
+}
+
+/** Distinct suppressed addresses in scope — a group-wide opt-out is one. */
+async function countSuppressedAddresses(
+  channel: SuppressionChannel,
+  accountKeys: string[] | null,
+): Promise<number> {
+  if (accountKeys && accountKeys.length === 0) return 0;
+  const { table, address } = SUPPRESSION_TABLES[channel];
+  const where = accountKeys
+    ? Prisma.sql`WHERE "accountKey" = ANY(${accountKeys}::text[])`
+    : Prisma.empty;
+  const [row] = await prisma.$queryRaw<Array<{ n: number | bigint }>>`
+    SELECT COUNT(DISTINCT ${address})::int AS "n" FROM ${table} ${where}
+  `;
+  return Number(row?.n) || 0;
+}
+
+function sumValues(map: Map<string, number>): number {
+  let total = 0;
+  for (const v of map.values()) total += v;
+  return total;
 }
 
 // ── Portfolio KPIs ──────────────────────────────────────────────
@@ -101,15 +200,20 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
     },
   });
 
-  // Email send pipeline: count from recipient rows (the canonical
-  // post-202 send log). Mirrors email-analytics service behaviour.
-  const emailsSent = await prisma.emailBlastRecipient.count({
-    where: {
-      accountKey: { in: accountKeys },
-      status: 'sent',
-      ...(range ? { sentAt: range } : {}),
-    },
-  });
+  // Email: every count from the shared recipient aggregate — see the file
+  // header. Sent includes bounces; opens and clicks are unique recipients.
+  const email = computeRatios(
+    sumEngagementCounts(
+      await aggregateEmailCohort({ accountKeys, start, end, source: 'all' }, 'account'),
+    ),
+  );
+  const emailsSent = email.sent;
+  const emailDelivered = email.delivered;
+  const emailOpens = email.uniqueOpens;
+  const emailClicks = email.uniqueClicks;
+  const emailBounces = email.bounces;
+  const emailSpamReports = email.spamReports;
+  const emailUnsubscribes = email.unsubscribes;
 
   // SMS: same shape, status = 'sent' or 'delivered' counts as sent.
   const smsSent = await prisma.smsBlastRecipient.count({
@@ -119,24 +223,6 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
       ...(range ? { sentAt: range } : {}),
     },
   });
-
-  // Email event aggregates.
-  const emailEventGroups = await prisma.emailEvent.groupBy({
-    by: ['eventType'],
-    where: {
-      accountKey: { in: accountKeys },
-      ...(range ? { timestamp: range } : {}),
-    },
-    _count: { _all: true },
-  });
-  const emailEventCount = new Map(emailEventGroups.map((g) => [g.eventType, g._count._all]));
-  const emailDelivered = emailEventCount.get('delivered') || 0;
-  const emailOpens = emailEventCount.get('open') || 0;
-  const emailClicks = emailEventCount.get('click') || 0;
-  const emailBounces = emailEventCount.get('bounce') || 0;
-  const emailSpamReports = emailEventCount.get('spamreport') || 0;
-  const emailUnsubscribes =
-    (emailEventCount.get('unsubscribe') || 0) + (emailEventCount.get('group_unsubscribe') || 0);
 
   // SMS event aggregates.
   const smsEventGroups = await prisma.smsEvent.groupBy({
@@ -152,19 +238,13 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
   const smsFailed = (smsEventCount.get('failed') || 0) + (smsEventCount.get('undelivered') || 0);
   const smsStops = (smsEventCount.get('stop') || 0) + (smsEventCount.get('unsub') || 0);
 
-  // Suppressions added in range (email + sms).
-  const emailSuppressionsAdded = await prisma.emailSuppression.count({
-    where: {
-      accountKey: { in: accountKeys },
-      ...(range ? { createdAt: range } : {}),
-    },
-  });
-  const smsSuppressionsAdded = await prisma.smsSuppression.count({
-    where: {
-      accountKey: { in: accountKeys },
-      ...(range ? { createdAt: range } : {}),
-    },
-  });
+  // Suppressions added in range (email + sms), each opt-out once — not once
+  // per account its group-wide copies landed on. See "Suppression counting".
+  const suppressionScope = { accountKeys, start, end };
+  const [emailSuppressionsAdded, smsSuppressionsAdded] = await Promise.all([
+    countOriginSuppressions('email', suppressionScope, 'account').then(sumValues),
+    countOriginSuppressions('sms', suppressionScope, 'account').then(sumValues),
+  ]);
 
   // Active accounts = accounts that had at least one recipient row
   // (sent or otherwise) in the period.
@@ -188,8 +268,6 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
   for (const r of activeSmsAccounts) activeAccountSet.add(r.accountKey);
   const accountsActive = activeAccountSet.size;
 
-  const safe = (num: number, den: number) => (den > 0 ? num / den : 0);
-
   return {
     accountsTotal,
     accountsActive,
@@ -206,12 +284,12 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
     smsDelivered,
     smsFailed,
     smsStops,
-    emailDeliveryRate: safe(emailDelivered, emailsSent),
-    emailOpenRate: safe(emailOpens, emailDelivered),
-    emailClickRate: safe(emailClicks, emailDelivered),
-    emailBounceRate: safe(emailBounces, emailsSent),
-    emailSpamRate: safe(emailSpamReports, emailDelivered),
-    smsDeliveryRate: safe(smsDelivered, smsSent),
+    emailDeliveryRate: email.deliveryRate,
+    emailOpenRate: email.openRate,
+    emailClickRate: email.clickRate,
+    emailBounceRate: email.bounceRate,
+    emailSpamRate: rate(emailSpamReports, emailDelivered),
+    smsDeliveryRate: rate(smsDelivered, smsSent),
     suppressionsAdded: emailSuppressionsAdded + smsSuppressionsAdded,
   };
 }
@@ -229,29 +307,16 @@ export interface EngagementTimelinePoint {
 
 export async function getEngagementTimeline(scope: PortfolioScope): Promise<EngagementTimelinePoint[]> {
   const { start, end, accountKeys } = scope;
-  const range = dateFilter(start, end);
 
-  const accountKeyWhere = accountKeys && accountKeys.length > 0 ? { accountKey: { in: accountKeys } } : {};
-
-  const emailRows = await prisma.emailEvent.findMany({
-    where: {
-      ...accountKeyWhere,
-      eventType: { in: ['delivered', 'open', 'click', 'bounce'] },
-      ...(range ? { timestamp: range } : {}),
-    },
-    select: { eventType: true, timestamp: true },
-    take: 100_000,
-  });
-
-  const smsRows = await prisma.smsEvent.findMany({
-    where: {
-      ...accountKeyWhere,
-      eventType: 'delivered',
-      ...(range ? { timestamp: range } : {}),
-    },
-    select: { timestamp: true },
-    take: 100_000,
-  });
+  // Both channels are bucketed by day in SQL. This used to pull up to 100,000
+  // raw events per channel into memory, in no particular order, and count them
+  // in JS — so a busy portfolio's chart was silently truncated, and the read
+  // itself was a memory risk on a 2GB server. Email days follow the shared
+  // rules (distinct recipients; only real opens); see email-analytics.ts.
+  const [emailDays, smsDays] = await Promise.all([
+    getEmailActivityByDay({ accountKeys, start, end, source: 'all' }),
+    smsDeliveredByDay(scope),
+  ]);
 
   const buckets = new Map<string, EngagementTimelinePoint>();
   function bucket(day: string): EngagementTimelinePoint {
@@ -263,17 +328,15 @@ export async function getEngagementTimeline(scope: PortfolioScope): Promise<Enga
     return b;
   }
 
-  for (const row of emailRows) {
-    const day = row.timestamp.toISOString().slice(0, 10);
-    const b = bucket(day);
-    if (row.eventType === 'delivered') b.emailDelivered += 1;
-    else if (row.eventType === 'open') b.emailOpens += 1;
-    else if (row.eventType === 'click') b.emailClicks += 1;
-    else if (row.eventType === 'bounce') b.emailBounces += 1;
+  for (const day of emailDays) {
+    const b = bucket(day.date);
+    b.emailDelivered = day.delivered;
+    b.emailOpens = day.opens;
+    b.emailClicks = day.clicks;
+    b.emailBounces = day.bounces;
   }
-  for (const row of smsRows) {
-    const day = row.timestamp.toISOString().slice(0, 10);
-    bucket(day).smsDelivered += 1;
+  for (const [day, delivered] of smsDays) {
+    bucket(day).smsDelivered = delivered;
   }
 
   // Fill gaps so the line chart has a continuous x-axis.
@@ -300,6 +363,22 @@ export async function getEngagementTimeline(scope: PortfolioScope): Promise<Enga
   return series;
 }
 
+/** SMS delivered events per UTC day, counted in SQL. */
+async function smsDeliveredByDay(scope: PortfolioScope): Promise<Map<string, number>> {
+  if (scope.accountKeys && scope.accountKeys.length === 0) return new Map();
+  const where: Prisma.Sql[] = [Prisma.sql`"eventType" = 'delivered'`];
+  if (scope.accountKeys) where.push(Prisma.sql`"accountKey" = ANY(${scope.accountKeys}::text[])`);
+  if (scope.start) where.push(Prisma.sql`"timestamp" >= ${scope.start}`);
+  if (scope.end) where.push(Prisma.sql`"timestamp" <= ${scope.end}`);
+  const rows = await prisma.$queryRaw<Array<{ date: string; delivered: number | bigint }>>`
+    SELECT to_char("timestamp", 'YYYY-MM-DD') AS "date", COUNT(*)::int AS "delivered"
+      FROM "SmsEvent"
+     WHERE ${Prisma.join(where, ' AND ')}
+     GROUP BY 1
+  `;
+  return new Map(rows.map((r) => [String(r.date), Number(r.delivered) || 0]));
+}
+
 function earliestDate(map: Map<string, unknown>): Date | null {
   let earliest: string | null = null;
   for (const key of map.keys()) {
@@ -321,76 +400,46 @@ export async function getEngagedContacts(
   windowDays: number,
 ): Promise<EngagedContactsResult> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
-
-  // Email engagement: distinct recipientId where eventType in {open, click}
-  // since `since`, joined back to the recipient row to get contactId +
-  // accountKey. recipientId IS NULL events (e.g. transactional traffic)
-  // are excluded.
+  if (scope.accountKeys && scope.accountKeys.length === 0) {
+    return { windowDays, engagedTotal: 0, engagedByAccount: [] };
+  }
   const accountKeyWhere = scope.accountKeys && scope.accountKeys.length > 0 ? { accountKey: { in: scope.accountKeys } } : {};
 
-  const engagedRecipients = await prisma.emailEvent.findMany({
-    where: {
-      ...accountKeyWhere,
-      eventType: { in: ['open', 'click'] },
-      recipientId: { not: null },
-      timestamp: { gte: since },
-    },
-    distinct: ['recipientId'],
-    select: { recipientId: true },
-  });
-  const recipientIds = engagedRecipients
-    .map((r) => r.recipientId)
-    .filter((id): id is string => Boolean(id));
-
-  let engagedRows: Array<{ contactId: string; accountKey: string }> = [];
-  if (recipientIds.length > 0) {
-    engagedRows = await prisma.emailBlastRecipient.findMany({
-      where: { id: { in: recipientIds } },
-      select: { contactId: true, accountKey: true },
-    });
-  }
-
-  // SMS engagement: contacts who replied (eventType = received) in window.
-  const smsEngagedRecipients = await prisma.smsEvent.findMany({
-    where: {
-      ...accountKeyWhere,
-      eventType: { in: ['received'] },
-      recipientId: { not: null },
-      timestamp: { gte: since },
-    },
-    distinct: ['recipientId'],
-    select: { recipientId: true },
-  });
-  const smsRecipientIds = smsEngagedRecipients
-    .map((r) => r.recipientId)
-    .filter((id): id is string => Boolean(id));
-
-  let smsEngagedRows: Array<{ contactId: string; accountKey: string }> = [];
-  if (smsRecipientIds.length > 0) {
-    smsEngagedRows = await prisma.smsBlastRecipient.findMany({
-      where: { id: { in: smsRecipientIds } },
-      select: { contactId: true, accountKey: true },
-    });
-  }
-
-  // Dedupe contactId across both channels.
-  const perAccount = new Map<string, Set<string>>();
-  for (const r of engagedRows) {
-    let s = perAccount.get(r.accountKey);
-    if (!s) {
-      s = new Set();
-      perAccount.set(r.accountKey, s);
-    }
-    s.add(r.contactId);
-  }
-  for (const r of smsEngagedRows) {
-    let s = perAccount.get(r.accountKey);
-    if (!s) {
-      s = new Set();
-      perAccount.set(r.accountKey, s);
-    }
-    s.add(r.contactId);
-  }
+  // Distinct contacts per account who opened or clicked an email, or replied
+  // to a text (eventType = received), since `since` — deduped across both
+  // channels, and counted in SQL. This used to load every engaged recipient
+  // id into memory and look them all up in one IN list, which breaks
+  // outright past Postgres's 65,535 bind parameters: a single large blast
+  // with a healthy open rate gets there now that blasts are uncapped.
+  // Events with no recipient (e.g. transactional traffic) can't join and are
+  // excluded, as before. Only eventType 'open' is an open — never a
+  // 'machine_open'.
+  const scoped = (alias: 'r' | 'e') =>
+    scope.accountKeys
+      ? Prisma.sql`AND ${Prisma.raw(alias)}."accountKey" = ANY(${scope.accountKeys}::text[])`
+      : Prisma.empty;
+  const engagedRows = await prisma.$queryRaw<Array<{ accountKey: string; engaged: number | bigint }>>`
+    SELECT u."accountKey" AS "accountKey", COUNT(DISTINCT u."contactId")::int AS "engaged"
+      FROM (
+        SELECT r."accountKey", r."contactId"
+          FROM "EmailEvent" e
+          JOIN "EmailCampaignRecipient" r ON r.id = e."recipientId"
+         WHERE e."eventType" IN ('open', 'click')
+           AND e."timestamp" >= ${since}
+           ${scoped('e')}
+           ${scoped('r')}
+        UNION
+        SELECT r."accountKey", r."contactId"
+          FROM "SmsEvent" e
+          JOIN "SmsCampaignRecipient" r ON r.id = e."recipientId"
+         WHERE e."eventType" = 'received'
+           AND e."timestamp" >= ${since}
+           ${scoped('e')}
+           ${scoped('r')}
+      ) u
+     GROUP BY u."accountKey"
+  `;
+  const engagedByKey = new Map(engagedRows.map((r) => [r.accountKey, Number(r.engaged) || 0]));
 
   const totalContacts = await prisma.contact.groupBy({
     by: ['accountKey'],
@@ -408,8 +457,7 @@ export async function getEngagedContacts(
   let engagedTotal = 0;
   const engagedByAccount: EngagedContactsResult['engagedByAccount'] = [];
   for (const a of accountMeta) {
-    const engagedSet = perAccount.get(a.key);
-    const engagedCount = engagedSet ? engagedSet.size : 0;
+    const engagedCount = engagedByKey.get(a.key) || 0;
     const totalCount = totalByAccount.get(a.key) || 0;
     engagedTotal += engagedCount;
     engagedByAccount.push({
@@ -653,7 +701,6 @@ export interface AccountHealthRow {
 
 export async function getAccountHealth(scope: PortfolioScope): Promise<AccountHealthRow[]> {
   const { start, end, accountKeys } = scope;
-  const range = dateFilter(start, end);
 
   const accounts = await prisma.account.findMany({
     where: { key: { not: { startsWith: '\\_' } }, ...(accountKeys ? { key: { in: accountKeys } } : {}) },
@@ -662,74 +709,47 @@ export async function getAccountHealth(scope: PortfolioScope): Promise<AccountHe
   const allowedKeys = accounts.map((a) => a.key);
   if (allowedKeys.length === 0) return [];
 
-  const [contactCounts, recipientSentGroups, eventGroups, suppressionGroups, lastSentRows] =
+  const [contactCounts, emailGroups, suppressionByKey, lastSentRows] =
     await Promise.all([
       prisma.contact.groupBy({
         by: ['accountKey'],
         where: { accountKey: { in: allowedKeys } },
         _count: { _all: true },
       }),
+      // Sent/delivered/opens/clicks/bounces per account, by the shared rules.
+      // `opensInPeriod` is UNIQUE opens: dividing every open event by
+      // deliveries is what let this read over 100%.
+      aggregateEmailCohort({ accountKeys: allowedKeys, start, end, source: 'all' }, 'account'),
+      // Opt-outs that STARTED at each account — a group-wide copy is not this
+      // account's growth. See "Suppression counting".
+      countOriginSuppressions('email', { accountKeys: allowedKeys, start, end }, 'account'),
       prisma.emailBlastRecipient.groupBy({
         by: ['accountKey'],
-        where: {
-          accountKey: { in: allowedKeys },
-          status: 'sent',
-          ...(range ? { sentAt: range } : {}),
-        },
-        _count: { _all: true },
-      }),
-      prisma.emailEvent.groupBy({
-        by: ['accountKey', 'eventType'],
-        where: {
-          accountKey: { in: allowedKeys },
-          ...(range ? { timestamp: range } : {}),
-        },
-        _count: { _all: true },
-      }),
-      prisma.emailSuppression.groupBy({
-        by: ['accountKey'],
-        where: {
-          accountKey: { in: allowedKeys },
-          ...(range ? { createdAt: range } : {}),
-        },
-        _count: { _all: true },
-      }),
-      prisma.emailBlastRecipient.groupBy({
-        by: ['accountKey'],
-        where: { accountKey: { in: allowedKeys }, status: 'sent' },
+        where: { accountKey: { in: allowedKeys }, status: { in: DISPATCHED_STATUSES } },
         _max: { sentAt: true },
       }),
     ]);
 
   const contactsByKey = new Map(contactCounts.map((r) => [r.accountKey, r._count._all]));
-  const sentByKey = new Map(recipientSentGroups.map((r) => [r.accountKey, r._count._all]));
-  const suppressionByKey = new Map(suppressionGroups.map((r) => [r.accountKey, r._count._all]));
+  const emailByKey = new Map(emailGroups.map((g) => [g.key, g]));
   const lastSentByKey = new Map(
     lastSentRows.map((r) => [r.accountKey, r._max.sentAt?.getTime() ?? null]),
   );
 
-  const eventsByKey = new Map<string, Record<string, number>>();
-  for (const g of eventGroups) {
-    if (!g.accountKey) continue;
-    const entry = eventsByKey.get(g.accountKey) || {};
-    entry[g.eventType] = g._count._all;
-    eventsByKey.set(g.accountKey, entry);
-  }
-
   const now = Date.now();
 
   const rows: AccountHealthRow[] = accounts.map((a) => {
-    const sent = sentByKey.get(a.key) || 0;
-    const evt = eventsByKey.get(a.key) || {};
-    const delivered = evt['delivered'] || 0;
-    const opens = evt['open'] || 0;
-    const clicks = evt['click'] || 0;
-    const bounces = evt['bounce'] || 0;
+    const email = emailByKey.get(a.key);
+    const sent = email?.sent ?? 0;
+    const delivered = email?.delivered ?? 0;
+    const opens = email?.uniqueOpens ?? 0;
+    const clicks = email?.uniqueClicks ?? 0;
+    const bounces = email?.bounces ?? 0;
     const lastSentMs = lastSentByKey.get(a.key) ?? null;
     const daysSinceLastSend = lastSentMs ? Math.floor((now - lastSentMs) / (24 * 60 * 60 * 1000)) : null;
-    const openRate = delivered > 0 ? opens / delivered : 0;
-    const clickRate = delivered > 0 ? clicks / delivered : 0;
-    const bounceRate = sent > 0 ? bounces / sent : 0;
+    const openRate = rate(opens, delivered);
+    const clickRate = rate(clicks, delivered);
+    const bounceRate = rate(bounces, sent);
     const healthScore = computeHealthScore({
       sent,
       openRate,
@@ -834,42 +854,34 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
 
   const alerts: AnomalyAlert[] = [];
 
-  // 1. Bounce rate spikes (last 7d > 5% on >= 50 sends).
-  const [sentLast7d, bouncesLast7d] = await Promise.all([
-    prisma.emailBlastRecipient.groupBy({
-      by: ['accountKey'],
-      where: { ...accountKeyWhere, status: 'sent', sentAt: { gte: sevenDaysAgo } },
-      _count: { _all: true },
-    }),
-    prisma.emailEvent.groupBy({
-      by: ['accountKey'],
-      where: { ...accountKeyWhere, eventType: 'bounce', timestamp: { gte: sevenDaysAgo } },
-      _count: { _all: true },
-    }),
-  ]);
-  const sentByAccount = new Map(sentLast7d.map((r) => [r.accountKey, r._count._all]));
-  const bouncesByAccount = new Map(bouncesLast7d.map((r) => [r.accountKey ?? '', r._count._all]));
-  for (const [key, sent] of sentByAccount) {
+  // 1. Bounce rate spikes (last 7d > 5% on >= 50 sends). Bounced recipients
+  //    over dispatched recipients from the same 7 days — the same rule as
+  //    every other bounce rate. It used to divide bounce EVENTS (drops
+  //    missed) by 'sent' rows (bounces missing), which overstated the rate.
+  const last7d = await aggregateEmailCohort(
+    { accountKeys: scope.accountKeys, start: sevenDaysAgo, end: null, source: 'all' },
+    'account',
+  );
+  for (const { key, sent, bounces } of last7d) {
     if (sent < 50) continue;
-    const bounces = bouncesByAccount.get(key) || 0;
-    const rate = bounces / sent;
-    if (rate >= 0.05) {
+    const bounceRate = rate(bounces, sent);
+    if (bounceRate >= 0.05) {
       alerts.push({
         id: `bounce-spike-${key}`,
         severity: 'critical',
         title: 'Bounce rate spike',
-        detail: `${(rate * 100).toFixed(1)}% bounces on ${sent.toLocaleString()} sends (7d).`,
+        detail: `${(bounceRate * 100).toFixed(1)}% bounces on ${sent.toLocaleString()} sends (7d).`,
         accountKey: key,
         dealer: dealerByAccount.get(key) || key,
         href: accountHref(key),
         timestamp: new Date().toISOString(),
       });
-    } else if (rate >= 0.02) {
+    } else if (bounceRate >= 0.02) {
       alerts.push({
         id: `bounce-elevated-${key}`,
         severity: 'warning',
         title: 'Elevated bounce rate',
-        detail: `${(rate * 100).toFixed(1)}% bounces on ${sent.toLocaleString()} sends (7d).`,
+        detail: `${(bounceRate * 100).toFixed(1)}% bounces on ${sent.toLocaleString()} sends (7d).`,
         accountKey: key,
         dealer: dealerByAccount.get(key) || key,
         href: accountHref(key),
@@ -901,7 +913,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
   // 3. Dormant accounts (have contacts but no send in 30d).
   const lastSendByAccount = await prisma.emailBlastRecipient.groupBy({
     by: ['accountKey'],
-    where: { ...accountKeyWhere, status: 'sent' },
+    where: { ...accountKeyWhere, status: { in: DISPATCHED_STATUSES } },
     _max: { sentAt: true },
   });
   const lastSendMap = new Map(lastSendByAccount.map((r) => [r.accountKey, r._max.sentAt?.getTime() ?? null]));
@@ -963,25 +975,27 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
     });
   }
 
-  // 5. Suppression growth (>5% of contact base in 7d or >= 100 raw).
-  const suppressionsLast7d = await prisma.emailSuppression.groupBy({
-    by: ['accountKey'],
-    where: { ...accountKeyWhere, createdAt: { gte: sevenDaysAgo } },
-    _count: { _all: true },
-  });
+  // 5. Suppression growth (>5% of contact base in 7d or >= 100 raw). Counted
+  //    where each opt-out started, so one group-wide unsubscribe doesn't
+  //    raise this alert at every account in the group.
+  const suppressionsLast7d = await countOriginSuppressions(
+    'email',
+    { accountKeys: scope.accountKeys, start: sevenDaysAgo, end: null },
+    'account',
+  );
   const contactsByKey = new Map(contactCounts.map((r) => [r.accountKey, r._count._all]));
-  for (const r of suppressionsLast7d) {
-    const total = contactsByKey.get(r.accountKey) || 0;
+  for (const [accountKey, added] of suppressionsLast7d) {
+    const total = contactsByKey.get(accountKey) || 0;
     if (total === 0) continue;
-    const pct = r._count._all / total;
-    if (pct >= 0.05 || r._count._all >= 100) {
+    const pct = added / total;
+    if (pct >= 0.05 || added >= 100) {
       alerts.push({
-        id: `suppression-growth-${r.accountKey}`,
+        id: `suppression-growth-${accountKey}`,
         severity: pct >= 0.1 ? 'critical' : 'warning',
         title: 'Suppression list growing fast',
-        detail: `${r._count._all.toLocaleString()} new suppressions in 7d (${(pct * 100).toFixed(1)}% of list).`,
-        accountKey: r.accountKey,
-        dealer: dealerByAccount.get(r.accountKey) || r.accountKey,
+        detail: `${added.toLocaleString()} new suppressions in 7d (${(pct * 100).toFixed(1)}% of list).`,
+        accountKey,
+        dealer: dealerByAccount.get(accountKey) || accountKey,
         href: '/settings/email-texts?section=suppressions',
         timestamp: new Date().toISOString(),
       });
@@ -1011,101 +1025,57 @@ export interface TopCampaignRow {
 
 export async function getTopCampaigns(scope: PortfolioScope, limit = 5): Promise<TopCampaignRow[]> {
   const { start, end, accountKeys } = scope;
-  const range = dateFilter(start, end);
 
-  const where = range
-    ? {
-        OR: [
-          { startedAt: range },
-          { completedAt: range },
-          { scheduledFor: range },
-        ],
-      }
-    : {};
+  // The same per-campaign numbers as the Blasts list and the Reporting page:
+  // recipients in scope, sent in the window, one-off blasts only (a flow step
+  // is not a campaign to rank). This used to pick blasts by date, count only
+  // 'sent' rows as sent, count raw delivered events, and load every distinct
+  // opener and clicker of up to 250 blasts into memory to count them.
+  const groups = (
+    await aggregateEmailCohort({ accountKeys, start, end, source: 'blasts' }, 'campaign')
+  ).filter((g) => g.sent >= 25); // only rank campaigns with meaningful denominator
+  if (groups.length === 0) return [];
 
-  const campaigns = await prisma.emailBlast.findMany({
-    where,
-    select: {
-      id: true,
-      name: true,
-      subject: true,
-      accountKeys: true,
-      scheduledFor: true,
-      startedAt: true,
-      completedAt: true,
-    },
-    orderBy: { createdAt: 'desc' },
-    take: 250,
-  });
+  const campaigns = (
+    await Promise.all(
+      chunk(groups.map((g) => g.key), DB_CHUNK).map((ids) =>
+        prisma.emailBlast.findMany({
+          where: { id: { in: ids } },
+          select: {
+            id: true,
+            name: true,
+            subject: true,
+            accountKeys: true,
+            scheduledFor: true,
+            startedAt: true,
+            completedAt: true,
+          },
+        }),
+      ),
+    )
+  ).flat();
+  const campaignById = new Map(campaigns.map((c) => [c.id, c]));
 
-  const filtered = campaigns.filter((c) => accountsOverlap(parseAccountKeyJson(c.accountKeys), accountKeys));
-  if (filtered.length === 0) return [];
-
-  const campaignIds = filtered.map((c) => c.id);
-
-  const [recipientGroups, eventGroups, uniqueOpenRows, uniqueClickRows] = await Promise.all([
-    prisma.emailBlastRecipient.groupBy({
-      by: ['campaignId', 'status'],
-      where: { campaignId: { in: campaignIds } },
-      _count: { _all: true },
-    }),
-    prisma.emailEvent.groupBy({
-      by: ['campaignId', 'eventType'],
-      where: { campaignId: { in: campaignIds } },
-      _count: { _all: true },
-    }),
-    prisma.emailEvent.findMany({
-      where: { campaignId: { in: campaignIds }, eventType: 'open', recipientId: { not: null } },
-      distinct: ['campaignId', 'recipientId'],
-      select: { campaignId: true, recipientId: true },
-    }),
-    prisma.emailEvent.findMany({
-      where: { campaignId: { in: campaignIds }, eventType: 'click', recipientId: { not: null } },
-      distinct: ['campaignId', 'recipientId'],
-      select: { campaignId: true, recipientId: true },
-    }),
-  ]);
-
-  const sentByCampaign = new Map<string, number>();
-  for (const g of recipientGroups) {
-    if (g.status === 'sent') sentByCampaign.set(g.campaignId, g._count._all);
-  }
-  const deliveredByCampaign = new Map<string, number>();
-  for (const g of eventGroups) {
-    if (g.campaignId && g.eventType === 'delivered') deliveredByCampaign.set(g.campaignId, g._count._all);
-  }
-  const uniqueOpensByCampaign = new Map<string, number>();
-  for (const r of uniqueOpenRows) {
-    if (!r.campaignId) continue;
-    uniqueOpensByCampaign.set(r.campaignId, (uniqueOpensByCampaign.get(r.campaignId) || 0) + 1);
-  }
-  const uniqueClicksByCampaign = new Map<string, number>();
-  for (const r of uniqueClickRows) {
-    if (!r.campaignId) continue;
-    uniqueClicksByCampaign.set(r.campaignId, (uniqueClicksByCampaign.get(r.campaignId) || 0) + 1);
-  }
-
-  const rows: TopCampaignRow[] = filtered
-    .map((c) => {
-      const sent = sentByCampaign.get(c.id) || 0;
-      const delivered = deliveredByCampaign.get(c.id) || 0;
-      const uniqueOpens = uniqueOpensByCampaign.get(c.id) || 0;
-      const uniqueClicks = uniqueClicksByCampaign.get(c.id) || 0;
-      return {
+  const rows: TopCampaignRow[] = groups.flatMap((g) => {
+    const c = campaignById.get(g.key);
+    if (!c) return [];
+    const sentAt = c.completedAt || c.startedAt || c.scheduledFor || g.lastSentAt;
+    return [
+      {
         campaignId: c.id,
         campaignName: c.name || c.subject || 'Untitled campaign',
         channel: 'email' as const,
         accountKeys: parseAccountKeyJson(c.accountKeys),
-        sent,
-        delivered,
-        uniqueOpens,
-        uniqueClicks,
-        openRate: delivered > 0 ? uniqueOpens / delivered : 0,
-        clickRate: delivered > 0 ? uniqueClicks / delivered : 0,
-        sentAt: c.completedAt?.toISOString() || c.startedAt?.toISOString() || c.scheduledFor?.toISOString() || null,
-      };
-    })
-    .filter((c) => c.sent >= 25); // only rank campaigns with meaningful denominator
+        sent: g.sent,
+        delivered: g.delivered,
+        uniqueOpens: g.uniqueOpens,
+        uniqueClicks: g.uniqueClicks,
+        openRate: rate(g.uniqueOpens, g.delivered),
+        clickRate: rate(g.uniqueClicks, g.delivered),
+        sentAt: sentAt ? sentAt.toISOString() : null,
+      },
+    ];
+  });
 
   rows.sort((a, b) => b.clickRate - a.clickRate || b.openRate - a.openRate);
   return rows.slice(0, limit);
@@ -1162,11 +1132,14 @@ export async function getRecentActivity(scope: { accountKeys: string[] | null },
     const primaryKey = keys[0] || '';
     const dealer = primaryKey ? dealerByAccount.get(primaryKey) || primaryKey : 'Portfolio';
     if (c.status === 'completed' && c.completedAt) {
+      // `sentCount` is the rows still 'sent' — the webhook moves a bounce out
+      // of it — so a bounce is added back to say how many went out. It never
+      // was a delivered count.
       entries.push({
         id: `email-completed-${c.id}`,
         kind: 'campaign-launched',
         title: 'Email campaign sent',
-        detail: `${c.name || c.subject} — ${c.sentCount.toLocaleString()} delivered`,
+        detail: `${c.name || c.subject} — ${(c.sentCount + c.bouncedCount).toLocaleString()} sent`,
         accountKey: primaryKey,
         dealer,
         timestamp: c.completedAt.toISOString(),
@@ -1299,8 +1272,10 @@ export async function getRepPerformance(scope: PortfolioScope): Promise<RepPerfo
       deliveredInPeriod: delivered,
       opensInPeriod: opens,
       clicksInPeriod: clicks,
-      openRate: delivered > 0 ? opens / delivered : 0,
-      clickRate: delivered > 0 ? clicks / delivered : 0,
+      // Summing per-account unique opens is exact — a recipient belongs to one
+      // account — so this stays a unique-open rate.
+      openRate: rate(opens, delivered),
+      clickRate: rate(clicks, delivered),
       averageHealthScore: avgHealth,
     });
   }
@@ -1321,40 +1296,32 @@ export interface SuppressionHealthResult {
 
 export async function getSuppressionHealth(scope: PortfolioScope): Promise<SuppressionHealthResult> {
   const { start, end, accountKeys } = scope;
-  const range = dateFilter(start, end);
-  const accountKeyWhere = accountKeys && accountKeys.length > 0 ? { accountKey: { in: accountKeys } } : {};
+  // Preserved: an empty list here has always meant "no account filter".
+  const keys = accountKeys && accountKeys.length > 0 ? accountKeys : null;
+  const inScope = { accountKeys: keys, start, end };
 
-  const [emailTotal, smsTotal, emailAdded, smsAdded, emailReasonsRaw, smsReasonsRaw] = await Promise.all([
-    prisma.emailSuppression.count({ where: accountKeyWhere }),
-    prisma.smsSuppression.count({ where: accountKeyWhere }),
-    prisma.emailSuppression.count({ where: { ...accountKeyWhere, ...(range ? { createdAt: range } : {}) } }),
-    prisma.smsSuppression.count({ where: { ...accountKeyWhere, ...(range ? { createdAt: range } : {}) } }),
-    prisma.emailSuppression.groupBy({
-      by: ['reason'],
-      where: { ...accountKeyWhere, ...(range ? { createdAt: range } : {}) },
-      _count: { _all: true },
-    }),
-    prisma.smsSuppression.groupBy({
-      by: ['reason'],
-      where: { ...accountKeyWhere, ...(range ? { createdAt: range } : {}) },
-      _count: { _all: true },
-    }),
+  // Totals are distinct addresses and "added" counts each opt-out where it
+  // started — a group-wide opt-out is one suppression, not one per account.
+  // The reasons split the same "added" set, so they sum to it.
+  const [emailTotal, smsTotal, emailReasonsAdded, smsReasonsAdded] = await Promise.all([
+    countSuppressedAddresses('email', keys),
+    countSuppressedAddresses('sms', keys),
+    countOriginSuppressions('email', inScope, 'reason'),
+    countOriginSuppressions('sms', inScope, 'reason'),
   ]);
 
-  const emailReasons = emailReasonsRaw
-    .map((r) => ({ reason: r.reason, count: r._count._all }))
-    .sort((a, b) => b.count - a.count);
-  const smsReasons = smsReasonsRaw
-    .map((r) => ({ reason: r.reason, count: r._count._all }))
-    .sort((a, b) => b.count - a.count);
+  const toReasons = (byReason: Map<string, number>) =>
+    [...byReason.entries()]
+      .map(([reason, count]) => ({ reason, count }))
+      .sort((a, b) => b.count - a.count);
 
   return {
     emailTotal,
     smsTotal,
-    emailAddedInPeriod: emailAdded,
-    smsAddedInPeriod: smsAdded,
-    emailReasons,
-    smsReasons,
+    emailAddedInPeriod: sumValues(emailReasonsAdded),
+    smsAddedInPeriod: sumValues(smsReasonsAdded),
+    emailReasons: toReasons(emailReasonsAdded),
+    smsReasons: toReasons(smsReasonsAdded),
   };
 }
 

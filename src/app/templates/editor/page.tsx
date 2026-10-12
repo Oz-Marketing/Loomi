@@ -8164,6 +8164,26 @@ export default function TemplateEditorPage() {
     }
   };
 
+  // ── Leaving for the blast builder ──
+  // Schedule, Done and Change template used to router.push straight away. The
+  // autosave above fires 3s after the last edit and is cancelled on unmount,
+  // so whatever changed in those last seconds never reached the template — and
+  // the blast's next step re-syncs from the template, so it never reached the
+  // email either. Save first, then go; a failed save keeps you here.
+  const [leavingForBlast, setLeavingForBlast] = useState(false);
+  const leaveForBlast = async (href: string) => {
+    if (leavingForBlast || saving) return;
+    setLeavingForBlast(true);
+    try {
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      const dirty = code !== originalCode || recordTitle !== savedRecordTitle;
+      if (dirty && !(await handleSave())) return;
+      router.push(href);
+    } finally {
+      setLeavingForBlast(false);
+    }
+  };
+
   // ── Save Template ──
   // The publish-to-ESP flow is gone with the ESP teardown. The remaining
   // surface is the Loomi library save, which the toolbar's Save button
@@ -8300,6 +8320,11 @@ export default function TemplateEditorPage() {
             parsed?.frontmatter?.title ||
             templateName ||
             "Test Email",
+          // The raw template, so the server renders it through the REAL send
+          // pipeline (account values, footer, plain-text part). The preview
+          // HTML already has sample values baked in — sent as is, a test would
+          // show "Alex"'s sample phone and logo instead of the account's.
+          content: code || undefined,
           html: previewHtml,
           // Routes through SendGrid when this account has a key
           // configured; the server falls back to SMTP otherwise.
@@ -8331,7 +8356,7 @@ export default function TemplateEditorPage() {
     } finally {
       setSendingTest(false);
     }
-  }, [sendTestTo, sendTestSubject, previewHtml, parsed, templateName, effectiveAccountKey]);
+  }, [sendTestTo, sendTestSubject, previewHtml, code, parsed, templateName, effectiveAccountKey]);
 
   const historyDiff = useMemo(
     () => buildSimpleDiff(code, selectedHistoryRaw),
@@ -9121,13 +9146,14 @@ export default function TemplateEditorPage() {
                       type="button"
                       onClick={() => {
                         setShowManageTemplateMenu(false);
-                        router.push(
+                        void leaveForBlast(
                           fromMultiBuilder
                             ? `/messaging/blasts/multi/${encodeURIComponent(campaignIdParam)}/message`
                             : `/messaging/blasts/${encodeURIComponent(campaignIdParam)}/template`,
                         );
                       }}
-                      className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]"
+                      disabled={saving || leavingForBlast}
+                      className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50"
                     >
                       Change template
                     </button>
@@ -9155,18 +9181,22 @@ export default function TemplateEditorPage() {
                   to the schedule page. */}
               <button
                 onClick={() =>
-                  router.push(
+                  void leaveForBlast(
                     fromMultiBuilder
                       ? `/messaging/blasts/multi/${encodeURIComponent(campaignIdParam)}/message`
                       : `/messaging/blasts/${encodeURIComponent(campaignIdParam)}/schedule`,
                   )
                 }
-                disabled={saving}
+                disabled={saving || leavingForBlast}
                 className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90 disabled:opacity-50 transition-opacity"
                 title={fromMultiBuilder ? 'Back to Message' : 'Continue to Schedule'}
               >
-                <PaperAirplaneIcon className="w-4 h-4" />
-                {fromMultiBuilder ? 'Done' : 'Schedule'}
+                {leavingForBlast ? (
+                  <ArrowPathIcon className="w-4 h-4 animate-spin" />
+                ) : (
+                  <PaperAirplaneIcon className="w-4 h-4" />
+                )}
+                {leavingForBlast ? 'Saving…' : fromMultiBuilder ? 'Done' : 'Schedule'}
               </button>
             </>
           ) : (

@@ -4,6 +4,8 @@ import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { listContactsForAccount, CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
+import { OPT_OUT_SOURCE, recordEmailOptOut, recordSmsOptOut } from '@/lib/sending/opt-outs';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 
 // GET /api/contacts?accountKey=&search=&limit=&all=true&includeMessaging=true
 //   List contacts for a sub-account. Response matches the existing
@@ -98,6 +100,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const dnd = dndField(body.dnd);
+  // Resolved outside the transaction below, so it doesn't hold a second
+  // connection open while the first waits on it.
+  const relatedAccountKeys =
+    dnd?.email === true || dnd?.sms === true ? await getRelatedAccountKeys(accountKey) : [];
   const data: Prisma.ContactCreateInput = {
     account: { connect: { key: accountKey } },
     email: normalisedEmail,
@@ -124,11 +131,29 @@ export async function POST(req: NextRequest) {
     warrantyEndDate: dateField(body.warrantyEndDate),
     purchaseDate: dateField(body.purchaseDate),
     customFields: customFieldsField(body.customFields) ?? Prisma.DbNull,
-    dnd: dndField(body.dnd) ?? Prisma.DbNull,
+    dnd: dnd ?? Prisma.DbNull,
   };
 
   try {
-    const row = await prisma.contact.create({ data, select: CONTACT_SELECT });
+    // A contact created opted out gets the suppression rows too, for the
+    // whole group — the flag alone is honored only for this one contact.
+    // One transaction, so a contact never exists flagged but unsuppressed.
+    const optingOut = dnd?.email === true || dnd?.sms === true;
+    const row = optingOut
+      ? await prisma.$transaction(async (tx) => {
+          const created = await tx.contact.create({ data, select: CONTACT_SELECT });
+          const shared = {
+            accountKey,
+            tx,
+            relatedAccountKeys,
+            reason: 'manual' as const,
+            source: OPT_OUT_SOURCE.manual,
+          };
+          if (dnd?.email === true) await recordEmailOptOut({ ...shared, email: normalisedEmail });
+          if (dnd?.sms === true) await recordSmsOptOut({ ...shared, phone: normalisedPhone });
+          return created;
+        })
+      : await prisma.contact.create({ data, select: CONTACT_SELECT });
     return NextResponse.json({ contact: serializeContact(row) }, { status: 201 });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

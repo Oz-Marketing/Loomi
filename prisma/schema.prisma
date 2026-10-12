@@ -2127,9 +2127,10 @@ model EmailBlast {
   // Messages the far end rejected AFTER we successfully handed them over — a
   // mailbox that does not exist, a dead domain. NOT a send error: the dispatch
   // worked, so these never make a blast `partial`. They are a list-hygiene
-  // number, and each one auto-suppresses the address so the next blast skips
-  // it. `failedCount` is reserved for messages Loomi could not dispatch at
-  // all, which is the only kind anyone can act on.
+  // number. Only a bounce that is a verdict on the ADDRESS suppresses it (see
+  // sendgrid-events.ts) — a block or reputation refusal is counted here but
+  // suppresses nothing. `failedCount` is reserved for messages Loomi could
+  // not dispatch at all, which is the only kind anyone can act on.
   bouncedCount     Int       @default(0)
   metadata         String?
   error            String?
@@ -2191,7 +2192,7 @@ model EmailEvent {
   recipientId String?
   recipient   EmailBlastRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   accountKey  String?
-  eventType   String // delivered | open | click | bounce | dropped | spamreport | unsubscribe | deferred | processed
+  eventType   String // delivered | open | machine_open | click | bounce | dropped | spamreport | unsubscribe | deferred | processed — machine_open is an Apple Mail Privacy / scanner prefetch, never counted as an open
   sgEventId   String               @unique // SendGrid's sg_event_id; the idempotency key
   sgMessageId String?
   email       String?

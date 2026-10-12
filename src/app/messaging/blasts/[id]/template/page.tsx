@@ -2,12 +2,29 @@
 
 import { use, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeftIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, ArrowPathIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount, type AccountData } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import PrimaryButton from '@/components/primary-button';
-import { TemplateLibraryPanel } from '@/components/campaigns/template-library-panel';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
+import {
+  TemplateLibraryPanel,
+  type TemplateLibraryItem,
+} from '@/components/campaigns/template-library-panel';
 import { SelectedTemplatePanel } from '@/components/campaigns/selected-template-panel';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
+import { readTemplateSlug } from '@/lib/messaging/blast-metadata';
+import { formatFromLine } from '@/lib/messaging/blast-sender';
+import {
+  attachTemplateToDraft,
+  detachTemplateFromDraft,
+  resolveTemplateForBlast,
+  syncEmailDraftFromTemplate,
+  templateSlugToEdit,
+} from '@/lib/messaging/blast-template';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -25,39 +42,11 @@ interface DraftCampaign {
   metadata?: string | null;
 }
 
-function parseMetadata(raw: string | null | undefined): Record<string, unknown> {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Templates are stored in raw form (v2 JSON for drag-and-drop, raw HTML
- * for HTML-mode). Both must be compiled before they can be rendered in
- * an iframe or sent as an email. /api/preview handles either format and
- * returns ready-to-render HTML.
- */
-async function compileTemplate(raw: string): Promise<string> {
-  const res = await fetch('/api/preview', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ html: raw, previewValues: {} }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.html) {
-    throw new Error(data?.error || 'Failed to compile template');
-  }
-  return String(data.html);
-}
-
 export default function MessageStepPage({ params }: PageProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { id } = use(params);
+  const subHref = useSubaccountHref();
   // If this page was launched from the multi-channel builder we need to
   // route the user back to the multi flow (not the email-only one) so
   // the linked SMS draft stays accessible. Carry the flag through every
@@ -90,51 +79,40 @@ export default function MessageStepPage({ params }: PageProps) {
         if (cancelled) return;
         if (!campaign) {
           toast.error('Blast not found');
-          router.push('/messaging/blasts');
+          router.push(subHref('/messaging/blasts'));
+          return;
+        }
+
+        // A blast that's scheduled or sent keeps exactly what it was
+        // committed with: no re-sync, no saves. The page shows a locked
+        // state instead (below).
+        if (!isEditableBlastStatus(campaign.status)) {
+          setDraft(campaign);
           return;
         }
 
         // Multi-channel context: once a template is loaded on the email
         // draft, the user belongs on the multi message page where they
-        // can switch to the SMS tab. The email-only settings/preview
-        // view (State B) is only the right home for single-channel
-        // email campaigns.
+        // can switch to the SMS tab — which re-syncs the template itself.
         if (fromMulti && campaign.htmlContent) {
-          router.replace(`/messaging/blasts/multi/${encodeURIComponent(id)}/message`);
+          router.replace(subHref(`/messaging/blasts/multi/${encodeURIComponent(id)}/message`));
           return;
         }
 
-        // If the campaign references a template, re-fetch the latest content
-        // and compile it so edits made in the editor flow into this campaign.
-        // We store the COMPILED html on the campaign so the iframe preview
-        // and the send pipeline both get email-ready HTML (drag-and-drop
-        // templates are stored as v2 JSON in raw form, which would render
-        // as code in an iframe otherwise).
-        const meta = parseMetadata(campaign.metadata);
-        const templateSlug = typeof meta.templateSlug === 'string' ? meta.templateSlug : '';
-        let synced = campaign;
-        if (templateSlug) {
-          try {
-            const rawRes = await fetch(
-              `/api/templates?design=${encodeURIComponent(templateSlug)}&format=raw`,
-            );
-            const rawData = await rawRes.json().catch(() => ({}));
-            const latestRaw = String(rawData?.raw || '');
-            if (rawRes.ok && latestRaw) {
-              const compiled = await compileTemplate(latestRaw);
-              if (compiled !== campaign.htmlContent) {
-                const updated = await patchDraft({ htmlContent: compiled });
-                if (updated) synced = updated;
-              }
-            }
-          } catch {
-            // Best-effort sync; if it fails we still have the old snapshot.
-          }
+        // Pull the template's latest content (and its subject/preheader)
+        // onto the draft — the editor saves the template, not the blast.
+        // A sync that can't be saved changes nothing on screen: showing
+        // html the send won't use would be worse than showing the stored one.
+        const synced = await syncEmailDraftFromTemplate(campaign);
+        if (cancelled) return;
+        if (synced.error) {
+          toast.error(
+            `Couldn’t refresh this email from its template, so the last saved version is shown. ${synced.error}`,
+          );
         }
-
-        setDraft(synced);
-        setSubject(synced.subject || '');
-        setPreviewText(synced.previewText || '');
+        setDraft(synced.draft);
+        setSubject(synced.draft.subject || '');
+        setPreviewText(synced.draft.previewText || '');
       })
       .finally(() => {
         if (!cancelled) setDraftLoading(false);
@@ -175,61 +153,66 @@ export default function MessageStepPage({ params }: PageProps) {
     }
   }
 
-  async function applyTemplate(design: string) {
+  /** Load the draft's fields after the template changed them. */
+  function adopt(updated: DraftCampaign) {
+    setDraft(updated);
+    setSubject(updated.subject || '');
+    setPreviewText(updated.previewText || '');
+  }
+
+  /** Carry the subject/preview someone typed but hasn't blurred yet. */
+  async function draftWithTypedFields(current: DraftCampaign): Promise<DraftCampaign> {
+    const patch: Record<string, unknown> = {};
+    if (subject !== current.subject) patch.subject = subject;
+    if (previewText !== current.previewText) patch.previewText = previewText;
+    if (Object.keys(patch).length === 0) return current;
+    return (await patchDraft(patch)) ?? current;
+  }
+
+  function openEditor(slug: string, extra = '') {
+    router.push(
+      `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}${multiSuffix}${extra}`,
+    );
+  }
+
+  async function applyTemplate(template: TemplateLibraryItem) {
     if (!draft) return;
     // Without the preview modal in the way, two quick clicks in the library
     // fire two applies — each compiling and PATCHing — and the second can
     // land after the first, attaching a template the user did not pick last.
     if (applying) return;
+    if (!accountKey) {
+      toast.error('Choose recipients first, so the template can be set up for the right account.');
+      return;
+    }
     setApplying(true);
     try {
-      const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(design)}&format=raw`);
-      const rawData = await rawRes.json().catch(() => ({}));
-      if (!rawRes.ok || !rawData?.raw) {
-        throw new Error(rawData?.error || 'Failed to load template');
-      }
-      const raw = String(rawData.raw);
-      const titleMatch = raw.match(/^---\s*\n([\s\S]*?)\n---/);
-      let newSubject = subject;
-      if (!newSubject && titleMatch) {
-        const line = titleMatch[1].match(/^title:\s*(.+)$/m);
-        if (line) newSubject = line[1].trim().replace(/^["']|["']$/g, '');
-      }
-      // Compile the template now so the campaign carries email-ready HTML
-      // (handles both drag-and-drop v2 JSON and raw HTML templates).
-      const compiled = await compileTemplate(raw);
-      // Record the template slug on the campaign so we can re-fetch the
-      // latest content when the user returns from the editor.
-      const meta = { ...parseMetadata(draft.metadata), templateSlug: design };
-      const updated = await patchDraft({
-        subject: newSubject || draft.name,
-        htmlContent: compiled,
-        sourceType: 'template-library',
-        metadata: JSON.stringify(meta),
+      // A shared library (or group) template is copied into this account
+      // first. The editor saves in place, so editing the shared original
+      // changed it for every account — and every draft re-synced from it.
+      const slug = await resolveTemplateForBlast({
+        template,
+        blastName: draft.name,
+        blastAccountKey: accountKey,
       });
-      if (updated) {
-        setDraft(updated);
-        setSubject(updated.subject);
-      }
-      // Selecting a template drops you straight into the existing template
-      // editor so the user can adjust before scheduling.
-      // campaignId is passed so the editor shows campaign-aware actions
-      // (Schedule + Manage template) instead of Save Template.
-      router.push(
-        `/templates/editor?design=${encodeURIComponent(design)}&campaignId=${encodeURIComponent(id)}${multiSuffix}`,
-      );
+      const updated = await attachTemplateToDraft(await draftWithTypedFields(draft), slug);
+      adopt(updated);
+      // Selecting a template drops you straight into the template editor so
+      // you can adjust before scheduling. campaignId makes the editor show
+      // blast-aware actions (Schedule) instead of Save Template.
+      openEditor(slug);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to apply template');
       setApplying(false);
     }
   }
 
-  // "Create New" from the picker: spin up a blank template scoped to this
-  // campaign's sub-account (accountKey → never global), attach it to the
-  // draft (so returning from the editor re-syncs content), then drop the
-  // user into the editor with campaign-aware actions. Mirrors applyTemplate.
+  // "Create New" from the picker: spin up a blank template owned by this
+  // blast's account (accountKey → never global), attach it to the draft
+  // (so returning from the editor re-syncs content), then drop the user into
+  // the editor with blast-aware actions. Mirrors applyTemplate.
   async function handleCreateNew(mode: 'visual' | 'code') {
-    if (!draft) return;
+    if (!draft || applying) return;
     if (!accountKey) {
       toast.error('This blast has no account, so a template can’t be created here.');
       return;
@@ -246,30 +229,33 @@ export default function MessageStepPage({ params }: PageProps) {
         throw new Error(createData?.error || 'Failed to create template');
       }
       const slug = String(createData.design);
-
-      // Compile the blank starter so the campaign carries email-ready HTML
-      // and record the slug, exactly like selecting an existing template.
-      const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(slug)}&format=raw`);
-      const rawData = await rawRes.json().catch(() => ({}));
-      const raw = String(rawData?.raw || '');
-      const compiled = raw ? await compileTemplate(raw) : '';
-      const meta = { ...parseMetadata(draft.metadata), templateSlug: slug };
-      const updated = await patchDraft({
-        subject: subject || draft.name,
-        htmlContent: compiled,
-        sourceType: 'template-library',
-        metadata: JSON.stringify(meta),
-      });
-      if (updated) {
-        setDraft(updated);
-        setSubject(updated.subject);
-      }
+      const updated = await attachTemplateToDraft(await draftWithTypedFields(draft), slug);
+      adopt(updated);
       const builderSuffix = mode === 'code' ? '&builder=html' : '';
-      router.push(
-        `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}&accountKey=${encodeURIComponent(accountKey)}${multiSuffix}${builderSuffix}`,
-      );
+      openEditor(slug, `&accountKey=${encodeURIComponent(accountKey)}${builderSuffix}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create template');
+      setApplying(false);
+    }
+  }
+
+  async function handleEdit() {
+    if (!draft || applying) return;
+    const slug = readTemplateSlug(draft.metadata);
+    if (!slug) {
+      toast.error("Can't open the editor — this blast has no template recorded.");
+      return;
+    }
+    setApplying(true);
+    try {
+      // A blast still pointing at a shared template gets its own copy first.
+      const own = await templateSlugToEdit({ slug, blastName: draft.name, blastAccountKey: accountKey });
+      if (own !== slug) {
+        adopt(await attachTemplateToDraft(await draftWithTypedFields(draft), own));
+      }
+      openEditor(own);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to open the editor');
       setApplying(false);
     }
   }
@@ -283,8 +269,9 @@ export default function MessageStepPage({ params }: PageProps) {
     // picker opens immediately so re-selecting is one click.
     if (!draft) return;
     try {
-      const updated = await patchDraft({ htmlContent: '' });
-      if (updated) setDraft(updated);
+      // The slug goes too — left behind, the next load re-synced the old
+      // template straight back onto the blast.
+      setDraft(await detachTemplateFromDraft(draft));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to change template');
     }
@@ -299,9 +286,11 @@ export default function MessageStepPage({ params }: PageProps) {
       if (previewText !== draft.previewText) patch.previewText = previewText;
       if (Object.keys(patch).length > 0) await patchDraft(patch);
       router.push(
-        fromMulti
-          ? `/messaging/blasts/multi/${encodeURIComponent(id)}/schedule`
-          : `/messaging/blasts/${encodeURIComponent(id)}/schedule`,
+        subHref(
+          fromMulti
+            ? `/messaging/blasts/multi/${encodeURIComponent(id)}/schedule`
+            : `/messaging/blasts/${encodeURIComponent(id)}/schedule`,
+        ),
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to save');
@@ -319,10 +308,14 @@ export default function MessageStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
+  }
+
+  if (draft && !isEditableBlastStatus(draft.status)) {
+    return <BlastLockedNotice status={draft.status} name={draft.name} />;
   }
 
   return (
@@ -332,7 +325,9 @@ export default function MessageStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Message
           </p>
-          <h1 className="text-2xl font-bold">{draft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="email" variant="title" initialName={draft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             {hasTemplate
               ? 'Set your subject and preview text. Click Edit to adjust the content.'
@@ -354,17 +349,7 @@ export default function MessageStepPage({ params }: PageProps) {
           {hasTemplate ? (
             <SelectedTemplatePanel
               htmlContent={draft!.htmlContent}
-              onEdit={() => {
-                const meta = parseMetadata(draft?.metadata);
-                const slug = typeof meta.templateSlug === 'string' ? meta.templateSlug : '';
-                if (!slug) {
-                  toast.error("Can't open editor — this blast has no template slug recorded.");
-                  return;
-                }
-                router.push(
-                  `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}${multiSuffix}`,
-                );
-              }}
+              onEdit={handleEdit}
               onChangeTemplate={handleChangeTemplate}
             />
           ) : (
@@ -373,7 +358,12 @@ export default function MessageStepPage({ params }: PageProps) {
             // edit this template regardless — that is the whole point of
             // picking one for a blast — so previewing first was a step that
             // only ever delayed the edit.
-            <TemplateLibraryPanel onSelect={applyTemplate} onCreateNew={handleCreateNew} />
+            <TemplateLibraryPanel
+              onSelect={applyTemplate}
+              onCreateNew={handleCreateNew}
+              accountKey={accountKey || undefined}
+              busy={applying}
+            />
           )}
         </div>
       </div>
@@ -381,9 +371,11 @@ export default function MessageStepPage({ params }: PageProps) {
       <BottomBar
         onBack={() =>
           router.push(
-            fromMulti
-              ? `/messaging/blasts/multi/${encodeURIComponent(id)}/message`
-              : `/messaging/blasts/${encodeURIComponent(id)}/recipients`,
+            subHref(
+              fromMulti
+                ? `/messaging/blasts/multi/${encodeURIComponent(id)}/message`
+                : `/messaging/blasts/${encodeURIComponent(id)}/recipients`,
+            ),
           )
         }
         onContinue={handleContinue}
@@ -422,6 +414,9 @@ function SettingsPanel({
   onSubjectBlur: () => void;
   onPreviewTextBlur: () => void;
 }) {
+  // Exactly what the send puts in the From header: the sender name, else the
+  // account's name — see lib/messaging/blast-sender.
+  const fromLine = formatFromLine(account);
   return (
     <div className="space-y-5 lg:sticky lg:top-20">
       <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)] space-y-4">
@@ -453,29 +448,20 @@ function SettingsPanel({
           />
         </div>
         <div>
-          <label className="block text-[11px] text-[var(--muted-foreground)] mb-1.5">
-            Sender name <span className="text-red-400">*</span>
+          <label className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)] mb-1.5">
+            From
+            <Tooltip label="The sender name set in Settings → Email & Texts → Sending Config, or this account’s name when none is set. The address comes from the same place.">
+              <InformationCircleIcon className="w-3.5 h-3.5" aria-label="About the From line" />
+            </Tooltip>
           </label>
-          <input
-            value={account?.senderName || account?.dealer || ''}
-            readOnly
-            disabled
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2.5 text-sm text-[var(--foreground)] cursor-not-allowed"
-          />
-        </div>
-        <div>
-          <label className="block text-[11px] text-[var(--muted-foreground)] mb-1.5">
-            Sender email <span className="text-red-400">*</span>
-          </label>
-          <input
-            value={account?.senderEmail || ''}
-            readOnly
-            disabled
-            placeholder="Configure in Sending settings"
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2.5 text-sm text-[var(--foreground)] cursor-not-allowed placeholder:text-[var(--muted-foreground)]"
-          />
-          <p className="text-[10px] text-[var(--muted-foreground)] mt-1.5">
-            Configure in Settings → Email & Texts → Sending Config.
+          <p className="w-full rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2.5 text-sm text-[var(--foreground)] truncate">
+            {account?.senderEmail ? (
+              fromLine
+            ) : (
+              <span className="text-amber-400">
+                No sending address yet — add one in Settings → Email & Texts → Sending Config.
+              </span>
+            )}
           </p>
         </div>
       </div>
@@ -513,7 +499,9 @@ function BottomBar({
         </button>
         <div className="flex items-center gap-4">
           {rightHint && (
-            <p className="text-xs text-[var(--muted-foreground)]">{rightHint}</p>
+            <p key={rightHint} className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">
+              {rightHint}
+            </p>
           )}
           <PrimaryButton onClick={onContinue} disabled={continueDisabled}>
             {continueLabel}

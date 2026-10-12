@@ -7,7 +7,6 @@ import {
   ArrowLeftIcon,
   ArrowPathIcon,
   ArrowPathRoundedSquareIcon,
-  CalendarDaysIcon,
   ChartBarSquareIcon,
   CheckCircleIcon,
   ClockIcon,
@@ -21,11 +20,30 @@ import { toast } from '@/lib/toast';
 import { WarmupNotice } from '@/components/campaigns/warmup-notice';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
-import {
-  audienceSelectionFromDraft,
-  type RecipientRow,
-} from '@/lib/segments/selection';
 import PrimaryButton from '@/components/primary-button';
+import { Select } from '@/components/select';
+import { Collapse } from '@/components/ui/collapse';
+import { BlastNameField } from '@/components/campaigns/blast-name-field';
+import { BlastLockedNotice } from '@/components/campaigns/blast-locked-notice';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TimePicker } from '@/components/ui/time-picker';
+import {
+  restoreSchedule,
+  scheduleInstantValue,
+  useScheduleStepAutosave,
+} from '@/lib/messaging/schedule-step-autosave';
+import { isAudienceConfirmed, isEditableBlastStatus } from '@/lib/messaging/blast-builder-steps';
+import { parseBlastMetadata } from '@/lib/messaging/blast-metadata';
+import { formatFromLine } from '@/lib/messaging/blast-sender';
+import { syncEmailDraftFromTemplate } from '@/lib/messaging/blast-template';
+import { submitSchedule } from '@/lib/messaging/schedule-submit';
+import {
+  accountLocalEquivalent,
+  browserTimeZone,
+  instantFromWallClock,
+  timeZoneLabel,
+  wallClockInZone,
+} from '@/lib/messaging/send-time';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -80,14 +98,13 @@ interface ResendSettings {
   subject: string;
 }
 
-interface CampaignMetadata {
-  utm?: Partial<UtmSettings>;
-  resend?: Partial<ResendSettings>;
-  /** Slug of the template this campaign was built from, recorded when a
-   *  template is applied. Used to re-sync the preview with the latest
-   *  template content on load. */
-  templateSlug?: string;
-}
+const RESEND_DELAY_OPTIONS = [
+  { value: '24', label: '24 hours' },
+  { value: '48', label: '2 days' },
+  { value: '72', label: '3 days' },
+  { value: '120', label: '5 days' },
+  { value: '168', label: '7 days' },
+];
 
 function slugify(value: string): string {
   return value
@@ -116,66 +133,21 @@ function defaultResend(): ResendSettings {
   };
 }
 
-function parseMetadata(raw: string): CampaignMetadata {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as CampaignMetadata)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Compile a template's raw source (v2 JSON for drag-and-drop, raw HTML for
- * HTML-mode) into email-ready HTML via /api/preview. Mirrors the Message
- * step so the Schedule preview reflects the same content the editor saved.
- */
-async function compileTemplate(raw: string): Promise<string> {
-  const res = await fetch('/api/preview', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ html: raw, previewValues: {} }),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.html) throw new Error(data?.error || 'Failed to compile template');
-  return String(data.html);
-}
-
-// Split-input date/time. We keep them as separate strings (YYYY-MM-DD,
-// HH:MM) and combine on submit so each input gets its own native picker
-// — `datetime-local` is one widget on Chrome but two on Safari etc.,
-// and the split form makes the keyboard flow obvious on every browser.
-
-function toLocalDateInputValue(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
-
-function toLocalTimeInputValue(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(11, 16);
-}
-
-function combineDateAndTime(dateStr: string, timeStr: string): Date | null {
-  if (!dateStr || !timeStr) return null;
-  const d = new Date(`${dateStr}T${timeStr}`);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
+/** "Tue, Oct 14, 2026, 9:00 AM MDT" — with the zone, so nobody has to guess. */
 function formatDateTime(iso: string): string {
   const value = new Date(iso);
   if (Number.isNaN(value.getTime())) return iso;
-  return value.toLocaleString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return value
+    .toLocaleString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    })
+    .replace(/ /g, ' ');
 }
 
 export default function ScheduleStepPage({ params }: PageProps) {
@@ -187,14 +159,24 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
+  const locked = draft !== null && !isEditableBlastStatus(draft.status);
+
+  // The pickers edit a wall clock in the BROWSER's zone; it's named next to
+  // them, and the account's own zone is spelled out when it differs.
+  const browserZone = useMemo(() => browserTimeZone(), []);
 
   const [sendMode, setSendMode] = useState<SendMode>('later');
   // Default to ~30m out so the input isn't pinned to "now" (which would
   // immediately fail the future-only validator on submit).
-  const defaultSend = useMemo(() => new Date(Date.now() + 30 * 60_000), []);
-  const [sendDate, setSendDate] = useState(toLocalDateInputValue(defaultSend));
-  const [sendTime, setSendTime] = useState(toLocalTimeInputValue(defaultSend));
+  const defaultSend = useMemo(
+    () => wallClockInZone(new Date(Date.now() + 30 * 60_000), browserZone),
+    [browserZone],
+  );
+  const [sendDate, setSendDate] = useState(defaultSend.date);
+  const [sendTime, setSendTime] = useState(defaultSend.time);
   const [submitting, setSubmitting] = useState(false);
+  // Set while we wait out a gateway timeout to learn whether the schedule took.
+  const [confirming, setConfirming] = useState(false);
 
   // Inline-edit state for subject + preview text. These persist back to
   // the draft via PATCH on blur so users can tweak copy without bouncing
@@ -203,14 +185,14 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const [previewTextDraft, setPreviewTextDraft] = useState('');
 
   // UTM + Resend live in the campaign's `metadata` JSON field. Hydrated
-  // from the draft once it lands; persisted in handleSchedule alongside
-  // the schedule POST (so we don't fire a PATCH per keystroke). The
-  // enabled flag also drives section expansion — see ToggleSection.
+  // from the draft once it lands and autosaved as they change (see
+  // useScheduleStepAutosave), so stepping back and returning keeps them.
+  // The enabled flag also drives section expansion — see ToggleSection.
   const [utm, setUtm] = useState<UtmSettings>(defaultUtm(''));
   const [resend, setResend] = useState<ResendSettings>(defaultResend());
 
   // Deliverability + compliance report for this draft. Fetched on load so a
-  // misconfigured sub-account is visible BEFORE the user picks a send time —
+  // misconfigured account is visible BEFORE the user picks a send time —
   // the schedule POST runs the same checks and hard-blocks, and discovering
   // that at the final click is a miserable way to find out.
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
@@ -220,16 +202,48 @@ export default function ScheduleStepPage({ params }: PageProps) {
     setPreviewTextDraft(draft?.previewText || '');
   }, [draft?.subject, draft?.previewText]);
 
+  // Restore every setting on this step from the draft — once per blast.
+  // Re-running on each `draft` change would let an autosave's echo overwrite
+  // whatever the user typed while it was in flight.
+  const [hydratedId, setHydratedId] = useState<string | null>(null);
   useEffect(() => {
-    if (!draft) return;
-    const meta = parseMetadata(draft.metadata);
+    if (!draft || hydratedId === draft.id) return;
+    const meta = parseBlastMetadata(draft.metadata);
     const baseUtm = defaultUtm(draft.name || '');
-    setUtm({ ...baseUtm, ...(meta.utm ?? {}) });
-    setResend({ ...defaultResend(), ...(meta.resend ?? {}) });
-  }, [draft]);
+    setUtm({ ...baseUtm, ...((meta.utm as Partial<UtmSettings> | undefined) ?? {}) });
+    setResend({ ...defaultResend(), ...((meta.resend as Partial<ResendSettings> | undefined) ?? {}) });
+    const saved = restoreSchedule(draft.metadata, new Date(), browserZone);
+    if (saved) {
+      setSendMode(saved.mode);
+      if (saved.at) {
+        setSendDate(saved.at.slice(0, 10));
+        setSendTime(saved.at.slice(11, 16));
+      }
+    }
+    setHydratedId(draft.id);
+  }, [draft, hydratedId, browserZone]);
+
+  // The instant the pickers name. Stored as such, so a colleague in another
+  // zone reopening the draft sees the same moment, not the same digits.
+  const sendInstant = useMemo(
+    () => (sendDate && sendTime ? instantFromWallClock(sendDate, sendTime, browserZone) : null),
+    [sendDate, sendTime, browserZone],
+  );
+
+  const autosave = useScheduleStepAutosave({
+    endpoint: `/api/blasts/email/${encodeURIComponent(id)}`,
+    settings: {
+      schedule: { mode: sendMode, at: scheduleInstantValue(sendDate, sendTime, browserZone) },
+      utm,
+      resend,
+    },
+    // A blast that isn't a draft must not change — so nothing autosaves.
+    ready: hydratedId !== null && !locked,
+    onSaved: (metadata) => setDraft((prev) => (prev ? { ...prev, metadata } : prev)),
+  });
 
   useEffect(() => {
-    if (!draft?.id) return;
+    if (!draft?.id || locked) return;
     let canceled = false;
     const accountKey = draft.accountKeys?.[0] || '';
     const qs = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
@@ -248,7 +262,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
     return () => {
       canceled = true;
     };
-  }, [draft?.id, draft?.accountKeys]);
+  }, [draft?.id, draft?.accountKeys, locked]);
 
   async function persistField(patch: { subject?: string; previewText?: string }) {
     if (!draft) return;
@@ -272,57 +286,32 @@ export default function ScheduleStepPage({ params }: PageProps) {
     (async () => {
       try {
         const res = await fetch(`/api/blasts/email/${encodeURIComponent(id)}`);
-        if (!res.ok) throw new Error('Failed to load campaign');
+        if (!res.ok) throw new Error('Failed to load blast');
         const data: { campaign?: DraftCampaign } = await res.json();
         if (cancelled) return;
         if (!data.campaign) {
           toast.error('Blast not found');
-          router.push('/messaging/blasts');
+          router.push(subHref('/messaging/blasts'));
           return;
         }
-        let campaign = data.campaign;
-
         // Re-sync the preview from the template's latest content. The editor
-        // saves edits to the template record (not the campaign), so arriving
+        // saves edits to the template record (not the blast), so arriving
         // here straight from the editor's Schedule button would otherwise show
-        // the stale snapshot until the user bounced back through the Message
-        // step. Recompile the latest raw and persist it if it drifted — same
-        // best-effort sync the Message step performs.
-        const templateSlug = parseMetadata(campaign.metadata).templateSlug || '';
-        if (templateSlug) {
-          try {
-            const rawRes = await fetch(
-              `/api/templates?design=${encodeURIComponent(templateSlug)}&format=raw`,
-            );
-            const rawData = await rawRes.json().catch(() => ({}));
-            const latestRaw = String(rawData?.raw || '');
-            if (rawRes.ok && latestRaw) {
-              const compiled = await compileTemplate(latestRaw);
-              if (!cancelled && compiled !== campaign.htmlContent) {
-                const patchRes = await fetch(
-                  `/api/blasts/email/${encodeURIComponent(id)}`,
-                  {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ htmlContent: compiled }),
-                  },
-                );
-                const patchData = await patchRes.json().catch(() => ({}));
-                campaign =
-                  patchRes.ok && patchData?.campaign
-                    ? (patchData.campaign as DraftCampaign)
-                    : { ...campaign, htmlContent: compiled };
-              }
-            }
-          } catch {
-            // Best-effort sync; fall back to the stored snapshot.
-          }
+        // the stale snapshot. Drafts only — a scheduled or sent blast keeps
+        // the html it was committed with (and this page shows it locked).
+        // If the re-sync can't be saved, the STORED html stays on screen:
+        // previewing html the send won't use is the failure this prevents.
+        const synced = await syncEmailDraftFromTemplate(data.campaign);
+        if (cancelled) return;
+        if (synced.error) {
+          toast.error(
+            `Couldn’t refresh this email from its template, so the last saved version is shown. ${synced.error}`,
+          );
         }
-
-        if (!cancelled) setDraft(campaign);
+        setDraft(synced.draft);
       } catch (err) {
         if (!cancelled) {
-          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
+          toast.error(err instanceof Error ? err.message : 'Failed to load blast');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -335,145 +324,122 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
   const accountKey = draft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // Resolved SERVER-side, over the whole contact roster.
-  //
-  // This used to filter `contacts`, which is the 5,000 most-recently-added
-  // rows. That put the campaign's 5,000-recipient ceiling BEFORE the
-  // segment filter instead of after it, so a segment uncorrelated with
-  // recency ("purchased over 2 years ago", "lapsed service") reached only
-  // the fraction of its members that happened to be recent — with no
-  // indication that anyone had been left out.
-  const [recipients, setRecipients] = useState<RecipientRow[]>([]);
-  const [recipientsLoading, setRecipientsLoading] = useState(true);
-  const [audienceTotal, setAudienceTotal] = useState(0);
-  const [audienceTruncated, setAudienceTruncated] = useState(false);
+  const audienceChosen = isAudienceConfirmed(draft);
 
-  const selection = useMemo(() => audienceSelectionFromDraft(draft), [draft]);
-  const selectionKey = useMemo(() => JSON.stringify(selection), [selection]);
+  // How many people this blast would reach, resolved by the same server code
+  // the schedule route runs — so this number and the send agree by
+  // construction. A count only; no contact rows reach the browser.
+  const [audienceTotal, setAudienceTotal] = useState(0);
+  const [audienceReason, setAudienceReason] = useState<string | null>(null);
+  const [audienceLoading, setAudienceLoading] = useState(true);
 
   useEffect(() => {
-    if (!draft || !accountKey || !selection) {
-      setRecipients([]);
-      setRecipientsLoading(false);
+    if (!draft?.id || locked) return;
+    if (!audienceChosen) {
+      setAudienceTotal(0);
+      setAudienceLoading(false);
       return;
     }
     let cancelled = false;
-    setRecipientsLoading(true);
-
-    fetch('/api/segments/recipients', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accountKey, selection, channel: 'email' }),
-    })
+    setAudienceLoading(true);
+    fetch(`/api/blasts/email/${encodeURIComponent(draft.id)}/audience`, { cache: 'no-store' })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-        return data;
+        return data as { total?: number; reason?: string };
       })
       .then((data) => {
         if (cancelled) return;
-        setRecipients(Array.isArray(data.recipients) ? data.recipients : []);
         setAudienceTotal(Number(data.total) || 0);
-        setAudienceTruncated(Boolean(data.truncated));
+        setAudienceReason(typeof data.reason === 'string' && data.reason ? data.reason : null);
       })
-      .catch(() => {
+      .catch((err: Error) => {
         if (cancelled) return;
-        setRecipients([]);
         setAudienceTotal(0);
-        setAudienceTruncated(false);
+        setAudienceReason(`Couldn’t count recipients: ${err.message}`);
       })
       .finally(() => {
-        if (!cancelled) setRecipientsLoading(false);
+        if (!cancelled) setAudienceLoading(false);
       });
-
     return () => {
       cancelled = true;
     };
-    // `selectionKey` stands in for `selection` (fresh object each render).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectionKey, accountKey, draft?.id]);
+  }, [draft?.id, audienceChosen, locked]);
 
   async function handleSchedule() {
     if (!draft) return;
-    if (recipients.length === 0) {
-      toast.error('No recipients to send to.');
+    if (!audienceChosen) {
+      toast.error('Choose who should receive this blast on the Recipients step first.');
       return;
     }
-    // Belt-and-braces: the button is disabled in this state, but never
-    // let a truncated audience through — sending to an arbitrary prefix
-    // of a segment is the exact failure this change exists to remove.
-    if (audienceTruncated) {
-      toast.error(
-        `This audience has ${audienceTotal.toLocaleString()} contacts, over the ${recipients.length.toLocaleString()} per-campaign limit. Narrow the segment and try again.`,
-      );
+    if (audienceTotal === 0) {
+      toast.error(audienceReason || 'No recipients to send to.');
       return;
     }
-
     let scheduledFor: string | null = null;
     if (sendMode === 'later') {
-      const date = combineDateAndTime(sendDate, sendTime);
-      if (!date) {
+      if (!sendInstant) {
         toast.error('Pick a valid send date and time.');
         return;
       }
-      if (date.getTime() <= Date.now() + 30_000) {
+      if (sendInstant.getTime() <= Date.now() + 30_000) {
         toast.error('Send time must be in the future.');
         return;
       }
-      scheduledFor = date.toISOString();
+      scheduledFor = sendInstant.toISOString();
     }
-
-    // Build the metadata blob from the UTM + Resend state. We keep the
-    // existing metadata fields the schedule step doesn't own (in case
-    // earlier steps store anything alongside).
-    const existingMeta = parseMetadata(draft.metadata);
-    const nextMeta: CampaignMetadata = { ...existingMeta, utm, resend };
-    const metadataJson = JSON.stringify(nextMeta);
 
     setSubmitting(true);
     try {
-      // Persist metadata first so the schedule POST sees a finalized
-      // campaign. Done as a PATCH because the schedule endpoint only
-      // accepts the recipient list + scheduledFor.
-      if (metadataJson !== (draft.metadata || '')) {
-        const patchRes = await fetch(`/api/blasts/email/${encodeURIComponent(draft.id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ metadata: metadataJson }),
-        });
-        if (!patchRes.ok) {
-          const patchData = await patchRes.json().catch(() => ({}));
-          throw new Error(patchData?.error || 'Failed to save tracking settings');
-        }
+      // Finish any pending autosave, then write this step's settings once
+      // more so the schedule reads exactly what's on screen. Merged into the
+      // stored metadata server-side, so keys other steps own survive.
+      await autosave.flush().catch(() => undefined);
+      const patchRes = await fetch(`/api/blasts/email/${encodeURIComponent(draft.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          metadataPatch: {
+            utm,
+            resend,
+            schedule: { mode: sendMode, at: scheduleInstantValue(sendDate, sendTime, browserZone) },
+          },
+        }),
+      });
+      if (!patchRes.ok) {
+        const patchData = await patchRes.json().catch(() => ({}));
+        throw new Error(patchData?.error || 'Failed to save tracking settings');
       }
 
-      const res = await fetch(
-        `/api/blasts/email/${encodeURIComponent(draft.id)}/schedule`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ recipients, scheduledFor }),
-        },
-      );
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      // No recipient list: the route resolves the audience the draft saved,
+      // so an audience of any size never has to round-trip the browser. A
+      // large one can outlast the proxy's 60s; submitSchedule then checks
+      // whether the blast committed rather than reporting a failure.
+      const outcome = await submitSchedule({
+        scheduleUrl: `/api/blasts/email/${encodeURIComponent(draft.id)}/schedule`,
+        blastUrl: `/api/blasts/email/${encodeURIComponent(draft.id)}`,
+        body: { scheduledFor },
+        onWaiting: () => setConfirming(true),
+      });
+      if (!outcome.ok) {
         // The preflight gate returns 422 with the full issue list — refresh
         // the panel so the user sees every blocker, not just the summary.
-        if (res.status === 422 && Array.isArray(data?.issues)) {
-          setPreflight({ ok: false, issues: data.issues });
+        if (outcome.status === 422 && Array.isArray(outcome.data?.issues)) {
+          setPreflight({ ok: false, issues: outcome.data.issues as PreflightIssue[] });
         }
-        throw new Error(data?.error || 'Failed to schedule campaign');
+        throw new Error(outcome.error);
       }
       toast.success(
         sendMode === 'now'
           ? 'Blast queued — will start sending in the next minute.'
           : `Blast scheduled for ${formatDateTime(scheduledFor!)}`,
       );
-      router.push('/messaging/blasts');
+      router.push(subHref('/messaging/blasts'));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to schedule campaign');
+      toast.error(err instanceof Error ? err.message : 'Failed to schedule blast');
     } finally {
       setSubmitting(false);
+      setConfirming(false);
     }
   }
 
@@ -482,18 +448,28 @@ export default function ScheduleStepPage({ params }: PageProps) {
       <div className="max-w-5xl mx-auto py-12 px-6">
         <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
           <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign…
+          Loading blast…
         </p>
       </div>
     );
   }
 
-  const fromName = account?.senderName || account?.dealer || '';
+  if (draft && locked) {
+    return <BlastLockedNotice status={draft.status} name={draft.name} />;
+  }
+
+  // Exactly what the send puts in the From header — see blast-sender.
+  const fromLine = formatFromLine(account);
   const fromEmail = account?.senderEmail || '';
 
   const blockers = (preflight?.issues ?? []).filter((i) => i.severity === 'blocker');
   const warnings = (preflight?.issues ?? []).filter((i) => i.severity === 'warning');
   const preflightBlocked = blockers.length > 0;
+
+  const zoneLabel = timeZoneLabel(browserZone, sendInstant ?? new Date());
+  const accountEquivalent = sendInstant
+    ? accountLocalEquivalent(sendInstant, account?.timezone, browserZone)
+    : null;
 
   return (
     <div className="pb-32">
@@ -502,7 +478,9 @@ export default function ScheduleStepPage({ params }: PageProps) {
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Schedule
           </p>
-          <h1 className="text-2xl font-bold">{draft?.name || 'Blast'}</h1>
+          <h1>
+            <BlastNameField id={id} channel="email" variant="title" initialName={draft?.name ?? ''} />
+          </h1>
           <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
             Review the email and choose when this blast should send.
           </p>
@@ -535,53 +513,49 @@ export default function ScheduleStepPage({ params }: PageProps) {
                 />
               </div>
 
-              {!recipientsLoading && recipients.length > 0 && accountKey && (
-                <WarmupNotice accountKey={accountKey} recipientCount={recipients.length} />
+              {!audienceLoading && audienceTotal > 0 && accountKey && (
+                <WarmupNotice accountKey={accountKey} recipientCount={audienceTotal} />
               )}
 
-              {sendMode === 'later' && (
+              <Collapse open={sendMode === 'later'} mountClosed={false} clip={false}>
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
                         Send Date
                       </label>
-                      <div className="relative">
-                        <CalendarDaysIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-                        <input
-                          type="date"
-                          value={sendDate}
-                          min={toLocalDateInputValue(new Date())}
-                          onChange={(e) => setSendDate(e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                        />
-                      </div>
+                      <DatePicker
+                        value={sendDate || null}
+                        onChange={(v) => setSendDate(v ?? '')}
+                        minDate={wallClockInZone(new Date(), browserZone).date}
+                        placeholder="Select date"
+                        className="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
                     </div>
                     <div>
                       <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
-                        Send Time
+                        Send Time{' '}
+                        <span className="normal-case tracking-normal font-normal">({zoneLabel})</span>
                       </label>
-                      <div className="relative">
-                        <ClockIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-                        <input
-                          type="time"
-                          value={sendTime}
-                          onChange={(e) => setSendTime(e.target.value)}
-                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                        />
-                      </div>
+                      <TimePicker
+                        value={sendTime || null}
+                        onChange={setSendTime}
+                        className="w-full inline-flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm text-[var(--foreground)] hover:border-[var(--primary)]/40 focus:outline-none focus:border-[var(--primary)] transition-colors"
+                      />
                     </div>
                   </div>
                   <p className="text-[11px] text-[var(--muted-foreground)] mt-2">
-                    {(() => {
-                      const combined = combineDateAndTime(sendDate, sendTime);
-                      return combined
-                        ? `Will send ${formatDateTime(combined.toISOString())}`
-                        : 'Pick a date and time to schedule the send.';
-                    })()}
+                    {sendInstant
+                      ? `Will send ${formatDateTime(sendInstant.toISOString())}.`
+                      : 'Pick a date and time to schedule the send.'}
+                    {accountEquivalent && (
+                      <span className="text-[var(--foreground)]">
+                        {' '}That’s {accountEquivalent} for this account.
+                      </span>
+                    )}
                   </p>
                 </div>
-              )}
+              </Collapse>
             </div>
 
             {/* UTM tracking. Header toggle drives both enabled + expanded
@@ -651,17 +625,16 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
                     Delay
                   </label>
-                  <select
-                    value={resend.delayHours}
-                    onChange={(e) => setResend((r) => ({ ...r, delayHours: Number(e.target.value) }))}
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
-                  >
-                    <option value={24}>24 hours</option>
-                    <option value={48}>2 days</option>
-                    <option value={72}>3 days</option>
-                    <option value={120}>5 days</option>
-                    <option value={168}>7 days</option>
-                  </select>
+                  <Select
+                    value={String(resend.delayHours)}
+                    onChange={(v) => setResend((r) => ({ ...r, delayHours: Number(v) }))}
+                    options={
+                      RESEND_DELAY_OPTIONS.some((o) => o.value === String(resend.delayHours))
+                        ? RESEND_DELAY_OPTIONS
+                        : [...RESEND_DELAY_OPTIONS, { value: String(resend.delayHours), label: `${resend.delayHours} hours` }]
+                    }
+                    ariaLabel="Follow-up delay"
+                  />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
@@ -671,7 +644,10 @@ export default function ScheduleStepPage({ params }: PageProps) {
                     type="text"
                     value={resend.subject}
                     onChange={(e) => setResend((r) => ({ ...r, subject: e.target.value }))}
-                    placeholder={draft?.subject ? `Reminder: ${draft.subject}` : 'Leave blank to reuse the original subject'}
+                    // Left blank, the follow-up goes out under the original
+                    // subject — so that's what the placeholder shows. It used
+                    // to show "Reminder: …", a subject nothing would send.
+                    placeholder={draft?.subject || 'Leave blank to reuse the email’s subject'}
                     maxLength={200}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
                   />
@@ -691,23 +667,26 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   <UsersIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold tabular-nums leading-tight">
-                      {recipientsLoading ? (
+                      {!audienceChosen ? (
+                        <span className="text-[var(--muted-foreground)] font-normal">No recipients chosen yet</span>
+                      ) : audienceLoading ? (
                         <ArrowPathIcon className="w-3.5 h-3.5 inline animate-spin text-[var(--muted-foreground)]" />
-                      ) : audienceTruncated ? (
-                        `${audienceTotal.toLocaleString()} in audience — over the ${recipients.length.toLocaleString()} limit`
                       ) : (
-                        `${recipients.length.toLocaleString()} recipient${recipients.length === 1 ? '' : 's'}`
+                        `${audienceTotal.toLocaleString()} recipient${audienceTotal === 1 ? '' : 's'}`
                       )}
                     </p>
+                    {audienceChosen && !audienceLoading && audienceTotal === 0 && audienceReason && (
+                      <p className="text-[11px] text-amber-400 mt-0.5 animate-fade-in-up">{audienceReason}</p>
+                    )}
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => router.push(`/messaging/blasts/${encodeURIComponent(id)}/recipients`)}
+                  onClick={() => router.push(subHref(`/messaging/blasts/${encodeURIComponent(id)}/recipients`))}
                   className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline whitespace-nowrap"
                 >
                   <PencilSquareIcon className="w-3 h-3" />
-                  Change
+                  {audienceChosen ? 'Change' : 'Choose'}
                 </button>
               </div>
               <div className="flex items-start gap-2.5 mt-2 pt-2 border-t border-[var(--border)] min-w-0">
@@ -716,19 +695,18 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] leading-tight">
                     From
                   </p>
-                  <p className="text-xs font-medium truncate">
-                    {fromName || <span className="text-[var(--muted-foreground)] italic">Not set</span>}
-                  </p>
-                  <p className="text-[11px] text-[var(--muted-foreground)] truncate">
-                    {fromEmail || (
+                  {fromEmail ? (
+                    <p className="text-xs font-medium truncate">{fromLine}</p>
+                  ) : (
+                    <p className="text-[11px] text-[var(--muted-foreground)] truncate">
                       <Link
                         href={sendingSettingsHref}
                         className="italic text-[var(--primary)] hover:underline"
                       >
                         Configure in Sending settings →
                       </Link>
-                    )}
-                  </p>
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -761,11 +739,11 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   }
                 />
                 <ChecklistItem
-                  ok={recipients.length > 0 && !audienceTruncated}
+                  ok={audienceChosen && audienceTotal > 0}
                   label={
-                    audienceTruncated
-                      ? `Audience is ${audienceTotal.toLocaleString()} contacts — over the ${recipients.length.toLocaleString()} per-campaign limit. Narrow the segment.`
-                      : `${recipients.length.toLocaleString()} sendable recipient${recipients.length === 1 ? '' : 's'}`
+                    audienceChosen
+                      ? `${audienceTotal.toLocaleString()} sendable recipient${audienceTotal === 1 ? '' : 's'}`
+                      : 'Recipients chosen'
                   }
                 />
               </ul>
@@ -855,7 +833,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
       {/* Deliverability + compliance report */}
       {(blockers.length > 0 || warnings.length > 0) && (
-        <div className="max-w-7xl mx-auto px-6 pb-4">
+        <div className="max-w-7xl mx-auto px-6 pb-4 animate-fade-in-up">
           <div
             className={`rounded-2xl border p-5 ${
               preflightBlocked
@@ -872,13 +850,13 @@ export default function ScheduleStepPage({ params }: PageProps) {
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-[var(--foreground)]">
                   {preflightBlocked
-                    ? 'This blast can\u2019t send yet'
+                    ? 'This blast can’t send yet'
                     : 'Worth checking before you send'}
                 </h3>
                 <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
                   {preflightBlocked
                     ? 'Each item below would push this email into spam folders or breach CAN-SPAM.'
-                    : 'These won\u2019t stop the send, but fixing them improves inbox placement.'}
+                    : 'These won’t stop the send, but fixing them improves inbox placement.'}
                 </p>
 
                 <ul className="mt-3 space-y-2.5">
@@ -905,37 +883,42 @@ export default function ScheduleStepPage({ params }: PageProps) {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
           <button
             type="button"
-            onClick={() => router.push(`/messaging/blasts/${encodeURIComponent(id)}/template`)}
+            onClick={() => router.push(subHref(`/messaging/blasts/${encodeURIComponent(id)}/template`))}
             className="inline-flex items-center gap-1.5 px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)]"
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back
           </button>
 
-          <PrimaryButton
-            onClick={handleSchedule}
-            disabled={
-              submitting ||
-              recipientsLoading ||
-              // An audience over the per-campaign ceiling must not send a
-              // silent prefix — the user picks a narrower segment instead.
-              audienceTruncated ||
-              recipients.length === 0 ||
-              !draft?.subject?.trim() ||
-              !draft?.htmlContent?.trim() ||
-              // Deliverability gate. The server enforces this too; disabling
-              // the button just means the user isn't told "no" only after
-              // committing to a send time.
-              preflightBlocked
-            }
-          >
-            <PaperAirplaneIcon className="w-4 h-4" />
-            {submitting
-              ? 'Scheduling…'
-              : sendMode === 'now'
-                ? 'Send now'
-                : 'Schedule send'}
-          </PrimaryButton>
+          <div className="flex items-center gap-4 min-w-0">
+            {confirming && (
+              <p className="text-xs text-[var(--muted-foreground)] animate-fade-in-up">
+                Still working — checking whether the schedule went through…
+              </p>
+            )}
+            <PrimaryButton
+              onClick={handleSchedule}
+              disabled={
+                submitting ||
+                audienceLoading ||
+                !audienceChosen ||
+                audienceTotal === 0 ||
+                !draft?.subject?.trim() ||
+                !draft?.htmlContent?.trim() ||
+                // Deliverability gate. The server enforces this too; disabling
+                // the button just means the user isn't told "no" only after
+                // committing to a send time.
+                preflightBlocked
+              }
+            >
+              <PaperAirplaneIcon className="w-4 h-4" />
+              {submitting
+                ? 'Scheduling…'
+                : sendMode === 'now'
+                  ? 'Send now'
+                  : 'Schedule send'}
+            </PrimaryButton>
+          </div>
         </div>
       </div>
     </div>
@@ -1006,7 +989,7 @@ function ToggleSection({
   // decides everything.
   return (
     <div
-      className={`glass-section-card rounded-2xl border ${
+      className={`glass-section-card rounded-2xl border transition-colors ${
         enabled ? 'border-[var(--primary)]/40' : 'border-[var(--border)]'
       }`}
     >
@@ -1026,11 +1009,12 @@ function ToggleSection({
         </div>
         <Switch checked={enabled} onChange={onToggle} ariaLabel={`Enable ${title.toLowerCase()}`} />
       </div>
-      {enabled && (
+      {/* Not clipped: the follow-up delay's dropdown has to escape the box. */}
+      <Collapse open={enabled} mountClosed={false} clip={false}>
         <div className="px-5 pb-5 pt-4 border-t border-[var(--border)]">
           {children}
         </div>
-      )}
+      </Collapse>
     </div>
   );
 }
@@ -1097,7 +1081,7 @@ function ChecklistItem({ ok, label }: { ok: boolean; label: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5">
       <CheckCircleIcon
-        className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+        className={`w-4 h-4 mt-0.5 flex-shrink-0 transition-colors ${
           ok ? 'text-emerald-300' : 'text-[var(--muted-foreground)] opacity-40'
         }`}
       />

@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
 import { parseCsv, importContacts, type ImportMapping } from '@/lib/contacts/import';
-import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
+import {
+  CONTACT_FIELDS,
+  IGNORE_FIELD,
+  isOptOutTarget,
+  type ContactField,
+} from '@/lib/contacts/normalize';
 import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
 
 // CSV upload pipeline. Three modes:
@@ -176,6 +181,7 @@ export async function POST(req: NextRequest) {
     listId: mode === 'commit' ? listId : undefined,
     applyTags: mode === 'commit' ? applyTags : undefined,
     preserveExistingOnMatch,
+    importedBy: session!.user.id,
   });
 
   return NextResponse.json({ summary });
@@ -237,6 +243,10 @@ function parseMapping(raw: string): ImportMapping {
     }
     if (target === IGNORE_FIELD) {
       out[header] = IGNORE_FIELD;
+    } else if (isOptOutTarget(target)) {
+      // An opt-out column (DND, Unsubscribed…): sets dnd and writes the
+      // suppression rows for the whole group. See OPT_OUT_TARGETS.
+      out[header] = target;
     } else if (target.startsWith('custom:')) {
       const key = target.slice('custom:'.length).trim();
       if (!key) throw new Error(`Custom field mapping for "${header}" needs a key after "custom:"`);

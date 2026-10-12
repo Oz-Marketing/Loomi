@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseBlastAccountKeys } from '@/lib/services/blast-account-keys';
 import { requirePermission } from '@/lib/permissions/require';
 import {
   createDraftEmailBlast,
@@ -26,15 +27,15 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const name = typeof body?.name === 'string' ? body.name : '';
-  const accountKeysInput = Array.isArray(body?.accountKeys)
-    ? (body.accountKeys as unknown[]).filter(
-        (k): k is string => typeof k === 'string' && k.length > 0,
-      )
-    : [];
+  const parsedKeys = parseBlastAccountKeys(body?.accountKeys);
+  if (!parsedKeys.ok) {
+    return NextResponse.json({ error: parsedKeys.error }, { status: 400 });
+  }
+  const accountKeysInput = parsedKeys.keys;
 
   const userRole = session!.user.role;
   const userAccountKeys: string[] = session!.user.accountKeys ?? [];
-  if (userRole === 'admin' && userAccountKeys.length > 0 && accountKeysInput.length > 0) {
+  if (userRole === 'admin' && userAccountKeys.length > 0) {
     const allowed = new Set(userAccountKeys);
     const disallowed = accountKeysInput.find((k) => !allowed.has(k));
     if (disallowed) {

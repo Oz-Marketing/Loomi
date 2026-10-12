@@ -120,6 +120,28 @@ describe('scheduleResendIfDue', () => {
     expect(blastCreate.mock.calls[0][0].data.subject).toBe('August lease offers');
   });
 
+  it("carries the parent's UTM tagging over to the follow-up", async () => {
+    const utm = {
+      enabled: true,
+      source: 'loomi',
+      medium: 'email',
+      campaign: 'august-lease',
+      term: '',
+      content: '',
+    };
+    blastFindUnique.mockResolvedValue(
+      parentBlast({
+        metadata: JSON.stringify({
+          resend: { enabled: true, delayHours: 48, subject: 'Still interested?' },
+          utm,
+        }),
+      }),
+    );
+    await scheduleResendIfDue('parent-1');
+    const meta = JSON.parse(blastCreate.mock.calls[0][0].data.metadata);
+    expect(meta.utm).toMatchObject({ enabled: true, campaign: 'august-lease' });
+  });
+
   it('marks the child with resendOf so it is recognizable', async () => {
     blastFindUnique.mockResolvedValue(parentBlast());
     await scheduleResendIfDue('parent-1');
@@ -239,9 +261,13 @@ describe('materializeResendRecipients', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].email).toBe('quiet@x.com');
     expect(rows[0].status).toBe('pending');
-    // Only open/click count as engagement — a delivery is not engagement.
-    expect(eventFindMany.mock.calls[0][0].where.eventType.in.sort())
-      .toEqual(['click', 'open']);
+    // Out of the follow-up: real engagement (open, click) and anyone who
+    // asked not to hear from us again. A delivery is not engagement, and an
+    // Apple Mail Privacy prefetch ('machine_open') is not an open.
+    const excluding = [...eventFindMany.mock.calls[0][0].where.eventType.in].sort();
+    expect(excluding).toEqual(['click', 'group_unsubscribe', 'open', 'spamreport', 'unsubscribe']);
+    expect(excluding).not.toContain('delivered');
+    expect(excluding).not.toContain('machine_open');
   });
 
   it('matches engagement case-insensitively', async () => {

@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The part of cancellation that is easy to get wrong and impossible to see
 // from the outside: stopping a send that is ALREADY RUNNING.
 //
-// processEmailBlast loads its pending recipients once and then works through
-// them, so a 10k-recipient blast lives for minutes. Writing 'canceled' to the
+// processEmailBlast loads a batch of pending recipients and then works through
+// it, so a pass lives for many seconds and a large blast for many minutes. Writing 'canceled' to the
 // row does nothing to that loop on its own — it is holding its list in memory.
 // Two things therefore have to hold:
 //
@@ -21,10 +21,13 @@ const blastUpdateMany = vi.fn();
 const blastFindFirst = vi.fn();
 const recipientFindMany = vi.fn();
 const recipientUpdate = vi.fn();
+const recipientUpdateMany = vi.fn();
 const sendEmail = vi.fn();
 
-vi.mock('@/lib/prisma', () => ({
-  prisma: {
+vi.mock('@/lib/prisma', () => {
+  // The counters are recounted inside a transaction under a row lock
+  // (recomputeEmailBlastCounters); the transaction runs against this same client.
+  const prisma: Record<string, unknown> = {
     emailBlast: {
       findUnique: (...a: unknown[]) => blastFindUnique(...a),
       findUniqueOrThrow: (...a: unknown[]) => blastFindUniqueOrThrow(...a),
@@ -35,6 +38,9 @@ vi.mock('@/lib/prisma', () => ({
     emailBlastRecipient: {
       findMany: (...a: unknown[]) => recipientFindMany(...a),
       update: (...a: unknown[]) => recipientUpdate(...a),
+      updateMany: (...a: unknown[]) => recipientUpdateMany(...a),
+      groupBy: vi.fn(async () => []),
+      findFirst: vi.fn(async () => null),
       count: vi.fn(async () => 0),
       createMany: vi.fn(async () => ({ count: 0 })),
     },
@@ -54,11 +60,18 @@ vi.mock('@/lib/prisma', () => ({
         },
       ]),
     },
-    contact: { findMany: vi.fn(async () => []) },
-    emailSuppression: { findMany: vi.fn(async () => []) },
+    // Every recipient's contact still exists (a deleted one is skipped).
+    contact: {
+      findMany: vi.fn(async () =>
+        Array.from({ length: 60 }, (_, i) => ({ id: `c${i}`, accountKey: 'young-chev', dnd: null })),
+      ),
+    },
     emailEvent: { findMany: vi.fn(async () => []) },
-  },
-}));
+    $queryRaw: vi.fn(async () => []),
+  };
+  prisma.$transaction = (fn: (tx: unknown) => unknown) => fn(prisma);
+  return { prisma };
+});
 
 vi.mock('@/lib/crypto/encryption', () => ({
   decryptToken: (v: string) => v,
@@ -81,6 +94,23 @@ vi.mock('@/lib/sending/warmup', () => ({
 
 vi.mock('@/lib/sending/account-footer', () => ({
   resolveAccountFooters: vi.fn(async () => new Map()),
+}));
+
+// The send-time gate passes — this test is about cancellation.
+vi.mock('@/lib/sending/blast-preflight', () => ({
+  preflightEmailBlast: vi.fn(async () => ({ ok: true, issues: [] })),
+  formatPreflightBlockers: () => '',
+}));
+
+// Nobody is opted out.
+vi.mock('@/lib/sending/suppression-lookup', () => ({
+  loadEmailSuppressions: vi.fn(async () => () => null),
+}));
+
+// No DNS from a unit test: every domain is "unknown", which sends.
+vi.mock('@/lib/sending/mx-check', () => ({
+  resolveDomainMx: vi.fn(async () => new Map()),
+  domainOf: (email: string) => email.split('@')[1] ?? null,
 }));
 
 const { processEmailBlast } = await import('./email-blasts');
@@ -128,33 +158,35 @@ function blastRow(overrides?: Record<string, unknown>) {
 }
 
 /**
- * Route the several distinct findUnique calls processEmailBlast makes:
- * the main load (which asks for `recipients`), the resend check, and the
- * cancel gate's status poll.
+ * Route the reads a send pass makes: the blast row (main load, resend check)
+ * and the cancel gate's status poll; and, on the recipient table, the
+ * pending-accounts probe and the batch itself.
  */
 function wireFindUnique(status: () => string) {
   blastFindUnique.mockImplementation(async (args: Record<string, unknown>) => {
-    if (args.include) {
-      return { ...blastRow({ status: status() }), recipients: RECIPIENTS };
-    }
     const select = (args.select ?? {}) as Record<string, boolean>;
     if (select.status && Object.keys(select).length === 1) {
       return { status: status() };
     }
     return blastRow({ status: status() });
   });
+  recipientFindMany.mockImplementation(async (args: Record<string, unknown>) => {
+    if (args.distinct) return [{ accountKey: 'young-chev' }];
+    return RECIPIENTS.map((r) => ({ ...r, error: null }));
+  });
 }
 
 beforeEach(() => {
   for (const fn of [
     blastFindUnique, blastFindUniqueOrThrow, blastUpdate, blastUpdateMany,
-    blastFindFirst, recipientFindMany, recipientUpdate, sendEmail,
+    blastFindFirst, recipientFindMany, recipientUpdate, recipientUpdateMany, sendEmail,
   ]) fn.mockReset();
 
   blastUpdateMany.mockResolvedValue({ count: 1 });
   blastUpdate.mockResolvedValue(blastRow());
   blastFindFirst.mockResolvedValue(null);
   recipientUpdate.mockResolvedValue({});
+  recipientUpdateMany.mockResolvedValue({ count: 1 });
   recipientFindMany.mockResolvedValue([]);
   sendEmail.mockResolvedValue({ messageId: 'sg-1' });
   blastFindUniqueOrThrow.mockImplementation(async () =>
@@ -198,14 +230,18 @@ describe('processEmailBlast — cancellation mid-send', () => {
     await processEmailBlast('blast-1', { concurrency: 1 });
 
     // Every status write after the claim goes through updateUnlessCanceled,
-    // which carries the `status: { not: 'canceled' }` guard. A bare
-    // emailBlast.update would resolve the blast to 'completed' — zero pending
-    // recipients reads as "finished" to resolveBlastStatus.
+    // which carries the `status: { not: 'canceled' }` guard. A bare status
+    // write would resolve the blast to 'completed' — zero pending recipients
+    // reads as "finished" to resolveBlastStatus.
     const guardedWrites = blastUpdateMany.mock.calls.filter(
       (call) => call[0]?.where?.status?.not === 'canceled',
     );
     expect(guardedWrites.length).toBeGreaterThan(0);
-    expect(blastUpdate).not.toHaveBeenCalled();
+    // A canceled pass still records what its in-flight messages did — counts
+    // only, never a status.
+    for (const [args] of blastUpdate.mock.calls) {
+      expect((args as { data: Record<string, unknown> }).data.status).toBeUndefined();
+    }
   });
 
   it('schedules no follow-up for a canceled blast', async () => {

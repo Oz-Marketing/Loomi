@@ -4,6 +4,7 @@ import {
   listSmsBlasts,
   type BlastStatusFilter,
 } from '@/lib/services/sms-blasts';
+import { confinedAccountKeys } from '@/lib/messaging/blast-access';
 
 /**
  * GET /api/blasts/sms?limit=20&status=all|archived
@@ -22,11 +23,20 @@ export async function GET(req: NextRequest) {
   const statusFilter = parseCampaignStatusFilter(
     req.nextUrl.searchParams.get('status'),
   );
-  const accountKeys = session!.user.role === 'client'
-    ? (session!.user.accountKeys ?? [])
-    : undefined;
+  // Clients AND account-scoped admins see only their accounts' blasts — the
+  // same rule as the email list (only clients used to be filtered).
+  const confined = confinedAccountKeys(session!.user);
+  // listSmsBlasts reads an empty list as "no filter"; a confined user with no
+  // accounts must get nothing instead.
+  if (confined !== null && confined.length === 0) {
+    return NextResponse.json({ campaigns: [] });
+  }
 
-  const campaigns = await listSmsBlasts({ limit, accountKeys, statusFilter });
+  const campaigns = await listSmsBlasts({
+    limit,
+    accountKeys: confined ?? undefined,
+    statusFilter,
+  });
   return NextResponse.json({ campaigns });
 }
 

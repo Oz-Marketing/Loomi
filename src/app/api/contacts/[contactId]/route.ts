@@ -4,6 +4,13 @@ import { requirePermission } from '@/lib/permissions/require';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 import { normaliseEmail, normalisePhone } from '@/lib/contacts/normalize';
+import {
+  applyContactOptOutChange,
+  dndAfterChange,
+  readDndFlags,
+  type DndFlags,
+} from '@/lib/sending/opt-outs';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 
 type RouteContext = { params: Promise<{ contactId: string }> };
 
@@ -105,8 +112,9 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
   const existing = await prisma.contact.findFirst({
     where: { id: contactId, accountKey },
     // The name columns come back because `fullName` has to be re-derived
-    // when either half of the name changes — see below.
-    select: { id: true, firstName: true, lastName: true },
+    // when either half of the name changes — see below. The address and dnd
+    // columns, because an opt-out is written against the address.
+    select: { id: true, firstName: true, lastName: true, email: true, phone: true, dnd: true },
   });
   if (!existing) {
     return NextResponse.json({ error: 'Contact not found' }, { status: 404 });
@@ -126,19 +134,23 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
     }
   }
 
-  // Email / phone get the same normalisation as imports.
+  // Email / phone get the same normalisation as imports. The resulting
+  // addresses are tracked too: an opt-out applies to the address the contact
+  // has AFTER this update.
+  let nextEmail = existing.email;
+  let nextPhone = existing.phone;
   if ('email' in body) {
-    if (body.email === null) data.email = null;
+    if (body.email === null) data.email = nextEmail = null;
     else if (typeof body.email === 'string') {
       const next = normaliseEmail(body.email);
-      data.email = next || null;
+      data.email = nextEmail = next || null;
     }
   }
   if ('phone' in body) {
-    if (body.phone === null) data.phone = null;
+    if (body.phone === null) data.phone = nextPhone = null;
     else if (typeof body.phone === 'string') {
       const next = normalisePhone(body.phone);
-      data.phone = next || null;
+      data.phone = nextPhone = next || null;
     }
   }
 
@@ -197,24 +209,51 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
     }
   }
 
-  if ('dnd' in body) {
-    if (body.dnd === null) {
-      data.dnd = Prisma.DbNull;
-    } else if (body.dnd && typeof body.dnd === 'object' && !Array.isArray(body.dnd)) {
-      const row = body.dnd as Record<string, unknown>;
-      const next: { email?: boolean; sms?: boolean } = {};
-      if (typeof row.email === 'boolean') next.email = row.email;
-      if (typeof row.sms === 'boolean') next.sms = row.sms;
-      data.dnd = Object.keys(next).length > 0 ? next : Prisma.DbNull;
-    }
+  // dnd follows the contact toggle's rules (applyContactOptOutChange): turning
+  // a channel on writes the suppression rows for the whole group; turning it
+  // off clears only what staff may clear, and a channel held by the person's
+  // own unsubscribe, a bounce or an import stays on. Per channel — a channel
+  // the body leaves out is left alone, where this used to replace the whole
+  // cell and drop it. `dnd: null` turns both off.
+  const dndPatch = parseDndPatch(body);
+
+  // An opted-out contact whose email or phone changes keeps its opt-out on
+  // the new address too — the flag says this PERSON opted out, and the send
+  // path looks up suppression rows by address.
+  const flags = readDndFlags(existing.dnd);
+  const carried: DndFlags = {};
+  if (nextEmail !== existing.email && flags.email === true && dndPatch?.email === undefined) {
+    carried.email = true;
   }
+  if (nextPhone !== existing.phone && flags.sms === true && dndPatch?.sms === undefined) {
+    carried.sms = true;
+  }
+  const optOutPatch: DndFlags | null =
+    dndPatch || Object.keys(carried).length > 0 ? { ...carried, ...dndPatch } : null;
 
   try {
-    const updated = await prisma.contact.update({
-      where: { id: contactId },
-      data,
-      select: CONTACT_SELECT,
-    });
+    // Resolved outside the transaction, so it doesn't hold a second
+    // connection open while the first waits on it.
+    const relatedAccountKeys = optOutPatch ? await getRelatedAccountKeys(accountKey) : [];
+    const updated = optOutPatch
+      ? await prisma.$transaction(async (tx) => {
+          const change = await applyContactOptOutChange({
+            accountKey,
+            email: nextEmail,
+            phone: nextPhone,
+            patch: optOutPatch,
+            tx,
+            relatedAccountKeys,
+          });
+          const next = dndAfterChange(existing.dnd, optOutPatch, change, accountKey);
+          data.dnd = Object.keys(next).length > 0 ? { ...next } : Prisma.DbNull;
+          return tx.contact.update({ where: { id: contactId }, data, select: CONTACT_SELECT });
+        })
+      : await prisma.contact.update({
+          where: { id: contactId },
+          data,
+          select: CONTACT_SELECT,
+        });
     return NextResponse.json({
       contact: serializeContact(updated),
       provider: 'loomi',
@@ -258,6 +297,18 @@ export async function DELETE(req: NextRequest, { params }: RouteContext) {
   }
 
   return NextResponse.json({ deleted: true });
+}
+
+/** The dnd channels a PATCH body asks to change, or null when it doesn't touch dnd. */
+function parseDndPatch(body: Record<string, unknown>): DndFlags | null {
+  if (!('dnd' in body)) return null;
+  if (body.dnd === null) return { email: false, sms: false };
+  if (!body.dnd || typeof body.dnd !== 'object' || Array.isArray(body.dnd)) return null;
+  const row = body.dnd as Record<string, unknown>;
+  const patch: DndFlags = {};
+  if (typeof row.email === 'boolean') patch.email = row.email;
+  if (typeof row.sms === 'boolean') patch.sms = row.sms;
+  return Object.keys(patch).length > 0 ? patch : null;
 }
 
 // ── Field lists ──

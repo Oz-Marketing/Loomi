@@ -13,6 +13,12 @@
  * real indexed column and is one row per person, which is the grain the numbers
  * are counted at anyway.
  *
+ * ── ONE COHORT ──────────────────────────────────────────────────────────────
+ * Totals and per-blast rows are counted over the same recipient rows, the
+ * same way email-analytics.ts does: Sent is everything Twilio accepted
+ * (including texts a carrier refused afterwards), and Failed is everything
+ * that didn't reach a handset — never handed over, or refused.
+ *
  * ── WHY DELIVERY IS COUNTED PER RECIPIENT, NOT PER EVENT ────────────────────
  * Twilio re-sends status callbacks as a message moves queued → sent →
  * delivered. The webhook de-dups on (sid, eventType), so a plain event count is
@@ -22,6 +28,7 @@
  */
 import { prisma } from '@/lib/prisma';
 import { EMPTY_TEXT_COUNTS, type TextCounts } from '@/lib/reporting/blasts';
+import { blastSourceWhere, type BlastSourceFilter } from './email-blasts';
 
 export interface TextBlastRow {
   campaignId: string;
@@ -38,82 +45,86 @@ interface Input {
   accountKeys: string[] | null;
   start: Date | null;
   end: Date | null;
+  /**
+   * Which sends count: one-off blasts (default — the Reporting page shows flow
+   * texts in their own section, and email reporting already leaves them out
+   * here), flow texts, or both.
+   */
+  source?: BlastSourceFilter;
 }
 
-/** Twilio event types that mean the message did not arrive. */
-const FAILURE_EVENTS = ['undelivered', 'failed'];
 /** Inbound STOP and its variants. */
 const OPT_OUT_EVENTS = ['stop', 'unsub'];
+/** Twilio accepted it: sent on, or refused afterwards by the carrier. */
+const ACCEPTED = ['sent', 'undelivered'];
+/** Didn't reach the handset: never handed to Twilio, or refused by the carrier. */
+const NOT_DELIVERED = ['failed', 'undelivered'];
 
 function dateFilter(start: Date | null, end: Date | null) {
   if (!start && !end) return undefined;
   return { ...(start ? { gte: start } : {}), ...(end ? { lte: end } : {}) };
 }
 
-function recipientWhere({ accountKeys, start, end }: Input) {
+/**
+ * The recipients a report covers — its cohort. Every number below is counted
+ * over these rows, so a blast's row and the totals always add up.
+ *
+ * A text that was never handed to Twilio has no `sentAt`; it is dated by its
+ * last update instead. Filtering on `sentAt` alone put failed texts in no
+ * window at all, so a date range never showed a failure.
+ */
+function recipientWhere({ accountKeys, start, end, source = 'blasts' }: Input) {
   const range = dateFilter(start, end);
   return {
     ...(accountKeys ? { accountKey: { in: accountKeys } } : {}),
-    ...(range ? { sentAt: range } : {}),
+    ...(source === 'all' ? {} : { campaign: blastSourceWhere(source) }),
+    ...(range ? { OR: [{ sentAt: range }, { sentAt: null, updatedAt: range }] } : {}),
   };
 }
 
-function eventWhere({ accountKeys, start, end }: Input) {
+/** Inbound STOPs carry no recipient — scoped by account and event time. */
+function optOutWhere({ accountKeys, start, end }: Input) {
   const range = dateFilter(start, end);
   return {
+    eventType: { in: OPT_OUT_EVENTS },
     ...(accountKeys ? { accountKey: { in: accountKeys } } : {}),
     ...(range ? { timestamp: range } : {}),
   };
 }
 
-/** Distinct recipients that reached any of `types`. */
-async function distinctRecipients(
-  where: Record<string, unknown>,
-  types: string[],
-): Promise<number> {
-  const rows = await prisma.smsEvent.findMany({
-    where: { ...where, eventType: { in: types }, recipientId: { not: null } },
-    distinct: ['recipientId'],
-    select: { recipientId: true },
-  });
-  return rows.length;
-}
-
 export async function getTextTotals(input: Input): Promise<TextCounts> {
   const rWhere = recipientWhere(input);
-  const eWhere = eventWhere(input);
 
-  const [sent, failedRecipients, campaigns, delivered, failedEvents, optOuts] = await Promise.all([
-    prisma.smsBlastRecipient.count({ where: { ...rWhere, status: 'sent' } }),
-    prisma.smsBlastRecipient.count({ where: { ...rWhere, status: 'failed' } }),
+  const [sent, notDelivered, campaigns, delivered, optOuts] = await Promise.all([
+    prisma.smsBlastRecipient.count({ where: { ...rWhere, status: { in: ACCEPTED } } }),
+    prisma.smsBlastRecipient.count({ where: { ...rWhere, status: { in: NOT_DELIVERED } } }),
     prisma.smsBlastRecipient.findMany({
       where: rWhere,
       distinct: ['campaignId'],
       select: { campaignId: true },
     }),
-    distinctRecipients(eWhere, ['delivered']),
-    distinctRecipients(eWhere, FAILURE_EVENTS),
-    // Opt-outs are counted as EVENTS, not distinct recipients: an inbound STOP
-    // has no recipientId to be distinct on (it's an unsolicited inbound
-    // message), so distinct-on-null would collapse every opt-out into one.
-    prisma.smsEvent.count({ where: { ...eWhere, eventType: { in: OPT_OUT_EVENTS } } }),
+    // Distinct recipients in the cohort with a delivery receipt — Twilio
+    // re-sends callbacks, and a retried message has two SIDs for one person.
+    prisma.smsEvent.findMany({
+      where: { eventType: 'delivered', recipient: rWhere },
+      distinct: ['recipientId'],
+      select: { recipientId: true },
+    }),
+    // Counted as EVENTS: an inbound STOP has no recipientId to be distinct on.
+    prisma.smsEvent.count({ where: optOutWhere(input) }),
   ]);
 
   return {
     ...EMPTY_TEXT_COUNTS,
     campaigns: campaigns.length,
     sent,
-    delivered,
-    // A recipient the worker never handed to Twilio and one Twilio couldn't
-    // deliver are both failures, but they're recorded in different places.
-    // Max, not sum: a recipient marked failed locally can also carry a Twilio
-    // failure event, and adding them would double-count that person.
-    failed: Math.max(failedRecipients, failedEvents),
+    delivered: delivered.length,
+    failed: notDelivered,
     optOuts,
   };
 }
 
-/** Per-campaign rows for the table. */
+/** Per-campaign rows for the table — over the same cohort as the totals. */
 export async function getTextBlasts(input: Input): Promise<TextBlastRow[]> {
   const rWhere = recipientWhere(input);
 
@@ -131,13 +142,13 @@ export async function getTextBlasts(input: Input): Promise<TextBlastRow[]> {
       select: { id: true, name: true, completedAt: true, scheduledFor: true },
     }),
     prisma.smsEvent.findMany({
-      where: { campaignId: { in: ids }, eventType: 'delivered', recipientId: { not: null } },
+      where: { eventType: 'delivered', recipient: rWhere },
       distinct: ['recipientId'],
       select: { campaignId: true },
     }),
     prisma.smsEvent.groupBy({
       by: ['campaignId'],
-      where: { campaignId: { in: ids }, eventType: { in: OPT_OUT_EVENTS } },
+      where: { ...optOutWhere(input), campaignId: { in: ids } },
       _count: { _all: true },
     }),
     // Earliest actual send per campaign — a truer "sent on" than the schedule,
@@ -163,6 +174,8 @@ export async function getTextBlasts(input: Input): Promise<TextBlastRow[]> {
     m.set(g.status, g._count._all);
     statusBy.set(g.campaignId, m);
   }
+  const countOf = (m: Map<string, number> | undefined, statuses: string[]) =>
+    statuses.reduce((n, status) => n + (m?.get(status) ?? 0), 0);
 
   return ids.map((id) => {
     const s = statusBy.get(id);
@@ -171,9 +184,9 @@ export async function getTextBlasts(input: Input): Promise<TextBlastRow[]> {
       campaignId: id,
       campaignName: b?.name ?? null,
       sentAt: firstSent.get(id) ?? b?.completedAt ?? b?.scheduledFor ?? null,
-      sent: s?.get('sent') ?? 0,
+      sent: countOf(s, ACCEPTED),
       delivered: deliveredBy.get(id) ?? 0,
-      failed: s?.get('failed') ?? 0,
+      failed: countOf(s, NOT_DELIVERED),
       optOuts: optOut.get(id) ?? 0,
     };
   });

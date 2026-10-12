@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { parseBlastAccountKeys } from '@/lib/services/blast-account-keys';
 import { requirePermission } from '@/lib/permissions/require';
-import {
-  deleteSmsBlast,
-  getSmsBlast,
-  updateSmsBlastDraft,
-} from '@/lib/services/sms-blasts';
+import { BlastNotDraftError } from '@/lib/services/email-blasts';
+import { getSmsBlast, updateSmsBlastDraft } from '@/lib/services/sms-blasts';
+import { deleteBlastWithLinkedChannels } from '@/lib/services/blast-linked';
+import { canReadBlast } from '@/lib/messaging/blast-access';
+import { isEditableBlastStatus, lockedBlastMessage } from '@/lib/messaging/blast-builder-steps';
+import { mergeBlastMetadata, readMetadataPatch } from '@/lib/messaging/blast-metadata';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -17,22 +19,20 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
   const { id } = await params;
   const campaign = await getSmsBlast(id);
-  if (!campaign) {
+  // Same scope rule as the email route — see canReadBlast.
+  if (!campaign || !canReadBlast(session!.user, campaign.accountKeys)) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-  }
-
-  if (session!.user.role === 'client') {
-    const allowed = new Set(session!.user.accountKeys ?? []);
-    const visible = campaign.accountKeys.some((key) => allowed.has(key));
-    if (!visible) {
-      return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
-    }
   }
 
   return NextResponse.json({ campaign });
 }
 
-/** PATCH /api/blasts/sms/[id] — merge-update a draft. */
+/**
+ * PATCH /api/blasts/sms/[id] — merge-update a draft.
+ *
+ * Same contract as the email route: `metadataPatch` merges into the stored
+ * metadata, and only a draft may change anything but its name (409 otherwise).
+ */
 export async function PATCH(req: NextRequest, { params }: RouteParams) {
   const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
@@ -75,10 +75,18 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   if (typeof body?.metadata === 'string' || body?.metadata === null) {
     patch.metadata = body.metadata || null;
   }
+  const metadataPatch = readMetadataPatch(body?.metadataPatch);
+  if (metadataPatch) {
+    const base = patch.metadata !== undefined ? patch.metadata : existing.metadata;
+    patch.metadata = mergeBlastMetadata(base, metadataPatch);
+  }
   if (Array.isArray(body?.accountKeys)) {
-    patch.accountKeys = (body.accountKeys as unknown[]).filter(
-      (k): k is string => typeof k === 'string' && k.length > 0,
-    );
+    // Moving a blast to "no account" would list it in every account.
+    const parsedKeys = parseBlastAccountKeys(body.accountKeys);
+    if (!parsedKeys.ok) {
+      return NextResponse.json({ error: parsedKeys.error }, { status: 400 });
+    }
+    patch.accountKeys = parsedKeys.keys;
     if (userRole === 'admin' && userAccountKeys.length > 0) {
       const allowed = new Set(userAccountKeys);
       const disallowed = patch.accountKeys.find((k) => !allowed.has(k));
@@ -88,16 +96,35 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     }
   }
 
+  // A rename is allowed at any status; everything else needs a draft.
+  const changesContent = Object.keys(patch).some((key) => key !== 'name');
+  if (changesContent && !isEditableBlastStatus(existing.status)) {
+    return NextResponse.json(
+      { error: lockedBlastMessage(existing.status), code: 'blast_locked' },
+      { status: 409 },
+    );
+  }
+
   try {
-    const updated = await updateSmsBlastDraft(id, patch);
+    const updated = await updateSmsBlastDraft(id, patch, { requireDraft: changesContent });
     return NextResponse.json({ campaign: updated });
   } catch (err) {
+    if (err instanceof BlastNotDraftError) {
+      return NextResponse.json(
+        { error: lockedBlastMessage('scheduled'), code: 'blast_locked' },
+        { status: 409 },
+      );
+    }
     const message = err instanceof Error ? err.message : 'Failed to update campaign';
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-/** DELETE /api/blasts/sms/[id] — hard-delete a Loomi SMS campaign. */
+/**
+ * DELETE /api/blasts/sms/[id] — hard-delete a Loomi SMS campaign, and the
+ * email half when it is one side of an Email + Text pair. Refused (409) while
+ * either half is still scheduled or sending.
+ */
 export async function DELETE(_req: NextRequest, { params }: RouteParams) {
   const { session, error } = await requirePermission('studio.email.edit');
   if (error) return error;
@@ -121,8 +148,11 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    await deleteSmsBlast(id);
-    return NextResponse.json({ ok: true });
+    const result = await deleteBlastWithLinkedChannels('sms', id);
+    return NextResponse.json({
+      ok: true,
+      ...(result.partnerError ? { partnerError: result.partnerError } : {}),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete campaign';
     return NextResponse.json({ error: message }, { status: 409 });

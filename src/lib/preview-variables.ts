@@ -1,15 +1,31 @@
-import {
-  resolveAccountAddress,
-  resolveAccountCity,
-  resolveAccountDealerName,
-  resolveAccountEmail,
-  resolveAccountPhone,
-  resolveAccountPostalCode,
-  resolveAccountState,
-  resolveAccountWebsite,
-} from '@/lib/account-resolvers';
+// What every {{…}} tag resolves to in the editor preview, the /preview page,
+// the PNG downloads and the test send.
+//
+// This used to keep its own account → value mapping beside the sender's, and
+// the two drifted until the preview showed a dealership's real service phone
+// while the inbox got a literal {{custom_values.service_phone}}. It now holds
+// no mapping of its own: contact values come from contactMergeValues(),
+// account values from accountMergeValues(), and substitution and auditing go
+// through the sender's parser and filters. The only thing that is preview-only
+// is the realistic sample text ("Alex", "(801) 555-0100") used to fill a blank
+// so a layout can be judged — and that is switchable off.
 
-export interface PreviewAccountData {
+import {
+  accountMergeValues,
+  type AccountMergeSource,
+} from '@/lib/sending/account-merge-values';
+import {
+  applyBlastMergetags,
+  applyContactCustomFields,
+  applyMergetagFilters,
+  contactMergeValues,
+  parseMergetag,
+  resolveMergetagValue,
+  type BlastContactData,
+  type BlastMergetagContext,
+} from '@/lib/sending/blast-mergetags';
+
+export interface PreviewAccountData extends AccountMergeSource {
   dealer?: string;
   email?: string;
   phone?: string;
@@ -71,48 +87,61 @@ export interface PreviewContact {
   leaseEndDate?: string;
   warrantyEndDate?: string;
   purchaseDate?: string;
+  dateOfBirth?: string;
+  /** The contact's custom fields, when the caller loaded them. */
+  customFields?: Record<string, unknown> | null;
 }
 
-function token(variable: string): string {
-  const trimmed = variable.trim();
-  if (trimmed.startsWith('{{') && trimmed.endsWith('}}')) return trimmed;
-  return `{{${trimmed.replace(/^\{+|\}+$/g, '')}}}`;
+/**
+ * The stand-in recipient for the editor preview and the test send. Clearly a
+ * sample — nobody mistakes "Alex Customer" at example.com for a real person.
+ */
+export const SAMPLE_PREVIEW_CONTACT: BlastContactData = {
+  firstName: 'Alex',
+  lastName: 'Customer',
+  fullName: 'Alex Customer',
+  email: 'alex.customer@example.com',
+  phone: '(801) 555-0199',
+  address1: '450 N Main St',
+  city: 'Layton',
+  state: 'UT',
+  postalCode: '84041',
+  country: 'US',
+  vehicleYear: '2021',
+  vehicleMake: 'Mazda',
+  vehicleModel: 'CX-5',
+  vehicleVin: 'JM3KFACM7M1234567',
+  vehicleMileage: '42000',
+  lastServiceDate: '2025-10-05',
+  nextServiceDate: '2026-03-05',
+  leaseEndDate: '2027-02-01',
+  warrantyEndDate: '2026-12-15',
+  purchaseDate: '2021-03-20',
+  dateOfBirth: '1988-06-15',
+};
+
+/** Sample fill for account fields the account hasn't set. Editor only. */
+const SAMPLE_ACCOUNT_VALUES: Record<string, string> = {
+  'location.name': 'Preview Dealer',
+  'location.email': 'dealer@example.com',
+  'location.phone': '(801) 555-0100',
+  'location.address': '450 N Main St',
+  'location.city': 'Layton',
+  'location.state': 'UT',
+  'location.postal_code': '84041',
+  'custom_values.sales_phone': '(801) 555-0101',
+  'custom_values.service_phone': '(801) 555-0102',
+  'custom_values.parts_phone': '(801) 555-0103',
+  'custom_values.dealer_name': 'Preview Dealer',
+  'custom_values.crm_name': 'Preview Dealer',
+};
+
+function bareKey(variable: string): string {
+  return variable.trim().replace(/^\{+\s*|\s*\}+$/g, '').trim();
 }
 
-function mergeTokenMap(
-  target: Record<string, string>,
-  source?: Record<string, string | undefined | null>,
-) {
-  if (!source) return;
-  for (const [rawKey, rawValue] of Object.entries(source)) {
-    if (rawValue === undefined || rawValue === null || rawValue === '') continue;
-    target[token(rawKey)] = String(rawValue);
-  }
-}
-
-function fallbackContactDefaults(): Record<string, string> {
-  return {
-    '{{contact.first_name}}': 'Alex',
-    '{{contact.last_name}}': 'Customer',
-    '{{contact.full_name}}': 'Alex Customer',
-    '{{contact.email}}': 'alex.customer@example.com',
-    '{{contact.phone}}': '(801) 555-0199',
-    '{{contact.address1}}': '450 N Main St',
-    '{{contact.city}}': 'Layton',
-    '{{contact.state}}': 'UT',
-    '{{contact.postal_code}}': '84041',
-    '{{contact.country}}': 'US',
-    '{{contact.vehicle_year}}': '2021',
-    '{{contact.vehicle_make}}': 'Mazda',
-    '{{contact.vehicle_model}}': 'CX-5',
-    '{{contact.vehicle_vin}}': 'JM3KFACM7M1234567',
-    '{{contact.vehicle_mileage}}': '42000',
-    '{{contact.last_service_date}}': '2025-10-05',
-    '{{contact.next_service_date}}': '2026-03-05',
-    '{{contact.lease_end_date}}': '2027-02-01',
-    '{{contact.warranty_end_date}}': '2026-12-15',
-    '{{contact.purchase_date}}': '2021-03-20',
-  };
+function token(key: string): string {
+  return `{{${key}}}`;
 }
 
 export interface PreviewVariableOptions {
@@ -132,187 +161,139 @@ export interface PreviewVariableOptions {
   sampleFallbacks?: boolean;
 }
 
+/**
+ * The preview's tag → value map, keyed WITH braces (`{{contact.first_name}}`)
+ * because that is the shape /api/preview and the editor exchange.
+ *
+ * Every tag the sender knows is present — an empty string when there's no
+ * data — so an absent key always means "the sender won't recognize this".
+ */
 export function buildPreviewVariableMap(
   accountData?: PreviewAccountData | null,
   contact?: PreviewContact | null,
   options: PreviewVariableOptions = {},
 ): Record<string, string> {
   const sample = options.sampleFallbacks !== false;
-  const or = (value: string) => (sample ? value : '');
+  const timeZone = accountData?.timezone ?? null;
+  const sampleContact = sample ? contactMergeValues(SAMPLE_PREVIEW_CONTACT, { timeZone }) : null;
+  const realContact = contact ? contactMergeValues(contact, { timeZone }) : null;
 
-  const values: Record<string, string> = {
-    '{{unsubscribe_link}}': or('https://example.com/unsubscribe'),
-    '{{message.id}}': or('preview-message-id'),
+  const ctx: BlastMergetagContext = {
+    // A preview has no SendGrid to mint a real unsubscribe URL.
+    unsubscribe_link: sample ? 'https://example.com/unsubscribe' : '',
+    unsubscribe_url: sample ? 'https://example.com/unsubscribe' : '',
+    // Empty at send time too: nothing fills it per recipient.
+    'message.id': '',
   };
 
-  if (sample) {
-    mergeTokenMap(values, fallbackContactDefaults());
-  } else {
-    // The key still has to EXIST. mergeTokenMap skips an empty value, and a
-    // key that is absent reads as an unrecognized token — the audit calls it
-    // invalid and the substituter leaves the raw `{{…}}` in the download,
-    // which is the bug this is meant to stop.
-    for (const key of Object.keys(fallbackContactDefaults())) values[key] = '';
+  // A selected contact's real values win; a blank falls back to the sample.
+  for (const [key, value] of Object.entries(contactMergeValues(null))) {
+    ctx[key] = realContact?.[key] || sampleContact?.[key] || value;
   }
 
-  if (contact) {
-    mergeTokenMap(values, {
-      '{{contact.first_name}}': contact.firstName,
-      '{{contact.last_name}}': contact.lastName,
-      '{{contact.full_name}}': contact.fullName || [contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.firstName,
-      '{{contact.email}}': contact.email,
-      '{{contact.phone}}': contact.phone,
-      '{{contact.address1}}': contact.address1,
-      '{{contact.city}}': contact.city,
-      '{{contact.state}}': contact.state,
-      '{{contact.postal_code}}': contact.postalCode,
-      '{{contact.country}}': contact.country,
-      '{{contact.vehicle_year}}': contact.vehicleYear,
-      '{{contact.vehicle_make}}': contact.vehicleMake,
-      '{{contact.vehicle_model}}': contact.vehicleModel,
-      '{{contact.vehicle_vin}}': contact.vehicleVin,
-      '{{contact.vehicle_mileage}}': contact.vehicleMileage,
-      '{{contact.last_service_date}}': contact.lastServiceDate,
-      '{{contact.next_service_date}}': contact.nextServiceDate,
-      '{{contact.lease_end_date}}': contact.leaseEndDate,
-      '{{contact.warranty_end_date}}': contact.warrantyEndDate,
-      '{{contact.purchase_date}}': contact.purchaseDate,
-    });
+  for (const [key, value] of Object.entries(accountMergeValues(accountData))) {
+    ctx[key] = value || (sample ? SAMPLE_ACCOUNT_VALUES[key] ?? '' : '');
   }
 
-  const dealerName = resolveAccountDealerName(accountData, or('Preview Dealer'));
-  const brandingColors = accountData?.branding?.colors;
-  const brandingFonts = accountData?.branding?.fonts;
-  const locationTokens: Record<string, string> = {
-    '{{location.name}}': dealerName,
-    '{{location.email}}': resolveAccountEmail(accountData, or('dealer@example.com')),
-    '{{location.phone}}': resolveAccountPhone(accountData, or('(801) 555-0100')),
-    '{{location.address}}': resolveAccountAddress(accountData, or('450 N Main St')),
-    '{{location.city}}': resolveAccountCity(accountData, or('Layton')),
-    '{{location.state}}': resolveAccountState(accountData, or('UT')),
-    '{{location.postal_code}}': resolveAccountPostalCode(accountData, or('84041')),
-    '{{location.website}}': resolveAccountWebsite(accountData),
-  };
-  if (sample) mergeTokenMap(values, locationTokens);
-  else Object.assign(values, locationTokens);
+  // Same resolution order as the send: the contact's own custom field beats
+  // the account's value of the same name.
+  if (contact?.customFields) applyContactCustomFields(ctx, contact.customFields, { timeZone });
 
-  // Custom values — from customValues field (dynamic), with static defaults
-  if (accountData?.customValues) {
-    for (const [fieldKey, cv] of Object.entries(accountData.customValues)) {
-      if (cv.value) {
-        values[token(`custom_values.${fieldKey}`)] = cv.value;
-      }
-    }
+  // Per-account preview overrides: an explicit "show this in the editor".
+  for (const [rawKey, rawValue] of Object.entries(accountData?.previewValues ?? {})) {
+    if (rawValue === undefined || rawValue === null || rawValue === '') continue;
+    const key = bareKey(rawKey);
+    if (key) ctx[key] = String(rawValue);
   }
 
-  // Static defaults for standard custom values. An account customValues
-  // entry always wins — these only fill what it left unset.
-  const mainPhone = resolveAccountPhone(accountData);
-  const customValueDefaults: Record<string, string> = {
-    // Phone numbers
-    '{{custom_values.sales_phone}}':
-      accountData?.phoneSales || accountData?.salesPhone || mainPhone || or('(801) 555-0101'),
-    '{{custom_values.service_phone}}':
-      accountData?.phoneService || accountData?.servicePhone || or('(801) 555-0102'),
-    '{{custom_values.parts_phone}}':
-      accountData?.phoneParts || accountData?.partsPhone || or('(801) 555-0103'),
-    // Branding
-    '{{custom_values.dealer_name}}': dealerName,
-    '{{custom_values.crm_name}}': dealerName,
-    '{{custom_values.storefront_image}}': accountData?.storefrontImage || '',
-    '{{custom_values.brand_primary_color}}': brandingColors?.primary || '',
-    '{{custom_values.brand_secondary_color}}': brandingColors?.secondary || '',
-    '{{custom_values.brand_accent_color}}': brandingColors?.accent || '',
-    '{{custom_values.brand_background_color}}': brandingColors?.background || '',
-    '{{custom_values.brand_text_color}}': brandingColors?.text || '',
-    '{{custom_values.brand_heading_font}}': brandingFonts?.heading || '',
-    '{{custom_values.brand_body_font}}': brandingFonts?.body || '',
-    // URLs
-    '{{custom_values.website_url}}': resolveAccountWebsite(accountData),
-    '{{custom_values.service_scheduler_url}}': '',
-    '{{custom_values.logo_url}}': accountData?.logos?.light || accountData?.logos?.dark || '',
-    '{{custom_values.review_link}}': '',
-    '{{custom_values.trade_in_url}}': '',
-    '{{custom_values.specials_url}}': '',
-    // Socials
-    '{{custom_values.facebook}}': '',
-    '{{custom_values.instagram}}': '',
-    '{{custom_values.tiktok}}': '',
-    '{{custom_values.x}}': '',
-    '{{custom_values.youtube}}': '',
-  };
-  for (const [key, value] of Object.entries(customValueDefaults)) {
-    if (values[key]) continue;
-    // In sample mode an empty default is left OUT, exactly as it always was.
-    if (sample && !value) continue;
-    values[key] = value;
-  }
-
-  mergeTokenMap(values, accountData?.previewValues);
-
+  const values: Record<string, string> = {};
+  for (const [key, value] of Object.entries(ctx)) values[token(key)] = value;
   return values;
+}
+
+/** The bare-keyed context the substitution engine wants, from a preview map. */
+export function previewMapToContext(
+  previewValues: Record<string, string>,
+): BlastMergetagContext {
+  const ctx: BlastMergetagContext = {};
+  for (const [rawKey, value] of Object.entries(previewValues)) {
+    const key = bareKey(rawKey);
+    if (key) ctx[key] = typeof value === 'string' ? value : String(value ?? '');
+  }
+  return ctx;
+}
+
+/**
+ * Substitute a preview map into HTML (or text) with the SENDER's engine —
+ * filters, `default:` fallbacks, case-insensitive custom keys, URL-aware
+ * encoding inside href/src — so the preview can't render a tag differently
+ * from the inbox. Exact-string replacement of `{{key}}` (what /api/preview and
+ * the editor canvas still do) misses every tag with a filter or odd spacing.
+ */
+export function applyPreviewVariables(
+  html: string,
+  previewValues: Record<string, string>,
+  options: { escape?: boolean } = {},
+): string {
+  return applyBlastMergetags(html, previewMapToContext(previewValues), {
+    escape: options.escape !== false,
+  });
 }
 
 export interface PreviewVariableAudit {
   /**
-   * Tokens no namespace recognizes — a typo like {{email.unsubscribe_link}}
-   * or a token from another ESP. These ship to the inbox as literal
-   * `{{...}}` text and preflight BLOCKS the send over them, so they are a
-   * different problem from a blank value and have to read differently.
+   * Tags that would ship to the inbox as literal `{{...}}` text — a typo like
+   * {{email.unsubscribe_link}}, a token from another ESP, an unsupported
+   * filter, template syntax Loomi doesn't run. Preflight BLOCKS the send over
+   * these, so they are a different problem from a blank value and have to
+   * read differently.
    */
   invalid: string[];
   /**
-   * Real tokens the current preview context has no value for. These render
+   * Real tags the current preview context has no value for. These render
    * as an empty string — a send-safe, fixable-with-data situation.
    */
   blank: string[];
 }
 
 /**
- * Classify the {{...}} tokens in a template against the preview map.
+ * Classify the {{...}} tags in a template against the preview map.
  *
  * These two cases used to be merged into one "Missing Preview Data" list
  * whose copy told the user to "select a contact with this data" — advice
  * that can never fix a misspelled token. The typo then sailed through the
  * editor and only surfaced as a hard blocker on the Schedule step, which is
- * the worst possible place to learn about it.
+ * the worst possible place to learn about it. The audit now parses tags with
+ * the sender's own parser, so anything the Schedule step would block, the
+ * editor flags first.
  */
 export function auditPreviewVariables(
   templateHtml: string,
   previewValues: Record<string, string>,
 ): PreviewVariableAudit {
-  // Match all {{...}} tokens (non-greedy, single-line)
-  const tokenRegex = /\{\{([^}]+)\}\}/g;
-  const seen = new Set<string>();
-  const invalid: string[] = [];
-  const blank: string[] = [];
+  const ctx = previewMapToContext(previewValues);
+  const invalid = new Set<string>();
+  const blank = new Set<string>();
 
-  let match: RegExpExecArray | null;
-  while ((match = tokenRegex.exec(templateHtml)) !== null) {
-    const varName = match[1].trim();
-    // Skip Maizzle expressions / helpers (contain pipes, parens, or are single words like "yield")
-    if (!varName || varName.includes('|') || varName.includes('(') || varName === 'yield' || varName.startsWith('#') || varName.startsWith('/')) continue;
-
-    const tokenKey = `{{${varName}}}`;
-    if (seen.has(varName)) continue;
-    seen.add(varName);
-
-    const value = previewValues[tokenKey];
+  for (const match of (templateHtml || '').matchAll(/\{\{([^{}]{0,1000})\}\}/g)) {
+    const parsed = parseMergetag(match[1]);
+    if (parsed.problem) {
+      invalid.add(parsed.source);
+      continue;
+    }
+    const value = resolveMergetagValue(ctx, parsed.key);
     if (value === undefined) {
-      // custom_values.* is per-account/per-contact and the preview map
-      // can't enumerate every one, so treat it as valid-but-unknown here.
-      // blast-preflight.ts exempts the same prefix for the same reason.
-      if (varName.startsWith('custom_values.')) {
-        blank.push(varName);
-      } else {
-        invalid.push(varName);
-      }
-    } else if (value === '') {
-      blank.push(varName);
+      // custom_values.* can come from a contact's own fields at send time,
+      // which the preview can't enumerate — a data gap, not a typo. Preflight
+      // decides whether ANY account or contact can fill it.
+      if (parsed.key.startsWith('custom_values.')) blank.add(parsed.key);
+      else invalid.add(parsed.key);
+    } else if (!applyMergetagFilters(value, parsed.filters)) {
+      blank.add(parsed.key);
     }
   }
 
-  return { invalid: invalid.sort(), blank: blank.sort() };
+  return { invalid: [...invalid].sort(), blank: [...blank].sort() };
 }
 
 /**

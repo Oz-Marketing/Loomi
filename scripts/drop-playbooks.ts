@@ -118,7 +118,47 @@ async function main() {
     console.log(`${TAG} removed ${notes} playbook_drift notification(s) and ${prefs} preference(s).`);
   }
 
-  if (!hasColumn && present.length === 0 && notes === 0 && prefs === 0) {
+  // ── the help article ──
+  //
+  // `seed-docs.ts` deliberately never deletes a row whose file was removed, so
+  // the Playbooks article would stay in the help library for good. Deleted even
+  // if it was edited in the app: the feature it describes is gone.
+  const article = await prisma.$executeRawUnsafe(
+    `DELETE FROM "DocArticle" WHERE "sourceKey" = 'studio/playbooks.md'`,
+  );
+  if (article > 0) console.log(`${TAG} removed the Playbooks help article.`);
+
+  // Articles whose Playbooks mentions were edited out in the same change. The
+  // seeder only refreshes rows nobody has edited in the app, so an edited row
+  // keeps describing Playbooks until someone fixes it by hand. Report, never
+  // overwrite — the in-app edit is the one somebody chose.
+  const latched = await prisma.$queryRawUnsafe<{ slug: string }[]>(
+    `SELECT slug FROM "DocArticle"
+      WHERE "sourceKey" IN ('platform/notifications.md', 'agency/industries-and-blueprints.md')
+        AND "editedInApp" = true AND body ILIKE '%playbook%'`,
+  );
+  for (const r of latched) {
+    console.warn(
+      `${TAG} WARNING: help article "${r.slug}" was edited in the app and still mentions `
+        + `Playbooks — the seeder won't update it. Edit it in Loomi.`,
+    );
+  }
+
+  // The in-app AI's knowledge base is seeded from loomi-knowledge.md ONCE and
+  // edited in the app after that, so the file's edit never reaches it. Report
+  // rather than rewrite: the stored copy has diverged from the file on purpose.
+  const knowledge = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
+    `SELECT COUNT(*)::bigint AS n FROM "AppSetting"
+      WHERE key = 'loomi-knowledge' AND value ILIKE '%playbook%'`,
+  );
+  if (Number(knowledge[0]?.n ?? 0) > 0) {
+    console.warn(
+      `${TAG} WARNING: the AI knowledge base (AppSetting "loomi-knowledge") still mentions `
+        + `Playbooks. Edit it in the app so the assistant stops describing a removed feature.`,
+    );
+  }
+
+  if (!hasColumn && present.length === 0 && notes === 0 && prefs === 0 && article === 0) {
     console.log(`${TAG} already removed — nothing to do.`);
   }
 }

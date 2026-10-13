@@ -49,7 +49,7 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
  */
 export interface NotificationCategoryStyle {
   /** Icon key — the panel maps this to a component; this file stays React-free. */
-  icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'book' | 'sparkles';
+  icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'sparkles';
   /** Icon-tile foreground and background classes. */
   accent: string;
   tint: string;

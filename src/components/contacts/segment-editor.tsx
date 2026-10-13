@@ -10,28 +10,23 @@ import {
   BookmarkSquareIcon,
   ChartBarIcon,
   CheckCircleIcon,
-  DocumentDuplicateIcon,
   EnvelopeIcon,
   ExclamationTriangleIcon,
   FunnelIcon,
   GlobeAltIcon,
-  Squares2X2Icon,
+  ShareIcon,
   PlusIcon,
   TrashIcon,
-  UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
-import { Checkbox } from '@/components/ui/checkbox';
-import { HelpTip } from '@/components/ui/help-tip';
 import { AccountScopeToggle } from '@/components/account-scope-toggle';
 import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
-import { AccountAccessModal } from '@/components/ad-generator/account-access-picker';
 import { summarizeFanOut } from '@/lib/segments/fan-out';
-import { PushCopiesModal, type LinkedCopy } from '@/components/contacts/push-copies-modal';
+import { SegmentSharingModal, type LinkedCopy } from '@/components/contacts/segment-sharing-modal';
 import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
@@ -121,21 +116,9 @@ interface SegmentPreviewState {
   error?: string;
 }
 
-/** What an ad-platform push would actually take from this segment. */
-interface EligibilityState {
-  status: 'idle' | 'loading' | 'ready' | 'error';
-  eligible: number;
-  excluded: {
-    noIdentifier: number;
-    suppressed: number;
-    optedOut: number;
-    duplicate: number;
-    noProvenance: number;
-  };
-  /** Which lead sources the provenance rule dropped, commonest first. */
-  excludedSources: Array<{ source: string; count: number }>;
-  message?: string;
-}
+/** The small bordered tag the header's segment settings share. */
+const CHIP =
+  'flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]';
 
 interface CopyLinks {
   /** This segment's linked copies, when it is an original. */
@@ -164,7 +147,7 @@ export interface SegmentEditorProps {
 
 export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const router = useRouter();
-  const { isAccount, accountKey, accountData, userRole, isRollup, scopedAccountKeys, accounts } =
+  const { isAccount, accountKey, userRole, isRollup, scopedAccountKeys, accounts } =
     useAccount();
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
@@ -213,7 +196,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // accountKey), because moving one changes whose contacts it resolves
   // against, which is a different segment.
   const [alsoAccounts, setAlsoAccounts] = useState<string[]>([]);
-  const [showAccountPicker, setShowAccountPicker] = useState(false);
   const isFanOut = mode === 'create' && alsoAccounts.length > 0;
   const owningDealer = owningKey ? accounts[owningKey]?.dealer ?? owningKey : null;
 
@@ -223,7 +205,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // mixing them in a portfolio segment is misleading).
   const { fields } = useFilterableFields(isAccount ? accountKey : null);
 
-  // The accounts this segment is RESOLVED against — preview, eligibility
+  // The accounts this segment is RESOLVED against — preview
   // and export alike.
   //
   // A group account (Young Powersports) owns no contacts of its own: every
@@ -270,7 +252,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // pushes, so the original shows its copies and offers the push, and a
   // copy says where it came from.
   const [copyLinks, setCopyLinks] = useState<CopyLinks>(NO_COPY_LINKS);
-  const [pushModal, setPushModal] = useState<null | 'manual' | 'after-save'>(null);
+  const [sharingModal, setSharingModal] = useState<null | 'all' | 'after-save'>(null);
   const segmentId = mode === 'edit' ? initial?.id : undefined;
   const loadCopyLinks = useCallback(async (): Promise<CopyLinks> => {
     if (!segmentId) return NO_COPY_LINKS;
@@ -307,13 +289,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     reachable: { email: 0, phone: 0 },
     contacts: [],
     total: 0,
-  });
-
-  const [eligibility, setEligibility] = useState<EligibilityState>({
-    status: 'idle',
-    eligible: 0,
-    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0, noProvenance: 0 },
-    excludedSources: [],
   });
 
   // Serialised so the effect re-runs on a real change to the filter, not
@@ -414,53 +389,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cleanedKey, resolveKeysKey]);
 
-  // How much of this segment could actually be pushed to an ad platform.
-  // A separate request from the preview so a slow eligibility pass never
-  // blanks the segment count beside it.
-  useEffect(() => {
-    if (resolveKeys.length === 0 || cleaned.groups.length === 0) {
-      setEligibility((prev) => ({ ...prev, status: 'idle' }));
-      return;
-    }
-    let cancelled = false;
-    setEligibility((prev) => ({ ...prev, status: 'loading' }));
-
-    const timer = setTimeout(() => {
-      fetch('/api/segments/eligibility', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKeys: resolveKeys, definition: cleaned }),
-      })
-        .then(async (res) => {
-          const data = await res.json().catch(() => ({}));
-          if (cancelled) return;
-          if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
-          setEligibility({
-            status: 'ready',
-            eligible: Number(data.breakdown?.eligible) || 0,
-            excluded: {
-              noIdentifier: Number(data.breakdown?.excluded?.noIdentifier) || 0,
-              suppressed: Number(data.breakdown?.excluded?.suppressed) || 0,
-              optedOut: Number(data.breakdown?.excluded?.optedOut) || 0,
-              duplicate: Number(data.breakdown?.excluded?.duplicate) || 0,
-              noProvenance: Number(data.breakdown?.excluded?.noProvenance) || 0,
-            },
-            excludedSources: Array.isArray(data.breakdown?.excludedSources)
-              ? data.breakdown.excludedSources
-              : [],
-          });
-        })
-        .catch(() => {
-          if (!cancelled) setEligibility((prev) => ({ ...prev, status: 'error' }));
-        });
-    }, 600);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cleanedKey, resolveKeysKey]);
 
   // ── Mutations ──────────────────────────────────────────────
   const updateDef = useCallback(
@@ -606,7 +534,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         if (copyLinks.copies.length > 0) {
           const fresh = await loadCopyLinks();
           if (fresh.copies.some((c) => c.canPush && !c.upToDate)) {
-            setPushModal('after-save');
+            setSharingModal('after-save');
             return;
           }
         }
@@ -678,11 +606,11 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     return true;
   }
 
-  function closePushModal() {
+  function closeSharingModal() {
     // After a save the user was on their way back to the list; the modal
     // only interrupted that.
-    if (pushModal === 'after-save') router.push(segmentsHref);
-    setPushModal(null);
+    if (sharingModal === 'after-save') router.push(segmentsHref);
+    setSharingModal(null);
   }
 
   // ── Render ─────────────────────────────────────────────────
@@ -690,11 +618,19 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // complete condition — the same two things the live preview needs.
   const canExport = resolveKeys.length > 0 && cleaned.groups.length > 0;
 
-  const scopeLabel = initial?.accountKey
-    ? accountData?.dealer ?? initial.accountKey
-    : isAccount && accountKey
-      ? accountData?.dealer ?? accountKey
-      : 'Org-wide';
+  const isCopy = !!(copyLinks.source || copyLinks.hasHiddenSource);
+  const showSharing = canShareDown || mode === 'create' || copyLinks.copies.length > 0 || isCopy;
+  const sharingSummary = [
+    'Sharing',
+    canShareDown && sharedWithChildren && !isFanOut ? 'Shared with group' : null,
+    isFanOut ? `Also creating in ${alsoAccounts.length}` : null,
+    copyLinks.copies.length > 0
+      ? `${copyLinks.copies.length} cop${copyLinks.copies.length === 1 ? 'y' : 'ies'}`
+      : null,
+    isCopy ? 'Linked copy' : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   const totalConditions = definition.groups.reduce((acc, g) => acc + g.conditions.length, 0);
 
@@ -737,100 +673,40 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               placeholder="Optional description"
               className="w-full text-sm text-[var(--muted-foreground)] bg-transparent border-0 focus:outline-none placeholder:text-[var(--muted-foreground)]/40 mt-1 px-0"
             />
-          </div>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <span
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]"
-              title={
-                initial?.accountKey || (isAccount && accountKey)
-                  ? canShareDown && sharedWithChildren
-                    ? 'Visible to this group and every account beneath it'
-                    : 'Visible only to this account'
-                  : 'Visible to all accounts'
-              }
-            >
-              {initial?.accountKey || (isAccount && accountKey) ? (
-                <UsersIcon className="w-3 h-3" />
-              ) : (
-                <GlobeAltIcon className="w-3 h-3" />
-              )}
-              {scopeLabel}
-            </span>
-            {copyLinks.copies.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setPushModal('manual')}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
-              >
-                <DocumentDuplicateIcon className="w-3 h-3" />
-                Copies in {copyLinks.copies.length} account{copyLinks.copies.length === 1 ? '' : 's'}
-                {outOfDateCopies > 0 && (
-                  <span className="rounded-full bg-amber-500/10 px-1.5 text-amber-500">
-                    {outOfDateCopies} out of date
-                  </span>
-                )}
-              </button>
-            )}
-            {(copyLinks.source || copyLinks.hasHiddenSource) && (
-              <span className="flex items-center gap-1">
-                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]">
-                  <DocumentDuplicateIcon className="w-3 h-3" />
-                  {copyLinks.source
-                    ? `Copy from ${accounts[copyLinks.source.accountKey ?? '']?.dealer ?? copyLinks.source.accountKey ?? 'all accounts'}`
-                    : 'Copy from another account'}
+
+            {/* How the segment reaches other accounts — the group and copies —
+                behind ONE control. They behave differently (one shared
+                read-only segment vs. separate segments that change only on a
+                push), and as two controls side by side they read as the same
+                thing twice. The modal sets them out together and says how each
+                works. The owning account isn't repeated: the switcher says it. */}
+            <div className="flex items-center gap-2 mt-3 flex-wrap empty:hidden">
+              {!(initial?.accountKey || (isAccount && accountKey)) && (
+                <span className={CHIP} title="Visible to all accounts">
+                  <GlobeAltIcon className="w-3 h-3" />
+                  All accounts
                 </span>
-                <HelpTip title="A linked copy" iconClassName="w-3 h-3">
-                  This segment was copied from {copyLinks.source ? <>&ldquo;{copyLinks.source.name}&rdquo;</> : 'a segment'} in
-                  another account. You can change it here, but when the original is changed and
-                  its changes are pushed, they replace this segment&apos;s name, description and
-                  filter.
-                </HelpTip>
-              </span>
-            )}
-            {/* On a group, which accounts the preview and the export resolve
-                against — its rooftops, or the group standing alone. The
-                numbers on this screen change with it, so the control belongs
-                on it (see docs/account-scope.md). */}
-            <AccountScopeToggle />
-            {canShareDown && (
-              <span className="flex items-center gap-1">
-                <Checkbox
-                  size="sm"
-                  checked={sharedWithChildren && !isFanOut}
-                  onChange={setSharedWithChildren}
-                  disabled={isFanOut}
-                  label={`Share with the ${childCount} account${childCount === 1 ? '' : 's'} in this group`}
-                  className="text-[11px] text-[var(--muted-foreground)]"
-                />
-                <HelpTip title="Sharing down" iconClassName="w-3 h-3">
-                  Every account under {owningDealer} sees this segment and can use it
-                  for sends and exports, but cannot change it — a segment is a filter,
-                  so it resolves to each account&apos;s own contacts. They can duplicate
-                  it to build their own version.
-                </HelpTip>
-              </span>
-            )}
-            {mode === 'create' && (
-              <span className="flex items-center gap-1">
+              )}
+              {showSharing && (
                 <button
                   type="button"
-                  onClick={() => setShowAccountPicker(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
+                  onClick={() => setSharingModal('all')}
+                  className={`${CHIP} hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors`}
                 >
-                  <Squares2X2Icon className="w-3 h-3" />
-                  {alsoAccounts.length > 0
-                    ? `Also creating in ${alsoAccounts.length} more`
-                    : 'Also create in\u2026'}
+                  <ShareIcon className="w-3 h-3" />
+                  {sharingSummary}
+                  {outOfDateCopies > 0 && (
+                    <span className="rounded-full bg-amber-500/10 px-1.5 text-amber-500">
+                      {outOfDateCopies} out of date
+                    </span>
+                  )}
                 </button>
-                <HelpTip title="Creating in several accounts" iconClassName="w-3 h-3">
-                  Creates a separate copy of this segment in each account you pick, so
-                  each one can change theirs. The copies stay linked to this one: when
-                  you change it, you can push the changes to them. For accounts that
-                  share a group, sharing down from the group is usually better &mdash;
-                  that is one segment everyone sees, so editing it once updates them all.
-                </HelpTip>
-              </span>
-            )}
+              )}
+            </div>
+          </div>
+
+          {/* The page's actions, and nothing else. */}
+          <div className="flex items-center gap-2 mt-1">
             <button
               type="button"
               onClick={handleExport}
@@ -844,17 +720,15 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                     ? `Download all ${preview.count.toLocaleString()} matching contacts as CSV`
                     : 'Download every matching contact as CSV'
               }
-              className="px-3 h-9 inline-flex items-center gap-1.5 text-sm rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Export CSV"
+              className="w-9 h-9 inline-flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <ArrowDownTrayIcon className="w-4 h-4" />
-              {exporting ? 'Exporting…' : 'Export CSV'}
+              {exporting ? (
+                <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              ) : (
+                <ArrowDownTrayIcon className="w-4 h-4" />
+              )}
             </button>
-            <Link
-              href={segmentsHref}
-              className="px-3 h-9 inline-flex items-center text-sm rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors"
-            >
-              Cancel
-            </Link>
             <button
               type="button"
               onClick={handleSave}
@@ -928,37 +802,58 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
 
         {/* Preview pane */}
         <aside className="lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] flex flex-col">
-          <PreviewPanel preview={preview} eligibility={eligibility} />
+          <PreviewPanel preview={preview} />
         </aside>
       </div>
-          {showAccountPicker && (
-        <AccountAccessModal
-          name={name.trim() || 'this segment'}
-          ownerKey={isAccount && accountKey ? accountKey : null}
-          selected={alsoAccounts}
-          onChange={setAlsoAccounts}
-          onClose={() => setShowAccountPicker(false)}
-          title="Create this segment in other accounts"
-          showLibraryWarning={false}
-          description={
-            <>
-              Each account gets its own copy of &ldquo;{name.trim() || 'this segment'}&rdquo;
-              to change as they like. The copies stay linked to this one, so when you
-              change it you can push the changes to them. For accounts that share a
-              group, sharing down from the group keeps them as one.
-            </>
-          }
-        />
-      )}
-      {pushModal && (
-        <PushCopiesModal
+      {sharingModal && (
+        <SegmentSharingModal
           segmentName={name.trim() || initial?.name || 'this segment'}
-          copies={copyLinks.copies}
+          focus={sharingModal}
+          group={
+            canShareDown && owningDealer
+              ? {
+                  ownerName: owningDealer,
+                  childCount,
+                  shared: sharedWithChildren,
+                  onChange: setSharedWithChildren,
+                  // A fan-out makes separate segments, so there is no single
+                  // group row for the flag to sit on.
+                  disabledReason: isFanOut
+                    ? "Not available while also creating in other accounts \u2014 those are separate copies, so there's no single segment to share."
+                    : undefined,
+                }
+              : null
+          }
+          create={
+            mode === 'create'
+              ? {
+                  ownerKey: isAccount && accountKey ? accountKey : null,
+                  selected: alsoAccounts,
+                  onChange: setAlsoAccounts,
+                }
+              : null
+          }
+          copies={
+            mode === 'edit' && !isCopy
+              ? {
+                  list: copyLinks.copies,
+                  hasUnsavedChanges,
+                  onPush: pushToCopies,
+                }
+              : null
+          }
+          source={
+            isCopy
+              ? {
+                  name: copyLinks.source?.name ?? null,
+                  accountName: copyLinks.source?.accountKey
+                    ? accounts[copyLinks.source.accountKey]?.dealer ?? copyLinks.source.accountKey
+                    : null,
+                }
+              : null
+          }
           accountLabel={(key) => (key ? accounts[key]?.dealer ?? key : 'All accounts')}
-          hasUnsavedChanges={pushModal === 'manual' && hasUnsavedChanges}
-          justSaved={pushModal === 'after-save'}
-          onPush={pushToCopies}
-          onClose={closePushModal}
+          onClose={closeSharingModal}
         />
       )}
     </div>
@@ -1269,18 +1164,6 @@ function ConditionRow({
   );
 }
 
-function excludedTotal(e: EligibilityState): number {
-  // Every bucket the gate can drop a contact into. Miss one and the
-  // headline silently under-reports: the segment count and the syncable
-  // count disagree with nothing explaining the gap.
-  return (
-    e.excluded.optedOut +
-    e.excluded.suppressed +
-    e.excluded.noIdentifier +
-    e.excluded.duplicate +
-    e.excluded.noProvenance
-  );
-}
 
 // ── Option multi-select ──
 //
@@ -1402,10 +1285,9 @@ function LogicPill({ value, onToggle, tone }: LogicPillProps) {
 
 interface PreviewPanelProps {
   preview: SegmentPreviewState;
-  eligibility: EligibilityState;
 }
 
-function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
+function PreviewPanel({ preview }: PreviewPanelProps) {
   const { status, count: matchCount, reachable, contacts, total } = preview;
   const loading = status === 'loading';
   const percent = total > 0 ? Math.round((matchCount / total) * 100) : 0;
@@ -1421,10 +1303,15 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
         <div className="flex items-center gap-2">
           <ChartBarIcon className="w-4 h-4 text-[var(--primary)]" />
           <span className="text-sm font-semibold">Live preview</span>
+          {loading && (
+            <ArrowPathIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] animate-spin" />
+          )}
         </div>
-        {loading && (
-          <ArrowPathIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] animate-spin" />
-        )}
+        {/* On a group, which accounts the preview and the export resolve
+            against — its rooftops, or the group standing alone. It changes
+            the numbers in this panel, so it sits on them (see
+            docs/account-scope.md). */}
+        <AccountScopeToggle showName={false} />
       </div>
 
       <div className="px-4 py-4 border-b border-[var(--border)]/70">
@@ -1453,59 +1340,6 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
           </p>
         )}
       </div>
-
-      {/* Ad-platform eligibility. Shown next to the segment size because
-          the gap between the two is the number that surprises people —
-          a 40,000-member segment can be a 12,000-member audience once
-          opt-outs, suppressions and missing identifiers come out. */}
-      {eligibility.status !== 'idle' && (
-        <div className="px-4 py-3 border-b border-[var(--border)]/70">
-          {eligibility.status === 'ready' ? (
-            <>
-              <div className="flex items-baseline gap-2">
-                <span className="text-lg font-semibold tabular-nums">
-                  {eligibility.eligible.toLocaleString()}
-                </span>
-                <span className="text-[11px] text-[var(--muted-foreground)]">
-                  syncable to ad platforms
-                </span>
-              </div>
-              {excludedTotal(eligibility) > 0 && (
-                <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
-                  {excludedTotal(eligibility).toLocaleString()} excluded:{' '}
-                  {[
-                    eligibility.excluded.optedOut && `${eligibility.excluded.optedOut} opted out`,
-                    eligibility.excluded.suppressed && `${eligibility.excluded.suppressed} suppressed`,
-                    eligibility.excluded.noIdentifier && `${eligibility.excluded.noIdentifier} no email or phone`,
-                    eligibility.excluded.duplicate && `${eligibility.excluded.duplicate} duplicate`,
-                    eligibility.excluded.noProvenance &&
-                      `${eligibility.excluded.noProvenance} no purchase, service or form history`,
-                  ]
-                    .filter(Boolean)
-                    .join(', ')}
-                </p>
-              )}
-              {/* Naming the sources turns "some contacts were dropped"
-                  into something actionable — these are the lead vendors
-                  to go and check the paperwork on. */}
-              {eligibility.excludedSources.length > 0 && (
-                <p className="text-[11px] text-[var(--muted-foreground)]/80 mt-1">
-                  Excluded sources:{' '}
-                  {eligibility.excludedSources
-                    .slice(0, 3)
-                    .map((s) => `${s.source} (${s.count.toLocaleString()})`)
-                    .join(', ')}
-                  {eligibility.excludedSources.length > 3 ? ', …' : ''}
-                </p>
-              )}
-            </>
-          ) : eligibility.status === 'loading' ? (
-            <p className="text-[11px] text-[var(--muted-foreground)]">
-              Checking ad-platform eligibility…
-            </p>
-          ) : null}
-        </div>
-      )}
 
       {!loading && matchCount > 0 && (
         <div className="px-4 py-3 border-b border-[var(--border)]/70 grid grid-cols-2 gap-2">

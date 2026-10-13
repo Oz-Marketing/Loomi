@@ -107,7 +107,6 @@ export type SmsBlastStatus =
   | 'scheduled'
   | 'processing'
   | 'completed'
-  | 'partial'
   | 'failed'
   | 'canceled';
 
@@ -148,7 +147,7 @@ export interface SmsBlastSummary {
 }
 
 const PROCESSABLE_STATUSES: SmsBlastStatus[] = ['queued', 'scheduled', 'processing'];
-const TERMINAL_STATUSES: SmsBlastStatus[] = ['completed', 'partial', 'failed', 'canceled'];
+const TERMINAL_STATUSES: SmsBlastStatus[] = ['completed', 'failed', 'canceled'];
 
 type ResolvedMessagingRuntime =
   | {
@@ -957,13 +956,14 @@ export interface SmsBlastCounts {
  */
 export function resolveSmsBlastStatus(counts: SmsBlastCounts): SmsBlastStatus {
   if (counts.pending > 0) return 'processing';
-  if (counts.sent > 0 && counts.failed > 0) return 'partial';
+  // No "sent with errors" — the mirror of resolveBlastStatus in
+  // email-blasts.ts. If the blast reached anyone, it was sent.
   if (counts.sent > 0) return 'completed';
   if (counts.failed > 0) return 'failed';
   // Carrier refusals are absent from the tests above on purpose — the mirror
   // of the bounce rule in email-blasts.ts. Twilio accepted the message, so the
   // blast did its job; a dead handset is a fact about the number, it
-  // auto-suppresses, and it must not render the send as "Sent with errors".
+  // auto-suppresses, and it must not render the send as a failure.
   if (counts.undelivered > 0) return 'completed';
   if (counts.skipped > 0) return 'completed';
   return 'completed';

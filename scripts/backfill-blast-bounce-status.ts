@@ -7,7 +7,10 @@
 // (`bounced` / `undelivered`) and their own counters; this brings the history
 // into line so past blasts stop reporting the same false alarm.
 //
-// Four set-based statements, no per-row loop: production carries hundreds of
+// 'partial' itself is retired too (step 5): a blast that reached anyone is
+// 'completed'.
+//
+// Set-based statements, no per-row loop: production carries hundreds of
 // thousands of recipient rows and the deploy's SSH step dies at 15 minutes.
 //
 // Idempotent by construction — every statement recomputes from the recipient
@@ -159,24 +162,21 @@ async function main() {
   `;
   console.log(`[blast-bounce] recomputed counters on ${smsCounts} SMS blast(s)`);
 
-  // ── 5. Demote 'partial' blasts that only ever bounced ──
+  // ── 5. Retire 'partial' ("Sent with errors") ──
   //
-  // Mirrors resolveBlastStatus: 'partial' means some dispatched and some
-  // could not be dispatched. A blast with zero remaining dispatch failures
-  // never qualified; it just had no other way to be recorded at the time.
+  // The status no longer exists: resolveBlastStatus calls a blast that
+  // reached anyone 'completed', whatever happened to individual recipients.
+  // Every 'partial' row becomes 'completed', failures or not.
   //
   // `error` is cleared with it — that column held the first recipient error,
-  // which for these rows is a bounce message, and it is what the failure
-  // banner reads for its detail line.
+  // and nothing should read it on a blast that was sent.
   //
-  // Terminal statuses only. A blast still processing resolves its own status
-  // when it finishes, and touching one mid-flight would race the worker.
+  // 'partial' was only ever written at the end of a send, so there is no
+  // in-flight row here to race the worker on.
   const emailStatus = await prisma.$executeRaw`
     UPDATE "EmailCampaign"
        SET status = 'completed', error = NULL
      WHERE status = 'partial'
-       AND "failedCount" = 0
-       AND "sentCount" > 0
   `;
   console.log(`[blast-bounce] ${emailStatus} email blast(s) no longer report errors`);
 
@@ -184,8 +184,6 @@ async function main() {
     UPDATE "SmsCampaign"
        SET status = 'completed', error = NULL
      WHERE status = 'partial'
-       AND "failedCount" = 0
-       AND "sentCount" > 0
   `;
   console.log(`[blast-bounce] ${smsStatus} SMS blast(s) no longer report errors`);
 }

@@ -5,6 +5,7 @@ import {
   attemptsSoFar,
   classifySendFailure,
   classifyTwilioFailure,
+  isRecipientAddressRefusal,
   MAX_ATTEMPTS,
   PreSendError,
   sanitizeDisplayName,
@@ -87,5 +88,44 @@ describe('sanitizeDisplayName', () => {
   it('omits an empty name rather than sending ""', () => {
     expect(sanitizeDisplayName('  ')).toBeUndefined();
     expect(sanitizeDisplayName(null)).toBeUndefined();
+  });
+});
+
+describe('isRecipientAddressRefusal', () => {
+  const refusal = (errors: { message: string; field?: string }[], status = 400) =>
+    new SendGridError(errors[0].message, status, { errors });
+
+  it('is a bad address when SendGrid pins the 400 on the to field', () => {
+    expect(
+      isRecipientAddressRefusal(
+        refusal([{ message: 'Does not contain a valid address.', field: 'personalizations.0.to.0.email' }]),
+      ),
+    ).toBe(true);
+  });
+
+  it('is a bad address when the message says so without a field', () => {
+    expect(
+      isRecipientAddressRefusal(refusal([{ message: 'The to email does not contain a valid address.' }])),
+    ).toBe(true);
+  });
+
+  it('never blames the recipient for a message-level 400', () => {
+    // These fail identically for the whole audience; suppressing on them
+    // would wipe out a list over a template problem.
+    expect(
+      isRecipientAddressRefusal(refusal([{ message: 'The content value must be a string at least one character in length.', field: 'content.0.value' }])),
+    ).toBe(false);
+    expect(
+      isRecipientAddressRefusal(
+        refusal([{ message: 'The from email does not contain a valid address.', field: 'from.email' }]),
+      ),
+    ).toBe(false);
+  });
+
+  it('ignores non-400s and non-SendGrid errors', () => {
+    expect(
+      isRecipientAddressRefusal(refusal([{ message: 'Does not contain a valid address.', field: 'personalizations.0.to.0.email' }], 500)),
+    ).toBe(false);
+    expect(isRecipientAddressRefusal(new Error('Does not contain a valid address.'))).toBe(false);
   });
 });

@@ -10,17 +10,10 @@ import { resolveBlastStatus, type BlastCounts } from './email-blasts';
 import { resolveSmsBlastStatus, type SmsBlastCounts } from './sms-blasts';
 
 /**
- * The line this draws is the fix:
- *
- *   failed  — Loomi could not dispatch the message. Someone can act on it, so
- *             it still turns the blast 'partial' and raises the banner.
- *   bounced — dispatched fine; the far end refused it afterwards. A fact
- *             about the address, not the blast.
- *
- * Conflating them is what made a healthy send to an aging list report itself
- * as "Sent with errors" — and worse, only from the second day onward, because
- * a warm-up-capped blast re-resolves its status on each daily slice and by
- * then the previous day's bounce webhooks had already landed.
+ * There is no "Sent with errors". A blast that reached anyone is 'completed';
+ * recipients it could not reach are bad addresses, counted and suppressed, and
+ * never raised to the reader as an error. The only failure a blast reports is
+ * one where nothing went out at all.
  */
 
 function emailCounts(over: Partial<BlastCounts> = {}): BlastCounts {
@@ -66,17 +59,17 @@ describe('resolveBlastStatus — bounces are not send errors', () => {
     );
   });
 
-  it('still reports partial when Loomi could not dispatch something', () => {
-    expect(resolveBlastStatus(emailCounts({ total: 10, sent: 9, failed: 1 }))).toBe(
-      'partial',
-    );
+  it('completes a blast where some recipients could not be dispatched', () => {
+    // 27 of 4,781 — the drawer used to call this "Sent with errors".
+    expect(
+      resolveBlastStatus(emailCounts({ total: 4781, sent: 4754, failed: 27 })),
+    ).toBe('completed');
   });
 
-  it('reports partial for a mix of real failures and bounces', () => {
-    // The failure is what matters; the bounces ride along silently.
+  it('completes a mix of failures and bounces', () => {
     expect(
       resolveBlastStatus(emailCounts({ total: 100, sent: 80, failed: 5, bounced: 15 })),
-    ).toBe('partial');
+    ).toBe('completed');
   });
 
   it('still fails a blast where nothing could be dispatched at all', () => {
@@ -102,16 +95,14 @@ describe('resolveSmsBlastStatus — carrier refusals are not send errors', () =>
     ).toBe('completed');
   });
 
-  it('still reports partial when Twilio would not take a message', () => {
+  it('completes a blast where Twilio would not take some messages', () => {
     expect(resolveSmsBlastStatus(smsCounts({ total: 10, sent: 9, failed: 1 }))).toBe(
-      'partial',
+      'completed',
     );
   });
 
-  it('reports partial for a mix, same as email', () => {
-    expect(
-      resolveSmsBlastStatus(smsCounts({ total: 50, sent: 40, failed: 2, undelivered: 8 })),
-    ).toBe('partial');
+  it('still fails a blast where nothing could be sent', () => {
+    expect(resolveSmsBlastStatus(smsCounts({ total: 10, failed: 10 }))).toBe('failed');
   });
 
   it('keeps processing while quiet-hours holds are pending', () => {

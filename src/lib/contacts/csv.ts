@@ -6,6 +6,7 @@
 // in a spreadsheet somebody had already sent to a client.
 
 import { prisma } from '@/lib/prisma';
+import { MERGED_DATE_FIELDS } from '@/lib/smart-list-types';
 
 export const CONTACT_CSV_COLUMNS: { key: string; label: string }[] = [
   { key: 'fullName', label: 'Full Name' },
@@ -28,11 +29,11 @@ export const CONTACT_CSV_COLUMNS: { key: string; label: string }[] = [
   // existing column order is untouched — these files get opened in
   // spreadsheets built against the old layout.
   //
-  // Labels match the segment builder's ('Purchase Date', 'Last Service
-  // Date'), so someone checking a date-filtered segment against its
-  // export is reading the same words in both places. Both are the CRM
-  // snapshot columns, NOT the ContactEvent rollups the builder offers
-  // alongside them as '… (from history)' — see FILTERABLE_FIELDS.
+  // Labels AND values match the segment builder's ('Purchase Date',
+  // 'Last Service Date'), so someone checking a date-filtered segment
+  // against its export is reading the same thing in both places. Each is
+  // the merged value the filter reads — event history first, CRM
+  // snapshot as the fallback (MERGED_DATE_FIELDS).
   { key: 'purchaseDate', label: 'Purchase Date' },
   { key: 'lastServiceDate', label: 'Last Service Date' },
 ];
@@ -57,6 +58,8 @@ export const CONTACT_CSV_SELECT = {
   vehicleModel: true,
   purchaseDate: true,
   lastServiceDate: true,
+  lastSaleEventAt: true,
+  lastServiceEventAt: true,
   tags: true,
 } as const;
 
@@ -89,6 +92,9 @@ export function buildContactsCsv(rows: CsvContactRow[]): string {
       // `Contact.tags` is a JSON column, not a relation.
       tags: Array.isArray(c.tags) ? c.tags.map((t) => String(t)).join('; ') : '',
     };
+    for (const [key, [history, snapshot]] of Object.entries(MERGED_DATE_FIELDS)) {
+      record[key] = c[history] ?? c[snapshot];
+    }
     return CONTACT_CSV_COLUMNS.map((col) => csvEscape(formatCell(record[col.key]))).join(',');
   });
   return [CONTACT_CSV_COLUMNS.map((c) => csvEscape(c.label)).join(','), ...body].join('\n');

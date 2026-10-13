@@ -32,7 +32,6 @@ const PAGES: ReadonlyArray<Page> = [
   { path: '/profile' },
   { path: '/media' },
   { path: '/docs' },
-  { path: '/playbooks' },
 
   { path: '/contacts' },
   { path: '/contacts/import' },

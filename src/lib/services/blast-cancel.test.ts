@@ -262,7 +262,7 @@ describe('cancelSmsBlast', () => {
   });
 
   it('refuses a blast that already finished', async () => {
-    smsFindUnique.mockResolvedValue({ id: 'blast-1', status: 'partial' });
+    smsFindUnique.mockResolvedValue({ id: 'blast-1', status: 'completed' });
     await expect(cancelSmsBlast('blast-1')).rejects.toThrow(
       /already finished sending/,
     );

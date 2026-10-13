@@ -39,8 +39,6 @@ export interface ScopeForm {
   emailTemplateId: string;
   emailAudienceId: string;
   emailMaxOffers: string;
-  /** `Playbook.id` followed, or '' for a hand-picked setup. */
-  playbookId: string;
   /** One ad per qualifying offer type, rather than only the best. */
   expandOfferTypes: boolean;
   /**
@@ -69,7 +67,6 @@ export const BLANK_FORM: ScopeForm = {
   emailTemplateId: '',
   emailAudienceId: '',
   emailMaxOffers: '6',
-  playbookId: '',
   expandOfferTypes: false,
   offerPriority: ['lease', 'apr', 'cash'],
 };
@@ -91,7 +88,6 @@ function formFromReport(rep: ShadowReport): ScopeForm {
     emailTemplateId: rep.scope?.emailTemplateId ?? '',
     emailAudienceId: rep.scope?.emailAudienceId ?? '',
     emailMaxOffers: String(rep.scope?.emailMaxOffers ?? 6),
-    playbookId: rep.scope?.playbookId ?? '',
     expandOfferTypes: rep.scope?.expandOfferTypes ?? false,
     offerPriority: rep.scope?.offerTypePriority?.length
       ? rep.scope.offerTypePriority
@@ -119,7 +115,6 @@ export function toPayload(f: ScopeForm) {
     emailTemplateId: f.emailTemplateId,
     emailAudienceId: f.emailAudienceId,
     emailMaxOffers: Number(f.emailMaxOffers) || 6,
-    playbookId: f.playbookId,
     expandOfferTypes: f.expandOfferTypes,
     offerTypePriority: f.offerPriority,
   };

@@ -35,7 +35,6 @@ place.
 | **Pacing alerts** | An ad is off pace against its plan, past a threshold |
 | **Task and project activity** | Work assigned to you, comments, due dates |
 | **Product updates** | A release note is published |
-| **Playbook checks** | A blocking setup check started failing on an account where it was passing |
 | **System notices** | Sync failures and other things that need someone to look |
 
 Product updates default to **in-app on, email off**. An unsolicited product
@@ -44,7 +43,7 @@ the inbox is opt-in.
 
 # Only new problems notify
 
-Several of these — pacing alerts, playbook checks, co-op guideline changes —
+Several of these — pacing alerts and co-op guideline changes —
 compare today against the last time they ran, and tell you only what changed.
 
 That is deliberate. A notification that re-lists every standing problem each
@@ -54,8 +53,8 @@ problem that has been sitting there for a month does not re-announce itself,
 and something going *green* is not an alert either.
 
 The trade-off is that these tell you about **changes**, not about **state**. For
-"where does everything stand right now", open the screen — the pacer, or the
-Playbooks audit — rather than reading back through the bell.
+"where does everything stand right now", open the screen — the pacer, for
+example — rather than reading back through the bell.
 
 # Pacing alerts specifically
 

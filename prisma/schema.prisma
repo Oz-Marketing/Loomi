@@ -635,6 +635,20 @@ model Audience {
    * receive them — see `canWriteSegment` in lib/segments/visibility.ts.
    */
   sharedWithChildren Boolean @default(false)
+  /**
+   * The segment this one was copied from by "Also create in…", when the
+   * same segment is made in several accounts at once. Those copies are
+   * independent rows (a filter can be valid in one account and not the
+   * next — see lib/segments/fan-out.ts), so editing the original changes
+   * nothing by itself; the link is what lets the original PUSH its saved
+   * name, description and filter to its copies on request.
+   *
+   * SetNull on delete: deleting the original leaves the copies standing,
+   * just no longer linked to anything.
+   */
+  sourceAudienceId String?
+  sourceAudience   Audience?  @relation("AudienceCopies", fields: [sourceAudienceId], references: [id], onDelete: SetNull)
+  copies           Audience[] @relation("AudienceCopies")
   createdByUserId  String?
   filters          String // JSON: FilterDefinition
   icon             String?
@@ -648,6 +662,7 @@ model Audience {
 
   @@unique([name, accountKey])
   @@index([accountKey])
+  @@index([sourceAudienceId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -4427,32 +4442,15 @@ model AdAutomationConfig {
   /// `AdTemplateDoc.id`.
   ///
   /// Null or empty = every published template in scope for the account, which is
-  /// what the fan-out did when it shipped and stays the default for a rooftop
-  /// following no playbook. Non-empty CONSTRAINS the run to exactly these.
+  /// what the fan-out did when it shipped and stays the default. Non-empty
+  /// CONSTRAINS the run to exactly these.
   ///
   /// Why constrain at all: `templateMap` only decides which design is
   /// RECOMMENDED, so without this any plate a designer publishes joins every
   /// account's run the next night — including one built for a different brand.
-  /// A playbook that cannot say "these are the Chevrolet plates" isn't
-  /// describing how a Chevrolet store is run.
-  ///
-  /// Preset by a creative playbook, like `templateMap` and `sizeIds`. This
-  /// column stays what generation actually reads.
   fanOutTemplateIds String?
 
   templateMap String? @db.Text
-
-  /// The agency-wide Playbook this sub-account follows for its creative, or null
-  /// for a hand-picked setup. A playbook PRESETS `templateMap`, `sizeIds` and
-  /// `emailTemplateId` rather than replacing them: the columns above stay the
-  /// single source of truth for what a run actually uses, so generation never
-  /// has to resolve a playbook and nothing breaks if one is deleted.
-  ///
-  /// Drift is therefore DERIVED — compare those columns to the playbook's
-  /// definition — rather than tracked in a `stepStates` column. That keeps the
-  /// override state honest with no backfill and no second thing to keep in sync.
-  playbookId String?
-  playbook   Playbook? @relation(fields: [playbookId], references: [id], onDelete: SetNull)
 
   /// Generate an ad for EVERY qualifying offer type on a vehicle (a lease ad
   /// AND an APR ad), rather than only the best one.
@@ -4498,134 +4496,6 @@ model AdAutomationConfig {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-}
-
-/// An agency-wide, versioned bundle of the creative that goes together: the ad
-/// template + sizes and the offer-email shell. See docs/playbooks.md.
-///
-/// This is Phase 1's `Playbook` arriving as ONE NARROW SLICE — scope 'creative'
-/// only. The spec's wider flavours (department motion, season/event) and the
-/// step registry are deliberately not built; `scope`/`scopeValue` exist so they
-/// can be without a migration.
-///
-/// Authored once and applied to many sub-accounts, which is the entire point:
-/// "are all our Chevy stores running the same creative?" has no answer while the
-/// pairing lives only in each rooftop's own config.
-model Playbook {
-  id   String @id @default(cuid())
-  /// Stable slug, like `AlertRule.key` — safe to reference from a seed or a doc.
-  key  String @unique
-  name String
-
-  /// creative | oem | department | event. Only 'creative' is honored today.
-  scope      String  @default("creative")
-  /// e.g. "Chevrolet" for an OEM-scoped playbook. Null = applies anywhere.
-  scopeValue String?
-
-  /// Bumped on every published edit, so an application can be seen as behind.
-  version Int @default(1)
-
-  /// JSON: { adTemplateId, sizeIds[], emailTemplateSlug, emailMaxOffers }.
-  /// Text + JSON rather than columns because the step list is meant to grow;
-  /// see `src/lib/playbooks/creative.ts` for the parsed shape.
-  definition     String @db.Text
-  /// Hash of `definition`, the staleness test — same discipline as
-  /// `AdTemplateCoopCheck.docHash`. Lets "this rooftop is on an older version"
-  /// be a fact rather than a guess.
-  definitionHash String
-
-  /// Null = draft, never offered to a sub-account.
-  publishedAt DateTime?
-
-  createdByUserId String?
-  /// Who last saved it. A playbook is platform configuration that reaches every
-  /// rooftop following it, so "who changed this, and when" has to survive the
-  /// change itself — `createdByUserId` alone answers neither.
-  updatedByUserId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  configs AdAutomationConfig[]
-
-  @@index([scope, scopeValue])
-  @@index([publishedAt])
-}
-
-// A check deliberately marked "not a question here".
-//
-// The audit infers which playbooks apply from observable account facts (see
-// docs/playbooks.md §4.3), so it is wrong in both directions: a rooftop that
-// deliberately doesn't run a channel still shows as missing it, and
-// `budget.managed` is red almost everywhere on purpose. An audit nobody trusts
-// is an audit nobody reads, and the fix people reach for — ignoring the reds —
-// is the failure mode.
-//
-// So a waiver records the judgement instead of losing it. A waived check scores
-// as `na`: excluded from coverage entirely, the same as a playbook that doesn't
-// apply, because that is exactly what the person is asserting.
-//
-// `reason` is NOT NULL by design. A waiver with no reason is how a real red gets
-// buried, and the next person to read the row has no way to tell a considered
-// exemption from a shrug.
-//
-// This is deliberately NOT PlaybookApplication (§5 Phase 1). It records one
-// account-and-check exemption, needs none of Phase 1's three open decisions, and
-// is the kind of fact an explicit application would later absorb rather than
-// contradict.
-model PlaybookCheckWaiver {
-  id         String @id @default(cuid())
-  accountKey String
-  /// Check id from the registry, e.g. `budget.managed`. Not a foreign key —
-  /// checks are code constants, and a renamed check should leave a dangling
-  /// waiver that reads as expired rather than blocking a deploy.
-  checkId    String
-
-  reason         String  @db.Text
-  waivedByUserId String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([accountKey, checkId])
-  @@index([accountKey])
-}
-
-// One execution of the nightly coverage sweep.
-//
-// A row is written on EVERY run including a clean one, exactly like `IngestRun`
-// and `AdAutomationRun`. Without heartbeat rows, "nothing drifted this week" and
-// "the sweep has been dead for three weeks" render identically — and the second
-// one is the state that actually costs money.
-//
-// `kind` is `sweep` today. Phase 1's apply/sync runs land here too (§5), which
-// is why it is a column rather than implied by the table.
-model PlaybookRun {
-  id   String @id @default(cuid())
-  kind String @default("sweep")
-
-  startedAt  DateTime  @default(now())
-  finishedAt DateTime?
-
-  accountsAudited Int  @default(0)
-  checksRun       Int  @default(0)
-  passCount       Int  @default(0)
-  warnCount       Int  @default(0)
-  failCount       Int  @default(0)
-  /// Failing checks whose severity is `blocking` — the triage number, tracked
-  /// over time so a trend is visible without recomputing history.
-  blockingFails   Int  @default(0)
-  /// Mean coverage across scored accounts, 0-100. Null when nothing scored.
-  coveragePct     Int?
-
-  /// JSON string[] of `accountKey:checkId` for every blocking failure this run.
-  /// The next run diffs against it so an alert fires on what is NEW rather than
-  /// re-reporting a backlog every morning until someone mutes it.
-  blockingKeys String? @db.Text
-
-  error String? @db.Text
-
-  @@index([kind, startedAt])
-  @@index([startedAt])
 }
 
 // One OEM offer as last seen by the poll, keyed by a fingerprint of its

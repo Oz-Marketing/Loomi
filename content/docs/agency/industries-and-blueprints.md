@@ -16,7 +16,7 @@ covers:
 Every account has an industry. It is not a label — it drives behavior:
 
 - Which **field blueprint** the account's contacts start with
-- Which templates and playbooks are offered
+- Which templates are offered
 - Where industry-specific reporting applies
 
 Set it when the account is created. Changing it later does not retroactively

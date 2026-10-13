@@ -37,6 +37,7 @@ import {
 import { SEGMENT_REF_FIELD } from './constants';
 import {
   FILTERABLE_FIELDS,
+  MERGED_DATE_FIELDS,
   type FieldDefinition,
   type FilterCondition,
   type FilterDefinition,
@@ -494,7 +495,10 @@ function translateDate(
   value: string,
   value2: string | undefined,
 ): Prisma.Sql | null {
-  const col = Prisma.raw(`"Contact"."${columnName(field)}"`);
+  const merged = MERGED_DATE_FIELDS[field];
+  const col = merged
+    ? Prisma.raw(`COALESCE("Contact"."${merged[0]}", "Contact"."${merged[1]}")`)
+    : Prisma.raw(`"Contact"."${columnName(field)}"`);
   // One `now` per condition, matching the engine — two relative bounds
   // that each read the clock can straddle midnight and disagree.
   const now = new Date();

@@ -315,11 +315,9 @@ export function OfferRunModal({
               <Row label="Designs">
                 {preflight.permitted.source === 'all_published'
                   ? `Every published design in scope (${preflight.permitted.count})`
-                  : `Each offer is built in the ${preflight.permitted.count} design${preflight.permitted.count === 1 ? '' : 's'} this account allows${
-                      preflight.permitted.playbookName ? ` — from the playbook “${preflight.permitted.playbookName}”` : ''
-                    }`}
+                  : `Each offer is built in the ${preflight.permitted.count} design${preflight.permitted.count === 1 ? '' : 's'} this account allows`}
                 <HelpTip title="Which designs are built" iconClassName="ml-1 inline h-3 w-3">
-                  <p>A playbook narrows which designs are built. The account picks the design to use on the campaign.</p>
+                  <p>The account's Ad Generator settings can narrow which designs are built. The account picks the design to use on the campaign.</p>
                 </HelpTip>
               </Row>
               <Row label="Recommended">{preflight.leadDesignName ?? 'none set'}</Row>

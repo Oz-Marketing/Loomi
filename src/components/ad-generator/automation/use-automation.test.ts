@@ -28,7 +28,6 @@ describe('toPayload', () => {
     emailTemplateId: 'emailTemplateId',
     emailAudienceId: 'emailAudienceId',
     emailMaxOffers: 'emailMaxOffers',
-    playbookId: 'playbookId',
     expandOfferTypes: 'expandOfferTypes',
     offerPriority: 'offerTypePriority',
   };

@@ -40,8 +40,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { aspectLabel } from '@/lib/ad-generator/ad-size-library';
 import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
 import { skipReasonFix, skipReasonLabel, summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
-import type { CreativeStep, CycleState, RunSummary, ShadowReport } from './types';
-import { STEP_LABEL, detachedSteps } from '@/lib/playbooks/creative';
+import type { CycleState, RunSummary, ShadowReport } from './types';
 import { type Automation } from './use-automation';
 
 /** Cycle-state presentation. `expiring_unrenewed` is amber, NOT red: the OEM
@@ -627,88 +626,6 @@ export function ShadowPanel({
   // its own, because each card needs the RENDERED email, not just a title.
   const audiences = report?.audiences ?? [];
 
-  // ── playbook ──
-  const playbookOptions = report?.playbookOptions ?? [];
-  // The report's own `playbook` is resolved against the SAVED config, so it only
-  // matches the picker while nothing is edited. Re-resolve against the option
-  // the form currently holds, or switching playbooks would keep describing the
-  // old one until a save round-trips.
-  const playbook = useMemo(() => {
-    if (!form.playbookId) return null;
-    // Options carry their definitions, so a freshly picked playbook resolves
-    // fully without waiting for a save to round-trip.
-    const opt = playbookOptions.find((p) => p.id === form.playbookId);
-    if (opt) return { id: opt.id, name: opt.name, version: opt.version, definition: opt.definition };
-    // Followed but no longer published — keep describing it rather than
-    // silently showing "None" over a config it is still driving.
-    if (report?.playbook?.id === form.playbookId) return report.playbook;
-    return null;
-  }, [form.playbookId, report?.playbook, playbookOptions]);
-
-  // Drift computed from what's ON SCREEN, not from the saved report: an override
-  // should light up the moment you make it, not after you save.
-  //
-  // Through `detachedSteps` — the same rule the server and the playbook page
-  // use — rather than a hand-rolled copy. The copy that lived here checked four
-  // of the five creative steps and skipped `fanOut`, so an account could drift
-  // from its playbook's design list with nothing lighting up.
-  const detached: CreativeStep[] = useMemo(() => {
-    const def = playbook?.definition;
-    if (!def) return [];
-    return detachedSteps(
-      {
-        adTemplateId: form.templateId,
-        fanOutTemplateIds: form.fanOutTemplateIds,
-        sizeIds: form.sizeIds,
-        emailTemplateSlug: form.emailTemplateId,
-        emailMaxOffers: Number(form.emailMaxOffers) || 6,
-      },
-      def,
-    );
-  }, [playbook, form.templateId, form.fanOutTemplateIds, form.sizeIds, form.emailTemplateId, form.emailMaxOffers]);
-
-  /** Picking a playbook writes every field it presets, in one move. */
-  const applyPlaybook = (id: string) => {
-    set('playbookId', id);
-    if (!id) return; // Unlinking leaves the creative alone — nothing is lost.
-    const def = playbookOptions.find((p) => p.id === id)?.definition;
-    if (!def) return;
-    set('templateId', def.adTemplateId);
-    // The designs the run builds. This was the one preset the apply skipped, so
-    // "constrain the fan-out to the playbook" never reached the config from the
-    // UI — every account built every published design regardless.
-    set('fanOutTemplateIds', [...def.fanOutTemplateIds]);
-    set('sizeIds', [...def.sizeIds]);
-    set('emailTemplateId', def.emailTemplateSlug);
-    set('emailMaxOffers', String(def.emailMaxOffers));
-  };
-
-  /** Undo ONE override, leaving the others alone. */
-  const resetPlaybookStep = (step: CreativeStep) => {
-    const def = playbook?.definition;
-    if (!def) return;
-    switch (step) {
-      case 'adTemplate':
-        set('templateId', def.adTemplateId);
-        // Sizes belong to the design, so ids picked against another template
-        // would silently render nothing.
-        set('sizeIds', [...def.sizeIds]);
-        break;
-      case 'fanOut':
-        set('fanOutTemplateIds', [...def.fanOutTemplateIds]);
-        break;
-      case 'sizes':
-        set('sizeIds', [...def.sizeIds]);
-        break;
-      case 'emailTemplate':
-        set('emailTemplateId', def.emailTemplateSlug);
-        break;
-      case 'emailMaxOffers':
-        set('emailMaxOffers', String(def.emailMaxOffers));
-        break;
-    }
-  };
-
   // Designs WITH their docs, so the picker can render a real preview of each.
   // The shadow report carries only names and sizes; this is the endpoint built
   // for the dealer-facing picker, and reusing it keeps both surfaces showing the
@@ -970,84 +887,6 @@ export function ShadowPanel({
             {/* How ads are built */}
             <div>
 
-              {/* ── playbook ──
-                  Above the individual pickers because it SETS them: picking one
-                  fills in the ad template, sizes and email shell in a single
-                  move, which is the whole point of not choosing each separately.
-                  Everything below stays editable — an override detaches just
-                  that step (docs/playbooks.md §7 decision 3: flag, never block). */}
-              <div className="mb-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    <span className="text-[11px] font-medium text-[var(--foreground)]">Playbook</span>
-                    <HelpTip title="Playbook" iconClassName="h-3 w-3">
-                      <p>
-                        A named pairing of the ad design and the offer-email template, authored once
-                        for the agency and applied to many accounts.
-                      </p>
-                      <p className="mt-1.5">
-                        Picking one fills in everything below. You can still change any of it —
-                        that step just shows as <strong>overridden</strong> instead of quietly
-                        diverging.
-                      </p>
-                    </HelpTip>
-                  </div>
-                  {playbook && detached.length === 0 && (
-                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-500">
-                      Following v{playbook.version}
-                    </span>
-                  )}
-                  {playbook && detached.length > 0 && (
-                    <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
-                      {detached.length} override{detached.length === 1 ? '' : 's'}
-                    </span>
-                  )}
-                  <div className="ml-auto w-full sm:w-64">
-                    <Select
-                      value={form.playbookId}
-                      onChange={applyPlaybook}
-                      previewFont={false}
-                      options={[
-                        { value: '', label: 'None — pick each by hand' },
-                        ...playbookOptions.map((p) => ({
-                          value: p.id,
-                          label: p.scopeValue ? `${p.name} · ${p.scopeValue}` : p.name,
-                        })),
-                      ]}
-                    />
-                  </div>
-                </div>
-
-                {playbook && detached.length > 0 && (
-                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                    <span className="text-[10px] text-[var(--muted-foreground)]">
-                      Overridden here:
-                    </span>
-                    {detached.map((step) => (
-                      // Per-step undo. A single "reset to playbook" would throw
-                      // away deliberate overrides the person wasn't looking at.
-                      <button
-                        key={step}
-                        onClick={() => resetPlaybookStep(step)}
-                        className="group flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/5 px-2 py-0.5 text-[10px] font-medium text-amber-500 transition-colors hover:bg-amber-500/15"
-                      >
-                        {STEP_LABEL[step]}
-                        <span className="text-[var(--muted-foreground)] group-hover:text-amber-500">
-                          undo
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {!playbook && playbookOptions.length === 0 && (
-                  <p className="mt-2 text-[10px] text-[var(--muted-foreground)]">
-                    No published playbooks yet — build one in Playbooks → Library, or keep picking
-                    each piece by hand below.
-                  </p>
-                )}
-              </div>
-
               {/* The design is the one setting whose value is a PICTURE. A list of
                   names made a wrong pick invisible until the ads came out, so it
                   gets previews and the width to show them — and it's the dealer's
@@ -1070,10 +909,8 @@ export function ShadowPanel({
                 />
               </div>
 
-              {/* WHICH designs a run builds — the fan-out. This is the one creative
-                  step the playbook presets that never had a control here, so the
-                  column stayed empty for every UI-configured account and the run
-                  built every published design regardless of the playbook. */}
+              {/* WHICH designs a run builds — the fan-out. Empty builds every
+                  published design in scope. */}
               <div className="mb-4">
                 <Field
                   label="Designs built"

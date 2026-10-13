@@ -13,27 +13,6 @@ import { LIVE_TEMPLATE, templatesForAccount } from '../template-access';
 import { stockGate, stockGatePassed } from './inventory-match';
 import { isV2Template } from '@/lib/email/types';
 import { templateHasOffersMarker } from './offer-email-doc';
-import {
-  parseDefinition,
-  detachedSteps,
-  type CreativeDefinition,
-  type CreativeStep,
-} from '@/lib/playbooks/creative';
-
-/**
- * The ad template a config renders from. `templateMap` is a per-offer-type map
- * whose `all` key is the only one the settings form writes today, so the
- * playbook comparison reads that one key rather than the whole map.
- */
-function templateIdFor(templateMap: string | null): string {
-  if (!templateMap) return '';
-  try {
-    const v = JSON.parse(templateMap) as Record<string, unknown>;
-    return typeof v?.all === 'string' ? v.all : '';
-  } catch {
-    return '';
-  }
-}
 
 /**
  * Shadow-mode reporting — everything the Phase 1 dashboard shows, read from the
@@ -201,31 +180,9 @@ export interface ShadowReport {
     /** `Audience` id the draft is pre-targeted at; null = no recipients. */
     emailAudienceId: string | null;
     emailMaxOffers: number;
-    /** `Playbook.id` this account follows, or null for a hand-picked setup. */
-    playbookId: string | null;
     /** One ad per qualifying offer type, rather than only the best. */
     expandOfferTypes: boolean;
   };
-  /**
-   * The followed playbook, resolved. `detached` names the steps this
-   * account has diverged from — DERIVED by comparing the config to the
-   * definition, never stored, so it can't go stale (docs/playbooks.md §5).
-   */
-  playbook: {
-    id: string;
-    name: string;
-    version: number;
-    definition: CreativeDefinition;
-    detached: CreativeStep[];
-  } | null;
-  /** Published playbooks, definitions included so the picker can preset. */
-  playbookOptions: {
-    id: string;
-    name: string;
-    scopeValue: string | null;
-    version: number;
-    definition: CreativeDefinition;
-  }[];
   /** v2 email templates on this account, as offer-email shell candidates. */
   emailTemplates: { slug: string; title: string; hasOffersBlock: boolean }[];
   /** Saved audiences, for pre-targeting the offer email draft. */
@@ -304,7 +261,6 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         emailTemplateId: string | null;
         emailAudienceId: string | null;
         emailMaxOffers: number;
-        playbookId: string | null;
         expandOfferTypes: boolean;
       })
     | null = null;
@@ -332,7 +288,6 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         emailTemplateId: true,
         emailAudienceId: true,
         emailMaxOffers: true,
-        playbookId: true,
         expandOfferTypes: true,
       },
     });
@@ -588,32 +543,6 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
     })
     .catch(() => []);
 
-  // ── the followed playbook, and what this account has diverged from ──
-  //
-  // Both reads are unconditional so the picker always has its options, but the
-  // detached-step comparison only means anything when a playbook is linked.
-  const [playbookRow, playbookOptionRows] = await Promise.all([
-    config?.playbookId
-      ? prisma.playbook
-          .findUnique({
-            where: { id: config.playbookId },
-            select: { id: true, name: true, version: true, definition: true },
-          })
-          .catch(() => null)
-      : Promise.resolve(null),
-    prisma.playbook
-      .findMany({
-        where: { scope: 'creative', publishedAt: { not: null } },
-        // The definition ships with every option, not just the followed one:
-        // picking a playbook has to preset the fields IMMEDIATELY, and a client
-        // that had to fetch it first would apply nothing until a save
-        // round-tripped. The list is small and the payload is four fields.
-        select: { id: true, name: true, scopeValue: true, version: true, definition: true },
-        orderBy: { name: 'asc' },
-      })
-      .catch(() => []),
-  ]);
-
   const audienceRows = await prisma.audience
     .findMany({
       where: { accountKey },
@@ -674,39 +603,8 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       emailTemplateId: config?.emailTemplateId ?? null,
       emailAudienceId: config?.emailAudienceId ?? null,
       emailMaxOffers: config?.emailMaxOffers ?? 6,
-      playbookId: config?.playbookId ?? null,
       expandOfferTypes: !!config?.expandOfferTypes,
     },
-    playbook: (() => {
-      if (!playbookRow) return null;
-      const definition = parseDefinition(playbookRow.definition);
-      // The config columns are the truth; the definition is what they were
-      // preset from. Anything that differs is a deliberate local override.
-      const detached = detachedSteps(
-        {
-          adTemplateId: templateIdFor(config?.templateMap ?? null),
-          fanOutTemplateIds: jsonArray(config?.fanOutTemplateIds ?? null),
-          sizeIds: jsonArray(config?.sizeIds ?? null),
-          emailTemplateSlug: config?.emailTemplateId ?? '',
-          emailMaxOffers: config?.emailMaxOffers ?? 6,
-        },
-        definition,
-      );
-      return {
-        id: playbookRow.id,
-        name: playbookRow.name,
-        version: playbookRow.version,
-        definition,
-        detached,
-      };
-    })(),
-    playbookOptions: playbookOptionRows.map((p) => ({
-      id: p.id,
-      name: p.name,
-      scopeValue: p.scopeValue,
-      version: p.version,
-      definition: parseDefinition(p.definition),
-    })),
     // Shell candidates for the offer email. `hasOffersBlock` is surfaced rather
     // than filtered on, so a template that's missing the marker can be shown as
     // unusable with a reason instead of silently vanishing from the list.

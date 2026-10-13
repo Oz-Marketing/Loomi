@@ -637,7 +637,7 @@ It did NOT go through the campaign generators as predicted. Those write AI prose
 and a model rewording an OEM's legal offer terms every month is a compliance
 liability — so the document is composed deterministically and the manufacturer's
 own verbiage passes through verbatim. See
-[playbooks.md §8](./playbooks.md#8-the-companion-offer-email-built-2026-08-16).
+[ad-generator-offer-email.md](./ad-generator-offer-email.md).
 
 Still open from that end state: SMS, and the landing page the email should point
 at (it currently uses `Account.website`) — which is Phase D.

@@ -347,6 +347,11 @@ describe.skipIf(!RUN)('segment resolution: SQL path == JS engine', () => {
     ['has bought at least one vehicle', def([{ field: 'saleCount', operator: 'num_gte', value: '1' }])],
     ['serviced in the last 60 days', def([{ field: 'lastServiceEventAt', operator: 'within_last_days', value: '60' }])],
     ['lapsed service (none in 365 days)', def([{ field: 'lastServiceEventAt', operator: 'more_than_days_ago', value: '365' }])],
+    // Purchase Date / Last Service Date read history first, the CRM
+    // snapshot second — both engines through MERGED_DATE_FIELDS.
+    ['merged last service date in the last 60 days', def([{ field: 'lastServiceDate', operator: 'within_last_days', value: '60' }])],
+    ['merged last service date is_empty needs BOTH sources empty', def([{ field: 'lastServiceDate', operator: 'is_empty' }])],
+    ['merged purchase date more than a year ago', def([{ field: 'purchaseDate', operator: 'more_than_days_ago', value: '365' }])],
     ['first serviced more than a year ago', def([{ field: 'firstServiceEventAt', operator: 'more_than_days_ago', value: '365' }])],
     ['bought but never serviced', def([
       { field: 'saleCount', operator: 'num_gte', value: '1' },

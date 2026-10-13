@@ -341,7 +341,7 @@ describe('isOffersSlot', () => {
   });
 
   it('still matches the legacy {{offers}} text marker', () => {
-    // A live playbook points at a shell authored this way. Dropping support
+    // Live shells were authored this way. Dropping support
     // would break it silently — the run would refuse and send nothing.
     expect(isOffersSlot({ id: 't', type: 'text', props: { text: '{{offers}}' } })).toBe(true);
     expect(isOffersSlot({ id: 't', type: 'text', props: { text: '  {{offers}}  ' } })).toBe(true);

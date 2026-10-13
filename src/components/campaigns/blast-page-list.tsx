@@ -28,7 +28,6 @@ import {
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
   BoltIcon,
-  ExclamationTriangleIcon,
   LockClosedIcon,
   NoSymbolIcon,
 } from '@heroicons/react/24/outline';
@@ -83,7 +82,7 @@ interface Campaign {
   scheduledAt?: string;
   sentAt?: string;
   sentCount?: number;
-  /** Recipients the send hard-failed on. Non-zero on 'partial' and 'failed'. */
+  /** Recipients the send hard-failed on. Non-zero on 'failed'. */
   failedCount?: number;
   /**
    * The blast's `error` column. On a blast still scheduled/queued/sending, a
@@ -202,7 +201,6 @@ function campaignAccountKey(campaign: Campaign): string | null {
 
 const STATUS_BADGE: Record<string, string> = {
   sent:       'bg-green-500/10 text-green-400',
-  partial:    'bg-amber-500/10 text-amber-400',
   failed:     'bg-red-500/10 text-red-400',
   scheduled:  'bg-blue-500/10 text-blue-400',
   draft:      'bg-zinc-500/10 text-zinc-400',
@@ -212,7 +210,6 @@ const STATUS_BADGE: Record<string, string> = {
 
 const STATUS_ICON: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
   sent:       CheckCircleIcon,
-  partial:    ExclamationTriangleIcon,
   failed:     XCircleIcon,
   scheduled:  ClockIcon,
   draft:      DocumentTextIcon,
@@ -224,9 +221,9 @@ const PAGE_SIZE = 10;
 
 function normalizeStatus(status: string): string {
   const s = status.toLowerCase().trim();
-  // Terminal-with-errors states, checked before the fuzzy substring pass so
-  // 'partial' never gets swept into 'sent' by a future rule change.
-  if (s === 'partial') return 'partial';
+  // There is no "sent with errors": a blast that reached anyone was sent.
+  // 'partial' is a retired status some older rows may still carry.
+  if (s === 'partial') return 'sent';
   if (s === 'failed' || s === 'failure') return 'failed';
   if (s.includes('complete') || s.includes('deliver') || s.includes('finish') || s.includes('sent')) return 'sent';
   if (s.includes('active') || s.includes('sched') || s.includes('queue') || s.includes('start') || s.includes('running') || s.includes('progress')) return 'scheduled';
@@ -258,7 +255,6 @@ function statusBadgeClass(status: string): string {
 function statusLabel(status: string): string {
   const normalized = normalizeStatus(status);
   if (normalized === 'draft') return 'In Progress';
-  if (normalized === 'partial') return 'Sent with errors';
   if (normalized === 'failed') return 'Failed';
   const withSpaces = normalized.replace(/_/g, ' ');
   return withSpaces.replace(/\b\w/g, (char) => char.toUpperCase());
@@ -314,7 +310,7 @@ type CampaignSortField = 'status' | 'send' | 'updated';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_ORDER: Record<string, number> = {
-  sent: 0, partial: 1, failed: 2, scheduled: 3, draft: 4, paused: 5, canceled: 6,
+  sent: 0, failed: 1, scheduled: 2, draft: 3, paused: 4, canceled: 5,
 };
 
 function compareCampaigns(a: Campaign, b: Campaign, field: CampaignSortField, dir: SortDir): number {
@@ -515,12 +511,10 @@ function EngagementCell({
   primary,
   secondary,
   empty,
-  warn,
 }: {
   primary: string | null;
   secondary: string | null;
   empty: boolean;
-  warn?: boolean;
 }) {
   if (empty || primary === null) {
     return (
@@ -531,11 +525,7 @@ function EngagementCell({
   }
   return (
     <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
-      <span
-        className={`block text-xs font-medium ${
-          warn ? 'text-amber-400' : 'text-[var(--foreground)]'
-        }`}
-      >
+      <span className="block text-xs font-medium text-[var(--foreground)]">
         {primary}
       </span>
       {secondary && (
@@ -631,12 +621,10 @@ function CampaignTableRow({
   // Flow wrappers are excluded for the same reason they can't be archived —
   // the flow owns them, and the next enrollment would recreate the send.
   const canCancel = isLoomi && !item.isFlow && isInFlightBlastStatus(item.status);
-  // A blast that went out — cleanly ('sent'/'completed'), with some
-  // recipients erroring ('partial'), or erroring outright ('failed').
-  // All three are past the point of editing, so all three open the
+  // A blast that went out ('sent'/'completed') or erroring outright
+  // ('failed'). Both are past the point of editing, so both open the
   // read-only detail drawer. Treating only 'sent' as sendable used to
-  // leave partial/failed rows dead: no metrics, no drawer, no way to
-  // find out which recipients failed or why.
+  // leave failed rows dead: no metrics, no drawer, no way to find out why.
   const isSent = isLoomi && normalizedStatus === 'sent';
   // A blast that is still working through its audience has real numbers to
   // show. 'processing' covers both an in-flight send and one parked by the
@@ -646,7 +634,6 @@ function CampaignTableRow({
   const hasSendResult =
     isLoomi &&
     (isSent ||
-      normalizedStatus === 'partial' ||
       normalizedStatus === 'failed' ||
       (item.sentCount ?? 0) > 0);
   // Only a draft opens the builder. Rows with delivery data open the
@@ -654,10 +641,6 @@ function CampaignTableRow({
   // locked outright rather than pretending to be editable.
   const rowClickable = Boolean(loomiEditUrl) || hasSendResult;
   const isLocked = isLoomi && !loomiEditUrl && !hasSendResult;
-  // The engagement aggregate's count when there is one, so the note agrees
-  // with the Sent figure beside it; the row's own counter otherwise.
-  const failedCount = engagement?.failed ?? item.failedCount ?? 0;
-  const failedNote = failedCount > 0 ? `${formatNum(failedCount)} failed` : null;
 
   function handleRowClick() {
     if (hasSendResult) {
@@ -742,9 +725,8 @@ function CampaignTableRow({
       </td>
       <EngagementCell
         primary={engagement ? formatNum(engagement.sent) : null}
-        secondary={failedNote}
+        secondary={null}
         empty={!hasSendResult}
-        warn={Boolean(failedNote)}
       />
       <EngagementCell
         primary={engagement ? formatPct(engagement.openRate) : null}
@@ -756,7 +738,7 @@ function CampaignTableRow({
         secondary={engagement ? `${formatNum(engagement.uniqueClicks)} unique` : null}
         empty={!hasSendResult}
       />
-      {/* No `warn` threshold on bounces.
+      {/* No alarm color on bounces.
           The number stays — list hygiene is worth watching — but it is not an
           alarm. An aging dealership list bounces well past 2% on its first
           send, and painting that amber on a blast that did exactly what it

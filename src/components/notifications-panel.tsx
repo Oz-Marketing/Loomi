@@ -9,7 +9,6 @@ import {
   Cog6ToothIcon,
   MagnifyingGlassIcon,
   TrashIcon,
-  BookOpenIcon,
   ChartBarIcon,
   CheckIcon,
   ClipboardDocumentListIcon,
@@ -140,7 +139,6 @@ const CATEGORY_ICON = {
   chart: ChartBarIcon,
   clipboard: ClipboardDocumentListIcon,
   photo: PhotoIcon,
-  book: BookOpenIcon,
   sparkles: SparklesIcon,
 } as const;
 

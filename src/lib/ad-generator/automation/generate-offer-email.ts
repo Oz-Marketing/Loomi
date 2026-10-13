@@ -354,8 +354,7 @@ export async function generateOfferEmail(
   }
   const ranked = rankOffers(pool, priority, config.emailMaxOffers);
 
-  // Own branding only — deliberately NOT the inherited chain the playbooks audit
-  // walks. `generate-ads` resolves the creative's colours the same way, and an
+  // Own branding only — deliberately NOT the inherited group chain. `generate-ads` resolves the creative's colours the same way, and an
   // email whose brand colour disagrees with the ad sitting next to it is worse
   // than one that inherits nothing.
   const branding = safeJson<{ colors?: Record<string, string> }>(account.branding ?? null);
@@ -369,14 +368,13 @@ export async function generateOfferEmail(
     vehicles: ranked,
   };
 
-  // ── document: the account's shell, which a playbook presets ──
+  // ── document: the account's shell ──
   //
   // ONE shell per run, not one per plate. The fan-out builds a design per
   // template, but a dealer's list gets a single send carrying every offer — so
   // the email does not correspond to any one plate and cannot follow the
-  // dealer's design choice. The shell comes from `AdAutomationConfig`, which the
-  // creative playbook presets alongside the plates it names. Null composes a
-  // standalone document from the account's branding.
+  // dealer's design choice. The shell comes from `AdAutomationConfig`. Null
+  // composes a standalone document from the account's branding.
   const shellSlug = resolveEmailShellSlug(config.emailTemplateId);
   const doc = await buildDocForShell(input, shellSlug);
   if (!doc) {

@@ -94,7 +94,7 @@ export async function GET(req: NextRequest) {
     if (role !== 'client') return true;
     const s = status.toLowerCase();
     return s === 'scheduled' || s === 'queued' || s === 'processing' ||
-      s === 'completed' || s === 'partial' || s === 'sent';
+      s === 'completed' || s === 'sent';
   }
 
   // A blast parked by its sending domain's daily warm-up cap sits in

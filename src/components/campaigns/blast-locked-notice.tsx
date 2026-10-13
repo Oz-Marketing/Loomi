@@ -25,7 +25,6 @@ const STATUS_LABEL: Record<string, string> = {
   scheduled: 'Scheduled',
   processing: 'Sending',
   completed: 'Sent',
-  partial: 'Sent with errors',
   failed: 'Failed',
   canceled: 'Canceled',
 };

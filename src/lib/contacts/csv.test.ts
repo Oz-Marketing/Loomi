@@ -43,4 +43,13 @@ describe('contact CSV columns', () => {
     expect(first.endsWith(',2023-04-11,2026-02-03')).toBe(true);
     expect(second.endsWith(',,')).toBe(true);
   });
+
+  it('exports the merged date the segment filter reads, history first', () => {
+    const csv = buildContactsCsv([
+      { firstName: 'A', lastName: 'B', tags: [],
+        purchaseDate: new Date('2020-01-01T00:00:00Z'), lastSaleEventAt: new Date('2024-05-06T00:00:00Z'),
+        lastServiceDate: new Date('2026-02-03T00:00:00Z'), lastServiceEventAt: null },
+    ]);
+    expect(csv.split('\n')[1].endsWith(',2024-05-06,2026-02-03')).toBe(true);
+  });
 });

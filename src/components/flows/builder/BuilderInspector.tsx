@@ -10,6 +10,7 @@ import {
 import type { Node } from '@xyflow/react';
 import {
   FIELD_CATEGORIES,
+  pickerFields,
   FILTERABLE_FIELDS,
   NO_VALUE_OPERATORS,
   OPERATOR_LABELS,
@@ -752,7 +753,7 @@ function RuleRow({
   // Empty categories drop out so the "Custom" group only appears when
   // the active flow's account has declared fields.
   const fieldOptions: SearchableSelectOption[] = FIELD_CATEGORIES.flatMap((cat) => {
-    const inCategory = fields.filter((f) => f.category === cat.key);
+    const inCategory = pickerFields(fields, rule.field).filter((f) => f.category === cat.key);
     if (inCategory.length === 0) return [];
     return inCategory.map((f) => ({
       value: f.key,

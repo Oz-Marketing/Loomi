@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeysForAll } from '@/lib/services/accounts';
 import { segmentReadWhere } from '@/lib/segments/visibility';
 import type { FanOutResult } from '@/lib/segments/fan-out';
+import type { PushableSegment, SegmentCopy } from '@/lib/segments/copies';
 
 /**
  * Segments these accounts may read.
@@ -35,6 +36,8 @@ export async function createAudience(data: {
   icon?: string;
   color?: string;
   sortOrder?: number;
+  /** Set on a fan-out copy — the segment it was copied from. */
+  sourceAudienceId?: string;
 }) {
   return prisma.audience.create({ data });
 }
@@ -82,6 +85,10 @@ export async function deleteAudience(id: string) {
  * deployBlueprintToAccounts. The caller is expected to have run the
  * pre-flight checks (scope, per-account validation, name clashes) so that by
  * the time we get here a failure is a race, not a foreseeable refusal.
+ *
+ * The FIRST account is the original and every other row is linked to it as a
+ * copy (`sourceAudienceId`), so the original can later push its edits to them.
+ * The builder puts the account the user is working in first.
  */
 export async function createAudienceAcrossAccounts(input: {
   name: string;
@@ -97,6 +104,10 @@ export async function createAudienceAcrossAccounts(input: {
 
   // De-dupe defensively: two rows for one account would collide on
   // (name, accountKey) and report the second as a mysterious failure.
+  // The first row that actually lands is the original. If the first account
+  // loses a race, the next one stands in rather than leaving every copy
+  // linked to nothing.
+  let sourceAudienceId: string | undefined;
   for (const accountKey of [...new Set(input.accountKeys)]) {
     try {
       const audience = await createAudience({
@@ -107,7 +118,9 @@ export async function createAudienceAcrossAccounts(input: {
         filters: input.filters,
         icon: input.icon,
         color: input.color,
+        sourceAudienceId,
       });
+      sourceAudienceId ??= audience.id;
       created.push({ accountKey, id: audience.id });
     } catch (err) {
       // A name collision is the one failure a user can act on, so say so
@@ -124,4 +137,42 @@ export async function createAudienceAcrossAccounts(input: {
   }
 
   return { created, failures };
+}
+
+/** The linked copies of an original segment, oldest first. */
+export async function getAudienceCopies(sourceAudienceId: string): Promise<SegmentCopy[]> {
+  return prisma.audience.findMany({
+    where: { sourceAudienceId },
+    select: {
+      id: true,
+      accountKey: true,
+      name: true,
+      description: true,
+      filters: true,
+      icon: true,
+      color: true,
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/**
+ * Overwrite the given copies with the original's saved fields.
+ *
+ * One transaction: the route has already refused anything foreseeable
+ * (scope, per-account validation, name clashes), so a failure here is a
+ * race, and rolling back beats leaving half the copies changed with no
+ * way to tell which.
+ */
+export async function pushAudienceToCopies(source: PushableSegment, copyIds: string[]) {
+  const data = {
+    name: source.name,
+    description: source.description,
+    filters: source.filters,
+    icon: source.icon,
+    color: source.color,
+  };
+  await prisma.$transaction(
+    copyIds.map((id) => prisma.audience.update({ where: { id }, data })),
+  );
 }

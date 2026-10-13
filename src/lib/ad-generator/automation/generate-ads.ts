@@ -42,7 +42,7 @@ import {
 import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { resolveEventAsset } from './event-assets';
 import { resolveAutomationTemplate, type TemplateCandidate } from './resolve-automation-template';
-import { effectiveFanOut } from '@/lib/playbooks/creative';
+import { effectiveFanOut } from './fan-out';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import {
   type OfferEmailConfigRow,
@@ -277,9 +277,9 @@ export async function generateForAccount(
     })
     .then((rows) => templatesForAccount(rows, { accountKey: config.accountKey }))
     .catch(() => []);
-  // The designs this account's PLAYBOOK permits, if it names any. Empty means
-  // unconstrained — every published in-scope template, which is what an account
-  // following no playbook has always done.
+  // The designs this account's settings permit, if they name any. Empty means
+  // unconstrained — every published in-scope template, which is what the
+  // fan-out has always done by default.
   //
   // Without this, any plate a designer publishes joins every account's run the
   // next night, including one built for a different brand. `templateMap` can't
@@ -287,7 +287,7 @@ export async function generateForAccount(
   // RECOMMENDED, not which ones exist.
   const permitted = new Set(
     effectiveFanOut({
-      // `templateMap.all` is where the playbook writes the lead design.
+      // `templateMap.all` is where the settings form writes the lead design.
       adTemplateId: typeof templateMap?.all === 'string' ? templateMap.all : '',
       fanOutTemplateIds: safeJson<string[]>(config.fanOutTemplateIds) ?? [],
     }),
@@ -307,7 +307,7 @@ export async function generateForAccount(
   }
   if (permittedSkips > 0) {
     console.log(
-      `[generate-ads] ${config.accountKey}: playbook permits ${permitted.size} design(s); skipped ${permittedSkips} other published template(s)`,
+      `[generate-ads] ${config.accountKey}: settings permit ${permitted.size} design(s); skipped ${permittedSkips} other published template(s)`,
     );
   }
 

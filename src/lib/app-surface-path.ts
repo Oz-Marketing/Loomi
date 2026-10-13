@@ -8,8 +8,7 @@
  *
  * Locally there is no proxy: everything is `localhost:3000`, and the only
  * working path IS `/app/projects`. A bare href 404s. That made every App-surface
- * link dead in local dev, which is why `/playbooks` could not be opened without
- * knowing to type the prefix.
+ * link dead in local dev unless you knew to type the prefix.
  *
  * The current pathname tells us which world we are in, because the proxy is
  * exactly what decides whether `/app` is visible. Mirror it:

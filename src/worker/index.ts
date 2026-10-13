@@ -50,7 +50,6 @@ import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
 import { sweepMediaExpiration } from '@/lib/services/media-expiration';
 import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
 import { runDueAudienceSyncs } from '@/lib/segments/sync/run';
-import { runCoverageSweep } from '@/lib/playbooks/sweep';
 import { singleFlight } from '@/lib/jobs/single-flight';
 import { requestSendStop } from '@/lib/sending/send-control';
 
@@ -87,12 +86,6 @@ const ADGEN_EXPIRE_QUEUE = 'loomi.adgen.expire';
 // only detects that a manufacturer reissued a document and tells someone. Runs
 // well clear of the generate chain because nothing downstream depends on it.
 const ADGEN_GUIDELINES_QUEUE = 'loomi.adgen.guidelines';
-// Playbooks coverage sweep. Runs LAST in the nightly chain (08:30 UTC), after
-// inventory, offers, generation and the audience sync have all landed — the
-// audit reads the freshness of exactly those jobs, so sweeping before them would
-// score every rooftop against yesterday's state and manufacture drift that
-// isn't there.
-const PLAYBOOKS_SWEEP_QUEUE = 'loomi.playbooks.sweep';
 // Media asset rights: retire assets past their license/effective date and warn
 // ahead of the ones approaching it. Independent of the ad chain — it governs the
 // source material, not the ads built from it — so it runs on its own slot.
@@ -277,25 +270,6 @@ async function runAdgenExpire(): Promise<void> {
   }
 }
 
-async function runPlaybooksSweep(): Promise<void> {
-  const startedAt = Date.now();
-  try {
-    const r = await runCoverageSweep();
-    // Logged on EVERY run, clean ones included. A silent success and a job that
-    // stopped being scheduled look the same in a log that only speaks up when
-    // something is wrong.
-    console.log(
-      `[worker] playbooks sweep: ${r.accountsAudited} account(s), ` +
-        `${r.blockingFails} blocking (${r.newBlocking.length} new), ` +
-        `coverage ${r.coveragePct ?? '-'}%, ${r.notified} notified in ${Date.now() - startedAt}ms`,
-    );
-  } catch (err) {
-    // runCoverageSweep already records its own failure on the run row and does
-    // not throw; this is the belt on top of those braces.
-    console.error('[worker] playbooks sweep failed', err);
-  }
-}
-
 async function runAudienceSync(): Promise<void> {
   const startedAt = Date.now();
   try {
@@ -390,11 +364,6 @@ async function main(): Promise<void> {
   await boss.createQueue(ADGEN_GENERATE_QUEUE, { retryLimit: 0, expireInSeconds: 3600 });
   await boss.work(ADGEN_GENERATE_QUEUE, async () => {
     await runAdgenGenerate();
-  });
-
-  await boss.createQueue(PLAYBOOKS_SWEEP_QUEUE);
-  await boss.work(PLAYBOOKS_SWEEP_QUEUE, async () => {
-    await runPlaybooksSweep();
   });
 
   await boss.createQueue(ADGEN_EXPIRE_QUEUE);
@@ -547,11 +516,6 @@ async function main(): Promise<void> {
 
   await boss.schedule(MEDIA_RIGHTS_QUEUE, '30 7 * * *');
   console.log('[worker] scheduled', MEDIA_RIGHTS_QUEUE, 'daily at 07:30 UTC');
-
-  // 08:30 UTC — last in the nightly chain, so the audit's freshness checks read
-  // the runs that finished this morning rather than yesterday's.
-  await boss.schedule(PLAYBOOKS_SWEEP_QUEUE, '30 8 * * *');
-  console.log('[worker] scheduled', PLAYBOOKS_SWEEP_QUEUE, 'daily at 08:30 UTC');
 
   // Every 5 minutes: approving the creative on monday should feel like it
   // started something. A no-op unless DRAFTING_INTAKE_ENABLED=true.

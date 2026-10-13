@@ -13,7 +13,6 @@ import {
   Squares2X2Icon,
   UserGroupIcon,
   PhotoIcon,
-  BookOpenIcon,
   MegaphoneIcon,
   SunIcon,
   MoonIcon,
@@ -38,7 +37,6 @@ import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav'
 import { SectorBrand } from '@/components/sector-brand';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
-import { PLAYBOOKS_ENABLED } from '@/lib/feature-flags';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -100,32 +98,6 @@ const adGeneratorNav: NavItem = {
   label: 'Ad Generator',
   icon: MegaphoneIcon,
   absolute: true,
-};
-// Playbooks — the coverage audit and the agency-wide creative library
-// (docs/playbooks.md). Sits under Templates: a playbook is a named bundle OF
-// templates (an ad design plus an email shell), so it reads as the next step
-// up from the library rather than a separate tool. Global, like Ad Generator —
-// it spans every account rather than scoping to the active one.
-//
-// Unparked 2026-09-08. It was greyed with a "Soon" pill from 2026-09-02 while
-// the creative slice was half-built; that slice is what the OEM offer set now
-// runs on — a playbook names the ad plates, their sizes and the email shell,
-// and applying one presets `AdAutomationConfig`.
-//
-// The pill now tracks the SAME flag the server gate reads, rather than being a
-// hardcoded `true`. While parked those two deliberately disagreed, which meant
-// turning the feature on took two edits in two files and the nav could sit
-// stale. One flag: `NEXT_PUBLIC_ENABLE_PLAYBOOKS`.
-//
-// DEPLOY NOTE: that is a `NEXT_PUBLIC_*` var, so it is inlined by `next build`
-// on the runner. Setting it in the droplet's shared `.env.local` does nothing
-// and reports no error — it goes in the build step's `env:`.
-const playbooksNav: NavItem = {
-  href: '/playbooks',
-  label: 'Playbooks',
-  icon: BookOpenIcon,
-  absolute: true,
-  comingSoon: !PLAYBOOKS_ENABLED,
 };
 // Media library — re-added below Ad Generator.
 const mediaNav: NavItem = { href: '/media', label: 'Assets', icon: PhotoIcon };
@@ -246,24 +218,6 @@ export function Sidebar() {
     // before the account context settles). Unprefixed routes read the active
     // account from context, so this is a safe interim.
     navItems = isClientRole ? subaccountClientNavItems : adminNavItems;
-  }
-
-  // Playbooks renders for every staff role, but as a disabled "Soon" row (see
-  // `playbooksNav`) — so the flag and the developer bypass no longer decide
-  // whether the ROW appears, only whether the route opens. That divergence from
-  // `playbooksAllowed` is deliberate while the feature is parked: the link is
-  // gone for everyone, and a developer reaches it by typing the URL. Don't
-  // "fix" the two gates back into agreement without also un-parking the row.
-  //
-  // Spliced here rather than in the module-level list above, which is built at
-  // import time, before any role is known. It sits after Templates, since a
-  // playbook bundles the ad design and email template that live there.
-  if (!isClientRole) {
-    const at = navItems.findIndex((e) => !('divider' in e) && e.href === templatesNav.href);
-    navItems =
-      at === -1
-        ? [...navItems, playbooksNav]
-        : [...navItems.slice(0, at + 1), playbooksNav, ...navItems.slice(at + 1)];
   }
 
   // Resolve nav item hrefs with the prefix (skip for absolute items)

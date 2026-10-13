@@ -13,19 +13,14 @@ import {
 /**
  * The email shell a run builds through, and the document it produces.
  *
- * WHERE THE PAIRING LIVES. A creative **Playbook** is the bundle — one ad plate
- * set, its sizes, and the email shell that goes with them, authored once for the
- * agency and applied to many rooftops. Applying one PRESETS
- * `AdAutomationConfig.emailTemplateId`; that column stays the single source of
- * truth for what a run actually uses, so generation never resolves a playbook
- * and drift is derived by comparing the two.
+ * WHERE THE PAIRING LIVES. `AdAutomationConfig.emailTemplateId` is the single
+ * source of truth for the shell a run uses — one per account, set in the Ad
+ * Generator's automation settings alongside the plates and sizes.
  *
  * An earlier version of this file resolved the shell from
  * `AdTemplateDoc.emailTemplateSlug` — a second pairing that silently overrode
  * the config column, which broke exactly that invariant: the config no longer
- * described what ran, so playbook drift detection compared the wrong thing.
- * Removed 2026-09-08. If you are tempted to re-add a per-template shell, put it
- * in the playbook definition instead.
+ * described what ran. Removed 2026-09-08. Don't re-add a per-template shell.
  */
 
 /** Metadata the offer-email generator writes onto its draft blast. */
@@ -49,9 +44,9 @@ export interface OfferEmailMetadata {
 /**
  * The shell for this account, or null to compose a standalone email.
  *
- * Deliberately a one-liner behind a function: it is the seam a playbook presets
- * into, and keeping it named makes "where does the shell come from" answerable
- * by grep rather than by reading the generator.
+ * Deliberately a one-liner behind a function: keeping it named makes "where
+ * does the shell come from" answerable by grep rather than by reading the
+ * generator.
  */
 export function resolveEmailShellSlug(accountShellSlug: string | null): string | null {
   return accountShellSlug?.trim() || null;

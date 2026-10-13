@@ -402,7 +402,7 @@ export function resolveLogoBlocks(blocks: Block[], logoUrl: string | null): Bloc
  * TWO FORMS, on purpose. The `offers` BLOCK is what a designer drags out of the
  * email palette — visible on the canvas, impossible to typo. The `{{offers}}`
  * text marker is what shells were authored with before that block existed, and
- * a live playbook still points at one, so it keeps working. New shells should
+ * live accounts still point at one, so it keeps working. New shells should
  * use the block; nothing needs migrating.
  */
 export function isOffersSlot(b: Block): boolean {
@@ -487,9 +487,9 @@ export function spliceOffers(
 /**
  * Does a stored `Template.content` carry the `{{offers}}` marker?
  *
- * Shared by the settings dropdown and the playbooks audit so "usable as a
- * shell" has exactly one definition — two drifting copies would let the audit
- * bless a template the generator then refuses.
+ * Shared by the settings dropdown and the generator so "usable as a shell" has
+ * exactly one definition — two drifting copies would let the dropdown offer a
+ * template the generator then refuses.
  */
 export function templateHasOffersMarker(content: string): boolean {
   let doc: EmailTemplate | null = null;

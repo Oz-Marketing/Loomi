@@ -28,7 +28,7 @@ export interface OfferRunPreflight {
   emailEnabled: boolean;
   emailAudienceName: string | null;
   /** The designs a run may build, from the same columns the run reads. */
-  permitted: { count: number; names: string[]; source: 'playbook' | 'settings' | 'all_published'; playbookName: string | null };
+  permitted: { count: number; names: string[]; source: 'settings' | 'all_published' };
   leadDesignName: string | null;
   automationEnabled: boolean;
   /** When offers were last checked against the manufacturer feed. */
@@ -66,7 +66,7 @@ const EMPTY: OfferRunPreflight = {
   runWindow: null,
   emailEnabled: false,
   emailAudienceName: null,
-  permitted: { count: 0, names: [], source: 'all_published', playbookName: null },
+  permitted: { count: 0, names: [], source: 'all_published' },
   leadDesignName: null,
   automationEnabled: false,
   lastPollAt: null,
@@ -85,7 +85,6 @@ interface ReportLite {
     emailAudienceId?: string | null;
     fanOutTemplateIds?: string[];
   };
-  playbook?: { name: string } | null;
   audiences?: { id: string; name: string }[];
   templates?: { id: string; name: string }[];
   runWindow?: { start: string; end: string; mode: string };
@@ -131,8 +130,7 @@ function toPreflight(d: ReportLite): OfferRunPreflight {
     permitted: {
       count: names.length,
       names,
-      source: permittedIds.size ? (d.playbook ? 'playbook' : 'settings') : 'all_published',
-      playbookName: d.playbook?.name ?? null,
+      source: permittedIds.size ? 'settings' : 'all_published',
     },
     leadDesignName: lead ? templates.find((t) => t.id === lead)?.name ?? null : null,
     automationEnabled: !!d.enabled,

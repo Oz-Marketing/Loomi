@@ -8,13 +8,14 @@ import { pathOffersAllAccounts, ALL_ACCOUNTS_PATHS } from './account-context';
  * renders one client's data merged with another's, and nothing throws.
  */
 describe('pathOffersAllAccounts', () => {
-  it('accepts the pages that opted in', () => {
-    for (const p of ALL_ACCOUNTS_PATHS) expect(pathOffersAllAccounts(p)).toBe(true);
-    expect(pathOffersAllAccounts('/playbooks')).toBe(true);
-  });
-
-  it('accepts sub-paths of an opted-in page', () => {
-    expect(pathOffersAllAccounts('/playbooks/anything')).toBe(true);
+  it('accepts the pages that opted in, and their sub-paths', () => {
+    for (const p of ALL_ACCOUNTS_PATHS) {
+      expect(pathOffersAllAccounts(p)).toBe(true);
+      expect(pathOffersAllAccounts(`${p}/anything`)).toBe(true);
+      // A lookalike prefix is a different page; matching it would opt a page in
+      // without anyone deciding to.
+      expect(pathOffersAllAccounts(`${p}-archive`)).toBe(false);
+    }
   });
 
   it('refuses the client-data pages', () => {
@@ -26,11 +27,8 @@ describe('pathOffersAllAccounts', () => {
     }
   });
 
-  it('does not match a lookalike prefix', () => {
-    // `/playbooks-archive` is a different page; matching it off the prefix
-    // would opt a page in without anyone deciding to.
-    expect(pathOffersAllAccounts('/playbooks-archive')).toBe(false);
-    expect(pathOffersAllAccounts('/playbooksomething')).toBe(false);
+  it('refuses the retired Playbooks page', () => {
+    expect(pathOffersAllAccounts('/playbooks')).toBe(false);
   });
 
   it('refuses the studio root', () => {

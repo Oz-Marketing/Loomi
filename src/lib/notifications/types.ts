@@ -27,8 +27,6 @@ export type NotificationType =
   | 'incentive_ads_ready'
   | 'coop_guideline_changed'
   | 'template_sync_finished'
-  // Playbooks (Studio surface) — nightly coverage sweep
-  | 'playbook_drift'
   // Media Library (Studio surface) — rights management
   | 'asset_rights_expiring'
   | 'asset_rights_expired'
@@ -259,17 +257,6 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     // In-app only by default. You started this yourself and the bell is right
     // there; mailing everyone their own button presses is noise.
     defaultEmailEnabled: false,
-  },
-  {
-    type: 'playbook_drift',
-    label: 'Playbook check started blocking',
-    description:
-      'The nightly coverage sweep found a blocking check that was passing before. Only NEW failures alert — a standing backlog does not re-announce itself every morning.',
-    category: 'Playbooks',
-    // Immediate: a blocking check means publishing is impossible for that
-    // rooftop, so every day it sits unnoticed is a day of nothing shipping.
-    channel: 'immediate',
-    defaultEnabled: true,
   },
   {
     type: 'asset_rights_expiring',

@@ -180,7 +180,7 @@ export function CampaignOfferDesigns({
    * the ordering is worth more than the parallelism.
    *
    * Offers that already use this template, or have no variant built from it, are
-   * skipped rather than reported as failures — a playbook can permit a design
+   * skipped rather than reported as failures — the settings can permit a design
    * that a particular offer could not be built on.
    */
   async function pickAll(templateId: string) {

@@ -612,7 +612,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
       where: {
         OR: [
           { status: { in: ['scheduled', 'processing', 'queued'] } },
-          { status: { in: ['failed', 'partial'] }, updatedAt: { gte: sevenDaysAgo } },
+          { status: 'failed', updatedAt: { gte: sevenDaysAgo } },
         ],
       },
       orderBy: { scheduledFor: 'asc' },
@@ -622,7 +622,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
       where: {
         OR: [
           { status: { in: ['scheduled', 'processing', 'queued'] } },
-          { status: { in: ['failed', 'partial'] }, updatedAt: { gte: sevenDaysAgo } },
+          { status: 'failed', updatedAt: { gte: sevenDaysAgo } },
         ],
       },
       orderBy: { scheduledFor: 'asc' },
@@ -673,7 +673,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
     .filter((c) => c.status === 'processing')
     .sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
   const recentlyFailed = merged
-    .filter((c) => c.status === 'failed' || c.status === 'partial')
+    .filter((c) => c.status === 'failed')
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return { scheduled, inFlight, recentlyFailed };

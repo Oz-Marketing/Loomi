@@ -1,13 +1,13 @@
 'use client';
 
 // Sent-campaign detail drawer. Slides in from the right when a row that
-// has already gone out is clicked — cleanly sent, 'partial' (some
-// recipients errored) or 'failed'. Renders campaign-scoped KPIs
-// (sent / delivered / opens / clicks / bounces / unsubs) plus an
-// email or SMS preview alongside, and — for partial/failed sends — the
-// failure count and the first error the send worker recorded, which is
-// otherwise invisible in the product. Sent campaigns are read-only —
-// there's no edit affordance here.
+// has already gone out is clicked — sent or 'failed'. Renders
+// campaign-scoped KPIs (sent / delivered / opens / clicks / bounces /
+// unsubs) plus an email or SMS preview alongside, and — only for a blast
+// that sent nothing at all — the error the send worker recorded. A blast
+// that reached anyone is simply sent: undeliverable addresses are counted
+// as bounces and suppressed, never raised as an error. Sent campaigns are
+// read-only — there's no edit affordance here.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -95,9 +95,6 @@ interface SmsBlastDetail {
  */
 function describeStatus(status: string): { label: string; tone: string; verb: string } {
   const s = (status || '').toLowerCase().trim();
-  if (s === 'partial') {
-    return { label: 'Sent with errors', tone: 'text-amber-400', verb: 'Sent' };
-  }
   if (s === 'failed') return { label: 'Failed', tone: 'text-red-400', verb: 'Attempted' };
   if (s === 'canceled' || s === 'cancelled') {
     return { label: 'Canceled', tone: 'text-red-400', verb: 'Canceled' };
@@ -327,36 +324,16 @@ export function SentBlastDrawer({ open, campaign, onClose, accountKey }: SentBla
     return previewBlock + emailDetail.htmlContent;
   }, [emailDetail]);
 
-  // Failure summary, assembled from whichever channel's detail payload
-  // loaded. Falls back to the status alone when the detail fetch hasn't
-  // landed (or failed), so a 'partial' row never renders as a clean send.
+  // Failure summary — ONLY for a blast that sent nothing at all. A blast
+  // that reached anyone was sent; recipients it could not reach are bad
+  // addresses, counted with the bounces and suppressed, and there is nothing
+  // for the reader to do about them.
   const detail = channel === 'sms' ? smsDetail : emailDetail;
-  const failedCount = detail?.failedCount ?? 0;
   const failureSummary = useMemo(() => {
     const status = (campaign?.status || '').toLowerCase().trim();
-    // Gate on the COUNT, not the status.
-    //
-    // `failedCount` now means only "Loomi could not dispatch this" — bounces
-    // moved to their own column and their own tile. A blast that dispatched
-    // everything and bounced on some of it therefore has nothing to say here,
-    // and gating on `status === 'partial'` would keep the banner up anyway on
-    // any older row the backfill has not reached yet.
-    //
-    // `status === 'failed'` with no failed recipients still speaks: that is a
-    // blast that fell over before it could write any, and silence would be
-    // worse than a vague headline.
-    if (failedCount === 0 && status !== 'failed') return null;
-    const total = detail?.totalRecipients ?? 0;
-    const headline =
-      failedCount > 0
-        ? total > 0
-          ? `${num(failedCount)} of ${num(total)} recipients failed to send.`
-          : `${num(failedCount)} recipients failed to send.`
-        : status === 'failed'
-          ? 'This blast failed to send.'
-          : 'Some recipients failed to send.';
-    return { headline, detail: detail?.error?.trim() || null };
-  }, [campaign?.status, detail, failedCount]);
+    if (status !== 'failed') return null;
+    return { headline: 'This blast failed to send.', detail: detail?.error?.trim() || null };
+  }, [campaign?.status, detail]);
 
   if (!mounted && !open) return null;
 
@@ -412,9 +389,7 @@ export function SentBlastDrawer({ open, campaign, onClose, accountKey }: SentBla
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {/* Failure banner — only for blasts that actually errored. The
-              worker stores the first recipient error on the blast row; it
-              had no surface in the UI before this. */}
+          {/* Failure banner — only for a blast that sent nothing. */}
           {failureSummary && (
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
               <div className="flex items-start gap-2">
@@ -428,10 +403,6 @@ export function SentBlastDrawer({ open, campaign, onClose, accountKey }: SentBla
                       {failureSummary.detail}
                     </p>
                   )}
-                  <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5">
-                    Bounces, suppressed and opted-out contacts are not counted here —
-                    these are messages Loomi could not send at all.
-                  </p>
                 </div>
               </div>
             </div>

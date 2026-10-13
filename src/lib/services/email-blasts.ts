@@ -7,6 +7,7 @@ import {
 } from '@/lib/contact-hygiene';
 import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 import {
   getAllowances,
   getCombinedRemaining,
@@ -44,11 +45,15 @@ import { applyPreviewText } from '@/lib/sending/preheader';
 import { htmlToText } from '@/lib/sending/html-to-text';
 import { fromDisplayName } from '@/lib/messaging/blast-sender';
 import { cloneTemplate } from '@/lib/services/templates';
-import { recomputeEmailBlastCounters } from '@/lib/sending/email-delivery-state';
+import {
+  recomputeEmailBlastCounters,
+  writeEmailSuppressions,
+} from '@/lib/sending/email-delivery-state';
 import { isSendStopRequested } from '@/lib/sending/send-control';
 import {
   attemptsSoFar,
   classifySendFailure,
+  isRecipientAddressRefusal,
   MAX_ATTEMPTS,
   PreSendError,
   sanitizeDisplayName,
@@ -93,14 +98,13 @@ export type EmailBlastStatus =
   | 'scheduled'
   | 'processing'
   | 'completed'
-  | 'partial'
   | 'failed'
   | 'canceled';
 
 // Drafts are NOT processable — they live until the user explicitly
 // schedules them, at which point status transitions to queued/scheduled.
 const PROCESSABLE_STATUSES: EmailBlastStatus[] = ['queued', 'scheduled', 'processing'];
-const TERMINAL_STATUSES: EmailBlastStatus[] = ['completed', 'partial', 'failed', 'canceled'];
+const TERMINAL_STATUSES: EmailBlastStatus[] = ['completed', 'failed', 'canceled'];
 // An address we deliberately never attempt: missing, or on a domain that
 // cannot receive mail (see lib/sending/email-domains.ts). Recorded as
 // `skipped`, the same as a suppression — we made a choice, nothing failed.
@@ -1374,6 +1378,13 @@ export interface BlastCounts {
 /**
  * Collapse recipient counts into the blast's status.
  *
+ * There is no "sent with errors". If the blast reached anyone, it was sent.
+ * Recipients Loomi could not dispatch to are recorded on their own rows (and
+ * a bad address is suppressed so it is never attempted again — see
+ * handleFailure in processEmailBlast), but they do not change what the blast
+ * itself did. The only failure a blast reports is the one where nothing went
+ * out at all.
+ *
  * `skipped` counts as work DONE. A blast whose entire audience turned out to
  * be suppressed is finished — 'completed' with zero sends — not stuck.
  * Returning 'queued' there (the old behaviour) made the sweep re-pick it
@@ -1381,20 +1392,11 @@ export interface BlastCounts {
  */
 export function resolveBlastStatus(counts: BlastCounts): EmailBlastStatus {
   if (counts.pending > 0) return 'processing';
-  if (counts.sent > 0 && counts.failed > 0) return 'partial';
   if (counts.sent > 0) return 'completed';
   if (counts.failed > 0) return 'failed';
-  // Bounces are NOT in any of the tests above, and that is the point.
-  //
-  // A bounce happens after a successful dispatch, so it says nothing about
-  // whether the blast worked. Counting them as failures is what made a
-  // perfectly healthy send to an old list render as "Sent with errors": a
-  // warm-up-capped blast sends over several days, and by day two the previous
-  // day's bounce webhooks had already flipped rows to 'failed', so every
-  // subsequent slice resolved to 'partial'. The client saw an alarm about a
-  // send that did exactly what it was asked to.
-  //
-  // A blast that dispatched everything and bounced on half is 'completed'.
+  // Bounces are NOT in either test above. A bounce happens after a successful
+  // dispatch, so it says nothing about whether the blast worked: a blast that
+  // dispatched everything and bounced on half is 'completed'.
   // The bounces are reported as their own number, and each one suppresses its
   // address so the next blast never attempts it.
   if (counts.bounced > 0) return 'completed';
@@ -2074,6 +2076,29 @@ async function processEmailBlastPass(
       });
     };
 
+    const markBadAddress = async (
+      recipient: (typeof batch)[number],
+      message: string,
+    ): Promise<void> => {
+      const email = normalizeEmailAddress(recipient.email || '');
+      const accountKeys = [recipient.accountKey, ...(await getRelatedAccountKeys(recipient.accountKey))];
+      await prisma.$transaction(async (tx) => {
+        await tx.emailBlastRecipient.updateMany({
+          where: { id: recipient.id, status: 'pending' },
+          data: { status: 'bounced', error: `bounce: ${message}` },
+        });
+        if (email) {
+          await writeEmailSuppressions(tx, {
+            accountKeys,
+            email,
+            reason: 'bounce',
+            source: 'send-refusal',
+            raw: message,
+          });
+        }
+      });
+    };
+
     const handleFailure = async (
       recipient: (typeof batch)[number],
       err: unknown,
@@ -2117,6 +2142,13 @@ async function processEmailBlastPass(
               'have arrived. It was not retried, to avoid sending it twice.',
           },
         });
+      } else if (isRecipientAddressRefusal(err)) {
+        // SendGrid refused the ADDRESS. That is a fact about the contact, not
+        // a fault in the send: record it as a bad address alongside the
+        // bounces and suppress it group-wide, so no later blast attempts it.
+        consecutiveFailures = 0;
+        resolved += 1;
+        await markBadAddress(recipient, message);
       } else {
         // A definite per-message refusal: SendGrid is up and answering.
         consecutiveFailures = 0;

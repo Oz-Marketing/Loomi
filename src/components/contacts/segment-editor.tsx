@@ -618,6 +618,10 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // complete condition — the same two things the live preview needs.
   const canExport = resolveKeys.length > 0 && cleaned.groups.length > 0;
 
+  // How the segment reaches other accounts — the group and copies — sits
+  // behind ONE share button. They behave differently (one shared read-only
+  // segment vs. separate segments that change only on a push), and as two
+  // controls side by side they read as the same thing twice.
   const isCopy = !!(copyLinks.source || copyLinks.hasHiddenSource);
   const showSharing = canShareDown || mode === 'create' || copyLinks.copies.length > 0 || isCopy;
   const sharingSummary = [
@@ -628,6 +632,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       ? `${copyLinks.copies.length} cop${copyLinks.copies.length === 1 ? 'y' : 'ies'}`
       : null,
     isCopy ? 'Linked copy' : null,
+    outOfDateCopies > 0 ? `${outOfDateCopies} out of date` : null,
   ]
     .filter(Boolean)
     .join(' · ');
@@ -674,12 +679,8 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               className="w-full text-sm text-[var(--muted-foreground)] bg-transparent border-0 focus:outline-none placeholder:text-[var(--muted-foreground)]/40 mt-1 px-0"
             />
 
-            {/* How the segment reaches other accounts — the group and copies —
-                behind ONE control. They behave differently (one shared
-                read-only segment vs. separate segments that change only on a
-                push), and as two controls side by side they read as the same
-                thing twice. The modal sets them out together and says how each
-                works. The owning account isn't repeated: the switcher says it. */}
+            {/* A platform-wide segment says so; an account's own doesn't
+                repeat the account — the switcher already names it. */}
             <div className="flex items-center gap-2 mt-3 flex-wrap empty:hidden">
               {!(initial?.accountKey || (isAccount && accountKey)) && (
                 <span className={CHIP} title="Visible to all accounts">
@@ -687,26 +688,29 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                   All accounts
                 </span>
               )}
-              {showSharing && (
-                <button
-                  type="button"
-                  onClick={() => setSharingModal('all')}
-                  className={`${CHIP} hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors`}
-                >
-                  <ShareIcon className="w-3 h-3" />
-                  {sharingSummary}
-                  {outOfDateCopies > 0 && (
-                    <span className="rounded-full bg-amber-500/10 px-1.5 text-amber-500">
-                      {outOfDateCopies} out of date
-                    </span>
-                  )}
-                </button>
-              )}
             </div>
           </div>
 
           {/* The page's actions, and nothing else. */}
           <div className="flex items-center gap-2 mt-1">
+            {showSharing && (
+              <button
+                type="button"
+                onClick={() => setSharingModal('all')}
+                title={sharingSummary}
+                aria-label={sharingSummary}
+                className="relative w-9 h-9 inline-flex items-center justify-center rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors"
+              >
+                <ShareIcon className="w-4 h-4" />
+                {/* Copies behind the original are the one thing here that
+                    needs acting on, so they show without opening the modal. */}
+                {outOfDateCopies > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-[10px] font-semibold leading-4 text-white text-center">
+                    {outOfDateCopies}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleExport}

@@ -93,9 +93,8 @@ export function templatesForAnyAccount<T extends TemplateScopeRow>(
  * against.
  *
  * Spelled once here for the same reason the access rule above is: the filter is
- * needed at nine call sites across the library, the automation resolver, the
- * taxonomy facets and the playbook context, and a soft delete that one of them
- * forgets is worse than none at all — the row looks gone in the library and
+ * needed at call sites across the library, the automation resolver and the
+ * taxonomy facets, and a soft delete that one of them forgets is worse than none at all — the row looks gone in the library and
  * still quietly feeds unattended generation.
  *
  * Deliberately NOT applied to fetch-by-id: restoring a template requires reading

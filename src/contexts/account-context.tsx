@@ -151,7 +151,7 @@ export type AccountType =
    * The effect below returns any other surface to a real account rather than
    * leaving its pages with nothing selected. Individual cross-account pages on
    * a surface that does NOT offer the scope can still opt back in by path, via
-   * ALL_ACCOUNTS_PATHS — Playbooks does. See docs/account-scope.md.
+   * ALL_ACCOUNTS_PATHS. See docs/account-scope.md.
    */
   | { mode: 'all' }
   | { mode: 'account'; accountKey: string };
@@ -165,9 +165,12 @@ export const ALL_ACCOUNTS_SURFACES = ['app', 'reporting'] as const;
  *
  * The exclusion above is about Studio's TOOLS — Contacts, Campaigns, Websites —
  * which are per-account and would render "pick an account" with nothing
- * selected. Playbooks is the opposite kind of page: its whole subject is the
- * comparison ACROSS accounts, so "no account" is its most useful state, not a
- * broken one.
+ * selected. A page belongs here only when its whole subject is the comparison
+ * ACROSS accounts, so "no account" is its most useful state, not a broken one.
+ *
+ * Empty since Playbooks was removed (2026-10-13) — it was the only page that
+ * opted in. The seam stays so the next cross-account page is a one-line
+ * decision rather than a rebuild.
  *
  * Kept as a path list rather than adding 'studio' to the surfaces above, which
  * would offer the scope on every Studio page and break most of them — and would
@@ -176,7 +179,7 @@ export const ALL_ACCOUNTS_SURFACES = ['app', 'reporting'] as const;
  *
  * The rule for deciding which pages belong here is in `docs/account-scope.md`.
  */
-export const ALL_ACCOUNTS_PATHS = ['/playbooks'] as const;
+export const ALL_ACCOUNTS_PATHS: readonly string[] = [];
 
 /** Does this path opt into the all-accounts scope? Pure, so it is testable. */
 export function pathOffersAllAccounts(pathname: string): boolean {
@@ -673,8 +676,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     // per-sub-account pages with nothing to render.
     // Re-evaluated on every navigation (see the `pathname` dependency). Before
     // all-accounts was reachable from a Studio page, leaving the scope always
-    // meant a cross-host load, so mounting was enough. Now you can walk from
-    // Playbooks to Contacts inside one React tree, and without this the scope
+    // meant a cross-host load, so mounting was enough. A page in
+    // ALL_ACCOUNTS_PATHS lets you walk to Contacts inside one React tree, and
+    // without this the scope
     // would follow you onto a page that cannot aggregate — which is exactly the
     // mixed-client roster docs/account-scope.md exists to prevent.
     if (account.mode === 'all' && allAccountsSurface()) return;

@@ -138,8 +138,8 @@ export function ContactsAccountFilter({
   const selectedCount = values.length;
   // "All accounts" here would mean all accounts IN THE CURRENT SCOPE, while the
   // sidebar switcher now uses that exact phrase for every account the agency
-  // manages across unrelated clients — and since Playbooks put that option on
-  // Studio, both can be on screen at once. The count disambiguates them and
+  // manages across unrelated clients — and on any page that opts that option
+  // into Studio, both can be on screen at once. The count disambiguates them and
   // says how wide this actually is. See docs/account-scope.md.
   const label =
     selectedCount === 0

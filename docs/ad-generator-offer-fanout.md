@@ -488,7 +488,6 @@ month.
 | Trigger + result | Campaigns (the client's home) — `Generate from OEM offers` (Phase 2) |
 | Second door | Ad Generator → New ad → Generate from OEM offers (same orchestrator) |
 | Config + run history | Settings → Ad Automation |
-| Recipe | Playbooks — presets config columns; never runs anything |
 
 **Rules.**
 
@@ -542,9 +541,8 @@ clobbered the shell template itself once.
 
 What holds now:
 
-- **The email shell is the account's automation setting.** The playbook presets
-  `emailTemplateSlug`; the Config tab writes it to `AdAutomationConfig`; the run
-  reads the config. One source of truth, the same as every other creative step.
+- **The email shell is the account's automation setting.** The Config tab writes
+  it to `AdAutomationConfig.emailTemplateId`; the run reads the config. One source of truth, the same as every other creative step.
 - **Picking a design is about the ads only.** The select route marks one design
   as chosen and archives its siblings. It does not touch the offer email, and
   the campaign's compare control says so ("Select a design" / "Change design").

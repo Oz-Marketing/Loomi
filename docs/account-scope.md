@@ -2,7 +2,9 @@
 
 Which roll-up a page should use, and why the answer is a property of the PAGE
 rather than of the surface it sits on. Written 2026-08-18, when Playbooks became
-the first Studio page that is genuinely cross-account.
+the first Studio page that is genuinely cross-account. Playbooks was removed
+2026-10-13, so no Studio page opts in today; the rule below still decides the
+next one.
 
 ## The scopes that exist
 
@@ -32,7 +34,7 @@ That makes it right for some pages and wrong for others, and the split is not
 per-surface:
 
 **Views about OUR OPERATIONS — offer all-accounts.**
-The Playbooks coverage audit, campaign lists, run history, feed health, "what is
+A coverage audit, campaign lists, run history, feed health, "what is
 misconfigured across the book of business". Unrelated clients sitting side by
 side is *the point*: "which of my 36 accounts has no sender identity" is a good
 question that spans a car dealer and a law firm without embarrassment. You are
@@ -126,8 +128,8 @@ doing, probably; cheap, no.
 
 The in-page filter says **"All accounts"** meaning *all accounts in the current
 scope*. The switcher now says **"All accounts"** meaning *every account the
-agency manages, across unrelated clients*. Since Playbooks put the switcher
-option on Studio, both can be on screen at once, meaning different things.
+agency manages, across unrelated clients*. Any page that puts the switcher
+option on Studio puts both on screen at once, meaning different things.
 Rename the in-page one — "All in group", "All rooftops" — whatever happens to
 the toggle.
 
@@ -148,7 +150,8 @@ browsing is operational, authoring is per-account.
 
 `ALL_ACCOUNTS_SURFACES` in `src/contexts/account-context.tsx` lists whole
 surfaces (`app`). `ALL_ACCOUNTS_PATHS` lists individual pages that are
-cross-account even though their surface is not — Playbooks is the first.
+cross-account even though their surface is not. It is empty today — Playbooks
+was the only entry, and was removed 2026-10-13.
 
 Opt in per page rather than per surface. Adding `'studio'` to the surfaces list
 would offer the scope on every Studio page at once, and most of them would render
@@ -179,7 +182,7 @@ all-accounts case and is already bounded by the same filter.
 | --- | --- | --- |
 | Projects (App surface) | all-accounts | shipped |
 | Reporting | all-accounts | shipped; reports gate on `isRollup` |
-| Playbooks audit | all-accounts + per-account | shipped |
+| Playbooks audit | all-accounts + per-account | removed 2026-10-13 |
 | Campaign list | all-accounts | candidate, not built |
 | Templates / Flows / Assets browsing | all-accounts | candidate, not built |
 | Contacts, audiences, lists, segments | group only | deliberate, not a gap |

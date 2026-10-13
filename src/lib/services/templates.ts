@@ -206,7 +206,7 @@ export async function updateTemplate(
   // quietly repointed an identifier every time someone edited a label —
   // "OEM Monthly Offers" → "OEM Monthly Offers — Fall" moved the row from
   // `oem-monthly-offers` to `oem-monthly-offers-fall` and broke everything
-  // holding the old one: a playbook's `emailTemplateSlug`, a blast's
+  // holding the old one: an automation config's `emailTemplateId`, a blast's
   // `metadata.templateSlug`, any bookmarked editor URL. Nothing rewrites those
   // references, and nothing told the person renaming that they existed.
   //

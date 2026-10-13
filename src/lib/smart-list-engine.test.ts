@@ -353,3 +353,25 @@ describe('relative date values', () => {
     expect(resolveFilterDateBound(literal, 'end')?.toISOString()).toBe(literal);
   });
 });
+
+describe('merged Purchase Date / Last Service Date', () => {
+  const withDates = (dates: Record<string, string>) =>
+    ({ id: 'm', tags: [], ...dates }) as unknown as Contact;
+
+  it('reads the event history when the contact has one', () => {
+    const c = withDates({ lastSaleEventAt: daysAgo(10), purchaseDate: daysAgo(900) });
+    expect(matches(def('purchaseDate', 'within_last_days', '30'), c)).toBe(true);
+  });
+  it('falls back to the CRM snapshot when there is no history', () => {
+    const c = withDates({ lastSaleEventAt: '', purchaseDate: daysAgo(10) });
+    expect(matches(def('purchaseDate', 'within_last_days', '30'), c)).toBe(true);
+  });
+  it('is empty only when both sources are', () => {
+    expect(matches(def('lastServiceDate', 'is_empty'), withDates({ lastServiceEventAt: '', lastServiceDate: '' }))).toBe(true);
+    expect(matches(def('lastServiceDate', 'is_empty'), withDates({ lastServiceEventAt: daysAgo(5), lastServiceDate: '' }))).toBe(false);
+  });
+  it('leaves the retired history-only field reading history alone', () => {
+    const c = withDates({ lastSaleEventAt: '', purchaseDate: daysAgo(10) });
+    expect(matches(def('lastSaleEventAt', 'is_empty'), c)).toBe(true);
+  });
+});

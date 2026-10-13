@@ -635,6 +635,20 @@ model Audience {
    * receive them — see `canWriteSegment` in lib/segments/visibility.ts.
    */
   sharedWithChildren Boolean @default(false)
+  /**
+   * The segment this one was copied from by "Also create in…", when the
+   * same segment is made in several accounts at once. Those copies are
+   * independent rows (a filter can be valid in one account and not the
+   * next — see lib/segments/fan-out.ts), so editing the original changes
+   * nothing by itself; the link is what lets the original PUSH its saved
+   * name, description and filter to its copies on request.
+   *
+   * SetNull on delete: deleting the original leaves the copies standing,
+   * just no longer linked to anything.
+   */
+  sourceAudienceId String?
+  sourceAudience   Audience?  @relation("AudienceCopies", fields: [sourceAudienceId], references: [id], onDelete: SetNull)
+  copies           Audience[] @relation("AudienceCopies")
   createdByUserId  String?
   filters          String // JSON: FilterDefinition
   icon             String?
@@ -648,6 +662,7 @@ model Audience {
 
   @@unique([name, accountKey])
   @@index([accountKey])
+  @@index([sourceAudienceId])
 }
 
 // ─────────────────────────────────────────────────────

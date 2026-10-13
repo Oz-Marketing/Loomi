@@ -25,6 +25,7 @@ import {
   DAY_COUNT_DATE_OPERATORS,
   FILTERABLE_FIELDS,
   FIELD_CATEGORIES,
+  pickerFields,
   OPERATORS_BY_TYPE,
   OPERATOR_LABELS,
   NO_VALUE_OPERATORS,
@@ -518,11 +519,11 @@ function ConditionRow({
     () =>
       FIELD_CATEGORIES.map((cat) => ({
         label: cat.label,
-        options: fields
+        options: pickerFields(fields, condition.field)
           .filter((f) => f.category === cat.key)
           .map((f) => ({ value: f.key, label: f.label })),
       })).filter((g) => g.options.length > 0),
-    [fields],
+    [fields, condition.field],
   );
 
   const operatorOptions = useMemo(

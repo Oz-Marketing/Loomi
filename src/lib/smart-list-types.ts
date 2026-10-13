@@ -391,6 +391,39 @@ export interface FieldDefinition {
    *  can render a dropdown of declared options instead of a free-text
    *  input. */
   options?: FieldOption[];
+  /** Still evaluated for definitions that already use it, but no longer
+   *  offered in field pickers. A picker keeps showing it only on a
+   *  condition that already has it selected, so a saved segment still
+   *  reads correctly. See `pickerFields`. */
+  retired?: boolean;
+}
+
+/**
+ * Date filters that read one value merged from two columns: the
+ * event-history rollup when the contact has one, else the CRM's
+ * latest-value snapshot on the contact record.
+ *
+ * The builder used to offer both sources side by side ("Purchase Date"
+ * vs "Last Purchase (from history)"). Dealers just want "when did they
+ * last buy", and two near-identical options made them guess. History
+ * wins because it's built from every deal/RO the CRM has sent; the
+ * snapshot is the fallback for contacts with no events at all.
+ *
+ * Both engines read through this map — the in-memory engine and the SQL
+ * translation — so the preview and the resolved audience can't disagree.
+ */
+export const MERGED_DATE_FIELDS: Record<string, readonly [history: string, snapshot: string]> = {
+  purchaseDate: ['lastSaleEventAt', 'purchaseDate'],
+  lastServiceDate: ['lastServiceEventAt', 'lastServiceDate'],
+};
+
+/** The fields a picker should offer: everything not retired, plus the
+ *  one this condition already has selected. */
+export function pickerFields(
+  fields: FieldDefinition[],
+  selectedKey: string,
+): FieldDefinition[] {
+  return fields.filter((f) => !f.retired || f.key === selectedKey);
 }
 
 export const FILTERABLE_FIELDS: FieldDefinition[] = [
@@ -415,7 +448,8 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
   { key: 'vehicleVin', label: 'VIN', type: 'text', category: 'vehicle' },
   { key: 'vehicleMileage', label: 'Mileage', type: 'numeric_text', category: 'vehicle' },
 
-  // Lifecycle dates
+  // Lifecycle dates. Purchase Date and Last Service Date each merge the
+  // event history with the CRM snapshot — see MERGED_DATE_FIELDS.
   { key: 'dateAdded', label: 'Date Added', type: 'date', category: 'lifecycle' },
   { key: 'purchaseDate', label: 'Purchase Date', type: 'date', category: 'lifecycle' },
   { key: 'lastServiceDate', label: 'Last Service Date', type: 'date', category: 'lifecycle' },
@@ -451,16 +485,15 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
 
   // Purchase / service history — rolled up from ContactEvent.
   //
-  // Labels say where the number comes from, because the lifecycle
-  // section above has similar-sounding fields sourced from the CRM's
-  // latest-value snapshot on the contact record. The two can disagree
-  // and a dealer needs to know which one they're filtering on.
+  // The two "last" dates are retired from the picker: Purchase Date and
+  // Last Service Date above now read them first (MERGED_DATE_FIELDS).
+  // They stay evaluable, history-only, for segments saved before that.
   { key: 'serviceVisitCount', label: 'Service Visits (lifetime count)', type: 'number', category: 'history' },
   { key: 'saleCount', label: 'Vehicles Purchased (lifetime count)', type: 'number', category: 'history' },
   { key: 'lifetimeSpend', label: 'Lifetime Spend ($)', type: 'number', category: 'history' },
-  { key: 'lastServiceEventAt', label: 'Last Service Visit (from history)', type: 'date', category: 'history' },
+  { key: 'lastServiceEventAt', label: 'Last Service Visit (from history)', type: 'date', category: 'history', retired: true },
   { key: 'firstServiceEventAt', label: 'First Service Visit (from history)', type: 'date', category: 'history' },
-  { key: 'lastSaleEventAt', label: 'Last Purchase (from history)', type: 'date', category: 'history' },
+  { key: 'lastSaleEventAt', label: 'Last Purchase (from history)', type: 'date', category: 'history', retired: true },
   { key: 'firstSaleEventAt', label: 'First Purchase (from history)', type: 'date', category: 'history' },
 
   // Meta

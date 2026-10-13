@@ -21,7 +21,14 @@ import { useAccount } from '@/contexts/account-context';
  * to roll up, and the all-accounts overview has no single group to stand alone —
  * in both cases a toggle would be a control that does nothing.
  */
-export function AccountScopeToggle({ className = '' }: { className?: string }) {
+export function AccountScopeToggle({
+  className = '',
+  showName = true,
+}: {
+  className?: string;
+  /** Off where the account is already named right beside it. */
+  showName?: boolean;
+}) {
   const { accountKey, accountData, isGroup, isSelfScoped, setRollup, childCounts } = useAccount();
 
   if (!isGroup || !accountKey) return null;
@@ -31,9 +38,11 @@ export function AccountScopeToggle({ className = '' }: { className?: string }) {
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-lg border border-[var(--border)] py-1 pl-2.5 pr-1 ${className}`}
+      className={`flex items-center gap-2 rounded-lg border border-[var(--border)] py-1 pr-1 ${showName ? 'pl-2.5' : 'pl-1'} ${className}`}
     >
-      <span className="max-w-[180px] truncate text-xs text-[var(--muted-foreground)]">{name}</span>
+      {showName && (
+        <span className="max-w-[180px] truncate text-xs text-[var(--muted-foreground)]">{name}</span>
+      )}
       <div className="flex items-center gap-0.5 rounded-md bg-[var(--muted)]/60 p-0.5">
         {(
           [

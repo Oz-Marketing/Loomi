@@ -1,4 +1,5 @@
 import {
+  MERGED_DATE_FIELDS,
   NO_VALUE_OPERATORS,
   RANGE_OPERATORS,
   parseDuration,
@@ -157,6 +158,12 @@ function evaluateCondition(
     const blob = (contact as Contact & { customFields?: Record<string, unknown> })
       .customFields;
     raw = blob ? blob[field] : undefined;
+  } else if (MERGED_DATE_FIELDS[field]) {
+    // History first, CRM snapshot as the fallback. Serialized dates are
+    // '' when unset, so `||` is the COALESCE the SQL path runs.
+    const [history, snapshot] = MERGED_DATE_FIELDS[field];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw = (contact as any)[history] || (contact as any)[snapshot];
   } else {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     raw = (contact as any)[field];

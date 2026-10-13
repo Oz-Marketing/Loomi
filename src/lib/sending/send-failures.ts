@@ -74,6 +74,28 @@ export function classifySendFailure(err: unknown): SendFailureKind {
   return 'ambiguous';
 }
 
+/**
+ * Did SendGrid refuse this message because of the RECIPIENT'S ADDRESS?
+ *
+ * Narrower than 'permanent', deliberately. A 400 can also be about the message
+ * itself — an oversized body, a bad header — and that fails identically for
+ * every recipient. Treating those as bad addresses would suppress an entire
+ * audience over a template problem. Only a refusal SendGrid pins on the `to`
+ * address says something about the address.
+ */
+export function isRecipientAddressRefusal(err: unknown): boolean {
+  if (!(err instanceof SendGridError) || err.status !== 400) return false;
+  const errors = (err.body as { errors?: { message?: unknown; field?: unknown }[] } | null)
+    ?.errors;
+  const entries = Array.isArray(errors) ? errors : [{ message: err.message }];
+  return entries.some((e) => {
+    const field = typeof e.field === 'string' ? e.field : '';
+    const message = typeof e.message === 'string' ? e.message : '';
+    if (/^personalizations\.\d+\.to\b/.test(field)) return true;
+    return /\b(valid|invalid)\b.*\baddress\b|\bemail address\b/i.test(message) && !/\bfrom\b|reply/i.test(message);
+  });
+}
+
 /** The same classification for a Twilio send. */
 export function classifyTwilioFailure(err: unknown): SmsFailureKind {
   if (err instanceof PreSendError) return 'retry';

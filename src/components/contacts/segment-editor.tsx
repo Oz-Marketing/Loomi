@@ -10,6 +10,7 @@ import {
   BookmarkSquareIcon,
   ChartBarIcon,
   CheckCircleIcon,
+  DocumentDuplicateIcon,
   EnvelopeIcon,
   ExclamationTriangleIcon,
   FunnelIcon,
@@ -30,6 +31,7 @@ import { LoomiSelect } from '@/components/contacts/loomi-select';
 import { DateValueInput } from '@/components/contacts/date-value-input';
 import { AccountAccessModal } from '@/components/ad-generator/account-access-picker';
 import { summarizeFanOut } from '@/lib/segments/fan-out';
+import { PushCopiesModal, type LinkedCopy } from '@/components/contacts/push-copies-modal';
 import { DurationValueInput } from '@/components/contacts/duration-value-input';
 import { exportSegmentCsv } from '@/lib/segments/export-client';
 import { toast } from '@/lib/toast';
@@ -44,6 +46,7 @@ import type {
 import {
   DAY_COUNT_DATE_OPERATORS,
   FIELD_CATEGORIES,
+  pickerFields,
   FILTERABLE_FIELDS,
   NO_VALUE_OPERATORS,
   OPERATOR_LABELS,
@@ -133,6 +136,16 @@ interface EligibilityState {
   excludedSources: Array<{ source: string; count: number }>;
   message?: string;
 }
+
+interface CopyLinks {
+  /** This segment's linked copies, when it is an original. */
+  copies: LinkedCopy[];
+  /** The original, when this segment is a copy the viewer can see. */
+  source: { id: string; name: string; accountKey: string | null } | null;
+  /** A copy whose original is in an account the viewer isn't assigned to. */
+  hasHiddenSource: boolean;
+}
+const NO_COPY_LINKS: CopyLinks = { copies: [], source: null, hasHiddenSource: false };
 
 export interface SegmentEditorProps {
   /** Existing segment for edit mode. When undefined, the editor is in create mode. */
@@ -249,6 +262,38 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // ── Linked copies ──────────────────────────────────────────
+  //
+  // A segment made in several accounts at once is an original plus
+  // independent copies that remember it (Audience.sourceAudienceId).
+  // Editing the original changes nothing in the copies until the user
+  // pushes, so the original shows its copies and offers the push, and a
+  // copy says where it came from.
+  const [copyLinks, setCopyLinks] = useState<CopyLinks>(NO_COPY_LINKS);
+  const [pushModal, setPushModal] = useState<null | 'manual' | 'after-save'>(null);
+  const segmentId = mode === 'edit' ? initial?.id : undefined;
+  const loadCopyLinks = useCallback(async (): Promise<CopyLinks> => {
+    if (!segmentId) return NO_COPY_LINKS;
+    try {
+      const res = await fetch(`/api/audiences/${encodeURIComponent(segmentId)}/copies`);
+      if (!res.ok) return NO_COPY_LINKS;
+      const data = await res.json();
+      const links: CopyLinks = {
+        copies: Array.isArray(data.copies) ? data.copies : [],
+        source: data.source ?? null,
+        hasHiddenSource: data.hasHiddenSource === true,
+      };
+      setCopyLinks(links);
+      return links;
+    } catch {
+      return NO_COPY_LINKS;
+    }
+  }, [segmentId]);
+  useEffect(() => {
+    void loadCopyLinks();
+  }, [loadCopyLinks]);
+  const outOfDateCopies = copyLinks.copies.filter((c) => !c.upToDate).length;
+
   // ── Live preview ───────────────────────────────────────────
   //
   // Resolved by the server, not in this tab. The browser used to fetch
@@ -274,6 +319,15 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   // Serialised so the effect re-runs on a real change to the filter, not
   // on every re-render (cleanForSave returns a fresh object each time).
   const cleanedKey = useMemo(() => JSON.stringify(cleaned), [cleaned]);
+
+  // Only the SAVED segment is pushed to copies, so the push is held back
+  // while the editor has edits that aren't saved yet.
+  const initialCleanedKey = useMemo(() => JSON.stringify(cleanForSave(initialDef)), [initialDef]);
+  const hasUnsavedChanges =
+    mode === 'edit' &&
+    (name.trim() !== (initial?.name ?? '').trim() ||
+      description.trim() !== (initial?.description ?? '').trim() ||
+      cleanedKey !== initialCleanedKey);
 
   useEffect(() => {
     // Org-wide scope has no single account to resolve against — a
@@ -547,6 +601,15 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
         }
         toast.success(`Segment "${trimmedName}" updated.`);
+        // Offer the push while the change is fresh, rather than leaving the
+        // copies quietly behind. Only when there is something to push.
+        if (copyLinks.copies.length > 0) {
+          const fresh = await loadCopyLinks();
+          if (fresh.copies.some((c) => c.canPush && !c.upToDate)) {
+            setPushModal('after-save');
+            return;
+          }
+        }
       } else {
         if (isFanOut) {
           body.accountKeys = [
@@ -595,6 +658,31 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function pushToCopies(copyIds: string[]): Promise<boolean> {
+    if (!segmentId) return false;
+    const res = await fetch(`/api/audiences/${encodeURIComponent(segmentId)}/copies`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ copyIds }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(typeof data.error === 'string' ? data.error : 'Could not push the changes');
+      return false;
+    }
+    const n = Array.isArray(data.pushed) ? data.pushed.length : copyIds.length;
+    toast.success(`Changes pushed to ${n} account${n === 1 ? '' : 's'}.`);
+    await loadCopyLinks();
+    return true;
+  }
+
+  function closePushModal() {
+    // After a save the user was on their way back to the list; the modal
+    // only interrupted that.
+    if (pushModal === 'after-save') router.push(segmentsHref);
+    setPushModal(null);
   }
 
   // ── Render ─────────────────────────────────────────────────
@@ -668,6 +756,37 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               )}
               {scopeLabel}
             </span>
+            {copyLinks.copies.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setPushModal('manual')}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)]/40 transition-colors"
+              >
+                <DocumentDuplicateIcon className="w-3 h-3" />
+                Copies in {copyLinks.copies.length} account{copyLinks.copies.length === 1 ? '' : 's'}
+                {outOfDateCopies > 0 && (
+                  <span className="rounded-full bg-amber-500/10 px-1.5 text-amber-500">
+                    {outOfDateCopies} out of date
+                  </span>
+                )}
+              </button>
+            )}
+            {(copyLinks.source || copyLinks.hasHiddenSource) && (
+              <span className="flex items-center gap-1">
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium border border-[var(--border)] text-[var(--muted-foreground)]">
+                  <DocumentDuplicateIcon className="w-3 h-3" />
+                  {copyLinks.source
+                    ? `Copy from ${accounts[copyLinks.source.accountKey ?? '']?.dealer ?? copyLinks.source.accountKey ?? 'all accounts'}`
+                    : 'Copy from another account'}
+                </span>
+                <HelpTip title="A linked copy" iconClassName="w-3 h-3">
+                  This segment was copied from {copyLinks.source ? <>&ldquo;{copyLinks.source.name}&rdquo;</> : 'a segment'} in
+                  another account. You can change it here, but when the original is changed and
+                  its changes are pushed, they replace this segment&apos;s name, description and
+                  filter.
+                </HelpTip>
+              </span>
+            )}
             {/* On a group, which accounts the preview and the export resolve
                 against — its rooftops, or the group standing alone. The
                 numbers on this screen change with it, so the control belongs
@@ -705,9 +824,10 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
                 </button>
                 <HelpTip title="Creating in several accounts" iconClassName="w-3 h-3">
                   Creates a separate copy of this segment in each account you pick, so
-                  each one can change theirs. For accounts that share a group, sharing
-                  down from the group is usually better \u2014 that is one segment
-                  everyone sees, so editing it once updates them all.
+                  each one can change theirs. The copies stay linked to this one: when
+                  you change it, you can push the changes to them. For accounts that
+                  share a group, sharing down from the group is usually better &mdash;
+                  that is one segment everyone sees, so editing it once updates them all.
                 </HelpTip>
               </span>
             )}
@@ -823,10 +943,22 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           description={
             <>
               Each account gets its own copy of &ldquo;{name.trim() || 'this segment'}&rdquo;
-              to change as they like &mdash; they do not stay in step afterwards. For
-              accounts that share a group, sharing down from the group keeps them as one.
+              to change as they like. The copies stay linked to this one, so when you
+              change it you can push the changes to them. For accounts that share a
+              group, sharing down from the group keeps them as one.
             </>
           }
+        />
+      )}
+      {pushModal && (
+        <PushCopiesModal
+          segmentName={name.trim() || initial?.name || 'this segment'}
+          copies={copyLinks.copies}
+          accountLabel={(key) => (key ? accounts[key]?.dealer ?? key : 'All accounts')}
+          hasUnsavedChanges={pushModal === 'manual' && hasUnsavedChanges}
+          justSaved={pushModal === 'after-save'}
+          onPush={pushToCopies}
+          onClose={closePushModal}
         />
       )}
     </div>
@@ -1002,11 +1134,11 @@ function ConditionRow({
     () =>
       FIELD_CATEGORIES.map((cat) => ({
         label: cat.label,
-        options: fields
+        options: pickerFields(fields, condition.field)
           .filter((f) => f.category === cat.key)
           .map((f) => ({ value: f.key, label: f.label })),
       })).filter((g) => g.options.length > 0),
-    [fields],
+    [fields, condition.field],
   );
 
   const operatorOptions = useMemo(

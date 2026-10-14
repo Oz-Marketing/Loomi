@@ -62,7 +62,27 @@ export async function updateAudience(
     sharedWithChildren?: boolean;
   },
 ) {
-  return prisma.audience.update({ where: { id }, data });
+  if (data.filters === undefined) {
+    return prisma.audience.update({ where: { id }, data });
+  }
+  // A blast keeps its own copy of the segment's filter (`sourceFilter`),
+  // and the send resolves that copy. Without this, editing a segment left
+  // every draft that had already picked it on the old definition — the
+  // segment showed ~7,000 and the draft blast 0. DRAFTS ONLY: a scheduled
+  // or sent blast's audience was final when it left draft.
+  const filters = data.filters;
+  const [audience] = await prisma.$transaction([
+    prisma.audience.update({ where: { id }, data }),
+    prisma.emailBlast.updateMany({
+      where: { sourceAudienceId: id, status: 'draft' },
+      data: { sourceFilter: filters },
+    }),
+    prisma.smsBlast.updateMany({
+      where: { sourceAudienceId: id, status: 'draft' },
+      data: { sourceFilter: filters },
+    }),
+  ]);
+  return audience;
 }
 
 export async function deleteAudience(id: string) {
@@ -172,7 +192,17 @@ export async function pushAudienceToCopies(source: PushableSegment, copyIds: str
     icon: source.icon,
     color: source.color,
   };
-  await prisma.$transaction(
-    copyIds.map((id) => prisma.audience.update({ where: { id }, data })),
-  );
+  if (copyIds.length === 0) return;
+  await prisma.$transaction([
+    ...copyIds.map((id) => prisma.audience.update({ where: { id }, data })),
+    // Draft blasts on the copies follow too — see updateAudience.
+    prisma.emailBlast.updateMany({
+      where: { sourceAudienceId: { in: copyIds }, status: 'draft' },
+      data: { sourceFilter: source.filters },
+    }),
+    prisma.smsBlast.updateMany({
+      where: { sourceAudienceId: { in: copyIds }, status: 'draft' },
+      data: { sourceFilter: source.filters },
+    }),
+  ]);
 }

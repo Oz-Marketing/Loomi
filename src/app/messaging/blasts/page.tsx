@@ -7,6 +7,7 @@ import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { BlastPageList, type AccountMeta } from '@/components/campaigns/blast-page-list';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
 import { withinDateWindow } from '@/lib/campaigns/blast-date-window';
+import { countTopLevel, filterKeepingFamilies } from '@/lib/messaging/blast-follow-ups';
 import { ListToolbar } from '@/components/list-toolbar';
 import type {
   StatusFilterOption,
@@ -44,6 +45,8 @@ interface Campaign {
   dealer?: string;
   bulkRequestId?: string;
   parentId?: string;
+  /** Set on a follow-up blast — the original it nests under. */
+  resendOf?: string;
 }
 
 type PageTab = 'analytics' | 'list';
@@ -195,11 +198,19 @@ function AccountCampaignsPage() {
     [campaigns, userRole],
   );
 
+  // A follow-up and its original stay together across the date window — one
+  // in range brings the other — so a follow-up never shows up stranded, and
+  // an original never loses the follow-up nested under it.
   const dateFiltered = useMemo(() => {
-    return visibleCampaigns.filter((c) =>
+    return filterKeepingFamilies(visibleCampaigns, (c) =>
       withinDateWindow(c, bounds.start, bounds.end),
     );
   }, [visibleCampaigns, bounds]);
+  // Counted the way the table shows them: a follow-up is part of its
+  // original's row, not a campaign of its own.
+  const shownCount = useMemo(() => countTopLevel(dateFiltered), [dateFiltered]);
+  const totalCount = useMemo(() => countTopLevel(visibleCampaigns), [visibleCampaigns]);
+  const loadedCount = useMemo(() => countTopLevel(campaigns), [campaigns]);
 
   const accountEmptyTitle =
     visibleCampaigns.length === 0
@@ -269,9 +280,9 @@ function AccountCampaignsPage() {
               </h2>
               <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
                 Email + Text {activeTab === 'analytics' ? 'performance' : 'blasts'} for {dealerName}
-                {dateFiltered.length !== visibleCampaigns.length && (
+                {shownCount !== totalCount && (
                   <span className="ml-1 tabular-nums">
-                    · {dateFiltered.length} / {visibleCampaigns.length}
+                    · {shownCount} / {totalCount}
                   </span>
                 )}
               </p>
@@ -351,11 +362,11 @@ function AccountCampaignsPage() {
                 leading={
                   <span className="text-sm text-[var(--muted-foreground)]">
                     <span className="text-[var(--foreground)] font-medium tabular-nums">
-                      {dateFiltered.length}
+                      {shownCount}
                     </span>{' '}
-                    campaign{dateFiltered.length === 1 ? '' : 's'}
-                    {dateFiltered.length !== campaigns.length && (
-                      <span className="opacity-60"> / {campaigns.length}</span>
+                    campaign{shownCount === 1 ? '' : 's'}
+                    {shownCount !== loadedCount && (
+                      <span className="opacity-60"> / {loadedCount}</span>
                     )}
                   </span>
                 }

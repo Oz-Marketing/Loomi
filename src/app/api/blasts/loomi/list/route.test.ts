@@ -18,6 +18,7 @@ vi.mock('@/lib/api-auth', () => ({
 vi.mock('@/lib/services/email-blasts', () => ({
   listEmailBlasts: (...a: unknown[]) => listEmailBlasts(...a),
   getWarmupHolds: vi.fn(async () => new Map()),
+  followUpInfo: () => ({ resendOf: undefined, followUpDelayHours: undefined }),
 }));
 
 vi.mock('@/lib/services/sms-blasts', () => ({

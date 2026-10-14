@@ -178,13 +178,12 @@ empty values are dropped; an unknown request type becomes `other`, which stops.
 vehicle, the disclaimer, and the request's name, Dev Details and Offer
 Disclaimer. Nothing else may vouch for a number.
 
-### 5.1 Interpretation to confirm
+### 5.1 No confirmation step for the disclaimer
 
-§4 originally had the disclaimer wait for a person's confirmation before
-drafting. The code follows the later decision instead (2026-10-09, recorded in
-`reading.ts`): no confirmation step; a low-confidence disclaimer is drafted,
-flagged in the update and noted on the version. **Connor to confirm** this is
-still right for legal text.
+Decided by Connor, 2026-10-14. Design almost always renders the disclaimer into
+the graphic, so the reading is drafted as is: a low-confidence disclaimer is
+flagged in the update for the proofer, and a creative with no disclaimer simply
+gets an email with none, with no note. Nothing waits on a person confirming it.
 
 ### 5.2 The conflict check
 

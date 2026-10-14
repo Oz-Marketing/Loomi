@@ -205,7 +205,6 @@ export async function runDraftStages(requestId: string): Promise<void> {
       ...(reading.disclaimer?.confidence === 'low'
         ? ['The disclaimer was hard to read. Check it against the creative word for word.']
         : []),
-      ...(reading.disclaimer ? [] : ['No disclaimer was read off the creative, so the email has none.']),
       `Every link goes to ${website}. Point the buttons at the offer's page before it sends.`,
     ];
 

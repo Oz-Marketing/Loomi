@@ -822,7 +822,7 @@ function CampaignTableRow({
                   </button>
                 )}
 
-                {/* A text blast has no email to show, so it gets no preview. */}
+                {/* A text blast has no email to show or download, so neither is offered. */}
                 {hasEmail && (
                   <button
                     type="button"
@@ -835,15 +835,17 @@ function CampaignTableRow({
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => onDownload(item)}
-                  disabled={!canPreview || downloading}
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {downloading ? 'Downloading...' : 'Download Email'}
-                  <ArrowDownTrayIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                </button>
+                {hasEmail && (
+                  <button
+                    type="button"
+                    onClick={() => onDownload(item)}
+                    disabled={!canPreview || downloading}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {downloading ? 'Downloading...' : 'Download Email'}
+                    <ArrowDownTrayIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                )}
 
                 {isLoomi && (
                   <button

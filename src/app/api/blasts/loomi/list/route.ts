@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import {
+  followUpInfo,
   getWarmupHolds,
   listEmailBlasts,
   type BlastSourceFilter,
@@ -187,6 +188,11 @@ function mapEmail(c: EmailBlastSummary, warmupHold?: WarmupHold) {
     // A paused send keeps its status and says why here ("Paused: …").
     error: c.error || undefined,
     channel: (isMulti ? 'multi' : 'email') as 'multi' | 'email',
+    // Follow-ups nest under the blast they follow up on (see
+    // lib/messaging/blast-follow-ups). `resendOf` marks a follow-up;
+    // `followUpDelayHours` marks an original that will spawn one when it
+    // finishes, so the list can say so before the follow-up row exists.
+    ...followUpInfo(c.metadata),
   };
 }
 

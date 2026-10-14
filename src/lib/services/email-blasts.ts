@@ -262,6 +262,24 @@ export function resendSubjectToCheck(metadata: string | null | undefined): strin
   return resend.subject.trim() || null;
 }
 
+/**
+ * The follow-up facts the Blasts list needs from a blast's metadata: which
+ * blast it follows up on (a follow-up), or how long after finishing it will
+ * spawn one (an original with "Resend to non-engaged" on). Read through
+ * parseCampaignMetadata so the list's delay is the one the send uses.
+ */
+export function followUpInfo(metadata: string | null | undefined): {
+  resendOf: string | undefined;
+  followUpDelayHours: number | undefined;
+} {
+  const meta = parseCampaignMetadata(metadata);
+  return {
+    resendOf: meta.resendOf || undefined,
+    // A follow-up never spawns its own (queueFollowUp), so it never plans one.
+    followUpDelayHours: meta.resend?.enabled && !meta.resendOf ? meta.resend.delayHours : undefined,
+  };
+}
+
 function parseCampaignMetadata(
   raw: string | null | undefined,
 ): ParsedCampaignMetadata {

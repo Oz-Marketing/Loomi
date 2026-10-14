@@ -49,7 +49,9 @@ describe('resolveCtas', () => {
   it("keeps a link it couldn't confirm, with a note", async () => {
     const [r] = await run('unconfirmed');
     expect(r.url).toBe('https://www.youngchev.com/specials');
-    expect(r.note).toContain("couldn't confirm");
+    expect(r.note).toBe(
+      "Loomi couldn't check the links on www.youngchev.com: the site blocks automated checks. Click the buttons before sending.",
+    );
   });
 
   it('checks each link once, and sends an unknown purpose to the homepage', async () => {

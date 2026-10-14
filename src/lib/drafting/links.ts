@@ -131,9 +131,14 @@ export async function resolveCtas(
         const why = result === 'dead' ? "doesn't load" : 'redirects to the homepage';
         return { url: homepage, note: `"${cta.label}" goes to the homepage: the account's ${link.key} (${link.url}) ${why}.` };
       }
+      // One note per SITE, not per button: Dealer.com sites (youngchev.com, checked
+      // 2026-10-14) refuse every automated request — a page that doesn't exist
+      // gets the same 403 — so nothing on them can be confirmed either way.
       return {
         url: link.url,
-        note: result === 'unconfirmed' ? `"${cta.label}" links to ${link.url}, which Loomi couldn't confirm loads. Check it before sending.` : null,
+        note: result === 'unconfirmed'
+          ? `Loomi couldn't check the links on ${new URL(link.url).host}: the site blocks automated checks. Click the buttons before sending.`
+          : null,
       };
     }),
   );

@@ -238,7 +238,10 @@ links where the first button does.
 Every link is fetched when the draft is made. A 404 or a server error, or a
 page that redirects to the homepage, falls back to the homepage with a note;
 401/403/405/429 and timeouts are bot protection as often as not, so the link is
-kept with a note to check it. A purpose with no link on file goes to the
+kept, with one note per site to click the buttons before sending. Dealer.com
+sites block every automated request (youngchev.com answers 403 even for a page
+that doesn't exist, checked 2026-10-14), so on those the check can't confirm
+anything and the note is expected. A purpose with no link on file goes to the
 homepage, and the note names the custom value to add.
 
 ## 6. Data model — built

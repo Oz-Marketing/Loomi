@@ -217,7 +217,8 @@ export async function runDraftStages(requestId: string): Promise<void> {
       ...(reading.disclaimer?.confidence === 'low'
         ? ['The disclaimer was hard to read. Check it against the creative word for word.']
         : []),
-      ...resolved.map((r) => r.note).filter((n): n is string => !!n),
+      // Deduped: an unconfirmable site gives every button the same note.
+      ...new Set(resolved.map((r) => r.note).filter((n): n is string => !!n)),
     ];
 
     const previous = await prisma.draftVersion.findFirst({ where: { requestId: row.id }, orderBy: { number: 'desc' } });

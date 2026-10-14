@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { Fragment, useMemo, useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   MagnifyingGlassIcon,
@@ -30,6 +30,9 @@ import {
   BoltIcon,
   LockClosedIcon,
   NoSymbolIcon,
+  ChevronRightIcon,
+  ArrowTurnDownRightIcon,
+  ArrowTrendingUpIcon,
 } from '@heroicons/react/24/outline';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 
@@ -60,6 +63,12 @@ import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avata
 import BulkActionDock from '@/components/bulk-action-dock';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { SentBlastDrawer } from '@/components/campaigns/sent-blast-drawer';
+import {
+  combinedReach,
+  filterKeepingFamilies,
+  groupFollowUps,
+  type CombinedReach,
+} from '@/lib/messaging/blast-follow-ups';
 import {
   bulkSkipSummary,
   isInFlightBlastStatus,
@@ -124,6 +133,12 @@ interface Campaign {
   isFlow?: boolean;
   /** Flow this wrapper belongs to, for the deep link back. */
   flowId?: string;
+  /** Set on a follow-up ("resend to non-engaged") blast: the original it
+   *  nests under. See lib/messaging/blast-follow-ups. */
+  resendOf?: string;
+  /** Set on an original that will spawn a follow-up this many hours after
+   *  it finishes — before the follow-up row itself exists. */
+  followUpDelayHours?: number;
 }
 
 export interface AccountMeta {
@@ -302,6 +317,78 @@ function getLastUpdatedDateParts(campaign: Campaign): { date: string; time: stri
 function formatShortDate(ts: number): string {
   if (!ts) return '—';
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ── Follow-ups ──
+
+function delayLabel(hours: number): string {
+  if (hours % 24 === 0) {
+    const days = hours / 24;
+    return `${days} day${days === 1 ? '' : 's'}`;
+  }
+  return `${hours} hour${hours === 1 ? '' : 's'}`;
+}
+
+interface FollowUpChip {
+  label: string;
+  className: string;
+  Icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  tooltip: string;
+}
+
+/**
+ * The tag beside an original's name that says where its follow-up stands,
+ * so a pending send is visible without expanding the row. Before the
+ * follow-up row exists (it's created when the original finishes) it reads
+ * from the original's own "Resend to non-engaged" setting.
+ */
+function followUpChip(item: Campaign, followUps: Campaign[] | undefined): FollowUpChip | null {
+  const followUp = followUps?.[0];
+  const audience = 'everyone who didn’t open or click the first send';
+  if (followUp) {
+    const status = normalizeStatus(followUp.status);
+    if (status === 'sent') {
+      return {
+        label: 'Follow-up sent',
+        className: 'bg-[var(--primary)]/10 text-[var(--primary)]',
+        Icon: ArrowTurnDownRightIcon,
+        tooltip: `A follow-up went to ${audience}. Expand the row to compare the two sends.`,
+      };
+    }
+    if (status === 'scheduled') {
+      const when = getSendDateParts(followUp);
+      return {
+        label: when ? `Follow-up ${formatShortDate(getSendTs(followUp))}` : 'Follow-up scheduled',
+        className: STATUS_BADGE.scheduled,
+        Icon: ClockIcon,
+        tooltip: `Scheduled${when ? ` for ${when.date} at ${when.time}` : ''}, to ${audience}.`,
+      };
+    }
+    if (status === 'canceled' || status === 'failed') {
+      return {
+        label: status === 'failed' ? 'Follow-up failed' : 'Follow-up canceled',
+        className: 'bg-zinc-500/10 text-zinc-400',
+        Icon: XCircleIcon,
+        tooltip: 'Expand the row to see the follow-up.',
+      };
+    }
+    return {
+      label: 'Follow-up',
+      className: 'bg-zinc-500/10 text-zinc-400',
+      Icon: ArrowTurnDownRightIcon,
+      tooltip: 'Expand the row to see the follow-up.',
+    };
+  }
+  const status = normalizeStatus(item.status);
+  if (item.followUpDelayHours && status !== 'sent' && status !== 'canceled' && status !== 'failed') {
+    return {
+      label: 'Follow-up planned',
+      className: 'bg-zinc-500/10 text-zinc-400',
+      Icon: ClockIcon,
+      tooltip: `Goes ${delayLabel(item.followUpDelayHours)} after this finishes sending, to ${audience}.`,
+    };
+  }
+  return null;
 }
 
 // ── Sort ──
@@ -558,6 +645,11 @@ function CampaignTableRow({
   onCancel,
   onOpenSentDetail,
   showRestore,
+  followUps,
+  expanded = false,
+  onToggleExpand,
+  expanderSlot = false,
+  asFollowUp = false,
 }: {
   item: Campaign;
   // accountMeta + accountProviders were only used for ESP deep links.
@@ -584,6 +676,14 @@ function CampaignTableRow({
   /** When true, the row sits in the archived view — show Restore in
    *  the menu instead of Archive. */
   showRestore: boolean;
+  /** This original's follow-up rows, shown nested when expanded. */
+  followUps?: Campaign[];
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  /** Reserve the expander's width so names line up down the table. */
+  expanderSlot?: boolean;
+  /** Render as a follow-up nested under its original. */
+  asFollowUp?: boolean;
 }) {
   void _accountMeta;
   void _accountProviders;
@@ -641,6 +741,8 @@ function CampaignTableRow({
   // locked outright rather than pretending to be editable.
   const rowClickable = Boolean(loomiEditUrl) || hasSendResult;
   const isLocked = isLoomi && !loomiEditUrl && !hasSendResult;
+  const hasFollowUps = !asFollowUp && (followUps?.length ?? 0) > 0;
+  const chip = asFollowUp ? null : followUpChip(item, followUps);
 
   function handleRowClick() {
     if (hasSendResult) {
@@ -655,7 +757,13 @@ function CampaignTableRow({
       onClick={rowClickable ? handleRowClick : undefined}
       className={`border-b border-[var(--border)] last:border-b-0 transition-colors ${
         rowClickable ? 'cursor-pointer' : ''
-      } ${selected ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/50'}`}
+      } ${
+        selected
+          ? 'bg-[var(--primary)]/10'
+          : asFollowUp
+            ? 'bg-[var(--muted)]/30 hover:bg-[var(--muted)]/60 animate-fade-in-up'
+            : 'hover:bg-[var(--muted)]/50'
+      }`}
     >
       <td className="w-10 px-3 py-2.5 align-middle">
         <input
@@ -668,8 +776,58 @@ function CampaignTableRow({
         />
       </td>
       <td className="px-3 py-2.5 align-middle">
-        <span className="flex items-center gap-1.5 min-w-0">
-          <span className="text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
+        <span className={`flex items-center gap-1.5 min-w-0 ${asFollowUp ? 'pl-6' : ''}`}>
+          {expanderSlot && !asFollowUp && (
+            hasFollowUps ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleExpand?.();
+                }}
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Hide follow-up' : 'Show follow-up'}
+                className="-ml-1 inline-flex items-center justify-center w-5 h-5 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex-shrink-0"
+              >
+                <ChevronRightIcon
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+                />
+              </button>
+            ) : (
+              <span className="-ml-1 w-5 flex-shrink-0" aria-hidden="true" />
+            )
+          )}
+          {asFollowUp ? (
+            <>
+              <ArrowTurnDownRightIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0" />
+              <span className="text-sm font-medium">Follow-up</span>
+              <span className="text-xs text-[var(--muted-foreground)] truncate">
+                · to people who didn’t open
+              </span>
+            </>
+          ) : (
+            <span className="text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
+          )}
+          {chip && (
+            <Tooltip label={chip.tooltip}>
+              <span
+                onClick={
+                  hasFollowUps
+                    ? (e) => {
+                        e.stopPropagation();
+                        onToggleExpand?.();
+                      }
+                    : undefined
+                }
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium whitespace-nowrap flex-shrink-0 ${chip.className} ${
+                  hasFollowUps ? 'cursor-pointer' : 'cursor-help'
+                }`}
+              >
+                <chip.Icon className="w-3 h-3" />
+                {chip.label}
+              </span>
+            </Tooltip>
+          )}
           {item.isFlow && (
             <span
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider bg-violet-500/15 text-violet-300 flex-shrink-0"
@@ -902,6 +1060,27 @@ function CampaignTableRow({
             )}
           </div>
         </div>
+      </td>
+    </tr>
+  );
+}
+
+/** The line under an expanded original: what the follow-up added. */
+function CombinedReachRow({ reach }: { reach: CombinedReach }) {
+  return (
+    <tr className="border-b border-[var(--border)] bg-[var(--muted)]/30 animate-fade-in-up">
+      <td className="w-10 px-3 py-2" />
+      <td colSpan={10} className="px-3 py-2 pl-9 text-xs text-[var(--muted-foreground)]">
+        <span className="inline-flex items-center gap-1.5">
+          <ArrowTrendingUpIcon className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+          <span>
+            Opened across both sends:{' '}
+            <span className="font-medium text-[var(--foreground)] tabular-nums">
+              {formatNum(reach.opened)} of {formatNum(reach.audience)} ({formatPct(reach.rate)})
+            </span>
+            , up from {formatNum(reach.openedFirst)} after the first send
+          </span>
+        </span>
       </td>
     </tr>
   );
@@ -1262,26 +1441,53 @@ export function BlastPageList({
     [accountRows, selectedAccount],
   );
 
-  const selectedCampaigns = useMemo(() => {
+  // Follow-ups nest under their original (lib/messaging/blast-follow-ups):
+  // the table, its pages and its count are over top-level rows, and a
+  // search hit on either half keeps the pair together, opening the row when
+  // only the follow-up matched.
+  const campaignView = useMemo(() => {
+    const empty = {
+      roots: [] as Campaign[],
+      byParent: new Map<string, Campaign[]>(),
+      searchExpanded: [] as string[],
+    };
     // In singleAccountMode the caller already scoped `campaigns` to one
     // account, so we work over the whole list directly.
-    let result = singleAccountMode
-      ? campaigns
-      : (selectedAccountRow ? selectedAccountRow.campaigns : []);
-    if (!singleAccountMode && !selectedAccountRow) return [];
+    if (!singleAccountMode && !selectedAccountRow) return empty;
+    let result = singleAccountMode ? campaigns : selectedAccountRow!.campaigns;
+    const searchExpanded: string[] = [];
     if (debouncedSearch) {
       const q = debouncedSearch.toLowerCase();
-      result = result.filter(c =>
+      const matches = (c: Campaign) =>
         c.name.toLowerCase().includes(q) ||
         c.status.toLowerCase().includes(q) ||
-        statusLabel(c.status).toLowerCase().includes(q),
-      );
+        statusLabel(c.status).toLowerCase().includes(q);
+      result = filterKeepingFamilies(result, matches);
+      for (const c of result) if (c.resendOf && matches(c)) searchExpanded.push(c.resendOf);
     }
-    if (campaignSortField) {
-      result = [...result].sort((a, b) => compareCampaigns(a, b, campaignSortField, campaignSortDir));
-    }
-    return result;
+    const { roots, byParent } = groupFollowUps(result);
+    const sorted = campaignSortField
+      ? [...roots].sort((a, b) => compareCampaigns(a, b, campaignSortField, campaignSortDir))
+      : roots;
+    return { roots: sorted, byParent, searchExpanded };
   }, [singleAccountMode, campaigns, selectedAccountRow, debouncedSearch, campaignSortField, campaignSortDir]);
+  const selectedCampaigns = campaignView.roots;
+  const followUpsByParent = campaignView.byParent;
+  const anyFollowUps = followUpsByParent.size > 0;
+
+  const [expandedFollowUps, setExpandedFollowUps] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (campaignView.searchExpanded.length === 0) return;
+    setExpandedFollowUps((prev) => new Set([...prev, ...campaignView.searchExpanded]));
+  }, [campaignView.searchExpanded]);
+  function toggleFollowUps(id: string) {
+    setExpandedFollowUps((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   const campaignTotalPages = Math.max(1, Math.ceil(selectedCampaigns.length / PAGE_SIZE));
 
@@ -1362,7 +1568,9 @@ export function BlastPageList({
   }
 
   function getSelectedCampaigns(): Campaign[] {
-    return selectedCampaigns.filter((c) => selectedKeys.has(getCampaignKey(c)));
+    // Nested follow-ups are selectable too, so look beyond the top level.
+    const all = selectedCampaigns.flatMap((c) => [c, ...(followUpsByParent.get(c.id) ?? [])]);
+    return all.filter((c) => selectedKeys.has(getCampaignKey(c)));
   }
 
   function isLoomiCampaign(c: Campaign): boolean {
@@ -2111,36 +2319,58 @@ export function BlastPageList({
                     </tr>
                   </thead>
                   <tbody>
-                    {pagedCampaigns.map((item) => {
-                      const rowKey = getCampaignKey(item);
-                      const campaignId = item.campaignId || item.id;
+                    {pagedCampaigns.map((root) => {
+                      const followUps = followUpsByParent.get(root.id) ?? [];
+                      const expanded = followUps.length > 0 && expandedFollowUps.has(root.id);
+                      const reach = expanded
+                        ? combinedReach(
+                            engagementById.get(root.campaignId || root.id),
+                            followUps.map((f) => engagementById.get(f.campaignId || f.id)),
+                          )
+                        : null;
+                      const rows = expanded ? [root, ...followUps] : [root];
                       return (
-                        <CampaignTableRow
-                          key={rowKey}
-                          item={item}
-                          accountMeta={accountMeta}
-                          accountProviders={accountProviders}
-                          isMenuOpen={openMenuId === rowKey}
-                          downloading={downloadingId === rowKey}
-                          selected={selectedKeys.has(rowKey)}
-                          engagement={engagementById.get(campaignId)}
-                          onToggleMenu={(campaign) => {
-                            const key = getCampaignKey(campaign);
-                            setOpenMenuId((prev) => (prev === key ? null : key));
-                          }}
-                          onPreview={handlePreview}
-                          onDownload={handleDownload}
-                          onToggleSelect={toggleSelectCampaign}
-                          onEdit={handleEditCampaign}
-                          onArchive={handleArchiveCampaign}
-                          onRestore={handleRestoreCampaign}
-                          onDelete={handleDeleteCampaign}
-                          onDuplicate={handleDuplicateCampaign}
-                          onRename={handleRenameCampaign}
-                          onCancel={handleCancelCampaign}
-                          onOpenSentDetail={openSentDetail}
-                          showRestore={statusFilter === 'archived'}
-                        />
+                        <Fragment key={getCampaignKey(root)}>
+                          {rows.map((item) => {
+                            const rowKey = getCampaignKey(item);
+                            const campaignId = item.campaignId || item.id;
+                            const isFollowUp = item !== root;
+                            return (
+                              <CampaignTableRow
+                                key={rowKey}
+                                item={item}
+                                followUps={isFollowUp ? undefined : followUps}
+                                expanded={expanded}
+                                onToggleExpand={() => toggleFollowUps(root.id)}
+                                expanderSlot={anyFollowUps}
+                                asFollowUp={isFollowUp}
+                                accountMeta={accountMeta}
+                                accountProviders={accountProviders}
+                                isMenuOpen={openMenuId === rowKey}
+                                downloading={downloadingId === rowKey}
+                                selected={selectedKeys.has(rowKey)}
+                                engagement={engagementById.get(campaignId)}
+                                onToggleMenu={(campaign) => {
+                                  const key = getCampaignKey(campaign);
+                                  setOpenMenuId((prev) => (prev === key ? null : key));
+                                }}
+                                onPreview={handlePreview}
+                                onDownload={handleDownload}
+                                onToggleSelect={toggleSelectCampaign}
+                                onEdit={handleEditCampaign}
+                                onArchive={handleArchiveCampaign}
+                                onRestore={handleRestoreCampaign}
+                                onDelete={handleDeleteCampaign}
+                                onDuplicate={handleDuplicateCampaign}
+                                onRename={handleRenameCampaign}
+                                onCancel={handleCancelCampaign}
+                                onOpenSentDetail={openSentDetail}
+                                showRestore={statusFilter === 'archived'}
+                              />
+                            );
+                          })}
+                          {reach && <CombinedReachRow reach={reach} />}
+                        </Fragment>
                       );
                     })}
                   </tbody>

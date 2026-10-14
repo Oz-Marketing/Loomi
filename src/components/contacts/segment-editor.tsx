@@ -104,7 +104,10 @@ function cleanForSave(def: FilterDefinition): FilterDefinition {
 /** Live-preview state. `count` and `reachable` are EXACT figures from
  *  the server; `contacts` is only a display sample. */
 interface SegmentPreviewState {
-  status: 'loading' | 'ready' | 'error' | 'empty-filter' | 'org-wide';
+  /** `idle`: a group scope not counted yet. `stale`: counted, but the
+   *  conditions changed since — the figures shown are the old ones.
+   *  `timeout`: the count outran its time budget on the server. */
+  status: 'loading' | 'ready' | 'error' | 'empty-filter' | 'org-wide' | 'idle' | 'stale' | 'timeout';
   count: number;
   reachable: { email: number; phone: number };
   contacts: Contact[];
@@ -115,6 +118,17 @@ interface SegmentPreviewState {
   strategy?: 'sql' | 'scan';
   error?: string;
 }
+
+const EMPTY_PREVIEW: SegmentPreviewState = {
+  status: 'idle',
+  count: 0,
+  reachable: { email: 0, phone: 0 },
+  contacts: [],
+  total: 0,
+};
+
+/** The preview ran out of time — told apart from a real failure. */
+class PreviewTimeout extends Error {}
 
 /** The small bordered tag the header's segment settings share. */
 const CHIP =
@@ -304,6 +318,20 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       description.trim() !== (initial?.description ?? '').trim() ||
       cleanedKey !== initialCleanedKey);
 
+  // More than one account in scope = a group roll-up: counted on demand
+  // (see the preview effect). `countRequestedFor` is the definition+scope
+  // the user last asked to count.
+  const countOnDemand = resolveKeys.length > 1;
+  const [countRequestedFor, setCountRequestedFor] = useState<string | null>(null);
+
+  // An edited segment with nothing changed has nothing to save — the button
+  // sat enabled after a save, which read as "your changes weren't saved".
+  // Sharing is part of what Save writes, so a flipped toggle counts too.
+  const nothingToSave =
+    mode === 'edit' &&
+    !hasUnsavedChanges &&
+    sharedWithChildren === (initial?.sharedWithChildren === true);
+
   useEffect(() => {
     // Org-wide scope has no single account to resolve against — a
     // segment is a filter, and its size differs per sub-account. Rather
@@ -329,15 +357,34 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       return;
     }
 
-    let cancelled = false;
+    // A group roll-up counts every rooftop's contacts at once, deduped by
+    // person — far too heavy to re-run on every edit, and on Young
+    // Automotive Group it outran the 60s gateway as a raw 504. So a group
+    // counts when asked (the panel's Count button), and an edit after a
+    // count marks the figures stale instead of starting another.
+    const requestKey = `${cleanedKey}|${resolveKeysKey}`;
+    if (countOnDemand && countRequestedFor !== requestKey) {
+      setPreview((prev) =>
+        prev.status === 'ready' || prev.status === 'stale'
+          ? { ...prev, status: 'stale' }
+          : { ...EMPTY_PREVIEW, status: 'idle' },
+      );
+      return;
+    }
+
+    // Aborted on every change, so an edit cancels the request it replaces
+    // rather than leaving it running behind the new one.
+    const controller = new AbortController();
     setPreview((prev) => ({ ...prev, status: 'loading' }));
 
     // Debounced: the builder fires on every keystroke in a value input,
     // and each resolve is a real query against the whole contact table.
+    // An on-demand count was asked for explicitly, so it goes at once.
     const timer = setTimeout(() => {
       fetch('/api/segments/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           accountKeys: resolveKeys,
           definition: cleaned,
@@ -348,11 +395,16 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
       })
         .then(async (r) => {
           const data = await r.json().catch(() => ({}));
+          // 503 + code is the route giving up on its own terms; a bare
+          // 504 is the gateway doing it first. Same meaning to the user.
+          if (r.status === 504 || (r.status === 503 && data?.code === 'timeout')) {
+            throw new PreviewTimeout();
+          }
           if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
           return data;
         })
         .then((data) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
           setPreview({
             status: 'ready',
             count: Number(data.count) || 0,
@@ -369,24 +421,29 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
           });
         })
         .catch((err) => {
-          if (cancelled) return;
+          if (controller.signal.aborted) return;
+          if (err instanceof PreviewTimeout) {
+            setPreview({ ...EMPTY_PREVIEW, status: 'timeout' });
+            return;
+          }
           setPreview({
+            ...EMPTY_PREVIEW,
             status: 'error',
-            count: 0,
-            reachable: { email: 0, phone: 0 },
-            contacts: [],
-            total: 0,
             error: err instanceof Error ? err.message : 'Preview failed',
           });
         });
-    }, 400);
+    }, countOnDemand ? 0 : 400);
 
     return () => {
-      cancelled = true;
+      controller.abort();
       clearTimeout(timer);
     };
     // `cleanedKey` stands in for `cleaned` — see above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanedKey, resolveKeysKey, countOnDemand, countRequestedFor]);
+
+  const requestCount = useCallback(() => {
+    setCountRequestedFor(`${cleanedKey}|${resolveKeysKey}`);
   }, [cleanedKey, resolveKeysKey]);
 
 
@@ -736,11 +793,13 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || !name.trim() || cleaned.groups.length === 0 || !canSave}
+              disabled={saving || !name.trim() || cleaned.groups.length === 0 || !canSave || nothingToSave}
               title={
-                canSave
-                  ? undefined
-                  : 'Org-wide segments can only be saved by a developer or super admin. Switch to an account to build one there.'
+                !canSave
+                  ? 'Org-wide segments can only be saved by a developer or super admin. Switch to an account to build one there.'
+                  : nothingToSave
+                    ? 'No changes to save'
+                    : undefined
               }
               className="px-4 h-9 inline-flex items-center gap-1.5 text-sm rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
@@ -806,7 +865,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
 
         {/* Preview pane */}
         <aside className="lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] flex flex-col">
-          <PreviewPanel preview={preview} />
+          <PreviewPanel preview={preview} onCount={countOnDemand ? requestCount : undefined} />
         </aside>
       </div>
       {sharingModal && (
@@ -1289,11 +1348,18 @@ function LogicPill({ value, onToggle, tone }: LogicPillProps) {
 
 interface PreviewPanelProps {
   preview: SegmentPreviewState;
+  /** Present on a group scope, which counts on request rather than live. */
+  onCount?: () => void;
 }
 
-function PreviewPanel({ preview }: PreviewPanelProps) {
+function PreviewPanel({ preview, onCount }: PreviewPanelProps) {
   const { status, count: matchCount, reachable, contacts, total } = preview;
   const loading = status === 'loading';
+  // Figures worth showing: fresh ones, or the last count kept (dimmed)
+  // while the conditions have moved on.
+  const hasFigures = status === 'ready' || status === 'stale';
+  const stale = status === 'stale';
+  const showCountButton = !!onCount && (status === 'idle' || status === 'stale' || status === 'timeout');
   const percent = total > 0 ? Math.round((matchCount / total) * 100) : 0;
   // Exact figures from the server — NOT derived from `contacts`, which is
   // only the handful of rows rendered below.
@@ -1306,7 +1372,7 @@ function PreviewPanel({ preview }: PreviewPanelProps) {
       <div className="px-4 py-3 border-b border-[var(--border)]/70 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ChartBarIcon className="w-4 h-4 text-[var(--primary)]" />
-          <span className="text-sm font-semibold">Live preview</span>
+          <span className="text-sm font-semibold">{onCount ? 'Preview' : 'Live preview'}</span>
           {loading && (
             <ArrowPathIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] animate-spin" />
           )}
@@ -1319,16 +1385,22 @@ function PreviewPanel({ preview }: PreviewPanelProps) {
       </div>
 
       <div className="px-4 py-4 border-b border-[var(--border)]/70">
-        <div className="flex items-baseline gap-2">
+        <div
+          className={`flex items-baseline gap-2 transition-opacity duration-200 ${stale ? 'opacity-50' : ''}`}
+        >
           <span className="text-3xl font-bold tabular-nums">
-            {status === 'ready' ? matchCount.toLocaleString() : '—'}
+            {hasFigures ? matchCount.toLocaleString() : '—'}
           </span>
           <span className="text-sm text-[var(--muted-foreground)]">
             contact{matchCount === 1 ? '' : 's'} match
           </span>
         </div>
         <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
-          {status === 'loading' && 'Resolving…'}
+          {status === 'loading' && (onCount ? 'Counting across every account — this can take a moment…' : 'Resolving…')}
+          {status === 'idle' && 'Count this audience across the group\u2019s accounts.'}
+          {status === 'stale' && 'Conditions changed since this count.'}
+          {status === 'timeout' &&
+            'Too large to count here. The segment still saves and sends normally.'}
           {status === 'empty-filter' && 'Add a condition to see who matches'}
           {status === 'org-wide' &&
             'Switch to an account to preview — segment size differs per account'}
@@ -1337,6 +1409,16 @@ function PreviewPanel({ preview }: PreviewPanelProps) {
           )}
           {status === 'ready' && `${percent}% of ${total.toLocaleString()} total`}
         </p>
+        {showCountButton && (
+          <button
+            type="button"
+            onClick={onCount}
+            className="mt-2.5 h-8 px-3 inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-[var(--border)] hover:bg-[var(--sidebar-muted)] transition-colors animate-fade-in-up"
+          >
+            <ArrowPathIcon className="w-3.5 h-3.5" />
+            {status === 'idle' ? 'Count audience' : status === 'stale' ? 'Count again' : 'Try again'}
+          </button>
+        )}
         {status === 'ready' && (preview.accountCount ?? 1) > 1 && (
           <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
             Across {preview.accountCount} accounts, counted as people — someone
@@ -1345,8 +1427,10 @@ function PreviewPanel({ preview }: PreviewPanelProps) {
         )}
       </div>
 
-      {!loading && matchCount > 0 && (
-        <div className="px-4 py-3 border-b border-[var(--border)]/70 grid grid-cols-2 gap-2">
+      {hasFigures && matchCount > 0 && (
+        <div
+          className={`px-4 py-3 border-b border-[var(--border)]/70 grid grid-cols-2 gap-2 transition-opacity duration-200 ${stale ? 'opacity-50' : ''}`}
+        >
           <PreviewStat
             icon={<EnvelopeIcon className="w-3 h-3" />}
             label="with email"
@@ -1365,7 +1449,7 @@ function PreviewPanel({ preview }: PreviewPanelProps) {
           <div className="px-4 py-8 text-center text-xs text-[var(--muted-foreground)]">
             Loading…
           </div>
-        ) : matchCount === 0 ? (
+        ) : !hasFigures ? null : matchCount === 0 ? (
           <div className="px-4 py-8 text-center text-xs text-[var(--muted-foreground)]">
             <FunnelIcon className="w-7 h-7 mx-auto mb-2 opacity-40" />
             No contacts match these filters yet.

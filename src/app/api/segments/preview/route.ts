@@ -20,11 +20,29 @@ import { requireAuth } from '@/lib/api-auth';
 import { SegmentRefError } from '@/lib/segments/refs';
 import { resolveRequestedAccountKeys } from '@/lib/segments/api-scope';
 import { previewSegmentForAccounts, SegmentLookupError } from '@/lib/segments/lookup';
-import { SegmentScanOverflowError } from '@/lib/segments/resolve';
+import { SegmentScanOverflowError, SegmentTimeoutError } from '@/lib/segments/resolve';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { clientErrorMessage } from '@/lib/api-errors';
 
 const MAX_SAMPLE = 100;
+
+// nginx cuts a droplet request at 60s and answers with a bare 504 the
+// builder can only show as an error, while the query runs on regardless.
+// So the preview gives up first, on its own terms: each query carries a
+// Postgres statement_timeout (cancelled server-side, no orphaned work), and
+// the whole request a deadline below nginx's, for the scan strategy's
+// JS-side work that a statement timeout can't reach. Either answers 503
+// with `code: 'timeout'`, which the builder explains instead of erroring.
+const QUERY_TIMEOUT_MS = 40_000;
+const REQUEST_DEADLINE_MS = 50_000;
+
+function deadline(ms: number): Promise<never> {
+  return new Promise((_, reject) => {
+    const t = setTimeout(() => reject(new SegmentTimeoutError()), ms);
+    // Never hold the process open for a timer whose request is long gone.
+    t.unref?.();
+  });
+}
 
 export async function POST(req: Request) {
   const { session, error } = await requireAuth();
@@ -79,10 +97,14 @@ export async function POST(req: Request) {
   try {
     // Validated per account inside — the field catalogue differs per
     // rooftop, so there is no one catalogue to check it against up front.
-    const result = await previewSegmentForAccounts(definition as FilterDefinition, selected, {
-      sampleSize,
-      excludeSegmentId: editingSegmentId,
-    });
+    const result = await Promise.race([
+      previewSegmentForAccounts(definition as FilterDefinition, selected, {
+        sampleSize,
+        excludeSegmentId: editingSegmentId,
+        timeoutMs: QUERY_TIMEOUT_MS,
+      }),
+      deadline(REQUEST_DEADLINE_MS),
+    ]);
     return NextResponse.json({
       count: result.count,
       reachable: result.reachable,
@@ -102,6 +124,9 @@ export async function POST(req: Request) {
       untranslatable: result.untranslatable,
     });
   } catch (err) {
+    if (err instanceof SegmentTimeoutError) {
+      return NextResponse.json({ error: err.message, code: 'timeout' }, { status: 503 });
+    }
     if (err instanceof SegmentScanOverflowError) {
       return NextResponse.json({ error: err.message }, { status: 507 });
     }

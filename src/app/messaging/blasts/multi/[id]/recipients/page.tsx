@@ -51,6 +51,7 @@ import {
   audiencePatch,
   audienceTab,
   isAudienceEmpty,
+  refreshSegmentSelection,
   sameAudience,
   toServerSelection,
   type AudienceTab,
@@ -356,6 +357,15 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
       return match && match.name !== prev.name ? { kind: 'list', id: match.id, name: match.name } : prev;
     });
   }, [scopedLists]);
+
+  // A picked segment follows the segment — see refreshSegmentSelection.
+  // Changes what's saved, so the autosave writes it back.
+  useEffect(() => {
+    // After hydration: the segments can arrive before the drafts do.
+    if (!hydrated || lockedDraft) return;
+    setEmailSelection((prev) => refreshSegmentSelection(prev, scopedAudiences) ?? prev);
+    setSmsSelection((prev) => refreshSegmentSelection(prev, scopedAudiences) ?? prev);
+  }, [scopedAudiences, lockedDraft, hydrated]);
 
   // When the rails aren't split, SMS follows the email selection.
   const effectiveSmsSelection = splitAudiences ? smsSelection : emailSelection;

@@ -42,6 +42,9 @@ lsof -a -p $(pgrep -f "next-server" | head -1) -d cwd -Fn
 | `npm run e2e:record` | As `e2e`, uploading results to Cypress Cloud. |
 | `npm run e2e:dev` | Starts `next dev`, waits for it, runs the suite, stops it. |
 | `npm run verify:e2e` | Typechecks the Cypress program (see below). |
+| `npm run e2e:db:up` | Starts a disposable test Postgres in Docker, then creates the tables and seeds the logins. See [Running it locally like CI](#running-it-locally-like-ci). |
+| `npm run e2e:local` | Starts the built app against that database, runs the suite, stops the app. No second terminal. |
+| `npm run e2e:db:down` | Stops the test database. Its data goes with it. |
 
 ---
 
@@ -221,23 +224,6 @@ same card as the component suite (`.github/scripts/test-alert.sh` builds both),
 headed "E2E tests". The **Run workflow** button has the same **test_alert**
 preview (see [component-testing.md](component-testing.md#previewing-the-slack-alert)).
 
-### Running it locally like CI
-
-A long-lived dev database drifts: the seeded passwords change and the schema
-falls behind, and the suite fails for reasons that aren't bugs. To run it the
-way CI does without touching your dev data, give it a database of its own:
-
-```bash
-E2E_DB="postgresql://<user>:<password>@127.0.0.1:5432/loomi_e2e?schema=public"
-DATABASE_URL=$E2E_DB npx prisma db push && DATABASE_URL=$E2E_DB npm run db:seed
-npm run build:assets
-DATABASE_URL=$E2E_DB npm start                                   # terminal 1
-DATABASE_URL=$E2E_DB CYPRESS_BASE_URL=http://127.0.0.1:3000 npm run e2e   # terminal 2
-```
-
-`CYPRESS_BASE_URL` must be the exact origin in your `NEXTAUTH_URL`
-(`127.0.0.1` and `localhost` are different origins to the session cookie).
-
 It is **not a deploy gate.** Branch protection requires a check named exactly
 `verify` (`typecheck.yml`) and nothing else, and the deploy workflows declare
 `needs: [build, verify]`. A browser suite is too young to be handed the power
@@ -246,6 +232,58 @@ it has a track record.
 
 Recording is conditional on the secret existing (`record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}`),
 so the suite still runs and still reports before the secret is added.
+
+### Running it locally like CI
+
+A long-lived dev database drifts: the seeded passwords change and the schema
+falls behind, and the suite fails for reasons that aren't bugs. To run it the
+way CI does without touching your dev data, give it a database of its own.
+
+[`docker-compose.e2e.yml`](../docker-compose.e2e.yml) is that database: the
+same `postgres:16` and `loomi_e2e` database CI uses, on port **5434** so it
+never collides with a local Postgres on 5432. Its data lives in memory
+(`tmpfs`), so every start is empty and stopping it wipes it.
+
+**You need Docker Desktop installed and running.** Then it's three commands:
+
+```bash
+npm run e2e:db:up       # start the database, create the tables, seed the logins
+npm run build:assets    # build the app (again after any code change)
+npm run e2e:local       # start the app, wait for it, run the suite, stop the app
+```
+
+When you're done, `npm run e2e:db:down` stops the database and throws it away.
+
+| Script | Run it | How often |
+|---|---|---|
+| `e2e:db:up` | when the test database isn't running: first thing, or after `down`, a reboot or quitting Docker | once per session |
+| `build:assets` | when app code changed since the last build (`e2e:local` tests the built app) | after each change you want tested |
+| `e2e:local` | every time you want to run the suite | as often as you like |
+| `e2e:db:down` | when you're done | once |
+
+The database stays up between runs, and the specs clean up the data they
+create. For a guaranteed clean slate, run `e2e:db:down` then `e2e:db:up`.
+
+**How the scripts find the database:** the connection string lives once, in
+`package.json`'s `config.E2E_DATABASE_URL`. Each script sets `DATABASE_URL`
+from it (`DATABASE_URL=$npm_package_config_E2E_DATABASE_URL …`) for its own
+commands only, so nothing is exported and `.env`, which points `npm run dev`
+at your dev database, is never touched. `e2e:local` sets it on
+`start-server-and-test`, which passes it to both the app and Cypress.
+
+Things that trip this up:
+
+- **Run `e2e:local` in the Terminal app, not VS Code's built-in terminal.**
+  VS Code sets `ELECTRON_RUN_AS_NODE`, which stops Cypress from starting with
+  a bare `MODULE_NOT_FOUND` or "bad option". Or prefix the command with
+  `env -u ELECTRON_RUN_AS_NODE`.
+- **Port 3000 must be free.** Stop `npm run dev` first; only one server can
+  own it.
+- **`start-server-and-test: command not found`** means your `node_modules`
+  predates it: `npm install --legacy-peer-deps`, then `npx prisma generate`.
+- **The suite visits `127.0.0.1`, not `localhost`,** because
+  `CYPRESS_BASE_URL` must be the exact origin in your `NEXTAUTH_URL`; the two
+  are different origins to the session cookie. `e2e:local` sets this for you.
 
 ---
 

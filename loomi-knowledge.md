@@ -316,7 +316,7 @@ logo → image (product/service photo) → section (intro text + quoted text blo
 Each account can store:
 - Business identity fields (name, address, phone, website, timezone; industry/category; OEM/brand affiliations)
 - Branding (logos light/dark/white, colors, fonts, favicon)
-- Custom values for template substitution and extensible contact custom fields
+- **Custom values** — the account's own merge tags (`{{custom_values.<key>}}`), edited on the account's **Custom Values** settings tab: links, review URLs, anything a template should say per store. A value's tag is set when it's added and doesn't change on rename. A group can **Copy to accounts**: pick values and accounts beneath it, names and values or names only, and whether to keep or replace a value an account already has. The copy uses the group's saved values. Custom values are not inherited from the group the way logos and branding are. (Contact data is separate: **Custom Fields**, one per contact.)
 - Per-account send credentials: SendGrid API key + from domain (email); Twilio creds + messaging-service SID (SMS) — all AES-256-GCM encrypted at rest
 - Ad-platform identifiers (Meta ad-account ID, Google Ads customer ID, StackAdapt advertiser ID) and per-account markup/margin overrides
 - CRM destinations (Tekion / VinSolutions via ADF, or HubSpot)

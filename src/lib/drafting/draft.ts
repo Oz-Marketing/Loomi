@@ -11,6 +11,7 @@ import { findConflicts, type DraftConflict } from './conflicts';
 import { COPY_RULE_IDS, repairCopy, writeCopy, type CopyResult } from './copywriter';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
+import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
 import { DRAFTABLE_TYPES, factSources, type RequestType } from './extraction';
 import type { ProjectRequest } from './monday-board';
 import { blockedUpdate, cantDraftUpdate, conflictUpdate } from './notes';
@@ -69,7 +70,7 @@ const TYPE_NAMES: Record<string, string> = {
 async function loadAccount(accountKey: string) {
   const row = await prisma.account.findUnique({
     where: { key: accountKey },
-    select: { key: true, dealer: true, oem: true, oems: true, website: true, siteDisplay: true },
+    select: { key: true, dealer: true, oem: true, oems: true, website: true, siteDisplay: true, customValues: true },
   });
   if (!row) return null;
   const preview = await loadPreviewAccountData(accountKey);
@@ -82,7 +83,7 @@ async function loadAccount(accountKey: string) {
     siteDisplay: row.siteDisplay,
     website: row.website,
   };
-  return { draftAccount, logoUrl: logos?.light || logos?.dark || null };
+  return { draftAccount, logoUrl: logos?.light || logos?.dark || null, links: accountLinks(row.customValues) };
 }
 
 /** The make whose co-op pack applies: the featured vehicle's, when the store sells it, else the store's only make. */
@@ -155,7 +156,7 @@ export async function runDraftStages(requestId: string): Promise<void> {
       await stop(row, 'failed', `No Loomi account "${row.accountKey}".`, cantDraftUpdate(`Loomi has no account "${row.accountKey}".`));
       return;
     }
-    const { draftAccount, logoUrl } = loaded;
+    const { draftAccount, logoUrl, links } = loaded;
     const hero = assets.find((a) => a.contentType.startsWith('image/') && a.url);
     if (!hero?.url) {
       const why = "The creative couldn't be stored in Spaces (S3 isn't configured here), and the email needs a lasting image URL for it.";
@@ -190,16 +191,19 @@ export async function runDraftStages(requestId: string): Promise<void> {
       },
       bannedPhrases: coop ? bannedPhrases(coopPack) : [],
       guidelines: pickPages(guidelineDocs),
+      linkedPurposes: Object.keys(links) as CtaPurpose[],
     };
     const common = { reading, account: draftAccount, logoUrl, heroUrl: hero.url, website, utmCampaign, facts, coop, coopPack };
 
     // 7. Validate, with one rewrite when only the copy is at fault.
     let written: CopyResult = await writeCopy(brief);
-    let built = await buildDraft({ ...common, copy: written.copy });
+    let resolved = await resolveCtas(written.copy.ctas, links, website, checkLink);
+    let built = await buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url) });
     const copyErrors = (b: BuiltDraft) => b.evaluation.violations.filter((v) => v.severity === 'error' && COPY_RULE_IDS.has(v.ruleId));
     if (built.evaluation.blocked && copyErrors(built).length) {
       written = await repairCopy(written, copyErrors(built));
-      built = await buildDraft({ ...common, copy: written.copy });
+      resolved = await resolveCtas(written.copy.ctas, links, website, checkLink);
+      built = await buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url) });
     }
 
     const notes = [
@@ -213,7 +217,7 @@ export async function runDraftStages(requestId: string): Promise<void> {
       ...(reading.disclaimer?.confidence === 'low'
         ? ['The disclaimer was hard to read. Check it against the creative word for word.']
         : []),
-      `Every link goes to ${website}. Point the buttons at the offer's page before it sends.`,
+      ...resolved.map((r) => r.note).filter((n): n is string => !!n),
     ];
 
     const previous = await prisma.draftVersion.findFirst({ where: { requestId: row.id }, orderBy: { number: 'desc' } });

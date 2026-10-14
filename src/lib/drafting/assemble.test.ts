@@ -29,7 +29,7 @@ function copy(dealer: string): DraftCopy {
   return {
     headline: 'The 2026 Equinox ACTIV, $3,500 off',
     body: [`Take $3,500 off MSRP on a new 2026 Equinox ACTIV at ${dealer}.`, 'The offer ends Oct 31.'],
-    ctas: ['Shop Equinox', 'Value Your Trade'],
+    ctas: [{ label: 'Shop Equinox', purpose: 'new_inventory' }, { label: 'Value Your Trade', purpose: 'trade_in' }],
     heroAlt: '2026 Equinox ACTIV, $3,500 off MSRP',
     subjects: [
       { kind: 'initial', text: 'Save $3,500 on the 2026 Equinox ACTIV' },
@@ -83,7 +83,7 @@ describe('buildDraft', () => {
   });
 
   it('puts one CTA on its own and two side by side', async () => {
-    const one = await built(YOUNG_CHEVROLET, { copy: { ...copy('Young Chevrolet'), ctas: ['Shop Equinox'] } });
+    const one = await built(YOUNG_CHEVROLET, { copy: { ...copy('Young Chevrolet'), ctas: [{ label: 'Shop Equinox', purpose: 'new_inventory' }] } });
     expect(one.artifact.template.blocks.some((b) => b.type === 'columns')).toBe(false);
     expect(errors(one)).toEqual([]);
     const two = await built(YOUNG_CHEVROLET);
@@ -109,6 +109,30 @@ describe('buildDraft', () => {
     bad.subjects[0] = { kind: 'initial', text: 'Save $4,000 on the 2026 Equinox ACTIV' };
     const b = await built(YOUNG_CHEVROLET, { copy: bad });
     expect(b.evaluation.violations.some((v) => v.ruleId === 'claims.supported')).toBe(true);
+  });
+});
+
+describe('button links', () => {
+  it('sends each button, and the creative, where its link points — tagged', async () => {
+    const b = await buildDraft({
+      copy: copy('Young Chevrolet'),
+      reading: READING,
+      account: YOUNG_CHEVROLET,
+      logoUrl: 'https://cdn.example.com/logo.png',
+      heroUrl: 'https://cdn.example.com/creative.png',
+      website: 'https://www.youngchev.com/',
+      utmCampaign: campaignSlug('Equinox ACTIV Monthly Offer', 10, 2026),
+      facts: factSources(READING, null),
+      coop: false,
+      coopPack: null,
+      ctaUrls: ['https://www.youngchev.com/new-inventory/index.htm?model=Equinox', 'https://www.youngchev.com/trade'],
+    });
+    const ctas = b.artifact.template.blocks.find((x) => x.id === 'ctas')!.children!;
+    expect(new URL(ctas[0].props.url as string).searchParams.get('model')).toBe('Equinox');
+    expect(new URL(ctas[1].props.url as string).pathname).toBe('/trade');
+    const hero = b.artifact.template.blocks.find((x) => x.id === 'hero')!;
+    expect(new URL(hero.props.linkUrl as string).pathname).toBe('/new-inventory/index.htm');
+    expect(errors(b)).toEqual([]);
   });
 });
 

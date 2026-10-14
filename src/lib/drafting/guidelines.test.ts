@@ -108,6 +108,7 @@ describe('copyPrompt', () => {
         request: { project: null, details: '', audience: '', runDates: null },
         bannedPhrases: [],
         guidelines: pickPages([DOC]),
+        linkedPurposes: [],
       },
       [],
     );

@@ -34,8 +34,8 @@ export interface DraftCopy {
   headline: string;
   /** Paragraphs, in order. */
   body: string[];
-  /** Button labels, one or two. */
-  ctas: string[];
+  /** One or two buttons: the label, and the purpose code turns into a link (`links.ts`). */
+  ctas: { label: string; purpose: string }[];
   heroAlt: string;
   subjects: CopyOption[];
   previews: CopyOption[];
@@ -89,30 +89,34 @@ export function assembleDraft(input: {
   heroUrl: string;
   account: AssemblyAccount;
   utmCampaign: string;
+  /** Where each button goes, by index. Missing → the homepage. */
+  ctaUrls?: string[];
 }): Assembled {
   const { copy, account, utmCampaign } = input;
   const vw = sells(account.oems, 'Volkswagen');
   const surface = vw ? VW_BACKGROUND : WHITE;
   const site = siteUrl(account.website);
   const taken = new Set<string>();
-  const link = (content: string) => tagLink(site, utmCampaign, content);
+  const link = (content: string, url = site) => tagLink(url, utmCampaign, content);
+  const ctaUrl = (i: number) => input.ctaUrls?.[i] || site;
 
   const blocks: Block[] = [
     {
       id: 'hero',
       type: 'image',
-      props: { src: input.heroUrl, alt: copy.heroAlt, linkUrl: link(contentKey('hero', 'image', taken)) },
+      // The creative opens what the first button opens: it IS the offer.
+      props: { src: input.heroUrl, alt: copy.heroAlt, linkUrl: link(contentKey('hero', 'image', taken), ctaUrl(0)) },
     },
     { id: 'headline', type: 'heading', props: { text: copy.headline, color: BLACK } },
     ...copy.body.map<Block>((text, i) => ({ id: `body-${i + 1}`, type: 'text', props: { text, color: BLACK } })),
   ];
 
-  const buttons: Block[] = copy.ctas.slice(0, 2).map((label, i) => ({
+  const buttons: Block[] = copy.ctas.slice(0, 2).map((cta, i) => ({
     id: `cta-${i + 1}`,
     type: 'button',
     props: {
-      text: label,
-      url: link(contentKey('cta', label, taken)),
+      text: cta.label,
+      url: link(contentKey('cta', cta.label, taken), ctaUrl(i)),
       fullWidth: true,
       borderRadius: 0,
       bgColor: BLACK,
@@ -185,6 +189,7 @@ export async function buildDraft(input: {
   facts: FactSource[];
   coop: boolean;
   coopPack: CoopRulePack | null;
+  ctaUrls?: string[];
 }): Promise<BuiltDraft> {
   const assembled = assembleDraft({
     copy: input.copy,
@@ -198,6 +203,7 @@ export async function buildDraft(input: {
       logoUrl: input.logoUrl,
     },
     utmCampaign: input.utmCampaign,
+    ctaUrls: input.ctaUrls,
   });
   const html = await renderEmailTemplate(assembled.template);
   const artifact: DraftArtifact = {

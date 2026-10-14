@@ -24,6 +24,11 @@ vi.mock('./copywriter', async (importOriginal) => ({
   writeCopy: (..._a: unknown[]) => writeCopy(),
   repairCopy: (..._a: unknown[]) => repairCopy(),
 }));
+// No network in tests: every account link "loads".
+vi.mock('./links', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./links')>()),
+  checkLink: vi.fn(async () => 'ok' as const),
+}));
 vi.mock('@/lib/email/screenshot', () => ({
   renderCampaignScreenshotFromHtml: vi.fn(async () => ({ image: Buffer.from('png'), contentType: 'image/png', filename: 'x.png' })),
 }));
@@ -52,7 +57,7 @@ function copy(subject = 'Save $3,500 on the 2026 Equinox ACTIV'): CopyResult {
   const c: DraftCopy = {
     headline: 'The 2026 Equinox ACTIV, $3,500 off',
     body: ['Take $3,500 off MSRP on a new 2026 Equinox ACTIV at Stagewell Chevrolet.'],
-    ctas: ['Shop Equinox', 'Value Your Trade'],
+    ctas: [{ label: 'Shop Equinox', purpose: 'new_inventory' }, { label: 'Value Your Trade', purpose: 'trade_in' }],
     heroAlt: '2026 Equinox ACTIV, $3,500 off MSRP',
     subjects: [
       { kind: 'initial', text: subject },
@@ -110,6 +115,7 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
         website: 'https://www.stagewellchevrolet.com/',
         siteDisplay: 'StagewellChevrolet.com',
         logos: JSON.stringify({ light: 'https://cdn.example.com/logo.png' }),
+        customValues: JSON.stringify({ trade_in_url: { name: 'Trade-In URL', value: 'https://www.stagewellchevrolet.com/value-your-trade' } }),
         address: '645 N Main St', city: 'Layton', state: 'UT', postalCode: '84041',
       },
     });
@@ -146,6 +152,15 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
     const update = stub.writes.updates.find((u) => u.itemId === SUB)!.body;
     expect(update).toContain('Save $3,500 on the 2026 Equinox ACTIV');
     expect(update).toContain(DISCLAIMER);
+
+    // The trade button uses the account's link; new inventory has none on file.
+    const template = JSON.parse(r.versions[0].template) as { blocks: { id: string; children?: { props: { url?: string } }[] }[] };
+    const [shop, trade] = template.blocks.find((b) => b.id === 'ctas')!.children!;
+    expect(new URL(trade.props.url!).pathname).toBe('/value-your-trade');
+    expect(new URL(shop.props.url!).pathname).toBe('/');
+    expect(JSON.parse(r.versions[0].notes!)).toContain(
+      '"Shop Equinox" goes to the homepage: the account has no {{custom_values.new_inventory_url}} for new inventory.',
+    );
   });
 
   it('stops on a conflict, reports both values, and writes no draft', async () => {

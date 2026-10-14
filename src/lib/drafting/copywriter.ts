@@ -3,6 +3,7 @@ import { DEALER_ABBREVIATIONS } from './compliance/rules/brand';
 import type { FactSource, Violation } from './compliance/types';
 import { pickExamples, renderExample, type DraftExample } from './corpus';
 import { renderGuidelinePages, type CoopUnmet, type GuidelinePage } from './guidelines';
+import { CTA_PURPOSES, CTA_PURPOSE_KEYS, type CtaPurpose } from './links';
 import { structuredCall } from './model';
 import type { CreativeReading } from './reading';
 
@@ -20,7 +21,7 @@ import type { CreativeReading } from './reading';
 interface CopyReply {
   headline: string;
   body: string[];
-  ctas: string[];
+  ctas: { label: string; purpose: string }[];
   heroAlt: string;
   subjects: { initial: string[]; urgent: string[] };
   previews: { initial: string[]; urgent: string[] };
@@ -43,7 +44,15 @@ export const COPY_REPLY_SCHEMA = {
   properties: {
     headline: { type: 'string' },
     body: strings,
-    ctas: strings,
+    ctas: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['label', 'purpose'],
+        properties: { label: { type: 'string' }, purpose: { type: 'string', enum: CTA_PURPOSE_KEYS } },
+      },
+    },
     heroAlt: { type: 'string' },
     subjects: options,
     previews: options,
@@ -84,6 +93,8 @@ export interface CopyBrief {
   bannedPhrases: string[];
   /** Pages of the make's co-op guidelines, for a co-op request. Empty otherwise. */
   guidelines: GuidelinePage[];
+  /** Button purposes the account has a link for. Others go to the homepage. */
+  linkedPurposes: CtaPurpose[];
 }
 
 export function copySystem(oems: string[]): string {
@@ -105,7 +116,7 @@ ${brand.map((b) => `- ${b}`).join('\n')}
 WHAT TO RETURN
 - headline: under 70 characters.
 - body: one to three paragraphs, each one to three sentences.
-- ctas: one or two button labels, each under 24 characters ("Shop Now", "Value Your Trade").
+- ctas: one or two buttons, each a label under 24 characters ("Shop Now", "Value Your Trade") and the purpose of the page it should open, from the list you're given. Prefer purposes the dealership has a link for; a button whose purpose has no link opens the homepage.
 - heroAlt: what the image says, briefly, for someone who can't see it.
 - subjects: three "initial" subject lines for the first send and two "urgent" ones for the last-chance follow-up, all different, under 60 characters.
 - previews: two "initial" and two "urgent" preview lines, all different, under 100 characters, each adding to its subject rather than repeating it.
@@ -126,6 +137,9 @@ export function copyPrompt(brief: CopyBrief, examples: DraftExample[]): string {
     r.project ? `Request: ${r.project}` : '',
     r.audience ? `Audience: ${r.audience}` : '',
     r.runDates ? `Runs: ${r.runDates}` : '',
+    `Button purposes:\n${CTA_PURPOSE_KEYS.map(
+      (p) => `- ${p}: ${CTA_PURPOSES[p].label}${p === 'homepage' || brief.linkedPurposes.includes(p) ? '' : ' (no link on file — opens the homepage)'}`,
+    ).join('\n')}`,
     factsBlock(brief),
     brief.bannedPhrases.length
       ? `This is co-op advertising. The manufacturer's guidelines ban these phrases — don't use them:\n${brief.bannedPhrases.join('; ')}`
@@ -146,7 +160,10 @@ function toCopy(reply: CopyReply): DraftCopy & { coopUnmet: CoopUnmet[] } {
   return {
     headline: reply.headline.trim(),
     body: clean(reply.body).slice(0, 3),
-    ctas: clean(reply.ctas).slice(0, 2),
+    ctas: (reply.ctas ?? [])
+      .map((c) => ({ label: (c.label ?? '').trim(), purpose: c.purpose }))
+      .filter((c) => c.label)
+      .slice(0, 2),
     heroAlt: reply.heroAlt.trim(),
     subjects: [
       ...clean(reply.subjects?.initial).map((text) => ({ text, kind: 'initial' as const })),
@@ -191,7 +208,7 @@ export async function repairCopy(first: CopyResult, violations: Violation[]): Pr
   const previous = [
     `headline: ${c.headline}`,
     ...c.body.map((p) => `body: ${p}`),
-    ...c.ctas.map((b) => `button: ${b}`),
+    ...c.ctas.map((b) => `button: ${b.label} (${b.purpose})`),
     `heroAlt: ${c.heroAlt}`,
     ...c.subjects.map((s) => `subject (${s.kind}): ${s.text}`),
     ...c.previews.map((p) => `preview (${p.kind}): ${p.text}`),

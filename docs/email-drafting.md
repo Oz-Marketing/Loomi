@@ -210,9 +210,36 @@ the client, not the request text.
 One look for every brand — black on white, white-on-black square full-width
 buttons side by side, Helvetica — which satisfies Kia's and Honda's palettes,
 YAG's font and VW's square CTAs; VW changes only the surfaces to #eff1f5.
-Every link goes to the account's website root, tagged; the update notes that
-the buttons should be pointed at the offer's page. The utm_campaign is the
-project name plus the month the draft is made.
+The utm_campaign is the project name plus the month the draft is made.
+
+### 5.4 Where the buttons go — built 2026-10-14
+
+`src/lib/drafting/links.ts`. The copywriter gives each button a label and a
+**purpose** from a fixed list; code looks the link up in the account's custom
+values (Account settings → Custom Values, which a group can copy down to its
+accounts). The model never writes a URL.
+
+| Purpose | Custom value read |
+|---|---|
+| new_inventory | `new_inventory_url`, else `inventory_url` |
+| used_inventory | `used_inventory_url` |
+| specials | `specials_url`, else `promotions_url` |
+| service_scheduler | `service_scheduler_url` |
+| service_specials | `service_specials_url` |
+| trade_in | `trade_in_url` |
+| finance | `finance_url` |
+| contact | `contact_url` |
+| homepage | the account's website |
+
+Keys match however they're spelled ("Specials URL" is `specials_url`). The
+copywriter is told which purposes have a link and prefers them. The creative
+links where the first button does.
+
+Every link is fetched when the draft is made. A 404 or a server error, or a
+page that redirects to the homepage, falls back to the homepage with a note;
+401/403/405/429 and timeouts are bot protection as often as not, so the link is
+kept with a note to check it. A purpose with no link on file goes to the
+homepage, and the note names the custom value to add.
 
 ## 6. Data model — built
 
@@ -497,6 +524,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Corpus builder (`scripts/drafting-build-corpus.ts`) | **built**, not run — the corpus ships empty and the copywriter runs without examples until it is |
 | Co-op documents as drafting context (§8) | **built**; page picking checked on the local documents, not yet on a live draft |
 | `Account.siteDisplay` | field built; values and a place to edit them are not |
+| Button links from the account's custom values, link check (`links.ts`) | **built**; checked with the network stubbed, not yet against real dealer sites |
 | Per-account abbreviations | next |
 
 **Retries, without noise.** A request that can't start waits (`needs_account`

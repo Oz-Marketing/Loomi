@@ -52,7 +52,12 @@
     { "variable": "{{custom_values.logo_url}}", "label": "Logo URL", "description": "Business logo image URL" },
     { "variable": "{{custom_values.review_link}}", "label": "Review Link", "description": "Link to leave a review" },
     { "variable": "{{custom_values.trade_in_url}}", "label": "Trade-In URL", "description": "Trade-in value estimator URL" },
-    { "variable": "{{custom_values.specials_url}}", "label": "Specials URL", "description": "Current specials/offers page" }
+    { "variable": "{{custom_values.specials_url}}", "label": "Specials URL", "description": "Current specials/offers page" },
+    { "variable": "{{custom_values.new_inventory_url}}", "label": "New Inventory URL", "description": "New vehicle inventory page" },
+    { "variable": "{{custom_values.used_inventory_url}}", "label": "Used Inventory URL", "description": "Used vehicle inventory page" },
+    { "variable": "{{custom_values.service_specials_url}}", "label": "Service Specials URL", "description": "Service and parts specials page" },
+    { "variable": "{{custom_values.finance_url}}", "label": "Finance URL", "description": "Credit / financing application page" },
+    { "variable": "{{custom_values.contact_url}}", "label": "Contact URL", "description": "Contact or directions page" }
   ],
   "System": [
     { "variable": "{{unsubscribe_link}}", "label": "Unsubscribe Link", "description": "Opt-out/unsubscribe URL" }

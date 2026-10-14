@@ -69,6 +69,43 @@ export function audienceFromDraft(draft: AudienceDraftColumns): BuilderAudience 
   }
 }
 
+/**
+ * The selection with its segment's CURRENT definition, or null when nothing
+ * needs to change.
+ *
+ * A blast stores a copy of the segment's filter (`sourceFilter`) when the
+ * segment is picked, and the send resolves that copy. Editing the segment
+ * afterwards left the draft on the old definition — a segment switched from
+ * "before 7 years ago" to "after" kept counting 0 on the blast while the
+ * segment itself showed ~7,000. The recipients page runs this once the
+ * account's segments load, and its autosave writes the refreshed copy back.
+ * Draft-only by construction: a locked blast's page never autosaves.
+ *
+ * A key-order-only difference reads as a change, which costs one harmless
+ * re-save of the same definition. A segment that no longer exists, or whose
+ * stored filter can't be parsed, leaves the selection alone rather than
+ * guessing.
+ */
+export function refreshSegmentSelection(
+  audience: BuilderAudience,
+  segments: ReadonlyArray<{ id: string; name: string; filters: string }>,
+): BuilderAudience | null {
+  if (audience.kind !== 'segment') return null;
+  const live = segments.find((s) => s.id === audience.id);
+  if (!live) return null;
+  let filter: FilterDefinition;
+  try {
+    filter = JSON.parse(live.filters) as FilterDefinition;
+  } catch {
+    return null;
+  }
+  if (!filter || filter.version !== 1 || !Array.isArray(filter.groups)) return null;
+  if (live.name === audience.name && JSON.stringify(filter) === JSON.stringify(audience.filter)) {
+    return null;
+  }
+  return { kind: 'segment', id: live.id, name: live.name, filter };
+}
+
 export type AudienceTab = 'lists' | 'segments' | 'contacts';
 
 /** The picker tab a saved audience lives on. */

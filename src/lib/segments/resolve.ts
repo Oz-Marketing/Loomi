@@ -349,6 +349,71 @@ export interface CrossAccountSegmentPreview extends CrossAccountSegmentResolutio
 const MAX_SCOPE_IDS = 200_000;
 
 /**
+ * A preview query ran past its time budget and Postgres cancelled it.
+ *
+ * Why the budget exists: nginx cuts a droplet request at 60s, and the web
+ * process sets no statement_timeout (see createPool in lib/prisma.ts). A
+ * group roll-up preview over every rooftop's contacts could outlive the
+ * request, so the user got a raw 504 while the query kept running on the
+ * database — and each edit in the builder started another. A
+ * transaction-local statement_timeout makes Postgres stop the work itself,
+ * and lets the route answer with something the UI can explain.
+ */
+export class SegmentTimeoutError extends Error {
+  constructor() {
+    super('This audience is too large to count in the preview.');
+    this.name = 'SegmentTimeoutError';
+  }
+}
+
+/** Postgres 57014 (query_canceled), or Prisma's own interactive-transaction
+ *  expiry (P2028). Through the pg driver adapter a raw query's cancel
+ *  arrives as P2010 with the Postgres code at
+ *  `meta.driverAdapterError.cause.originalCode`, so that path is followed
+ *  as well as plain `cause` chains. Exported for its test. */
+export function isQueryTimeout(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [err];
+  while (queue.length > 0 && seen.size < 10) {
+    const e = queue.shift();
+    if (!e || typeof e !== 'object' || seen.has(e)) continue;
+    seen.add(e);
+    const o = e as {
+      code?: unknown;
+      originalCode?: unknown;
+      meta?: { code?: unknown; driverAdapterError?: unknown };
+      cause?: unknown;
+    };
+    if (o.code === '57014' || o.originalCode === '57014' || o.code === 'P2028') return true;
+    if (o.meta?.code === '57014') return true;
+    queue.push(o.cause, o.meta?.driverAdapterError);
+  }
+  return false;
+}
+
+type Db = Prisma.TransactionClient;
+
+/** Run `query` with Postgres enforcing `timeoutMs`, or unbounded when no
+ *  budget is given (every non-preview caller). */
+async function bounded<T>(timeoutMs: number | undefined, query: (db: Db) => Promise<T>): Promise<T> {
+  if (!timeoutMs) return query(prisma);
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        // `true` = transaction-local, so the pooled connection goes back
+        // with its default intact.
+        await tx.$executeRaw`SELECT set_config('statement_timeout', ${String(timeoutMs)}, true)`;
+        return query(tx);
+      },
+      { timeout: timeoutMs + 5_000, maxWait: 10_000 },
+    );
+  } catch (err) {
+    if (isQueryTimeout(err)) throw new SegmentTimeoutError();
+    throw err;
+  }
+}
+
+/**
  * The WHERE clause covering every account in scope, plus how it was
  * arrived at.
  *
@@ -410,11 +475,11 @@ async function buildScopePredicate(plans: SegmentAccountPlan[]): Promise<{
 const IDENTITY = contactIdentitySql('"Contact"');
 
 /** Distinct people matching, and how many carry each identifier. */
-async function aggregateScope(predicate: Prisma.Sql): Promise<{
+async function aggregateScope(predicate: Prisma.Sql, db: Db = prisma): Promise<{
   count: number;
   reachable: { email: number; phone: number };
 }> {
-  const rows = await prisma.$queryRaw<
+  const rows = await db.$queryRaw<
     Array<{ count: number; with_email: number; with_phone: number }>
   >(Prisma.sql`
     WITH scoped AS (
@@ -459,13 +524,18 @@ export async function countSegmentAcrossAccounts(
 export async function previewSegmentAcrossAccounts(
   plans: SegmentAccountPlan[],
   sampleSize = 25,
+  /** Per-query budget; past it the query is cancelled and this throws
+   *  SegmentTimeoutError. Omitted means unbounded. */
+  timeoutMs?: number,
 ): Promise<CrossAccountSegmentPreview> {
   const { predicate, strategy, untranslatable } = await buildScopePredicate(plans);
   const accountKeys = plans.map((p) => p.accountKey);
 
+  // Three separate bounded transactions rather than one, so the queries
+  // still run in parallel on their own connections.
   const [totals, sampleRows, totalRows] = await Promise.all([
-    aggregateScope(predicate),
-    prisma.$queryRaw<Array<{ rep_id: string }>>(Prisma.sql`
+    bounded(timeoutMs, (db) => aggregateScope(predicate, db)),
+    bounded(timeoutMs, (db) => db.$queryRaw<Array<{ rep_id: string }>>(Prisma.sql`
       WITH scoped AS (
         SELECT
           "Contact"."id",
@@ -489,17 +559,17 @@ export async function previewSegmentAcrossAccounts(
       FROM grouped
       ORDER BY last_added DESC NULLS LAST, last_created DESC
       LIMIT ${sampleSize}
-    `),
+    `)),
     // The roster the segment is a share OF — also distinct people, or the
     // percentage would be a fraction with two different denominators.
-    prisma.$queryRaw<Array<{ total: number }>>(Prisma.sql`
+    bounded(timeoutMs, (db) => db.$queryRaw<Array<{ total: number }>>(Prisma.sql`
       SELECT COUNT(*)::int AS total
       FROM (
         SELECT DISTINCT ${IDENTITY} AS ident
         FROM "Contact"
         WHERE "Contact"."accountKey" = ANY(${accountKeys})
       ) people
-    `),
+    `)),
   ]);
 
   return {

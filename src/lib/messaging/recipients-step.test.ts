@@ -7,6 +7,7 @@ import {
   audienceFromDraft,
   audiencePatch,
   isAudienceEmpty,
+  refreshSegmentSelection,
   sameAudience,
   toServerSelection,
   type BuilderAudience,
@@ -119,5 +120,50 @@ describe('sameAudience', () => {
     expect(sameAudience({ kind: 'contacts', ids: ['a', 'b'] }, { kind: 'contacts', ids: ['b', 'a'] })).toBe(true);
     expect(sameAudience({ kind: 'contacts', ids: ['a'] }, { kind: 'contacts', ids: ['b'] })).toBe(false);
     expect(sameAudience({ kind: 'all' }, NOBODY)).toBe(false);
+  });
+});
+
+describe('refreshSegmentSelection', () => {
+  const after: FilterDefinition = {
+    version: 1,
+    logic: 'OR',
+    groups: [
+      {
+        id: 'g1',
+        logic: 'AND',
+        conditions: [{ id: 'c1', field: 'purchaseDate', operator: 'after', value: 'rel:-7:year' }],
+      },
+    ],
+  };
+  const live = (filters: unknown, name = 'Lapsed') => [
+    { id: 'seg1', name, filters: JSON.stringify(filters) },
+  ];
+
+  it('takes the segment\'s current definition when it was edited after the pick', () => {
+    expect(refreshSegmentSelection(segment, live(after))).toEqual({
+      kind: 'segment',
+      id: 'seg1',
+      name: 'Lapsed',
+      filter: after,
+    });
+  });
+
+  it('picks up a rename', () => {
+    expect(refreshSegmentSelection(segment, live(FILTER, 'Renamed'))).toMatchObject({ name: 'Renamed' });
+  });
+
+  it('returns null when nothing changed, so the page does not loop', () => {
+    expect(refreshSegmentSelection(segment, live(FILTER))).toBeNull();
+  });
+
+  it('leaves the selection alone when the segment is gone or unreadable', () => {
+    expect(refreshSegmentSelection(segment, [])).toBeNull();
+    expect(refreshSegmentSelection(segment, [{ id: 'seg1', name: 'Lapsed', filters: '{nope' }])).toBeNull();
+    expect(refreshSegmentSelection(segment, live({ version: 2, groups: [] }))).toBeNull();
+  });
+
+  it('ignores everything that is not a segment', () => {
+    expect(refreshSegmentSelection({ kind: 'all' }, live(after))).toBeNull();
+    expect(refreshSegmentSelection(NOBODY, live(after))).toBeNull();
   });
 });

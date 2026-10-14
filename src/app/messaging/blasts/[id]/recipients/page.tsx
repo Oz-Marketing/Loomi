@@ -44,6 +44,7 @@ import {
   audiencePatch,
   audienceTab,
   isAudienceEmpty,
+  refreshSegmentSelection,
   toServerSelection,
   type AudienceTab,
   type BuilderAudience,
@@ -297,6 +298,16 @@ export default function RecipientsStepPage({ params }: PageProps) {
   // Hydrate selection name once the lists arrive (we set kind:'list' with a
   // placeholder name before the fetch resolves). A name isn't part of what's
   // saved, so this never triggers an autosave.
+  // A picked segment follows the segment: if it was edited after this
+  // draft saved its copy, take the current definition. Unlike the list name
+  // above this changes what's saved, so the autosave writes it back — which
+  // is the point. Skipped on a locked blast, whose audience is final.
+  useEffect(() => {
+    if (locked) return;
+    const next = refreshSegmentSelection(selection, scopedAudiences);
+    if (next) setSelection(next);
+  }, [scopedAudiences, selection, locked]);
+
   useEffect(() => {
     if (selection.kind !== 'list') return;
     const match = scopedLists.find((l) => l.id === selection.id);

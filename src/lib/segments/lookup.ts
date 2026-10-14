@@ -204,10 +204,10 @@ export async function planSegmentAcrossAccounts(
 export async function previewSegmentForAccounts(
   definition: FilterDefinition,
   accountKeys: string[],
-  opts: { sampleSize?: number; excludeSegmentId?: string | null } = {},
+  opts: { sampleSize?: number; excludeSegmentId?: string | null; timeoutMs?: number } = {},
 ): Promise<CrossAccountSegmentPreview & { errors: SegmentPlanResult['errors'] }> {
   const { plans, errors } = await planSegmentAcrossAccounts(definition, accountKeys, opts);
-  const preview = await previewSegmentAcrossAccounts(plans, opts.sampleSize ?? 25);
+  const preview = await previewSegmentAcrossAccounts(plans, opts.sampleSize ?? 25, opts.timeoutMs);
   return { ...preview, errors };
 }
 

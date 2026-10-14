@@ -279,6 +279,10 @@ model Account {
   state                      String?
   postalCode                 String?
   website                    String?
+  // The dealer's site as an email footer prints it, camelCase: "YoungCDJRRiverdale.com".
+  // Not derivable from `website` (Riverdale's is youngchryslerdodgejeepramriverdale.com);
+  // drafted emails are blocked by `footer.site-url` until it's set. See docs/email-drafting.md §7.5.
+  siteDisplay                String?
   timezone                   String?
   logos                      String? // JSON: { light, dark, white?, black? }
   branding                   String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }

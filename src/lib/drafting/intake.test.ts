@@ -53,6 +53,15 @@ describe('intakeAction', () => {
     expect(intakeAction(ready(), prior('failed', { updatedAt: NOW }), changed, NOW)).toEqual({ kind: 'start' });
   });
 
+  it('restarts a conflict or a blocked draft only when the creative is replaced', () => {
+    const changed = intakeFingerprint(ready({ designAssetIds: ['502'] }));
+    const longAgo = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    for (const status of ['conflict', 'blocked']) {
+      expect(intakeAction(ready(), prior(status, { updatedAt: longAgo }), fp, NOW).kind, status).toBe('skip');
+      expect(intakeAction(ready(), prior(status, { updatedAt: NOW }), changed, NOW), status).toEqual({ kind: 'start' });
+    }
+  });
+
   it('retries a failure quietly, a bounded number of times, never a missing account', () => {
     expect(intakeAction(ready(), prior('failed'), fp, NOW)).toEqual({ kind: 'start' });
     expect(intakeAction(ready(), prior('failed', { updatedAt: NOW }), fp, NOW).kind).toBe('skip');

@@ -20,6 +20,8 @@ vi.mock('./job', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./job')>()),
   enqueueDraftingJob: vi.fn(async () => {}),
 }));
+// The read/draft stages call the model; the fetch-stage tests stop where fetch ends.
+vi.mock('./draft', () => ({ runDraftStages: vi.fn(async () => {}) }));
 vi.mock('@/lib/email/screenshot', () => ({
   renderCampaignScreenshotFromHtml: vi.fn(async () => ({ image: Buffer.from('png'), contentType: 'image/png', filename: 'x.png' })),
 }));

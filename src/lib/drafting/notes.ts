@@ -80,3 +80,28 @@ export function cantDraftUpdate(reason: string): string {
     '<p>Fix it here on monday and Loomi tries again on its own within a few minutes.</p>'
   );
 }
+
+/** The creative and the written request disagree. Both values, side by side; Loomi picks neither. */
+export function conflictUpdate(conflicts: { label: string; creative: string; request: string }[]): string {
+  return (
+    "<p><strong>Loomi didn't draft this email: the creative and the request disagree.</strong> " +
+    "It won't pick one. Correct whichever is wrong.</p>" +
+    list(
+      conflicts.map(
+        (c) =>
+          `<strong>${escapeHtml(c.label)}</strong> — creative: ${escapeHtml(c.creative).replace(/\r?\n/g, '<br>')}; ` +
+          `request: ${escapeHtml(c.request).replace(/\r?\n/g, '<br>')}`,
+      ),
+    ) +
+    '<p>A replaced creative in Design Assets is picked up on its own. A corrected request needs the draft run again from Loomi.</p>'
+  );
+}
+
+/** A hard rule failed; nothing was written to Draft Files. */
+export function blockedUpdate(versionNumber: number, errors: { message: string }[]): string {
+  return (
+    `<p><strong>Loomi drafted this email (version ${versionNumber}) but a house rule stopped it</strong>, ` +
+    'so nothing went to Draft Files.</p>' +
+    list(errors.map((e) => escapeHtml(e.message)))
+  );
+}

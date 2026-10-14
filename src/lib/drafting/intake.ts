@@ -60,8 +60,14 @@ export function intakeAction(
     if (d.hasDraftFiles || d.hasTemplateLink) return { kind: 'skip', why: 'already has a draft' };
     return { kind: 'start' };
   }
-  if (prior.status !== 'needs_account' && prior.status !== 'failed') return { kind: 'skip', why: `already ${prior.status}` };
+  // A conflict or a blocked draft restarts only when the creative is replaced —
+  // never quietly, since re-reading the same image gives the same answer.
+  const stopped = prior.status === 'conflict' || prior.status === 'blocked';
+  if (prior.status !== 'needs_account' && prior.status !== 'failed' && !stopped) {
+    return { kind: 'skip', why: `already ${prior.status}` };
+  }
   if (prior.intakeFingerprint !== fingerprint) return { kind: 'start' };
+  if (stopped) return { kind: 'skip', why: 'waiting for a new creative' };
   if (
     prior.status === 'failed'
     && prior.attempts < MAX_ATTEMPTS
@@ -88,7 +94,7 @@ export function clientFor(d: Pick<ReadyDeliverable, 'clients'>): { name: string 
   return { name: d.clients[0], problem: null };
 }
 
-async function accountOptions(): Promise<AccountOption[]> {
+export async function accountOptions(): Promise<AccountOption[]> {
   const rows = await prisma.account.findMany({ select: { key: true, dealer: true, parentAccountKey: true } });
   const parents = new Set(rows.map((r) => r.parentAccountKey).filter((k): k is string => Boolean(k)));
   return rows.filter((r) => !r.key.startsWith('_')).map((r) => ({ key: r.key, dealer: r.dealer, isGroup: parents.has(r.key) }));

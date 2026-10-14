@@ -3,6 +3,7 @@ import { getBoss } from '@/lib/queue/boss';
 import { MondayError } from '@/lib/monday/client';
 import { copyDesignAssets, imageType, sameCreative, type DraftAsset } from './assets';
 import { getDeliverable, type Deliverable } from './monday-board';
+import { runDraftStages } from './draft';
 import { cantDraftUpdate } from './notes';
 import { noticeOnce } from './notice';
 
@@ -15,9 +16,9 @@ import { noticeOnce } from './notice';
  * the stages and keeps the row current, so the queue page can show progress and
  * whoever comes back later can see what happened.
  *
- * Stages built so far: FETCH — read the deliverable and its request from monday,
- * check it's still approved, and copy the creative into Loomi. A request then
- * rests at `awaiting_extraction` until the extraction stage exists.
+ * FETCH is here — read the deliverable and its request from monday, check it's
+ * still approved, and copy the creative into Loomi. The rest (read, check,
+ * draft, validate, publish) is `draft.ts::runDraftStages`, run straight after.
  */
 
 export const DRAFTING_RUN_QUEUE = 'loomi.drafting.run';
@@ -133,7 +134,10 @@ export async function runDraftingJob(requestId: string): Promise<void> {
   } catch (err) {
     console.error(`[drafting-job] request ${requestId} failed:`, err);
     await failRequest(request, failureMessage(err)).catch(() => {});
+    return;
   }
+  // Records its own stops and failures.
+  await runDraftStages(requestId);
 }
 
 /** Stop the request and say why on the subitem, once. */

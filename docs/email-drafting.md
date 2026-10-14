@@ -1,6 +1,7 @@
 # Email drafting from approved creative
 
-Status: **in build** — slice 1. Written 2026-10-09.
+Status: **in build** — slice 1. Written 2026-10-09; the read and draft stages
+landed 2026-10-14 and have not yet run against a real creative.
 
 Loomi reads a deliverable's approved design assets and its request on monday,
 extracts what the creative says, drafts the email around it, enforces the house
@@ -115,11 +116,11 @@ Compliance Check count as co-op (§7.2).
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
 | 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; the intake pass (`loomi.drafting.intake`, every 5 minutes) starts it. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
 | 2 | **Fetch** the subitem, the project, and the Design Assets files | No approved assets, or a file over 40 MB (a layered PSD, not a flattened export) |
-| 3 | **Extract + classify** — one vision pass, saved field by field | — |
-| 4 | **Conflict check** — every number, date and disclaimer found in both the graphic and the request must agree | Any disagreement: both values are shown, nothing is chosen |
-| 5 | **Confirm** — where a person checks the extraction, with no Loomi screen, is open (§10) | — |
+| 3 | **Extract + classify** — one vision pass, saved field by field (§5) | Anything but a model / APR offer: slice 1 drafts nothing else |
+| 4 | **Conflict check** — every term found in both the graphic and the request must agree (§5.2) | Any disagreement: both values are shown, nothing is chosen |
+| 5 | **Confirm** — no gate. Low-confidence readings are flagged in the subitem update, and the proofer compares them with the image (decided 2026-10-09) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
-| 7 | **Validate** — the rule registry (§7) | Any error |
+| 7 | **Validate** — the rule registry (§7). One rewrite when only the copy broke a rule | Any error left after the rewrite: the version is kept, nothing goes to monday |
 | 8 | **Publish** (`publish.ts`) — the draft becomes the account's Loomi template (`draft-…` slug, category `drafted`; later drafts update it and `TemplateVersion` keeps the earlier ones); the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
 | 9 | **Watch** Proof Status | "Approved" freezes the version as final |
 
@@ -143,33 +144,76 @@ wrong.
 
 ---
 
-## 5. Extraction
+## 5. Extraction — built
 
-**Persisted and correctable, field by field.** Each field records:
+Code: `extract.ts` (the vision call), `extraction.ts` (its contract and
+screening, pure), `conflicts.ts` (pure), `draft.ts` (the stages 3–8 that run
+straight after fetch in the same job).
 
-- the asset it came from;
-- the model's value;
-- the human-corrected value;
-- who confirmed it.
+**One pass, image only.** The reader sees the creative and never the request:
+the conflict check compares the two, and a reader that had seen "1.9% APR" in
+the request would be inclined to read it off the image. Each image goes in
+whole, then as overlapping full-width strips, because the API scales an image
+to about 1,568px on its long edge and a 600×1800 creative's 6pt disclaimer
+doesn't survive that.
 
-The disclaimer cannot be drafted against until a person confirms it. Reading
-6pt legal text off an image is the weakest step in the chain.
+**What it produces** — a `CreativeReading` (`reading.ts`), stored on
+`DraftRequest.extraction` and reused until the creative changes:
 
-Monthly-offer fields:
+- `requestType` — model_offer, service_special, sales_event, event_invite,
+  announcement, conquest, other;
+- `fields`, from a fixed vocabulary — headline, subhead, vehicle, offer,
+  payment, term, apr, dueAtSigning, msrp, price, savings, rebate, services,
+  expiration, cta, dealer, logos, other — each with its value as printed, a
+  confidence, and the monday asset it came from;
+- `disclaimer` — verbatim, paragraph breaks kept, with a confidence;
+- `offerType` (lease / finance / cash / other) and the one featured `vehicle`;
+- `unreadable` — text the reader could see but not make out, reported rather
+  than guessed.
 
-- headline and subhead;
-- vehicle (year, make, model, trim);
-- offer type (lease / finance / cash / other);
-- payment, term, APR, due at signing, MSRP and savings;
-- expiration;
-- CTA label;
-- logos present;
-- disclaimer text, verbatim.
+Anything but an explicit "high" counts as low confidence. Unknown keys and
+empty values are dropped; an unknown request type becomes `other`, which stops.
 
-Other request types (service special, sales event, event invite,
-survey/announcement, conquest) share a common core and are out of slice 1.
+**Sources for the fact check** (`extraction.ts::factSources`): every field, the
+vehicle, the disclaimer, and the request's name, Dev Details and Offer
+Disclaimer. Nothing else may vouch for a number.
 
----
+### 5.1 Interpretation to confirm
+
+§4 originally had the disclaimer wait for a person's confirmation before
+drafting. The code follows the later decision instead (2026-10-09, recorded in
+`reading.ts`): no confirmation step; a low-confidence disclaimer is drafted,
+flagged in the update and noted on the version. **Connor to confirm** this is
+still right for legal text.
+
+### 5.2 The conflict check
+
+A term is compared only when both sides state it. The creative states it in a
+field; the request states it in prose, so a request value counts when it sits
+in a clause naming that term ("1.9% APR for 72 months", "Offer ends 10/31").
+APR, term, payment, due at signing, MSRP, savings, rebate and the expiry date
+are compared. The request conflicts when it states the term and none of its
+values for it is the creative's — so a request listing a lease and a finance
+payment doesn't stop a creative showing one of them.
+
+The disclaimer is compared by its figures: a number or date in one that the
+other lacks stops the draft. Wording alone only adds a note, because the
+request's Offer Disclaimer is often a note to design or an earlier draft, and
+the creative's text is the one carried verbatim. **Interpretation to confirm.**
+
+A conflict or a blocked draft restarts on its own only when the creative is
+replaced in Design Assets. A corrected request needs the draft run again
+(`scripts/drafting-run.ts`), because the intake fingerprint is the assets and
+the client, not the request text.
+
+### 5.3 What the assembler decides
+
+One look for every brand — black on white, white-on-black square full-width
+buttons side by side, Helvetica — which satisfies Kia's and Honda's palettes,
+YAG's font and VW's square CTAs; VW changes only the surfaces to #eff1f5.
+Every link goes to the account's website root, tagged; the update notes that
+the buttons should be pointed at the offer's page. The utm_campaign is the
+project name plus the month the draft is made.
 
 ## 6. Data model — built
 
@@ -333,11 +377,11 @@ verbatim disclaimer aren't checked, because code assembles them from trusted dat
 
 ### 7.5 Data the rules need that doesn't exist yet
 
-- **`siteDisplay`** — the camelCase site, e.g. `YoungCDJRRiverdale.com`. It can't
-  be derived: Riverdale's `Account.website` is
+- **`Account.siteDisplay`** — the camelCase site, e.g. `YoungCDJRRiverdale.com`.
+  It can't be derived: Riverdale's `Account.website` is
   `youngchryslerdodgejeepramriverdale.com`, a different domain from the display
-  form. Proposed: a new `Account` field. Until set, every draft for that account
-  is blocked by `footer.site-url`.
+  form. The field exists (2026-10-14) and is empty everywhere, with no UI to set
+  it yet. Until set, every draft for that account is blocked by `footer.site-url`.
 - **Per-account abbreviations** for `copy.dealer-name-in-full`, beyond the global
   CDJR / YAG / YPS / YUC / T&T list.
 
@@ -431,11 +475,14 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Intake: every 5 minutes, approved creative → request; holds + notices once; bounded quiet retries (`intake.ts`) | **built**; DB-tested |
 | Publish: template in Loomi, proof PNG + HTML to Draft Files, Loomi Template link, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested |
 | Client from the subitem (Oz Clients connect → Loomi Account Key) | waiting on monday |
-| Extraction (vision) | next |
-| Co-op documents as drafting context, notes on the draft (§8) | next, with the drafter |
-| Corpus import from Loomi prod | next |
-| Drafting + assembly (the step between fetch and publish) | next |
-| Account → `siteDisplay`, abbreviations | next (needs the field) |
+| Extraction (vision) + classification (`extract.ts`, `extraction.ts`) | **built**; fixture-tested; not yet run on a real creative |
+| Conflict check (`conflicts.ts`) | **built**; fixture-tested |
+| Copywriter (`copywriter.ts`), assembler (`assemble.ts`), stages 3–8 (`draft.ts`) | **built**; every brand's assembled draft clears the registry (`assemble.test.ts`); stages DB-tested with the model stubbed (`draft.db.test.ts`) |
+| Hand-run end to end (`scripts/drafting-run.ts`) | **built** |
+| Corpus builder (`scripts/drafting-build-corpus.ts`) | **built**, not run — the corpus ships empty and the copywriter runs without examples until it is |
+| Co-op documents as drafting context (§8) | next — only the make's banned phrases reach the copywriter so far |
+| `Account.siteDisplay` | field built; values and a place to edit them are not |
+| Per-account abbreviations | next |
 
 **Retries, without noise.** A request that can't start waits (`needs_account`
 or `failed`) with one notice on the subitem. The intake retries it as soon as
@@ -446,9 +493,10 @@ may bump. A failure with nothing changed is retried quietly at most three times,
 
 **Switched off until turned on.** The intake does nothing unless
 `DRAFTING_INTAKE_ENABLED=true` on the droplet — `MONDAY_API_TOKEN` alone isn't
-enough, because the help desk needs the token too. Turn it on once the drafter
-can finish what the intake starts; until then a started request stops at
-`awaiting_extraction`. No route or page uses any of this.
+enough, because the help desk needs the token too. The drafter now finishes
+what the intake starts, so turning it on drafts every approved email deliverable
+on the board: do it after a hand-run end to end has been reviewed, and after
+the accounts it will see have `siteDisplay` set. No route or page uses any of this.
 
 ---
 
@@ -464,5 +512,17 @@ can finish what the intake starts; until then a started request stops at
   ```
 
   Reads (`--list`, `--subitem <id>`, `--download`) need no nomination.
+- **Drafting one deliverable by hand**, without the worker or the intake flag —
+  the same writes as the pipeline, so the subitem must be nominated:
+
+  ```
+  DRAFTING_MONDAY_WRITE_SUBITEMS=<id> npx tsx --env-file=.env.local \
+    scripts/drafting-run.ts --subitem <id> [--account <key>] [--reread]
+  ```
+
+  Needs `MONDAY_API_TOKEN`, `ANTHROPIC_API_KEY` and the `S3_*` settings: the
+  creative is the email's hero image and needs a URL that outlives monday's.
+- **Building the corpus:** `scripts/drafting-build-corpus.ts`, read-only against
+  the database it is pointed at, dry run unless `--write`; one model call per final.
 - monday's asset `public_url` is a signed S3 link that expires in about an hour.
   It is fetched immediately and never stored.

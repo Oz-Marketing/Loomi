@@ -1309,13 +1309,49 @@ export function BlastPageList({
   // ESP-backed preview is gone. Loomi-native campaigns can wire a new
   // preview endpoint in a follow-up — for now the action surfaces a
   // friendly "unavailable" state in the preview modal.
+  // Which preview request is current, so a slow response for one blast can't
+  // land in the modal after the user has opened another.
+  const previewRequestRef = useRef(0);
+
   async function handlePreview(campaign: Campaign) {
     setOpenMenuId(null);
     setPreviewCampaign(campaign);
     setPreviewHtml('');
     setPreviewUrl('');
-    setPreviewLoading(false);
-    setPreviewError('Preview is not available yet for this blast.');
+    setPreviewError(null);
+    // This used to stop here with a hard-coded "Preview is not available yet"
+    // for every blast — the modal was built, the loading never was.
+    if (!isLoomiEmail(campaign)) {
+      setPreviewLoading(false);
+      setPreviewError(
+        getCampaignChannel(campaign) === 'sms'
+          ? 'Text blasts have no email to preview.'
+          : 'Preview isn’t available for this blast.',
+      );
+      return;
+    }
+    const request = ++previewRequestRef.current;
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(
+        `/api/blasts/loomi/preview?campaignId=${encodeURIComponent(campaign.campaignId || campaign.id)}`,
+      );
+      const data = await res.json().catch(() => ({}));
+      if (request !== previewRequestRef.current) return;
+      if (!res.ok || typeof data.html !== 'string') {
+        setPreviewError(
+          typeof data.error === 'string' ? data.error : 'Couldn’t load the preview. Try again.',
+        );
+        return;
+      }
+      setPreviewHtml(data.html);
+    } catch {
+      if (request === previewRequestRef.current) {
+        setPreviewError('Couldn’t load the preview. Try again.');
+      }
+    } finally {
+      if (request === previewRequestRef.current) setPreviewLoading(false);
+    }
   }
 
   async function handleDownload(campaign: Campaign) {

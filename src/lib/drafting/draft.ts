@@ -10,6 +10,7 @@ import type { DraftAccount } from './compliance/types';
 import { findConflicts, type DraftConflict } from './conflicts';
 import { COPY_RULE_IDS, repairCopy, writeCopy, type CopyResult } from './copywriter';
 import { readCreative } from './extract';
+import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { DRAFTABLE_TYPES, factSources, type RequestType } from './extraction';
 import type { ProjectRequest } from './monday-board';
 import { blockedUpdate, cantDraftUpdate, conflictUpdate } from './notes';
@@ -170,6 +171,8 @@ export async function runDraftStages(requestId: string): Promise<void> {
     const coop = row.coop === 'yes' || row.coop === 'compliance_check';
     const make = coopMake(reading, draftAccount.oems);
     const coopPack = make ? ((await loadAcceptedCoopPack(make))?.pack ?? null) : null;
+    // §8: the make's guideline pages as input to the copy — co-op requests only, never a gate.
+    const guidelineDocs: GuidelineDoc[] = coop && make ? await loadGuidelineDocs(make) : [];
     const facts = factSources(reading, request);
     const now = new Date();
     const utmCampaign = campaignSlug(request?.name || row.projectName || row.name, now.getMonth() + 1, now.getFullYear());
@@ -186,6 +189,7 @@ export async function runDraftStages(requestId: string): Promise<void> {
         runDates: request?.runDates ?? null,
       },
       bannedPhrases: coop ? bannedPhrases(coopPack) : [],
+      guidelines: pickPages(guidelineDocs),
     };
     const common = { reading, account: draftAccount, logoUrl, heroUrl: hero.url, website, utmCampaign, facts, coop, coopPack };
 
@@ -201,6 +205,10 @@ export async function runDraftStages(requestId: string): Promise<void> {
     const notes = [
       ...check.notes,
       ...built.copy.notes,
+      ...coopNotes(written.coopUnmet, guidelineDocs),
+      ...(coop && make && guidelineDocs.length === 0
+        ? [`This is a co-op request, but Loomi has no ${make} guideline document to draft against.`]
+        : []),
       ...(reading.unreadable ?? []).map((u) => `Couldn't read part of the creative: ${u}.`),
       ...(reading.disclaimer?.confidence === 'low'
         ? ['The disclaimer was hard to read. Check it against the creative word for word.']

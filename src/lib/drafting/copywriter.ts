@@ -2,6 +2,7 @@ import type { DraftCopy } from './assemble';
 import { DEALER_ABBREVIATIONS } from './compliance/rules/brand';
 import type { FactSource, Violation } from './compliance/types';
 import { pickExamples, renderExample, type DraftExample } from './corpus';
+import { renderGuidelinePages, type CoopUnmet, type GuidelinePage } from './guidelines';
 import { structuredCall } from './model';
 import type { CreativeReading } from './reading';
 
@@ -24,6 +25,7 @@ interface CopyReply {
   subjects: { initial: string[]; urgent: string[] };
   previews: { initial: string[]; urgent: string[] };
   notes: string[];
+  coopUnmet: CoopUnmet[];
 }
 
 const strings = { type: 'array', items: { type: 'string' } };
@@ -37,7 +39,7 @@ const options = {
 export const COPY_REPLY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['headline', 'body', 'ctas', 'heroAlt', 'subjects', 'previews', 'notes'],
+  required: ['headline', 'body', 'ctas', 'heroAlt', 'subjects', 'previews', 'notes', 'coopUnmet'],
   properties: {
     headline: { type: 'string' },
     body: strings,
@@ -46,6 +48,20 @@ export const COPY_REPLY_SCHEMA = {
     subjects: options,
     previews: options,
     notes: strings,
+    coopUnmet: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['requirement', 'document', 'page', 'quote'],
+        properties: {
+          requirement: { type: 'string' },
+          document: { type: 'string' },
+          page: { type: 'integer' },
+          quote: { type: 'string' },
+        },
+      },
+    },
   },
 } as const;
 
@@ -66,6 +82,8 @@ export interface CopyBrief {
   request: { project: string | null; details: string; audience: string; runDates: string | null };
   /** The make's co-op banned phrases, when it has a pack. */
   bannedPhrases: string[];
+  /** Pages of the make's co-op guidelines, for a co-op request. Empty otherwise. */
+  guidelines: GuidelinePage[];
 }
 
 export function copySystem(oems: string[]): string {
@@ -91,7 +109,8 @@ WHAT TO RETURN
 - heroAlt: what the image says, briefly, for someone who can't see it.
 - subjects: three "initial" subject lines for the first send and two "urgent" ones for the last-chance follow-up, all different, under 60 characters.
 - previews: two "initial" and two "urgent" preview lines, all different, under 100 characters, each adding to its subject rather than repeating it.
-- notes: anything a person should know — a fact you needed and didn't have, or a co-op wording you avoided. Empty when there is nothing.`;
+- notes: anything a person should know — a fact you needed and didn't have, or a co-op wording you avoided. Empty when there is nothing.
+- coopUnmet: only when manufacturer guideline pages are given. Each requirement on those pages that applies to this email and that your copy can't satisfy — because it needs a fact you don't have, or something only the graphic or its disclaimer could carry (you can't change either). Give the requirement in one plain sentence, the document title and page exactly as labeled, and a quote of at least six words copied exactly from that page. Satisfy what you can in the copy instead of listing it. Empty when there is nothing, or when no pages are given.`;
 }
 
 function factsBlock(brief: CopyBrief): string {
@@ -111,6 +130,9 @@ export function copyPrompt(brief: CopyBrief, examples: DraftExample[]): string {
     brief.bannedPhrases.length
       ? `This is co-op advertising. The manufacturer's guidelines ban these phrases — don't use them:\n${brief.bannedPhrases.join('; ')}`
       : '',
+    brief.guidelines.length
+      ? `This is co-op advertising. The manufacturer's guidelines for it, the pages that bear on an offer email — follow them in your copy where you can:\n\n${renderGuidelinePages(brief.guidelines)}`
+      : '',
     examples.length
       ? `Emails like this one that were approved and sent, for voice and structure only. Their figures belong to other offers; never reuse them:\n\n${examples.map(renderExample).join('\n\n')}`
       : '',
@@ -119,7 +141,7 @@ export function copyPrompt(brief: CopyBrief, examples: DraftExample[]): string {
   return parts.filter(Boolean).join('\n\n');
 }
 
-function toCopy(reply: CopyReply): DraftCopy {
+function toCopy(reply: CopyReply): DraftCopy & { coopUnmet: CoopUnmet[] } {
   const clean = (xs: string[] | undefined) => (xs ?? []).map((s) => s.trim()).filter(Boolean);
   return {
     headline: reply.headline.trim(),
@@ -135,11 +157,14 @@ function toCopy(reply: CopyReply): DraftCopy {
       ...clean(reply.previews?.urgent).map((text) => ({ text, kind: 'urgent' as const })),
     ],
     notes: clean(reply.notes),
+    coopUnmet: (reply.coopUnmet ?? []).filter((u) => u.requirement?.trim()),
   };
 }
 
 export interface CopyResult {
   copy: DraftCopy;
+  /** Co-op requirements the copy couldn't meet, uncited until `coopNotes` checks them. */
+  coopUnmet: CoopUnmet[];
   exampleIds: string[];
   system: string;
   prompt: string;
@@ -156,7 +181,8 @@ export async function writeCopy(brief: CopyBrief): Promise<CopyResult> {
     effort: 'high',
     task: 'writing the copy',
   });
-  return { copy: toCopy(reply), exampleIds: examples.map((e) => e.id), system, prompt };
+  const { coopUnmet, ...copy } = toCopy(reply);
+  return { copy, coopUnmet, exampleIds: examples.map((e) => e.id), system, prompt };
 }
 
 /** One rewrite, told exactly which lines failed and why. */
@@ -179,5 +205,6 @@ export async function repairCopy(first: CopyResult, violations: Violation[]): Pr
     effort: 'high',
     task: 'rewriting the copy',
   });
-  return { ...first, copy: toCopy(reply), prompt };
+  const { coopUnmet, ...copy } = toCopy(reply);
+  return { ...first, copy, coopUnmet, prompt };
 }

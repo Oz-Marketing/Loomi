@@ -64,7 +64,7 @@ function copy(subject = 'Save $3,500 on the 2026 Equinox ACTIV'): CopyResult {
     ],
     notes: [],
   };
-  return { copy: c, exampleIds: [], system: 's', prompt: 'p' };
+  return { copy: c, coopUnmet: [], exampleIds: [], system: 's', prompt: 'p' };
 }
 
 let board: StubBoard;

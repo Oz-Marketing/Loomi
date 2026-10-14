@@ -416,6 +416,22 @@ drafts without co-op context.
 4. Those items are saved as notes on the draft version, beside the warnings from
    §7.2. Nothing blocks.
 
+**Built 2026-10-14** (`src/lib/drafting/guidelines.ts`):
+
+- The make → document map is `GUIDELINE_SOURCES`; a make not in it matches a
+  document filed under its own name, case-insensitively. GMC also gets the GMC
+  Brand Style Guide; the Hyundai claim-status reference is never sent.
+- Pages are chosen by keyword weight within ~40,000 characters (12 pages at
+  most), and pages about email as a channel always go first. Email addresses
+  are ignored when scoring, because a running footer ("Email: saf@ansira") put
+  an email hit on every page of the Subaru guide. Checked against the local
+  documents: Subaru p. 19 and p. 44 and GM p. 21 are all picked.
+- The copywriter returns what it couldn't satisfy with a document, page and
+  quote. The quote is checked with the ad engine's verifier and cited at the
+  page it was actually found on; a quote that can't be found keeps its note,
+  marked as unverified.
+- A co-op request for a make with no document gets a note saying so.
+
 **Not in scope:** eligibility rulings, a signed-off requirements checklist,
 growing per-brand rules from accepted items, claim evidence capture, and any
 enforced route back to design.
@@ -479,7 +495,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Copywriter (`copywriter.ts`), assembler (`assemble.ts`), stages 3–8 (`draft.ts`) | **built**; every brand's assembled draft clears the registry (`assemble.test.ts`); stages DB-tested with the model stubbed (`draft.db.test.ts`) |
 | Hand-run end to end (`scripts/drafting-run.ts`) | **built** |
 | Corpus builder (`scripts/drafting-build-corpus.ts`) | **built**, not run — the corpus ships empty and the copywriter runs without examples until it is |
-| Co-op documents as drafting context (§8) | next — only the make's banned phrases reach the copywriter so far |
+| Co-op documents as drafting context (§8) | **built**; page picking checked on the local documents, not yet on a live draft |
 | `Account.siteDisplay` | field built; values and a place to edit them are not |
 | Per-account abbreviations | next |
 

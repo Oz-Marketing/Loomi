@@ -594,6 +594,8 @@ function CampaignTableRow({
   const StatusIcon = STATUS_ICON[normalizedStatus];
   const isLoomi = (item.provider || '').toLowerCase().startsWith('loomi-');
   const canPreview = isLoomi;
+  // Email-only and email + text blasts have an email; a text blast doesn't.
+  const hasEmail = getCampaignChannel(item) !== 'sms';
   // Archive/Delete only operate on Loomi-native rows. In-flight statuses
   // are blocked server-side too — we mirror that here so the button
   // doesn't dangle uselessly.
@@ -820,15 +822,18 @@ function CampaignTableRow({
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => onPreview(item)}
-                  disabled={!canPreview}
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Preview Email
-                  <EyeIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                </button>
+                {/* A text blast has no email to show, so it gets no preview. */}
+                {hasEmail && (
+                  <button
+                    type="button"
+                    onClick={() => onPreview(item)}
+                    disabled={!canPreview}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Preview Email
+                    <EyeIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1321,13 +1326,11 @@ export function BlastPageList({
     setPreviewError(null);
     // This used to stop here with a hard-coded "Preview is not available yet"
     // for every blast — the modal was built, the loading never was.
+    // The menu only offers Preview on blasts with an email; this guards the
+    // call itself.
     if (!isLoomiEmail(campaign)) {
       setPreviewLoading(false);
-      setPreviewError(
-        getCampaignChannel(campaign) === 'sms'
-          ? 'Text blasts have no email to preview.'
-          : 'Preview isn’t available for this blast.',
-      );
+      setPreviewError('Preview isn’t available for this blast.');
       return;
     }
     const request = ++previewRequestRef.current;

@@ -11,8 +11,12 @@ import { nameTokens } from './accounts';
  *
  *   - the TYPE: "Email" in the name makes it an email graphic
  *     ("08) _ Email _ Text.png" is both);
- *   - the STORE, when the request is for more than one: the store's name, as
- *     the request's Client field writes it, in the file name or its folder.
+ *   - the STORE, when the request is for more than one: whatever tells it
+ *     from the request's other stores ("YPS Ogden" is enough beside Euro), in
+ *     the file name or its folder.
+ *
+ * Design's usual name: "09 SEP - YPS Ogden - Winter Prep - Emailpng_Email - Hero.png"
+ * — date, store, campaign, type, role.
  *
  * Anything Loomi can't place it reports rather than guesses: a wrong guess
  * drafts one store's offer for another.
@@ -53,20 +57,36 @@ function contains(haystack: Set<string>, needle: Set<string>): boolean {
 }
 
 /**
- * The client whose name a piece of text carries, among `clients`, or null.
- * Every identifying word of the name must be there ("Young" and "of" don't
- * identify a store). When two match, the one with more words wins — "Young
- * Powersports Euro" over "Young Powersports" — and a tie is no answer.
+ * The words that tell `client` apart from the request's other clients:
+ * "Ogden" for Young Powersports Ogden beside Young Powersports Euro. A name
+ * that is wholly inside another ("Young Powersports" beside "Young
+ * Powersports Euro") has none of its own, so it needs all of its words.
+ */
+function distinguishing(client: string, clients: string[]): Set<string> {
+  const own = nameTokens(client);
+  const others = new Set(clients.filter((c) => c !== client).flatMap((c) => [...nameTokens(c)]));
+  const mine = new Set([...own].filter((t) => !others.has(t)));
+  return mine.size ? mine : own;
+}
+
+/**
+ * The client a piece of text names, among `clients`, or null.
+ *
+ * Matched on the words that tell the stores apart, so design's shorthand
+ * works: "09 SEP - YPS Ogden - Winter Prep - Email - Hero.png" names Young
+ * Powersports Ogden on a request that's also for Euro, though it never says
+ * "Powersports". When two match, the one whose whole name is there and longer
+ * wins; a tie is no answer.
  */
 export function clientNamedIn(text: string, clients: string[]): string | null {
   const tokens = pathTokens(text);
+  const fullMatch = (c: string) => (contains(tokens, nameTokens(c)) ? nameTokens(c).size : 0);
   const hits = clients
-    .map((c) => ({ c, t: nameTokens(c) }))
-    .filter((x) => contains(tokens, x.t))
-    .sort((a, b) => b.t.size - a.t.size);
+    .filter((c) => contains(tokens, distinguishing(c, clients)))
+    .sort((a, b) => fullMatch(b) - fullMatch(a));
   if (hits.length === 0) return null;
-  if (hits.length > 1 && hits[0].t.size === hits[1].t.size) return null;
-  return hits[0].c;
+  if (hits.length > 1 && fullMatch(hits[0]) === fullMatch(hits[1])) return null;
+  return hits[0];
 }
 
 /**
@@ -127,4 +147,9 @@ export function pickEmailFiles<T extends ApprovedFile>(input: {
     };
   }
   return { files: mine, problem: null };
+}
+
+/** The email's main image: the one design named "Hero", else the first. */
+export function pickHero<T extends { name: string }>(images: T[]): T | undefined {
+  return images.find((a) => /(^|[^a-z0-9])hero([^a-z0-9]|$)/i.test(a.name)) ?? images[0];
 }

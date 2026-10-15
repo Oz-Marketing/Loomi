@@ -9,6 +9,7 @@ import type { DraftAsset } from './assets';
 import type { DraftAccount } from './compliance/types';
 import { findConflicts, type DraftConflict } from './conflicts';
 import { COPY_RULE_IDS, repairCopy, writeCopy, type CopyResult } from './copywriter';
+import { pickHero } from './approved-files';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
@@ -157,7 +158,9 @@ export async function runDraftStages(requestId: string): Promise<void> {
       return;
     }
     const { draftAccount, logoUrl, links } = loaded;
-    const hero = assets.find((a) => a.contentType.startsWith('image/') && a.url);
+    // Design marks the email's main image "Hero"; otherwise the first image.
+    const images = assets.filter((a) => a.contentType.startsWith('image/') && a.url);
+    const hero = pickHero(images);
     if (!hero?.url) {
       const why = "The creative couldn't be stored in Spaces (S3 isn't configured here), and the email needs a lasting image URL for it.";
       await stop(row, 'failed', why, cantDraftUpdate(why));

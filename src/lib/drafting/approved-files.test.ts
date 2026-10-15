@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { clientNamedIn, isEmailFile, pickEmailFiles, subitemClient } from './approved-files';
+import { clientNamedIn, isEmailFile, pickEmailFiles, pickHero, subitemClient } from './approved-files';
 import { imagesInZip } from './assets';
 
 const f = (path: string) => ({ path });
@@ -23,6 +23,16 @@ describe('clientNamedIn / subitemClient', () => {
     expect(clientNamedIn('Email.png', YPS)).toBeNull();
     expect(subitemClient('Email Blast 1 - Young Powersports Ogden', YPS)).toBe('Young Powersports Ogden');
     expect(subitemClient('Email Blast 1', ['Young Mazda of Missoula'])).toBe('Young Mazda of Missoula');
+  });
+
+  it("reads design's real file names, shorthand and all", () => {
+    const name = '09 SEP - YPS Ogden - Winter Prep - Emailpng_Email - Hero.png';
+    expect(isEmailFile(name)).toBe(true);
+    expect(clientNamedIn(name, YPS)).toBe('Young Powersports Ogden');
+    expect(clientNamedIn('09 SEP - YPS Euro - Winter Prep - Emailpng_Email - Hero.png', YPS)).toBe('Young Powersports Euro');
+    expect(subitemClient('Email Blast 1 - YPS Ogden', YPS)).toBe('Young Powersports Ogden');
+    // A word both stores share tells them apart from nothing.
+    expect(clientNamedIn('09 SEP - YPS - Winter Prep - Email - Hero.png', YPS)).toBeNull();
   });
 
   it('prefers the longer name, and gives no answer on a tie', () => {
@@ -72,6 +82,16 @@ describe('pickEmailFiles', () => {
       files: [f('Email.png')],
     });
     expect(two.problem).toContain('2 email deliverables');
+  });
+});
+
+describe('pickHero', () => {
+  it('takes the image design named Hero, else the first', () => {
+    const banner = { name: '09 SEP - YPS Ogden - Winter Prep - Email - Banner.png' };
+    const hero = { name: '09 SEP - YPS Ogden - Winter Prep - Emailpng_Email - Hero.png' };
+    expect(pickHero([banner, hero])).toBe(hero);
+    expect(pickHero([banner])).toBe(banner);
+    expect(pickHero([banner, { name: 'Superhero sale.png' }])).toBe(banner);
   });
 });
 

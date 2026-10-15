@@ -98,10 +98,15 @@ Design", per rep board) → the project.
   are never downloaded: only an image can be an email's hero.
 - **The type is in the file name.** "Email" as a word (also "E-mail",
   "Emails") makes it an email graphic; "08) _ Email _ Text.png" is both.
-- **So is the store**, when the request names several: the store's name, as
-  the Client field writes it, in the file name or its folder ("Young" and "of"
-  don't count). The subitem says which store it's for by its name ("Email Blast
-  1 - Young Powersports Euro").
+- **So is the store**, when the request names several: whatever tells it from
+  the request's other stores, in the file name or its folder. Design's usual
+  name — "09 SEP - YPS Ogden - Winter Prep - Emailpng_Email - Hero.png" — names
+  Young Powersports Ogden beside Euro by "Ogden" alone, so their shorthand
+  works with no abbreviation list. A word every store shares tells nothing. The
+  subitem says which store it's for the same way, by its name ("Email Blast 1 -
+  YPS Ogden").
+- **"Hero"** in the file name marks the email's main image; without one, the
+  first email graphic is used. Every email graphic is read for the offer.
 - **Reported, never guessed:** no email graphic (the notice lists what design
   did upload), a subitem that doesn't name its store on a multi-store request,
   and two email deliverables for one store — the graphics can't say which is

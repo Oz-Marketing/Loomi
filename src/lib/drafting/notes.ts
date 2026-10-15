@@ -24,7 +24,8 @@ const CHECK = ' <strong>— low confidence: check this against the creative</str
 
 /** A draft is in Draft Files and the template is linked. */
 export function draftReadyUpdate(input: {
-  templateUrl: string;
+  /** The draft blast in Loomi. */
+  draftUrl: string;
   versionNumber: number;
   subjects: CopyOption[];
   previews: CopyOption[];
@@ -36,7 +37,7 @@ export function draftReadyUpdate(input: {
 }): string {
   const parts: string[] = [
     `<p><strong>Loomi drafted this email</strong>${input.versionNumber > 1 ? ` (version ${input.versionNumber})` : ''}. ` +
-      `<a href="${escapeHtml(input.templateUrl)}">Open the template in Loomi</a>. ` +
+      `<a href="${escapeHtml(input.draftUrl)}">Open the draft blast in Loomi</a> — nothing sends until someone sets its audience and schedules it. ` +
       `The PNG and HTML are in Draft Files, ready for a proof.</p>`,
   ];
 

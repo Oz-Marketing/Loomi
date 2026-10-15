@@ -17,8 +17,10 @@ service specials, events, notices; nothing is excluded (Connor, 2026-10-15; slic
 1 had been monthly model / APR offers only). Started
 when design uploads the request's final graphics (§3.1; until 2026-10-15 it was
 a person setting Assets Approved on the subitem). **There is no
-drafting screen in Loomi** (decided 2026-10-09): the output is a Loomi email
-template, and the subitem carries a link to it.
+drafting screen in Loomi** (decided 2026-10-09): the output is a **draft email
+blast** for the account, built from the template library, and the subitem
+carries a link to it (decided 2026-10-15 — one library of reusable templates,
+blasts filled from them, never a new template per send).
 
 Chosen over Subaru service specials (the first pick) because the corpus exists
 today: ~30 monthly-offer finals already sent from Loomi plus ~35 urgent-subject
@@ -70,7 +72,7 @@ proof moves on its own. Board contract in code: `src/lib/drafting/monday-board.t
 | Design Assets | `file_mm7z1a42` | design team | no longer read (replaced by Approved Design, §3.1) |
 | Assets Approved | `color_mm7zba2g` | design team | no longer read |
 | Draft Files | `file_mm7z7hyz` | Loomi | **writes** — the rendered draft, PNG + HTML |
-| Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft's template in Loomi |
+| Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft blast in Loomi (its design step) |
 | Proof Status | `color_mm79xe71` | PageProof sync | reads — "Approved" is final |
 | Proof URL | `link_mm79djf1` | PageProof sync | reads |
 | Proof Approval Date | `date_mm7z9v44` | PageProof sync | reads |
@@ -161,7 +163,7 @@ Compliance Check count as co-op (§7.2).
 | 5 | **Confirm** — no gate. Low-confidence readings are flagged in the subitem update, and the proofer compares them with the image (decided 2026-10-09) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
 | 7 | **Validate** — the rule registry (§7). One rewrite when only the copy broke a rule | Any error left after the rewrite: the version is kept, nothing goes to monday |
-| 8 | **Publish** (`publish.ts`) — the draft becomes the account's Loomi template (`draft-…` slug, category `drafted`; later drafts update it and `TemplateVersion` keeps the earlier ones); the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
+| 8 | **Publish** (`publish.ts`) — the draft becomes a draft `EmailBlast` for the account, its design a hidden per-blast template (type `campaign`, out of the library) as every blast's is; a re-draft updates the same blast while it's still a draft and starts a fresh one once someone has scheduled or sent it; the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
 | 9 | **Watch** Proof Status | "Approved" freezes the version as final |
 
 Steps 2–8 run as a pg-boss job. Vision plus drafting outlasts nginx's 60-second
@@ -186,9 +188,18 @@ wrong.
 
 ### 4.1 Drafting templates — built 2026-10-15
 
-A person can give drafted emails a designed layout instead of the built-in
-one: an ordinary drag-and-drop Loomi template, marked for one or more request
-types from the template library (card menu → **Use for drafted emails**). The
+Drafted emails are filled from a **library of reusable templates**, one or more
+per request type — never a new template per send. **Nobody has to build them:**
+the shared library has a starter for every request type
+(`drafting-starter-<type>`, "Drafted email — Sales event", …), seeded by the
+drafter before each draft and by `scripts/ensure-drafting-templates.ts`.
+Create-only: a restyled starter is never overwritten; a deleted one comes back,
+so to stop using one, unmark it. Design restyles a starter once and every draft
+of that type after looks that way; a group or store can mark its own template
+to override it.
+
+Any drag-and-drop template can be marked for one or more request types from the
+template library (card menu → **Use for drafted emails**). The
 marking is `Template.draftingFor` (JSON string[]); the card shows a
 **Drafting** badge, amber while the template can't be used yet.
 
@@ -208,7 +219,7 @@ Everything else — banners, colors, fonts, spacing — is the template's own.
 
 **Which template:** the account's own, then its group's (nearest first), then
 the shared library; at one level the most recently edited
-(`drafting-templates.ts`). Drafts themselves (category `drafted`) are never
+(`drafting-templates.ts`). Blast designs (type `campaign`) and old per-send drafts (category `drafted`) are never
 candidates.
 
 **Fallback to the built-in layout**, with a note on the draft saying why:
@@ -345,15 +356,19 @@ homepage, and the note names the custom value to add.
   - the monday asset ids written to Draft Files;
   - `finalAt`, set when Proof Status reads Approved.
 
-Each draft also becomes an account-owned `Template` (the editor opens it at
-`/templates/editor?design=<slug>`); `TemplateVersion` keeps its edit history,
-and the `DraftVersion` keeps what the template's history can't — the rule
-evaluation, the notes and the provenance of the copy.
+Each draft lands in a **draft `EmailBlast`** (`DraftRequest.blastId`) for the
+account, with no audience and no schedule, so nothing sends until a person gives
+it both. Its design is a hidden per-blast template (`DraftRequest.templateId`,
+type `campaign`) — never a new entry in the template library. The blast's
+metadata records the design (`templateSlug`) and the draft (`draftRequestId`,
+`draftVersion`); a re-draft merges into it rather than replacing other keys.
+The `DraftVersion` keeps what the blast can't — the rule evaluation, the notes
+and the provenance of the copy.
 
-**On Approved, freeze the version only. No `EmailBlast` is created.** This was
-decided while GoHighLevel still carried most sends, to avoid a trail of drafts
-that never send. With Loomi now the only sender that reason is gone, so it is
-open for Connor to revisit.
+**Changed 2026-10-15.** Until then each draft became an account-owned template
+(category `drafted`), one per send, and no blast was made — decided while
+GoHighLevel carried most sends. Connor reversed it: one library of reusable
+templates, blasts filled from them. On Approved, the version is still frozen.
 
 ---
 
@@ -597,7 +612,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | monday Client → account resolver (`accounts.ts`) | **built**; calibrated on the real names |
 | Proof Status watcher → freeze (`loomi.drafting.proof-status`, every 15 min) | **built**; read-only against monday |
 | Intake: every 5 minutes, approved creative → request; holds + notices once; bounded quiet retries (`intake.ts`) | **built**; DB-tested |
-| Publish: template in Loomi, proof PNG + HTML to Draft Files, Loomi Template link, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested |
+| Publish: draft blast in Loomi (since 2026-10-15; was a template per send), proof PNG + HTML to Draft Files, Loomi Template link to the blast, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested; live on the TEST Chev request |
 | Client from the subitem (Oz Clients connect → Loomi Account Key) | waiting on monday |
 | Extraction (vision) + classification (`extract.ts`, `extraction.ts`) | **built**; fixture-tested; not yet run on a real creative |
 | Conflict check (`conflicts.ts`) | **built**; fixture-tested |

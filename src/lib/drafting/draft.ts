@@ -10,7 +10,7 @@ import type { DraftAccount } from './compliance/types';
 import { findConflicts, type DraftConflict } from './conflicts';
 import { COPY_RULE_IDS, repairCopy, writeCopy, type CopyResult } from './copywriter';
 import { pickHero } from './approved-files';
-import { findDraftingTemplate } from './drafting-templates';
+import { ensureStarterTemplates, findDraftingTemplate } from './drafting-templates';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
@@ -194,6 +194,8 @@ export async function runDraftStages(requestId: string): Promise<void> {
     let written: CopyResult = await writeCopy(brief);
     let resolved = await resolveCtas(written.copy.ctas, links, website, checkLink);
     // §4.1: a marked template's layout when there is one; the built-in otherwise.
+    // The library always has a starter per request type, so nobody has to build one.
+    await ensureStarterTemplates();
     const marked = await findDraftingTemplate(row.accountKey, reading.requestType ?? 'other');
     const build = (shell: typeof marked) =>
       buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url), shell: shell?.template ?? null });
@@ -217,7 +219,8 @@ export async function runDraftStages(requestId: string): Promise<void> {
         layoutNotes.push(`The "${marked.title}" drafting template breaks a rule for ${draftAccount.dealer} (${broken.join(' ')}), so the built-in layout was used.`);
         built = fallback;
       }
-    } else if (marked && built.usedShell) {
+    } else if (marked && built.usedShell && !marked.slug.startsWith('drafting-starter-')) {
+      // Only worth saying for a template someone chose; the starters are the default.
       layoutNotes.push(`Built on the "${marked.title}" drafting template.`);
     }
 

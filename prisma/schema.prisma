@@ -5804,9 +5804,12 @@ model DraftRequest {
   /// Null while it can't be — the request then waits at `needs_account`.
   accountKey String?
 
-  /// The Loomi email template the drafts are written into, one per deliverable.
-  /// Its own TemplateVersion history keeps every earlier draft.
+  /// The draft's design: a hidden per-blast template (type `campaign`, kept out
+  /// of the library), built from a drafting template in the library.
   templateId String?
+  /// The draft EmailBlast the email lands in — nothing sends until a person
+  /// schedules it. Re-drafts update it while it's still a draft.
+  blastId    String?
 
   /// Where the request is in the pipeline; see src/lib/drafting/status.ts.
   status String @default("queued")

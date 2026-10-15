@@ -58,6 +58,10 @@ function freshBoard(): StubBoard {
 const request = (subitemId: string) => prisma.draftRequest.findUnique({ where: { mondaySubitemId: subitemId } });
 
 async function cleanup() {
+  const blasts = await prisma.draftRequest.findMany({ where: { mondaySubitemId: { in: [A, B, C, D, E] } }, select: { blastId: true } });
+  const blastIds = blasts.map((b) => b.blastId).filter((x): x is string => !!x);
+  await prisma.emailBlast.deleteMany({ where: { OR: [{ id: { in: blastIds } }, { accountKeys: { contains: ACCOUNT } }] } });
+  await prisma.template.deleteMany({ where: { accountKey: ACCOUNT, type: 'campaign' } });
   const rows = await prisma.draftRequest.findMany({ where: { mondaySubitemId: { in: [A, B, C, D, E] } }, select: { templateId: true } });
   await prisma.draftRequest.deleteMany({ where: { mondaySubitemId: { in: [A, B, C, D, E] } } });
   const templateIds = rows.map((r) => r.templateId).filter((t): t is string => Boolean(t));
@@ -194,35 +198,49 @@ describe.skipIf(!RUN)('drafting pipeline (DB)', () => {
     });
 
     const result = await publishDraftVersion(version.id);
-    expect(result).toMatchObject({ ok: true, templateSlug: expect.stringMatching(/^draft-email-blast-1-vitest-chevrolet-/) });
-    const slug = result.ok ? result.templateSlug : '';
+    expect(result).toMatchObject({ ok: true });
+    const { blastId, templateSlug: slug } = result.ok ? result : { blastId: '', templateSlug: '' };
 
+    // A draft blast for the account — no audience, no schedule — whose design is
+    // a hidden per-blast template, not a new entry in the template library.
     const published = (await request(A))!;
-    expect(published.status).toBe('in_proofing');
-    const saved = await prisma.template.findUniqueOrThrow({ where: { id: published.templateId! } });
-    expect(saved).toMatchObject({ slug, accountKey: ACCOUNT, type: 'design', preheader: '$3,500 off MSRP.' });
+    expect(published).toMatchObject({ status: 'in_proofing', blastId });
+    const blast = await prisma.emailBlast.findUniqueOrThrow({ where: { id: blastId } });
+    expect(blast).toMatchObject({ status: 'draft', subject: 'Save $3,500', previewText: '$3,500 off MSRP.', accountKeys: JSON.stringify([ACCOUNT]) });
+    expect(JSON.parse(blast.metadata ?? '{}')).toMatchObject({ templateSlug: slug, draftRequestId: published.id, draftVersion: 1 });
+    const design = await prisma.template.findUniqueOrThrow({ where: { slug } });
+    expect(design).toMatchObject({ id: published.templateId, accountKey: ACCOUNT, type: 'campaign' });
 
     expect(stub.writes.uploads.map((u) => [u.columnId, u.name])).toEqual([
       [DRAFT_OUTPUT_COLUMN, 'Email Blast 1 - Vitest Chevrolet - v1.png'],
       [DRAFT_OUTPUT_COLUMN, 'Email Blast 1 - Vitest Chevrolet - v1.html'],
     ]);
     expect(stub.writes.links).toEqual([
-      { itemId: A, columnId: TEMPLATE_LINK_COLUMN, value: expect.stringContaining(`/templates/editor?design=${slug}`) },
+      { itemId: A, columnId: TEMPLATE_LINK_COLUMN, value: expect.stringContaining(`/messaging/blasts/${blastId}/template`) },
     ]);
     const update = stub.writes.updates.find((u) => u.itemId === A)!.body;
-    expect(update).toContain('Open the template in Loomi');
+    expect(update).toContain('Open the draft blast in Loomi');
     expect(update).toContain('Offer: $3,500 off MSRP <strong>— low confidence');
     expect(update).toContain('MSRP $36,995. Take delivery by 10/31/2026.');
     expect(update).toContain('<li>Urgent: Last chance: $3,500</li>');
     expect(update).toContain('<li>A gray.</li>');
     expect((await prisma.draftVersion.findUniqueOrThrow({ where: { id: version.id } })).uploadedAt).not.toBeNull();
 
-    // A second version updates the same template and keeps the first in its history.
+    // A second version updates the same draft blast and design, keeping metadata others wrote.
+    await prisma.emailBlast.update({ where: { id: blastId }, data: { metadata: JSON.stringify({ ...JSON.parse(blast.metadata ?? '{}'), sendAt: 'kept' }) } });
     const v2 = await prisma.draftVersion.create({
       data: { ...version, id: undefined, number: 2, template: JSON.stringify({ ...template, title: 'v2' }), uploadedAt: null, mondayAssetIds: null },
     });
-    expect(await publishDraftVersion(v2.id)).toMatchObject({ ok: true, templateSlug: slug });
-    expect(await prisma.templateVersion.count({ where: { templateId: published.templateId! } })).toBe(1);
+    expect(await publishDraftVersion(v2.id)).toMatchObject({ ok: true, blastId, templateSlug: slug });
+    expect(JSON.parse((await prisma.emailBlast.findUniqueOrThrow({ where: { id: blastId } })).metadata ?? '{}')).toMatchObject({ sendAt: 'kept', draftVersion: 2 });
+
+    // Once someone schedules it, a re-draft starts a fresh draft blast instead.
+    await prisma.emailBlast.update({ where: { id: blastId }, data: { status: 'scheduled' } });
+    const v3 = await prisma.draftVersion.create({
+      data: { ...version, id: undefined, number: 3, uploadedAt: null, mondayAssetIds: null },
+    });
+    const third = await publishDraftVersion(v3.id);
+    expect(third.ok && third.blastId).not.toBe(blastId);
   });
 
   it('renders the proof as a recipient gets it: send-time footer in, one unsubscribe link, no raw tokens', async () => {

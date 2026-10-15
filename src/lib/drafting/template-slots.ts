@@ -89,3 +89,49 @@ export function templateSlotProblems(template: EmailTemplate | null): string[] {
   if (slots.has('cta2') && !slots.has('cta1')) problems.push(`${DRAFT_SLOTS.cta2.token} without ${DRAFT_SLOTS.cta1.token}.`);
   return problems;
 }
+
+// ── Starter templates ────────────────────────────────────────────────────────
+
+/** The shared starter for a request type: `drafting-starter-sales-event`. */
+export function starterSlug(type: RequestType): string {
+  return `drafting-starter-${type.replace(/_/g, '-')}`;
+}
+
+/**
+ * A starter drafting template for one request type: the built-in layout —
+ * black on white, Helvetica, square full-width buttons side by side — with
+ * every slot in place, so the library has one per type without anyone
+ * building it, and design can restyle it once for every draft after.
+ * The same look the built-in fallback produces, so it clears every brand rule.
+ */
+export function starterTemplate(type: RequestType): EmailTemplate {
+  const button = (id: string, slot: DraftSlot): Block => ({
+    id,
+    type: 'button',
+    props: { text: DRAFT_SLOTS[slot].token, fullWidth: true, borderRadius: 0, bgColor: '#000000', textColor: '#ffffff' },
+  });
+  const cell = (id: string, child: Block): Block => ({
+    id,
+    type: 'section',
+    props: { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 },
+    children: [child],
+  });
+  return {
+    version: '2',
+    title: `Drafted email — ${REQUEST_TYPE_LABELS[type]}`,
+    settings: { bodyBg: '#ffffff', contentBg: '#ffffff', contentWidth: 600, fontFamily: 'Helvetica, Arial, sans-serif', textColor: '#000000' },
+    blocks: [
+      { id: 'hero', type: 'image', props: { src: DRAFT_SLOTS.hero.token, alt: '' } },
+      { id: 'headline', type: 'heading', props: { text: DRAFT_SLOTS.headline.token, color: '#000000' } },
+      { id: 'body', type: 'text', props: { text: DRAFT_SLOTS.body.token, color: '#000000' } },
+      {
+        id: 'ctas',
+        type: 'columns',
+        props: { columnCount: 2, stackOnMobile: true },
+        children: [cell('cta-cell-1', button('cta-1', 'cta1')), cell('cta-cell-2', button('cta-2', 'cta2'))],
+      },
+      { id: 'disclaimer', type: 'text', props: { text: DRAFT_SLOTS.disclaimer.token, color: '#000000', fontSize: 11 } },
+      { id: 'footer-slot', type: 'text', props: { text: DRAFT_SLOTS.footer.token } },
+    ],
+  };
+}

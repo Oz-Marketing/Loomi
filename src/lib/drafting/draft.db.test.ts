@@ -98,6 +98,8 @@ async function seed(details = 'Equinox ACTIV, $3,500 off MSRP. Offer ends 10/31/
 }
 
 async function cleanup() {
+  await prisma.emailBlast.deleteMany({ where: { accountKeys: { contains: ACCOUNT } } });
+  await prisma.template.deleteMany({ where: { accountKey: ACCOUNT, type: 'campaign' } });
   const rows = await prisma.draftRequest.findMany({ where: { mondaySubitemId: SUB }, select: { templateId: true } });
   await prisma.draftRequest.deleteMany({ where: { mondaySubitemId: SUB } });
   await prisma.template.deleteMany({ where: { id: { in: rows.map((r) => r.templateId).filter((t): t is string => !!t) } } });
@@ -229,6 +231,20 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
     expect(r.versions[0].uploadedAt).toBeNull();
     expect(stub.writes.uploads).toEqual([]);
     expect(stub.writes.updates[0].body).toContain('$4,000');
+  });
+
+  it('seeds a starter drafting template per request type in the shared library, once', async () => {
+    const starters = await prisma.template.findMany({ where: { slug: { startsWith: 'drafting-starter-' } } });
+    expect(starters.map((t) => t.slug).sort()).toEqual([
+      'drafting-starter-announcement',
+      'drafting-starter-conquest',
+      'drafting-starter-event-invite',
+      'drafting-starter-model-offer',
+      'drafting-starter-other',
+      'drafting-starter-sales-event',
+      'drafting-starter-service-special',
+    ]);
+    expect(starters.every((t) => t.accountKey === null && t.type === 'design')).toBe(true);
   });
 
   it("drafts into the store's marked template for the request type", async () => {

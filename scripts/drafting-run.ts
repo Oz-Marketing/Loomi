@@ -95,9 +95,9 @@ async function main(): Promise<void> {
     for (const n of json<string[]>(v.notes, [])) console.log(`  note: ${n}`);
     console.log(v.uploadedAt ? `  Uploaded to Draft Files ${v.uploadedAt.toISOString()}` : '  Not uploaded.');
   }
-  if (request.templateId) {
-    const t = await prisma.template.findUnique({ where: { id: request.templateId }, select: { slug: true } });
-    if (t) console.log(`\nTemplate: /templates/editor?design=${t.slug}`);
+  if (request.blastId) {
+    const blast = await prisma.emailBlast.findUnique({ where: { id: request.blastId }, select: { name: true, status: true, subject: true } });
+    if (blast) console.log(`\nDraft blast: "${blast.name}" (${blast.status}) — /messaging/blasts/${request.blastId}/template`);
   }
 }
 

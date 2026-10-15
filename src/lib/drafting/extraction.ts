@@ -25,8 +25,6 @@ export const REQUEST_TYPES = [
 ] as const;
 export type RequestType = (typeof REQUEST_TYPES)[number];
 
-/** Slice 1 drafts these; everything else stops with a note saying so. */
-export const DRAFTABLE_TYPES: readonly RequestType[] = ['model_offer'];
 
 export const OFFER_TYPES = ['lease', 'finance', 'cash', 'other'] as const;
 
@@ -130,7 +128,7 @@ function yearOf(raw: string | null | undefined): number | null {
  * The model's reply as a `CreativeReading`.
  *
  * Unknown keys and empty values are dropped; an unknown request type becomes
- * `other` (which stops drafting rather than guessing a template). The
+ * `other`, which drafts with no type-specific examples. The
  * disclaimer keeps its line breaks — it is legal text and goes in verbatim.
  */
 export function toReading(

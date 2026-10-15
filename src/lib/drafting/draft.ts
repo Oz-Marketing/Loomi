@@ -13,7 +13,7 @@ import { pickHero } from './approved-files';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
-import { DRAFTABLE_TYPES, factSources, type RequestType } from './extraction';
+import { factSources } from './extraction';
 import type { ProjectRequest } from './monday-board';
 import { blockedUpdate, cantDraftUpdate, conflictUpdate } from './notes';
 import { noticeOnce } from './notice';
@@ -56,16 +56,6 @@ async function stop(
   });
   await noticeOnce(row, notice);
 }
-
-const TYPE_NAMES: Record<string, string> = {
-  model_offer: 'a model / APR offer',
-  service_special: 'a service or parts special',
-  sales_event: 'a sales event',
-  event_invite: 'an event invitation',
-  announcement: 'an announcement',
-  conquest: 'a conquest email',
-  other: 'something other than an offer',
-};
 
 /** The account as the rules and the assembler need it. */
 async function loadAccount(accountKey: string) {
@@ -130,12 +120,8 @@ export async function runDraftStages(requestId: string): Promise<void> {
       reading = await readCreative(assets);
       await prisma.draftRequest.update({ where: { id: row.id }, data: { extraction: JSON.stringify(reading) } });
     }
-    const type = (reading.requestType ?? 'other') as RequestType;
-    if (!DRAFTABLE_TYPES.includes(type)) {
-      const why = `Loomi read this creative as ${TYPE_NAMES[type] ?? type}. Only model / APR offer emails are drafted so far, so this one is yours to build.`;
-      await stop(row, 'blocked', why, cantDraftUpdate(why));
-      return;
-    }
+    // Every kind of creative is drafted (Connor, 2026-10-15). The request type
+    // only steers the copy and picks the examples; it never stops a draft.
 
     // 4. Conflict check — report both values, never choose.
     const check = findConflicts(reading, request);

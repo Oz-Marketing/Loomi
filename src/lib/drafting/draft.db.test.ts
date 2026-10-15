@@ -175,13 +175,12 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
     expect(stub.writes.updates[0].body).toContain('the creative and the request disagree');
   });
 
-  it('says it only drafts model offers yet, rather than guessing a service email', async () => {
+  it('drafts every kind of creative, not just model offers', async () => {
     await seed();
-    readCreative.mockResolvedValue({ ...READING, requestType: 'service_special' });
+    readCreative.mockResolvedValue({ ...READING, requestType: 'sales_event' });
     await runDraftStages((await row()).id);
-    expect((await row()).status).toBe('blocked');
-    expect(writeCopy).not.toHaveBeenCalled();
-    expect(stub.writes.updates[0].body).toContain('a service or parts special');
+    expect((await row()).status).toBe('in_proofing');
+    expect(writeCopy).toHaveBeenCalledTimes(1);
   });
 
   it('rewrites once when only the copy broke a rule', async () => {

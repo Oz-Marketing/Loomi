@@ -12,7 +12,9 @@ subitem for a person to proof. **Nothing is sent or published automatically.**
 
 ## 1. Scope
 
-**Slice 1 — building now:** monthly model / APR offer emails, any brand, started
+**Scope:** every kind of email creative, any brand — offers, sales events,
+service specials, events, notices; nothing is excluded (Connor, 2026-10-15; slice
+1 had been monthly model / APR offers only). Started
 when design uploads the request's final graphics (§3.1; until 2026-10-15 it was
 a person setting Assets Approved on the subitem). **There is no
 drafting screen in Loomi** (decided 2026-10-09): the output is a Loomi email
@@ -153,7 +155,7 @@ Compliance Check count as co-op (§7.2).
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
 | 1 | **Trigger** — the project's Approved Design gets files (§3.1); the intake pass (`loomi.drafting.intake`, every 5 minutes) starts each of its email subitems. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
 | 2 | **Fetch** the subitem, the project and design's approved files; unzip; pick this store's email graphic (`approved-files.ts`) | No email graphic for the store, a subitem that doesn't name its store, two email deliverables for one store, or an image over 40 MB |
-| 3 | **Extract + classify** — one vision pass, saved field by field (§5) | Anything but a model / APR offer: slice 1 drafts nothing else |
+| 3 | **Extract + classify** — one vision pass, saved field by field (§5). The type steers the copy and the examples; it never stops a draft | — |
 | 4 | **Conflict check** — every term found in both the graphic and the request must agree (§5.2) | Any disagreement: both values are shown, nothing is chosen |
 | 5 | **Confirm** — no gate. Low-confidence readings are flagged in the subitem update, and the proofer compares them with the image (decided 2026-10-09) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
@@ -209,7 +211,7 @@ doesn't survive that.
   than guessed.
 
 Anything but an explicit "high" counts as low confidence. Unknown keys and
-empty values are dropped; an unknown request type becomes `other`, which stops.
+empty values are dropped; an unknown request type becomes `other`, which still drafts.
 
 **Sources for the fact check** (`extraction.ts::factSources`): every field, the
 vehicle, the disclaimer, and the request's name, Dev Details and Offer

@@ -102,7 +102,7 @@ export function copySystem(oems: string[]): string {
   const sells = (m: string) => oems.some((o) => o.toLowerCase() === m.toLowerCase());
   if (sells('Mazda')) brand.push('Mazda: never "exclusive" in any form, and avoid "VIP", "only at", "invitation only".');
   if (sells('Honda')) brand.push('Honda: never write the name in capitals ("HONDA"). Write "Honda".');
-  return `You write the supporting copy for a car dealership's marketing email. The email's main image is an approved graphic that already carries the offer, the headline and the legal disclaimer. Your copy sits around it: a short headline, one to three short paragraphs, one or two button labels, the image's alt text, subject lines and preview text.
+  return `You write the supporting copy for a car dealership's marketing email. The email's main image is an approved graphic that already carries the message — an offer, a sale, an event, a service special, a notice — with its headline and, usually, its legal disclaimer. Write for the kind of email it is: an event invitation invites, a notice informs, an offer sells. Your copy sits around it: a short headline, one to three short paragraphs, one or two button labels, the image's alt text, subject lines and preview text.
 
 FACTS ARE FIXED. Every price, payment, rate, term, date, percentage, model year and make you write must appear in the FACTS you are given, in the same kind ("$3,500" needs "$3,500"; "1.9%" needs "1.9%"). Do not round, total, compare, or restate a figure differently. Never mention an incentive, rebate, model, trim or date that isn't in the facts. When in doubt, leave the number out — the image already shows it. Code checks every number you write against the facts and rejects the draft on any mismatch.
 
@@ -145,7 +145,7 @@ export function copyPrompt(brief: CopyBrief, examples: DraftExample[]): string {
       ? `This is co-op advertising. The manufacturer's guidelines ban these phrases — don't use them:\n${brief.bannedPhrases.join('; ')}`
       : '',
     brief.guidelines.length
-      ? `This is co-op advertising. The manufacturer's guidelines for it, the pages that bear on an offer email — follow them in your copy where you can:\n\n${renderGuidelinePages(brief.guidelines)}`
+      ? `This is co-op advertising. The manufacturer's guidelines for it, the pages that bear on an email like this — follow them in your copy where you can:\n\n${renderGuidelinePages(brief.guidelines)}`
       : '',
     examples.length
       ? `Emails like this one that were approved and sent, for voice and structure only. Their figures belong to other offers; never reuse them:\n\n${examples.map(renderExample).join('\n\n')}`

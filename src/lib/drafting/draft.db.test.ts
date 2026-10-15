@@ -154,8 +154,9 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
     expect(update).toContain(DISCLAIMER);
 
     // The trade button uses the account's link; new inventory has none on file.
-    const template = JSON.parse(r.versions[0].template) as { blocks: { id: string; children?: { props: { url?: string } }[] }[] };
-    const [shop, trade] = template.blocks.find((b) => b.id === 'ctas')!.children!;
+    type Node = { id: string; props: { url?: string }; children?: Node[] };
+    const template = JSON.parse(r.versions[0].template) as { blocks: Node[] };
+    const [shop, trade] = template.blocks.find((b) => b.id === 'ctas')!.children!.map((cell) => cell.children![0]);
     expect(new URL(trade.props.url!).pathname).toBe('/value-your-trade');
     expect(new URL(shop.props.url!).pathname).toBe('/');
     expect(JSON.parse(r.versions[0].notes!)).toContain(

@@ -87,7 +87,9 @@ describe('buildDraft', () => {
     expect(one.artifact.template.blocks.some((b) => b.type === 'columns')).toBe(false);
     expect(errors(one)).toEqual([]);
     const two = await built(YOUNG_CHEVROLET);
-    expect(two.artifact.template.blocks.find((b) => b.id === 'ctas')?.children).toHaveLength(2);
+    // Each cell is a Section holding its button, as the editor builds Columns.
+    const cells = two.artifact.template.blocks.find((b) => b.id === 'ctas')?.children ?? [];
+    expect(cells.map((c) => [c.type, c.children?.[0]?.type])).toEqual([['section', 'button'], ['section', 'button']]);
   });
 
   it('leaves the footer logo off for Hyundai, Audi and Volkswagen', async () => {
@@ -127,7 +129,7 @@ describe('button links', () => {
       coopPack: null,
       ctaUrls: ['https://www.youngchev.com/new-inventory/index.htm?model=Equinox', 'https://www.youngchev.com/trade'],
     });
-    const ctas = b.artifact.template.blocks.find((x) => x.id === 'ctas')!.children!;
+    const ctas = b.artifact.template.blocks.find((x) => x.id === 'ctas')!.children!.map((cell) => cell.children![0]);
     expect(new URL(ctas[0].props.url as string).searchParams.get('model')).toBe('Equinox');
     expect(new URL(ctas[1].props.url as string).pathname).toBe('/trade');
     const hero = b.artifact.template.blocks.find((x) => x.id === 'hero')!;

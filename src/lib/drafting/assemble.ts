@@ -62,6 +62,7 @@ export const VW_BACKGROUND = '#eff1f5';
 const BLACK = '#000000';
 const WHITE = '#ffffff';
 const FONT = 'Helvetica, Arial, sans-serif';
+const FOOTER_LOGO_WIDTH = 200;
 
 function sells(oems: string[], make: string): boolean {
   return oems.some((o) => o.toLowerCase() === make.toLowerCase());
@@ -129,7 +130,15 @@ export function assembleDraft(input: {
       id: 'ctas',
       type: 'columns',
       props: { columnCount: buttons.length, stackOnMobile: true, ...(vw ? { bgColor: VW_BACKGROUND } : {}) },
-      children: buttons,
+      // Each cell is a Section holding its button — the shape the editor builds
+      // and edits. A bare button in a column renders, but the editor shows the
+      // cell as empty ("Drop component") and the button can't be edited.
+      children: buttons.map((button, i) => ({
+        id: `cta-cell-${i + 1}`,
+        type: 'section',
+        props: { paddingTop: 0, paddingBottom: 0, paddingLeft: 0, paddingRight: 0 },
+        children: [button],
+      })),
     });
   }
 
@@ -142,7 +151,9 @@ export function assembleDraft(input: {
   const footer: Block[] = [];
   const logoAllowed = !NO_FOOTER_LOGO_OEMS.some((o) => sells(account.oems, o));
   if (logoAllowed && account.logoUrl) {
-    footer.push({ id: 'footer-logo', type: 'logo', props: { src: account.logoUrl, alt: account.dealer } });
+    // 200px, not the Logo block's 140 default: dealer logos are wide lockups
+    // (Young Chev's is 659×134), which at 140 render about 28px tall.
+    footer.push({ id: 'footer-logo', type: 'logo', props: { src: account.logoUrl, alt: account.dealer, width: FOOTER_LOGO_WIDTH } });
   }
   const siteText = account.siteDisplay?.trim();
   const parts = [

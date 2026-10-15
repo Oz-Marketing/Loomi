@@ -13,7 +13,8 @@ subitem for a person to proof. **Nothing is sent or published automatically.**
 ## 1. Scope
 
 **Slice 1 — building now:** monthly model / APR offer emails, any brand, started
-by a person — on monday, by setting Assets Approved to "Approved". **There is no
+when design uploads the request's final graphics (§3.1; until 2026-10-15 it was
+a person setting Assets Approved on the subitem). **There is no
 drafting screen in Loomi** (decided 2026-10-09): the output is a Loomi email
 template, and the subitem carries a link to it.
 
@@ -63,8 +64,8 @@ proof moves on its own. Board contract in code: `src/lib/drafting/monday-board.t
 
 | Subitem column | id | Owner | Loomi |
 |---|---|---|---|
-| Design Assets | `file_mm7z1a42` | design team | **reads** — the approved creative, drafting's input |
-| Assets Approved | `color_mm7zba2g` | design team | **reads** — "Approved" means ready to draft |
+| Design Assets | `file_mm7z1a42` | design team | no longer read (replaced by Approved Design, §3.1) |
+| Assets Approved | `color_mm7zba2g` | design team | no longer read |
 | Draft Files | `file_mm7z7hyz` | Loomi | **writes** — the rendered draft, PNG + HTML |
 | Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft's template in Loomi |
 | Proof Status | `color_mm79xe71` | PageProof sync | reads — "Approved" is final |
@@ -76,6 +77,37 @@ link, the subject and preview options, what it read off the creative — offer
 terms, dates and the disclaimer verbatim, low-confidence readings flagged — and
 the draft's notes and warnings), or why it couldn't draft. Each notice is posted
 once; the same news is never posted twice.
+
+### 3.1 Approved Design — the input and the trigger (2026-10-15)
+
+Design uploads every final graphic for a request — email, text, landing page,
+web banners — to the **Approved** file column on their own board (Design
+Projects, `7463112018`, column `files_mkm3w9fh`), often as one zip. **Only
+finals go there**, so an upload is the start; nobody sets a status. It reaches
+the project as the **Approved Design** mirror (`lookup_mm7zrfjk`), which is a
+mirror of a mirror: design's column → the rep's intake board ("Approved
+Design", per rep board) → the project.
+
+- **Read a hop at a time.** monday answers a two-level mirror query with an
+  internal error, so Loomi reads the project's mirror for the intake item, then
+  the intake item's mirror for design's files. Which column holds them on each
+  rep board comes from the project mirror's own settings. Checked live
+  2026-10-15, including downloading a 12 MB zip through the chain.
+- **Unzipped.** Zips are unpacked (folders, `__MACOSX`, dotfiles and non-images
+  skipped; at most 500 files, 300 MB unpacked, 150 MB zipped). PDFs and PSDs
+  are never downloaded: only an image can be an email's hero.
+- **The type is in the file name.** "Email" as a word (also "E-mail",
+  "Emails") makes it an email graphic; "08) _ Email _ Text.png" is both.
+- **So is the store**, when the request names several: the store's name, as
+  the Client field writes it, in the file name or its folder ("Young" and "of"
+  don't count). The subitem says which store it's for by its name ("Email Blast
+  1 - Young Powersports Euro").
+- **Reported, never guessed:** no email graphic (the notice lists what design
+  did upload), a subitem that doesn't name its store on a multi-store request,
+  and two email deliverables for one store — the graphics can't say which is
+  which yet.
+- A project with approved files but no subitems has nothing to draft: two of
+  the four live projects with finals on 2026-10-15 were like that.
 
 From the parent project Loomi reads Client, Co-op, Offer Disclaimer, Dev
 Details, Complete by, Ad Run Dates, audience and Job Number. They are mirrors of
@@ -114,8 +146,8 @@ Compliance Check count as co-op (§7.2).
 | # | Stage | Stops when |
 |---|---|---|
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
-| 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; the intake pass (`loomi.drafting.intake`, every 5 minutes) starts it. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
-| 2 | **Fetch** the subitem, the project, and the Design Assets files | No approved assets, or a file over 40 MB (a layered PSD, not a flattened export) |
+| 1 | **Trigger** — the project's Approved Design gets files (§3.1); the intake pass (`loomi.drafting.intake`, every 5 minutes) starts each of its email subitems. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
+| 2 | **Fetch** the subitem, the project and design's approved files; unzip; pick this store's email graphic (`approved-files.ts`) | No email graphic for the store, a subitem that doesn't name its store, two email deliverables for one store, or an image over 40 MB |
 | 3 | **Extract + classify** — one vision pass, saved field by field (§5) | Anything but a model / APR offer: slice 1 drafts nothing else |
 | 4 | **Conflict check** — every term found in both the graphic and the request must agree (§5.2) | Any disagreement: both values are shown, nothing is chosen |
 | 5 | **Confirm** — no gate. Low-confidence readings are flagged in the subitem update, and the proofer compares them with the image (decided 2026-10-09) | — |
@@ -201,7 +233,7 @@ request's Offer Disclaimer is often a note to design or an earlier draft, and
 the creative's text is the one carried verbatim. **Interpretation to confirm.**
 
 A conflict or a blocked draft restarts on its own only when the creative is
-replaced in Design Assets. A corrected request needs the draft run again
+replaced in Approved Design. A corrected request needs the draft run again
 (`scripts/drafting-run.ts`), because the intake fingerprint is the assets and
 the client, not the request text.
 
@@ -528,6 +560,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | Co-op documents as drafting context (§8) | **built**; page picking checked on the local documents, not yet on a live draft |
 | `Account.siteDisplay` | field built; values and a place to edit them are not |
 | Button links from the account's custom values, link check (`links.ts`) | **built**; checked with the network stubbed, not yet against real dealer sites |
+| Approved Design intake: mirror chain, unzip, email + store matching (`approved-files.ts`, `monday-board.ts`) | **built**; live read-only dry run picked the Mazda MT Owner Night email graphic |
 | Per-account abbreviations | next |
 
 **Retries, without noise.** A request that can't start waits (`needs_account`

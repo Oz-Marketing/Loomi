@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { getBoss } from '@/lib/queue/boss';
 import { MondayError } from '@/lib/monday/client';
-import { copyDesignAssets, imageType, sameCreative, type DraftAsset } from './assets';
+import { pickEmailFiles } from './approved-files';
+import { collectApprovedCreative, sameCreative, storeCreative, type DraftAsset } from './assets';
 import { getDeliverable, type Deliverable } from './monday-board';
 import { runDraftStages } from './draft';
 import { cantDraftUpdate } from './notes';
@@ -67,12 +68,9 @@ function parseAssets(raw: string | null): DraftAsset[] | null {
 export function fetchProblem(d: Deliverable | null): string | null {
   if (!d) return 'monday no longer has this deliverable.';
   if (d.kind !== 'email') return `"${d.name}" isn't an email deliverable; only email is drafted so far.`;
-  if (!d.assetsApproved) return 'Assets Approved on monday isn\'t "Approved" any more.';
   if (!d.project) return 'This deliverable has no parent project on monday.';
-  if (d.designAssets.length === 0) return 'Design Assets on monday is empty.';
-  if (!d.designAssets.some((f) => imageType(f))) {
-    const names = d.designAssets.map((f) => f.name).join(', ');
-    return `Design Assets has no PNG or JPG to draft from (found: ${names}). Export the approved creative as an image.`;
+  if (d.project.approvedFiles.length === 0) {
+    return "Approved Design on the project is empty: design hasn't uploaded the final graphics yet.";
   }
   return null;
 }
@@ -112,7 +110,24 @@ export async function runDraftingJob(requestId: string): Promise<void> {
       return;
     }
 
-    const assets = await copyDesignAssets(requestId, deliverable.designAssets);
+    // Every approved graphic, zips unpacked; then the email one(s) for this store.
+    const collected = await collectApprovedCreative(deliverable.project.approvedFiles);
+    const pick = pickEmailFiles({
+      subitem: { id: deliverable.id, name: deliverable.name },
+      siblings: deliverable.project.subitems,
+      clients: deliverable.project.clients,
+      files: collected,
+      // What design uploaded, zips listed by their contents.
+      available: [
+        ...deliverable.project.approvedFiles.filter((f) => !/\.zip$/i.test(f.name)).map((f) => f.name),
+        ...collected.filter((c) => c.id.includes('#')).map((c) => c.path),
+      ],
+    });
+    if (pick.problem !== null) {
+      await failRequest(request, pick.problem);
+      return;
+    }
+    const assets = await storeCreative(requestId, pick.files);
     // A replaced creative invalidates everything read from the old one.
     const creativeChanged = !sameCreative(parseAssets(request.assets), assets);
     await prisma.draftRequest.update({

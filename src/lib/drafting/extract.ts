@@ -1,8 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import sharp from 'sharp';
-import { downloadMondayAsset } from '@/lib/monday/client';
 import { downloadFromS3 } from '@/lib/s3';
-import type { DraftAsset } from './assets';
+import { approvedCreativeBytes, type DraftAsset } from './assets';
 import { READ_REPLY_SCHEMA, toReading, type ReadReply } from './extraction';
 import { DRAFTING_MODEL, structuredCall } from './model';
 import type { CreativeReading } from './reading';
@@ -63,7 +62,7 @@ export async function prepareImage(bytes: Buffer): Promise<Prepared> {
 /** The creative's bytes: from Spaces when Loomi kept a copy, else from monday again. */
 export async function creativeBytes(asset: DraftAsset): Promise<Buffer> {
   if (asset.s3Key) return downloadFromS3(asset.s3Key);
-  return (await downloadMondayAsset(asset.mondayAssetId)).bytes;
+  return approvedCreativeBytes(asset.mondayAssetId);
 }
 
 export const READ_SYSTEM = `You transcribe what an approved automotive marketing graphic says, so an email can be drafted around it. A person compares your reading with the image, and code checks every number in the email against it — so what you report must be exactly what is printed.

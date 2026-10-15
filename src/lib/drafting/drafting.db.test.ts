@@ -8,6 +8,7 @@
 // tables pushed — point it at a throwaway database:
 //   DATABASE_URL=postgresql://…/scratch RUN_DB_TESTS=1 npx vitest run src/lib/drafting/drafting.db.test.ts
 import 'dotenv/config';
+import JSZip from 'jszip';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '@/lib/prisma';
 import { renderEmailTemplate } from '@/lib/email/render';
@@ -30,11 +31,12 @@ const { runDraftingJob, enqueueDraftingJob } = await import('./job');
 const { runDraftingIntake, RETRY_AFTER_MS } = await import('./intake');
 const { runProofStatusSweep } = await import('./proof-watch');
 const { publishDraftVersion, proofHtml } = await import('./publish');
+const { startDraftRequest } = await import('./requests');
 
 const RUN = !!process.env.RUN_DB_TESTS;
 // Not `_`-prefixed: the intake treats `_` keys as system rows, not stores.
 const ACCOUNT = 'vitestDraftingChevrolet';
-const [A, B, C, D] = ['990000000101', '990000000102', '990000000103', '990000000104'];
+const [A, B, C, D, E] = ['990000000101', '990000000102', '990000000103', '990000000104', '990000000105'];
 
 let board: StubBoard;
 let stub: ReturnType<typeof mondayStub>;
@@ -42,20 +44,22 @@ let stub: ReturnType<typeof mondayStub>;
 function freshBoard(): StubBoard {
   return {
     subitems: [
-      { id: A, name: 'Email Blast 1 - Vitest Chevrolet', approved: true, assets: { '501': 'Offer.png' }, clients: ['Vitest Chevrolet'], coop: 'Yes' },
-      { id: B, name: 'Email Blast 2', approved: true, assets: { '502': 'Offer.png' }, clients: ['Vitest Mazda'] },
+      { id: A, name: 'Email Blast 1 - Vitest Chevrolet', approved: true, assets: { '501': 'Email Offer.png', '511': 'Text Offer.png' }, clients: ['Vitest Chevrolet'], coop: 'Yes' },
+      { id: B, name: 'Email Blast 2', approved: true, assets: { '502': 'Email Offer.png' }, clients: ['Vitest Mazda'] },
       { id: C, name: 'Email Blast 3', approved: true, assets: { '503': 'Layered.psd' }, clients: ['Vitest Chevrolet'] },
-      { id: D, name: 'Email Blast 4', approved: true, assets: { '504': 'Offer.png' }, clients: ['Vitest Chevrolet'], draftFiles: ['by-hand.png'] },
+      { id: D, name: 'Email Blast 4', approved: true, assets: { '504': 'Email Offer.png' }, clients: ['Vitest Chevrolet'], draftFiles: ['by-hand.png'] },
+      // A two-store request whose finals came as one zip; started by hand in its own test.
+      { id: E, name: 'Email Blast 1 - Vitest Chevrolet', approved: false, assets: { '506': 'Finals.zip' }, clients: ['Vitest Chevrolet', 'Vitest Mazda'] },
     ],
-    creative: { '501': 'creative-v1', '502': 'creative-b', '503': 'psd', '504': 'd' },
+    creative: { '501': 'creative-v1', '511': 'text', '502': 'creative-b', '503': 'psd', '504': 'd' },
   };
 }
 
 const request = (subitemId: string) => prisma.draftRequest.findUnique({ where: { mondaySubitemId: subitemId } });
 
 async function cleanup() {
-  const rows = await prisma.draftRequest.findMany({ where: { mondaySubitemId: { in: [A, B, C, D] } }, select: { templateId: true } });
-  await prisma.draftRequest.deleteMany({ where: { mondaySubitemId: { in: [A, B, C, D] } } });
+  const rows = await prisma.draftRequest.findMany({ where: { mondaySubitemId: { in: [A, B, C, D, E] } }, select: { templateId: true } });
+  await prisma.draftRequest.deleteMany({ where: { mondaySubitemId: { in: [A, B, C, D, E] } } });
   const templateIds = rows.map((r) => r.templateId).filter((t): t is string => Boolean(t));
   await prisma.template.deleteMany({ where: { id: { in: templateIds } } });
   await prisma.account.deleteMany({ where: { key: ACCOUNT } });
@@ -78,7 +82,7 @@ describe.skipIf(!RUN)('drafting pipeline (DB)', () => {
     vi.stubGlobal('fetch', vi.fn(stub.fetch));
     vi.stubEnv('MONDAY_API_TOKEN', 'test-token');
     vi.stubEnv('DRAFTING_INTAKE_ENABLED', 'true');
-    vi.stubEnv('DRAFTING_MONDAY_WRITE_SUBITEMS', [A, B, C, D].join(','));
+    vi.stubEnv('DRAFTING_MONDAY_WRITE_SUBITEMS', [A, B, C, D, E].join(','));
     vi.stubEnv('S3_BUCKET', '');
   });
   afterEach(() => {
@@ -93,40 +97,60 @@ describe.skipIf(!RUN)('drafting pipeline (DB)', () => {
     expect(await request(A)).toBeNull();
   });
 
-  it('starts an approved deliverable, holds what it can’t start, and skips one built by hand', async () => {
+  it('starts the email deliverables whose project has approved graphics, holds what it can’t, skips one built by hand', async () => {
     const summary = await runDraftingIntake();
-    expect(summary).toEqual({ ready: 4, started: 1, held: 2 });
-    expect(enqueueDraftingJob).toHaveBeenCalledTimes(1);
+    expect(summary).toEqual({ ready: 4, started: 2, held: 1 });
+    expect(enqueueDraftingJob).toHaveBeenCalledTimes(2);
 
     expect(await request(A)).toMatchObject({ status: 'queued', accountKey: ACCOUNT, clientName: 'Vitest Chevrolet', coop: 'yes' });
     expect(await request(B)).toMatchObject({ status: 'needs_account', accountKey: null });
-    expect(await request(C)).toMatchObject({ status: 'failed', error: expect.stringContaining('no PNG or JPG') });
+    // A PSD is still an approved file: whether it holds an email graphic is the job's to find out.
+    expect(await request(C)).toMatchObject({ status: 'queued' });
     expect(await request(D)).toBeNull();
+    expect(await request(E)).toBeNull();
 
-    // One notice each for the two that can't go — nothing for the started one.
-    expect(stub.writes.updates.map((u) => u.itemId).sort()).toEqual([B, C]);
-    expect(stub.writes.updates.find((u) => u.itemId === B)?.body).toContain("Loomi couldn't tell which account");
+    // One notice, for the one that can't go.
+    expect(stub.writes.updates.map((u) => u.itemId)).toEqual([B]);
+    expect(stub.writes.updates[0].body).toContain("Loomi couldn't tell which account");
   });
 
-  it('stays quiet on the next pass, and retries a failure quietly once it is old enough', async () => {
-    await runDraftingIntake();
-    expect(stub.writes.updates).toEqual([]);
+  it('fails a deliverable with no email graphic once, then retries it quietly', async () => {
+    await runDraftingJob((await request(C))!.id);
+    expect(await request(C)).toMatchObject({ status: 'failed', error: expect.stringContaining('no email graphic') });
+    expect(stub.writes.updates.map((u) => u.itemId)).toEqual([C]);
+    expect(stub.writes.updates[0].body).toContain('It found: Layered.psd');
 
-    // Half an hour later the PSD-only deliverable is tried again — same problem,
-    // so no second notice, but the attempt is counted.
+    // The next pass is quiet; half an hour later it's tried again, still quietly.
+    await runDraftingIntake();
     await runDraftingIntake(new Date(Date.now() + RETRY_AFTER_MS + 1000));
-    expect(stub.writes.updates).toEqual([]);
-    expect((await request(C))?.attempts).toBe(2);
+    expect(stub.writes.updates).toHaveLength(1);
+    expect(await request(C)).toMatchObject({ status: 'queued', attempts: 2 });
   });
 
   it('picks a held deliverable up again as soon as someone fixes it on monday', async () => {
     board.subitems.find((s) => s.id === B)!.clients = ['Vitest Chevrolet'];
-    board.subitems.find((s) => s.id === C)!.assets = { '505': 'Offer.png' };
-    board.creative['505'] = 'fixed';
     const summary = await runDraftingIntake();
-    expect(summary.started).toBe(2);
+    expect(summary.started).toBe(1);
     expect(await request(B)).toMatchObject({ status: 'queued', accountKey: ACCOUNT, attempts: 1 });
-    expect(await request(C)).toMatchObject({ status: 'queued', error: null });
+  });
+
+  it('drafts from a zip: unpacks it and takes only this store\'s email graphic', async () => {
+    const zip = new JSZip();
+    zip.file('Email/Vitest Chevrolet.png', 'chevy-email');
+    zip.file('Email/Vitest Mazda.png', 'mazda-email');
+    zip.file('Text/Vitest Chevrolet.png', 'chevy-text');
+    zip.file('Print/flyer.pdf', 'pdf');
+    board.creative['506'] = await zip.generateAsync({ type: 'nodebuffer' });
+    board.subitems.find((s) => s.id === E)!.approved = true;
+
+    const started = await startDraftRequest({ subitemId: E, accountKey: ACCOUNT, clientName: 'Vitest Chevrolet' });
+    expect(started.ok).toBe(true);
+    await runDraftingJob((await request(E))!.id);
+    const e = (await request(E))!;
+    expect(e.status).toBe('awaiting_extraction');
+    expect(JSON.parse(e.assets ?? '[]')).toEqual([
+      expect.objectContaining({ mondayAssetId: '506#Email/Vitest Chevrolet.png', name: 'Email/Vitest Chevrolet.png', contentType: 'image/png', bytes: 11 }),
+    ]);
   });
 
   it('runs the fetch stage: copies the creative, and fails with one notice when approval is withdrawn', async () => {
@@ -135,12 +159,13 @@ describe.skipIf(!RUN)('drafting pipeline (DB)', () => {
     const fetched = (await request(A))!;
     expect(fetched.status).toBe('awaiting_extraction');
     expect(JSON.parse(fetched.assets ?? '[]')).toEqual([
-      expect.objectContaining({ mondayAssetId: '501', name: 'Offer.png', contentType: 'image/png', bytes: 11, s3Key: null }),
+      // The email graphic only — not the text one beside it.
+      expect.objectContaining({ mondayAssetId: '501', name: 'Email Offer.png', contentType: 'image/png', bytes: 11, s3Key: null }),
     ]);
 
     board.subitems.find((s) => s.id === B)!.approved = false;
     await runDraftingJob((await request(B))!.id);
-    expect(await request(B)).toMatchObject({ status: 'failed', error: 'Assets Approved on monday isn\'t "Approved" any more.' });
+    expect(await request(B)).toMatchObject({ status: 'failed', error: expect.stringContaining('Approved Design on the project is empty') });
     expect(stub.writes.updates.map((u) => u.itemId)).toEqual([B]);
   });
 

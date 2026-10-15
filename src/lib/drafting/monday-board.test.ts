@@ -9,7 +9,9 @@ import {
   deliverableKind,
   getDeliverable,
   parseCoopFlag,
+  approvedDesignSources,
   parseDeliverable,
+  parseIntakeColumns,
   postDraftUpdate,
   setTemplateLink,
   uploadDraftFile,
@@ -53,6 +55,16 @@ const RAW_SUBITEM: Parameters<typeof parseDeliverable>[0] = {
       { id: 'lookup_mm7p3p7s', text: null, display_value: 'No service in ___ months' },
       { id: 'lookup_mm7pap3x', text: null, display_value: 'Customers who purchased within the past 12 months' },
       { id: 'lookup_mm7parn0', text: null, display_value: 'OZ2610-075' },
+      {
+        id: 'lookup_mm7zrfjk',
+        text: null,
+        display_value: '',
+        mirrored_items: [{ linked_item: { id: '13175653879' } }, { linked_item: { id: '13175653879' } }, { linked_item: null }],
+      },
+    ],
+    subitems: [
+      { id: '13241541081', name: 'Email Blast 1' },
+      { id: '13241541099', name: 'Text Blast 1' },
     ],
   },
 };
@@ -61,11 +73,10 @@ describe('parseDeliverable', () => {
   it('reads the deliverable and the request it belongs to', () => {
     const d = parseDeliverable(RAW_SUBITEM);
     expect(d.kind).toBe('email');
-    expect(d.assetsApproved).toBe(true);
-    expect(d.designAssets).toEqual([
-      { assetId: '901', name: 'Oct Offer 600x900.png', extension: '.png', sizeBytes: 812_345 },
-    ]);
     expect(d.draftFiles).toEqual([]);
+    expect(d.project?.subitems.map((s) => s.name)).toEqual(['Email Blast 1', 'Text Blast 1']);
+    // Filled by getDeliverable, which follows the mirror; parsing alone leaves it empty.
+    expect(d.project?.approvedFiles).toEqual([]);
     expect(d.proof).toEqual({ status: 'No proof', url: null, approvedOn: null, approved: false });
     expect(d.project?.clients).toEqual(['Young Powersports Ogden', 'Young Powersports Euro']);
     expect(d.project?.coop).toBe('no');
@@ -74,16 +85,27 @@ describe('parseDeliverable', () => {
     expect(d.project?.jobNumber).toBe('OZ2610-075');
   });
 
-  it('treats only "Approved" as approved, for both the trigger and the proof', () => {
+  it('treats only "Approved" as a final proof', () => {
     const raw = structuredClone(RAW_SUBITEM);
-    raw.column_values = raw.column_values.map((cv) =>
-      cv.id === 'color_mm7zba2g' ? { ...cv, label: 'Waiting on Design' }
-      : cv.id === 'color_mm79xe71' ? { ...cv, label: 'Approved' }
-      : cv,
-    );
-    const d = parseDeliverable(raw);
-    expect(d.assetsApproved).toBe(false);
-    expect(d.proof.approved).toBe(true);
+    raw.column_values = raw.column_values.map((cv) => (cv.id === 'color_mm79xe71' ? { ...cv, label: 'Approved' } : cv));
+    expect(parseDeliverable(raw).proof.approved).toBe(true);
+    raw.column_values = raw.column_values.map((cv) => (cv.id === 'color_mm79xe71' ? { ...cv, label: 'To-dos requested' } : cv));
+    expect(parseDeliverable(raw).proof.approved).toBe(false);
+  });
+
+  it('finds the intake items behind Approved Design, once each', () => {
+    const cv = RAW_SUBITEM.parent_item!.column_values.find((c) => c.id === 'lookup_mm7zrfjk');
+    expect(approvedDesignSources(cv)).toEqual(['13175653879']);
+    expect(approvedDesignSources(undefined)).toEqual([]);
+  });
+
+  it("reads which column holds design's files on each rep board from the mirror's settings", () => {
+    const settings = JSON.stringify({
+      relation_column: { board_relation_mm79kvxr: true },
+      displayed_linked_columns: { '9577266535': ['mirror_mm1'], '18414976097': ['mirror_mkm35fxz'] },
+    });
+    expect(parseIntakeColumns(settings)).toEqual({ '9577266535': ['mirror_mm1'], '18414976097': ['mirror_mkm35fxz'] });
+    expect(parseIntakeColumns('not json')).toEqual({});
   });
 
   it('keeps a store whose name contains a comma in one piece', () => {

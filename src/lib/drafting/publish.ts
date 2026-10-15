@@ -3,7 +3,9 @@ import { loadPreviewAccountData, resolvePreviewTokens } from '@/lib/email/previe
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
 import { resolveAccountFooter } from '@/lib/sending/account-footer';
 import { UNSUBSCRIBE_TOKEN, injectUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
-import { createTemplate, getTemplateById, updateTemplate } from '@/lib/services/templates';
+import { mergeBlastMetadata, readTemplateSlug } from '@/lib/messaging/blast-metadata';
+import { upsertCampaignEmailTemplate } from '@/lib/services/campaigns';
+import { createDraftEmailBlast, updateEmailBlastDraft } from '@/lib/services/email-blasts';
 import type { DraftEvaluation } from './compliance/registry';
 import type { CopyOption } from './compliance/types';
 import { cantDraftUpdate, draftReadyUpdate } from './notes';
@@ -12,19 +14,24 @@ import { postDraftUpdate, setTemplateLink, uploadDraftFile } from './monday-boar
 import { noticeOnce } from './notice';
 
 /**
- * The template output: a drafted, rule-cleared version becomes the
- * deliverable's Loomi email template, and monday hears about it.
+ * The output: a drafted, rule-cleared version becomes a DRAFT EMAIL BLAST for
+ * the account, and monday hears about it (Connor, 2026-10-15 — one library of
+ * reusable templates, blasts filled from them, no new template per send).
  *
- *   1. Save it as the account's template — created on the first draft, updated
- *      after that (updateTemplate snapshots the previous draft into
- *      TemplateVersion, so nothing a re-draft replaces is lost).
+ *   1. The blast and its design. The design is a hidden per-blast template
+ *      (type `campaign`, kept out of the library) — the same shape every Loomi
+ *      blast has, so the blast's design step opens it. Created on the first
+ *      draft; a re-draft updates the same blast and design while the blast is
+ *      still a draft, and starts a fresh one if someone has already scheduled
+ *      or sent it.
  *   2. Render the proof the way a recipient will get it: Loomi's send-time
  *      footer injected, the account's real values filled in.
  *   3. Attach the PNG and HTML to Draft Files, point the Loomi Template column
- *      at the template, and post an update carrying what was read off the
+ *      at the draft blast, and post an update carrying what was read off the
  *      creative, so the proofer can compare it with the image.
  *
- * Nothing is sent: the template sits in the library until a person uses it.
+ * Nothing is sent: the blast has no audience and no schedule until a person
+ * gives it both.
  */
 
 /** A screenshot can hang on a stuck asset; one render must never pin the worker. */
@@ -35,14 +42,9 @@ export function studioUrl(path: string): string {
   return `${base}${path}`;
 }
 
-export function templateEditorUrl(slug: string): string {
-  return studioUrl(`/templates/editor?design=${encodeURIComponent(slug)}`);
-}
-
-/** "Email Blast 1 - Young Powersports Euro" → "draft-email-blast-1-young-powersports-euro-k3x9q2ab". */
-export function draftTemplateSlug(subitemName: string, requestId: string): string {
-  const base = subitemName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-  return `draft-${base || 'email'}-${requestId.slice(-8)}`;
+/** The draft blast's design step — bare, not account-prefixed, so it opens for anyone with access. */
+export function draftBlastUrl(blastId: string): string {
+  return studioUrl(`/messaging/blasts/${encodeURIComponent(blastId)}/template`);
 }
 
 /** The HTML a recipient receives, short of their own name: tokens filled, the send-time footer in. */
@@ -95,7 +97,7 @@ function parseJson<T>(raw: string | null, fallback: T): T {
   }
 }
 
-export type PublishResult = { ok: true; templateSlug: string } | { ok: false; error: string };
+export type PublishResult = { ok: true; blastId: string; templateSlug: string } | { ok: false; error: string };
 
 export async function publishDraftVersion(versionId: string): Promise<PublishResult> {
   const version = await prisma.draftVersion.findUnique({ where: { id: versionId }, include: { request: true } });
@@ -106,29 +108,37 @@ export async function publishDraftVersion(versionId: string): Promise<PublishRes
   if (!evaluation || evaluation.blocked) return { ok: false, error: 'This version was blocked by a rule and is not publishable.' };
 
   try {
-    // 1. The template.
+    // 1. The draft blast and its design.
     const subjects = parseJson<CopyOption[]>(version.subjects, []);
     const previews = parseJson<CopyOption[]>(version.previews, []);
-    const title = request.projectName ? `${request.projectName} · ${request.name}` : request.name;
-    const preheader = previews.find((p) => p.kind === 'initial')?.text;
-    let slug: string;
-    const existing = request.templateId ? await getTemplateById(request.templateId) : null;
-    if (existing) {
-      slug = existing.slug;
-      await updateTemplate(slug, { content: version.template, title, preheader });
-    } else {
-      slug = draftTemplateSlug(request.name, request.id);
-      const created = await createTemplate({
-        slug,
-        title,
-        type: 'design',
-        category: 'drafted',
-        content: version.template,
-        preheader,
-        accountKey: request.accountKey,
-      });
-      await prisma.draftRequest.update({ where: { id: request.id }, data: { templateId: created.id } });
-    }
+    const name = request.projectName ? `${request.projectName} · ${request.name}` : request.name;
+    const subject = subjects.find((s) => s.kind === 'initial')?.text ?? '';
+    const previewText = previews.find((p) => p.kind === 'initial')?.text ?? '';
+    const prior = request.blastId
+      ? await prisma.emailBlast.findUnique({ where: { id: request.blastId }, select: { id: true, status: true, metadata: true } })
+      : null;
+    // A blast someone scheduled or sent is theirs; a re-draft never rewrites it.
+    const reusable = prior?.status === 'draft' ? prior : null;
+    const slug = await upsertCampaignEmailTemplate(reusable ? readTemplateSlug(reusable.metadata) || null : null, {
+      accountKey: request.accountKey,
+      title: name,
+      content: version.template,
+      previewText,
+    });
+    const blastId = reusable?.id ?? (await createDraftEmailBlast({ name, accountKeys: [request.accountKey] })).id;
+    await updateEmailBlastDraft(blastId, {
+      subject,
+      previewText,
+      htmlContent: version.html,
+      sourceType: 'template-library',
+      metadata: mergeBlastMetadata(reusable?.metadata, {
+        templateSlug: slug,
+        draftRequestId: request.id,
+        draftVersion: version.number,
+      }),
+    });
+    const design = await prisma.template.findUnique({ where: { slug }, select: { id: true } });
+    await prisma.draftRequest.update({ where: { id: request.id }, data: { blastId, templateId: design?.id ?? null } });
 
     // 2. The proof.
     const html = await proofHtml(version.html, request.accountKey);
@@ -140,12 +150,12 @@ export async function publishDraftVersion(versionId: string): Promise<PublishRes
       await uploadDraftFile(request.mondaySubitemId, new File([new Uint8Array(png)], `${base}.png`, { type: 'image/png' })),
       await uploadDraftFile(request.mondaySubitemId, new File([html], `${base}.html`, { type: 'text/html' })),
     ];
-    const url = templateEditorUrl(slug);
-    await setTemplateLink(request.mondaySubitemId, url, 'Open in Loomi');
+    const url = draftBlastUrl(blastId);
+    await setTemplateLink(request.mondaySubitemId, url, 'Open draft in Loomi');
     await postDraftUpdate(
       request.mondaySubitemId,
       draftReadyUpdate({
-        templateUrl: url,
+        draftUrl: url,
         versionNumber: version.number,
         subjects,
         previews,
@@ -165,7 +175,7 @@ export async function publishDraftVersion(versionId: string): Promise<PublishRes
       }),
       prisma.draftRequest.update({ where: { id: request.id }, data: { status: 'in_proofing', error: null } }),
     ]);
-    return { ok: true, templateSlug: slug };
+    return { ok: true, blastId, templateSlug: slug };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[drafting-publish] version ${versionId} failed:`, err);

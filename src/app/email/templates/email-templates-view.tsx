@@ -25,7 +25,10 @@ import {
   ArrowTopRightOnSquareIcon,
   CheckIcon,
   EllipsisHorizontalIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
+import { DraftingTemplateDialog } from '@/components/templates/drafting-template-dialog';
+import { REQUEST_TYPE_LABELS } from '@/lib/drafting/template-slots';
 import { getTagColor } from '@/lib/tag-colors';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
 import { TemplateLibraryShell, TemplateEmptyState } from '@/components/templates/template-library-shell';
@@ -51,6 +54,10 @@ interface TemplateEntry {
   name: string;
   editorType?: 'code' | 'visual' | string | null;
   category?: string | null;
+  /** Request types this is the drafting template for. */
+  draftingFor?: string[];
+  /** Why the drafter can't use it yet, when it's marked. */
+  draftingProblems?: string[];
   updatedAt?: string;
   createdBy?: string | null;
   createdByAvatar?: string | null;
@@ -441,6 +448,7 @@ function ManagementView({
   const [previewDesign, setPreviewDesign] = useState<string | null>(null);
   const [selectedDesigns, setSelectedDesigns] = useState<Set<string>>(new Set());
   const [renameDesign, setRenameDesign] = useState<string | null>(null);
+  const [draftingDesign, setDraftingDesign] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [, setDownloadingDesign] = useState<string | null>(null);
@@ -1037,6 +1045,9 @@ function ManagementView({
               { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => openRenameModal(t) },
               { key: 'download', label: 'Download PNG', icon: ArrowDownTrayIcon, run: () => void handleDownloadScreenshot(t) },
               { key: 'clone', label: 'Clone', icon: Square2StackIcon, run: () => void cloneTemplate(t.design) },
+              ...(t.editorType === 'visual' && t.category !== 'drafted'
+                ? [{ key: 'drafting', label: 'Use for drafted emails', icon: SparklesIcon, run: () => setDraftingDesign(t.design) }]
+                : []),
               ...(!scoped
                 ? [
                     isPublished
@@ -1058,9 +1069,24 @@ function ManagementView({
                     : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }
                 }
                 badges={
-                  <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                    {templateTypeLabel}
-                  </span>
+                  <>
+                    <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                      {templateTypeLabel}
+                    </span>
+                    {(t.draftingFor?.length ?? 0) > 0 && (
+                      <span
+                        title={`Drafted emails: ${t.draftingFor!.map((r) => REQUEST_TYPE_LABELS[r as keyof typeof REQUEST_TYPE_LABELS] ?? r).join(', ')}${t.draftingProblems?.length ? ` — not usable yet: ${t.draftingProblems.join(' ')}` : ''}`}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          t.draftingProblems?.length
+                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                            : 'border-[var(--primary)]/30 bg-[var(--primary)]/10 text-[var(--primary)]'
+                        }`}
+                      >
+                        <SparklesIcon className="h-3 w-3" />
+                        Drafting
+                      </span>
+                    )}
+                  </>
                 }
                 category={t.category}
                 tags={tags}
@@ -1090,6 +1116,22 @@ function ManagementView({
           onClose={() => setShowTagModal(false)}
         />
       )}
+      {draftingDesign && (() => {
+        const t = templates.find((x) => x.design === draftingDesign);
+        if (!t) return null;
+        return (
+          <DraftingTemplateDialog
+            slug={t.design}
+            name={t.name || formatDesign(t.design)}
+            initial={t.draftingFor ?? []}
+            initialProblems={t.draftingProblems ?? []}
+            onClose={() => setDraftingDesign(null)}
+            onSaved={(draftingFor, draftingProblems) =>
+              setTemplates((prev) => prev.map((x) => (x.design === t.design ? { ...x, draftingFor, draftingProblems } : x)))
+            }
+          />
+        );
+      })()}
       {renameDesign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={closeRenameModal}>
           <div className="glass-modal w-[460px]" onClick={(e) => e.stopPropagation()}>

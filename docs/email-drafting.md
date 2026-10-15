@@ -1,6 +1,7 @@
 # Email drafting from approved creative
 
-Status: **in build** — slice 1. Written 2026-10-09.
+Status: **in build** — slice 1. Written 2026-10-09; the read and draft stages
+landed 2026-10-14 and have not yet run against a real creative.
 
 Loomi reads a deliverable's approved design assets and its request on monday,
 extracts what the creative says, drafts the email around it, enforces the house
@@ -11,10 +12,15 @@ subitem for a person to proof. **Nothing is sent or published automatically.**
 
 ## 1. Scope
 
-**Slice 1 — building now:** monthly model / APR offer emails, any brand, started
-by a person — on monday, by setting Assets Approved to "Approved". **There is no
-drafting screen in Loomi** (decided 2026-10-09): the output is a Loomi email
-template, and the subitem carries a link to it.
+**Scope:** every kind of email creative, any brand — offers, sales events,
+service specials, events, notices; nothing is excluded (Connor, 2026-10-15; slice
+1 had been monthly model / APR offers only). Started
+when design uploads the request's final graphics (§3.1; until 2026-10-15 it was
+a person setting Assets Approved on the subitem). **There is no
+drafting screen in Loomi** (decided 2026-10-09): the output is a **draft email
+blast** for the account, built from the template library, and the subitem
+carries a link to it (decided 2026-10-15 — one library of reusable templates,
+blasts filled from them, never a new template per send).
 
 Chosen over Subaru service specials (the first pick) because the corpus exists
 today: ~30 monthly-offer finals already sent from Loomi plus ~35 urgent-subject
@@ -28,8 +34,9 @@ own constraints (always strip DDC's default wrapper padding and use the page's
 own spacing).
 
 **Loomi is the only sending platform.** GoHighLevel is being retired (decided
-2026-10-09). Drafts target Loomi's sender alone: one unsubscribe tag, no send
-platform field, and no ongoing dependency on GHL anywhere in this pipeline.
+2026-10-09). Drafts target Loomi's sender alone: no unsubscribe link in the template
+(Loomi's send-time footer adds it and SendGrid fills in the URL — Connor,
+2026-10-15), no send platform field, and no ongoing dependency on GHL anywhere in this pipeline.
 
 ---
 
@@ -62,10 +69,10 @@ proof moves on its own. Board contract in code: `src/lib/drafting/monday-board.t
 
 | Subitem column | id | Owner | Loomi |
 |---|---|---|---|
-| Design Assets | `file_mm7z1a42` | design team | **reads** — the approved creative, drafting's input |
-| Assets Approved | `color_mm7zba2g` | design team | **reads** — "Approved" means ready to draft |
+| Design Assets | `file_mm7z1a42` | design team | no longer read (replaced by Approved Design, §3.1) |
+| Assets Approved | `color_mm7zba2g` | design team | no longer read |
 | Draft Files | `file_mm7z7hyz` | Loomi | **writes** — the rendered draft, PNG + HTML |
-| Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft's template in Loomi |
+| Loomi Template | `link_mm7zjhj9` | Loomi | **writes** — link to the draft blast in Loomi (its design step) |
 | Proof Status | `color_mm79xe71` | PageProof sync | reads — "Approved" is final |
 | Proof URL | `link_mm79djf1` | PageProof sync | reads |
 | Proof Approval Date | `date_mm7z9v44` | PageProof sync | reads |
@@ -75,6 +82,42 @@ link, the subject and preview options, what it read off the creative — offer
 terms, dates and the disclaimer verbatim, low-confidence readings flagged — and
 the draft's notes and warnings), or why it couldn't draft. Each notice is posted
 once; the same news is never posted twice.
+
+### 3.1 Approved Design — the input and the trigger (2026-10-15)
+
+Design uploads every final graphic for a request — email, text, landing page,
+web banners — to the **Approved** file column on their own board (Design
+Projects, `7463112018`, column `files_mkm3w9fh`), often as one zip. **Only
+finals go there**, so an upload is the start; nobody sets a status. It reaches
+the project as the **Approved Design** mirror (`lookup_mm7zrfjk`), which is a
+mirror of a mirror: design's column → the rep's intake board ("Approved
+Design", per rep board) → the project.
+
+- **Read a hop at a time.** monday answers a two-level mirror query with an
+  internal error, so Loomi reads the project's mirror for the intake item, then
+  the intake item's mirror for design's files. Which column holds them on each
+  rep board comes from the project mirror's own settings. Checked live
+  2026-10-15, including downloading a 12 MB zip through the chain.
+- **Unzipped.** Zips are unpacked (folders, `__MACOSX`, dotfiles and non-images
+  skipped; at most 500 files, 300 MB unpacked, 150 MB zipped). PDFs and PSDs
+  are never downloaded: only an image can be an email's hero.
+- **The type is in the file name.** "Email" as a word (also "E-mail",
+  "Emails") makes it an email graphic; "08) _ Email _ Text.png" is both.
+- **So is the store**, when the request names several: whatever tells it from
+  the request's other stores, in the file name or its folder. Design's usual
+  name — "09 SEP - YPS Ogden - Winter Prep - Emailpng_Email - Hero.png" — names
+  Young Powersports Ogden beside Euro by "Ogden" alone, so their shorthand
+  works with no abbreviation list. A word every store shares tells nothing. The
+  subitem says which store it's for the same way, by its name ("Email Blast 1 -
+  YPS Ogden").
+- **"Hero"** in the file name marks the email's main image; without one, the
+  first email graphic is used. Every email graphic is read for the offer.
+- **Reported, never guessed:** no email graphic (the notice lists what design
+  did upload), a subitem that doesn't name its store on a multi-store request,
+  and two email deliverables for one store — the graphics can't say which is
+  which yet.
+- A project with approved files but no subitems has nothing to draft: two of
+  the four live projects with finals on 2026-10-15 were like that.
 
 From the parent project Loomi reads Client, Co-op, Offer Disclaimer, Dev
 Details, Complete by, Ad Run Dates, audience and Job Number. They are mirrors of
@@ -113,14 +156,14 @@ Compliance Check count as co-op (§7.2).
 | # | Stage | Stops when |
 |---|---|---|
 | 0 | **Resolve** the monday Client to one Loomi account, its makes and its group | The Client names several stores (it can: "Young Powersports Ogden, Young Powersports Euro"), or no account matches |
-| 1 | **Trigger** — Assets Approved turns "Approved" on the subitem; the intake pass (`loomi.drafting.intake`, every 5 minutes) starts it. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
-| 2 | **Fetch** the subitem, the project, and the Design Assets files | No approved assets, or a file over 40 MB (a layered PSD, not a flattened export) |
-| 3 | **Extract + classify** — one vision pass, saved field by field | — |
-| 4 | **Conflict check** — every number, date and disclaimer found in both the graphic and the request must agree | Any disagreement: both values are shown, nothing is chosen |
-| 5 | **Confirm** — where a person checks the extraction, with no Loomi screen, is open (§10) | — |
+| 1 | **Trigger** — the project's Approved Design gets files (§3.1); the intake pass (`loomi.drafting.intake`, every 5 minutes) starts each of its email subitems. A deliverable that already has Draft Files or a template link was built by hand and is left alone | — |
+| 2 | **Fetch** the subitem, the project and design's approved files; unzip; pick this store's email graphic (`approved-files.ts`) | No email graphic for the store, a subitem that doesn't name its store, two email deliverables for one store, or an image over 40 MB |
+| 3 | **Extract + classify** — one vision pass, saved field by field (§5). The type steers the copy and the examples; it never stops a draft | — |
+| 4 | **Conflict check** — every term found in both the graphic and the request must agree (§5.2) | Any disagreement: both values are shown, nothing is chosen |
+| 5 | **Confirm** — no gate. Low-confidence readings are flagged in the subitem update, and the proofer compares them with the image (decided 2026-10-09) | — |
 | 6 | **Draft** — the model writes copy, subjects and previews; code assembles the email | — |
-| 7 | **Validate** — the rule registry (§7) | Any error |
-| 8 | **Publish** (`publish.ts`) — the draft becomes the account's Loomi template (`draft-…` slug, category `drafted`; later drafts update it and `TemplateVersion` keeps the earlier ones); the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
+| 7 | **Validate** — the rule registry (§7). One rewrite when only the copy broke a rule | Any error left after the rewrite: the version is kept, nothing goes to monday |
+| 8 | **Publish** (`publish.ts`) — the draft becomes a draft `EmailBlast` for the account, its design a hidden per-blast template (type `campaign`, out of the library) as every blast's is; a re-draft updates the same blast while it's still a draft and starts a fresh one once someone has scheduled or sent it; the proof is rendered with Loomi's send-time footer and real account values; the PNG + HTML go to Draft Files, the Loomi Template column gets the link, and an update carries what was read | A monday write fails |
 | 9 | **Watch** Proof Status | "Approved" freezes the version as final |
 
 Steps 2–8 run as a pg-boss job. Vision plus drafting outlasts nginx's 60-second
@@ -135,7 +178,7 @@ text. Code assembles everything else into a v2 `EmailTemplate`:
 - the hero image (the approved creative);
 - CTA URLs with their UTM tags;
 - the disclaimer, pasted verbatim from the confirmed extraction;
-- the footer (logo, camelCase site, unsubscribe token);
+- the footer (logo, camelCase site — no unsubscribe link, which the send adds);
 - fonts and colors.
 
 The model never writes a disclaimer, a URL or a footer, so it cannot get them
@@ -143,33 +186,154 @@ wrong.
 
 ---
 
-## 5. Extraction
+### 4.1 Drafting templates — built 2026-10-15
 
-**Persisted and correctable, field by field.** Each field records:
+Drafted emails are filled from a **library of reusable templates**, one or more
+per request type — never a new template per send. **Nobody has to build them:**
+the shared library has a starter for every request type
+(`drafting-starter-<type>`, "Drafted email — Sales event", …), seeded by the
+drafter before each draft and by `scripts/ensure-drafting-templates.ts`.
+Create-only: a restyled starter is never overwritten; a deleted one comes back,
+so to stop using one, unmark it. Design restyles a starter once and every draft
+of that type after looks that way; a group or store can mark its own template
+to override it.
 
-- the asset it came from;
-- the model's value;
-- the human-corrected value;
-- who confirmed it.
+Any drag-and-drop template can be marked for one or more request types from the
+template library (card menu → **Use for drafted emails**). The
+marking is `Template.draftingFor` (JSON string[]); the card shows a
+**Drafting** badge, amber while the template can't be used yet.
 
-The disclaimer cannot be drafted against until a person confirms it. Reading
-6pt legal text off an image is the weakest step in the chain.
+**Slots** are tokens typed into blocks in the normal editor — a block whose
+whole content is the token is that slot (`template-slots.ts`):
 
-Monthly-offer fields:
+| Slot | Put it in | Filled with |
+|---|---|---|
+| `{{draft.hero}}` | an Image's image URL | the approved creative, linked where the first button goes — **required** |
+| `{{draft.headline}}` | a Heading or Text | the headline |
+| `{{draft.body}}` | a Text | the body, one block per paragraph, each styled like the slot — **required** |
+| `{{draft.cta1}}`, `{{draft.cta2}}` | a Button's text | label and tagged link; an unused one is removed, and a Columns row left with one button becomes that button |
+| `{{draft.disclaimer}}` | a Text | the creative's disclaimer verbatim; removed when there is none. Without the slot it goes before the footer anyway — it's legal text |
+| `{{draft.footer}}` | a Text | the dealer logo (contrasting) and site name. Without it, the template's last block is the footer the rules check |
 
-- headline and subhead;
-- vehicle (year, make, model, trim);
-- offer type (lease / finance / cash / other);
-- payment, term, APR, due at signing, MSRP and savings;
-- expiration;
-- CTA label;
-- logos present;
-- disclaimer text, verbatim.
+Everything else — banners, colors, fonts, spacing — is the template's own.
 
-Other request types (service special, sales event, event invite,
-survey/announcement, conquest) share a common core and are out of slice 1.
+**Which template:** the account's own, then its group's (nearest first), then
+the shared library; at one level the most recently edited
+(`drafting-templates.ts`). Blast designs (type `campaign`) and old per-send drafts (category `drafted`) are never
+candidates.
 
----
+**Fallback to the built-in layout**, with a note on the draft saying why:
+the template lacks a required slot, or its own design breaks a rule for the
+store — a serif font, red for Kia, a non-#eff1f5 background for VW. The copy
+is the same either way; only the layout changes. Copy-rule failures are
+rewritten once as before, whichever layout is used.
+
+## 5. Extraction — built
+
+Code: `extract.ts` (the vision call), `extraction.ts` (its contract and
+screening, pure), `conflicts.ts` (pure), `draft.ts` (the stages 3–8 that run
+straight after fetch in the same job).
+
+**One pass, image only.** The reader sees the creative and never the request:
+the conflict check compares the two, and a reader that had seen "1.9% APR" in
+the request would be inclined to read it off the image. Each image goes in
+whole, then as overlapping full-width strips, because the API scales an image
+to about 1,568px on its long edge and a 600×1800 creative's 6pt disclaimer
+doesn't survive that.
+
+**What it produces** — a `CreativeReading` (`reading.ts`), stored on
+`DraftRequest.extraction` and reused until the creative changes:
+
+- `requestType` — model_offer, service_special, sales_event, event_invite,
+  announcement, conquest, other;
+- `fields`, from a fixed vocabulary — headline, subhead, vehicle, offer,
+  payment, term, apr, dueAtSigning, msrp, price, savings, rebate, services,
+  expiration, cta, dealer, logos, other — each with its value as printed, a
+  confidence, and the monday asset it came from;
+- `disclaimer` — verbatim, paragraph breaks kept, with a confidence;
+- `offerType` (lease / finance / cash / other) and the one featured `vehicle`;
+- `unreadable` — text the reader could see but not make out, reported rather
+  than guessed.
+
+Anything but an explicit "high" counts as low confidence. Unknown keys and
+empty values are dropped; an unknown request type becomes `other`, which still drafts.
+
+**Sources for the fact check** (`extraction.ts::factSources`): every field, the
+vehicle, the disclaimer, and the request's name, Dev Details and Offer
+Disclaimer. Nothing else may vouch for a number.
+
+### 5.1 No confirmation step for the disclaimer
+
+Decided by Connor, 2026-10-14. Design almost always renders the disclaimer into
+the graphic, so the reading is drafted as is: a low-confidence disclaimer is
+flagged in the update for the proofer, and a creative with no disclaimer simply
+gets an email with none, with no note. Nothing waits on a person confirming it.
+
+### 5.2 The conflict check
+
+A term is compared only when both sides state it. The creative states it in a
+field; the request states it in prose, so a request value counts when it sits
+in a clause naming that term ("1.9% APR for 72 months", "Offer ends 10/31").
+APR, term, payment, due at signing, MSRP, savings, rebate and the expiry date
+are compared. The request conflicts when it states the term and none of its
+values for it is the creative's — so a request listing a lease and a finance
+payment doesn't stop a creative showing one of them.
+
+The disclaimer is compared by its figures: a number or date in one that the
+other lacks stops the draft. Wording alone only adds a note, because the
+request's Offer Disclaimer is often a note to design or an earlier draft, and
+the creative's text is the one carried verbatim. **Interpretation to confirm.**
+
+A conflict or a blocked draft restarts on its own only when the creative is
+replaced in Approved Design. A corrected request needs the draft run again
+(`scripts/drafting-run.ts`), because the intake fingerprint is the assets and
+the client, not the request text.
+
+### 5.3 What the assembler decides
+
+One look for every brand — black on white, white-on-black square full-width
+buttons side by side, Helvetica — which satisfies Kia's and Honda's palettes,
+YAG's font and VW's square CTAs; VW changes only the surfaces to #eff1f5.
+The utm_campaign is the project name plus the month the draft is made.
+
+The footer logo is the one that contrasts with the footer (`logo.ts`): dark
+artwork on a light footer, white artwork on a dark one (Connor, 2026-10-15). It
+is measured, not taken from the slot name: "Light Logo" reads both ways, and
+Young Chev's was white artwork that vanished on the white footer. The footer
+is light today (white, or VW's #eff1f5); `assemble.ts::footerBackground` is the
+one place that sets it, so a dark footer flips the logo with it. 200px wide.
+
+### 5.4 Where the buttons go — built 2026-10-14
+
+`src/lib/drafting/links.ts`. The copywriter gives each button a label and a
+**purpose** from a fixed list; code looks the link up in the account's custom
+values (Account settings → Custom Values, which a group can copy down to its
+accounts). The model never writes a URL.
+
+| Purpose | Custom value read |
+|---|---|
+| new_inventory | `new_inventory_url`, else `inventory_url` |
+| used_inventory | `used_inventory_url` |
+| specials | `specials_url`, else `promotions_url` |
+| service_scheduler | `service_scheduler_url` |
+| service_specials | `service_specials_url` |
+| trade_in | `trade_in_url` |
+| finance | `finance_url` |
+| contact | `contact_url` |
+| homepage | the account's website |
+
+Keys match however they're spelled ("Specials URL" is `specials_url`). The
+copywriter is told which purposes have a link and prefers them. The creative
+links where the first button does.
+
+Every link is fetched when the draft is made. A 404 or a server error, or a
+page that redirects to the homepage, falls back to the homepage with a note;
+401/403/405/429 and timeouts are bot protection as often as not, so the link is
+kept, with one note per site to click the buttons before sending. Dealer.com
+sites block every automated request (youngchev.com answers 403 even for a page
+that doesn't exist, checked 2026-10-14), so on those the check can't confirm
+anything and the note is expected. A purpose with no link on file goes to the
+homepage, and the note names the custom value to add.
 
 ## 6. Data model — built
 
@@ -192,15 +356,19 @@ survey/announcement, conquest) share a common core and are out of slice 1.
   - the monday asset ids written to Draft Files;
   - `finalAt`, set when Proof Status reads Approved.
 
-Each draft also becomes an account-owned `Template` (the editor opens it at
-`/templates/editor?design=<slug>`); `TemplateVersion` keeps its edit history,
-and the `DraftVersion` keeps what the template's history can't — the rule
-evaluation, the notes and the provenance of the copy.
+Each draft lands in a **draft `EmailBlast`** (`DraftRequest.blastId`) for the
+account, with no audience and no schedule, so nothing sends until a person gives
+it both. Its design is a hidden per-blast template (`DraftRequest.templateId`,
+type `campaign`) — never a new entry in the template library. The blast's
+metadata records the design (`templateSlug`) and the draft (`draftRequestId`,
+`draftVersion`); a re-draft merges into it rather than replacing other keys.
+The `DraftVersion` keeps what the blast can't — the rule evaluation, the notes
+and the provenance of the copy.
 
-**On Approved, freeze the version only. No `EmailBlast` is created.** This was
-decided while GoHighLevel still carried most sends, to avoid a trail of drafts
-that never send. With Loomi now the only sender that reason is gone, so it is
-open for Connor to revisit.
+**Changed 2026-10-15.** Until then each draft became an account-owned template
+(category `drafted`), one per send, and no blast was made — decided while
+GoHighLevel carried most sends. Connor reversed it: one library of reusable
+templates, blasts filled from them. On Approved, the version is still frozen.
 
 ---
 
@@ -234,7 +402,6 @@ How rules are organized and run:
 | `copy.subject-and-preview-options` — at least one initial and one urgent subject and preview, none empty or duplicated | all | error |
 | `claims.supported` — every number, date and make in the copy appears in the creative or request (§7.3) | all | error |
 | `disclaimer.verbatim` — the disclaimer block equals the creative's text, whitespace aside, and renders | all | error |
-| `footer.unsubscribe` — the footer links Loomi's `{{unsubscribe_link}}` | all | error |
 | `links.utm` — every http link carries `utm_source=email`, `utm_medium=email`, `utm_campaign={slug}-{month}-{year}`, and a `utm_content` unique to it | all | error |
 | `layout.multi-cta` — several CTAs sit in Columns (side by side), stack on mobile, full width | all | error |
 | `fonts.no-serif` — no serif face anywhere, fallbacks included | all | error |
@@ -333,11 +500,11 @@ verbatim disclaimer aren't checked, because code assembles them from trusted dat
 
 ### 7.5 Data the rules need that doesn't exist yet
 
-- **`siteDisplay`** — the camelCase site, e.g. `YoungCDJRRiverdale.com`. It can't
-  be derived: Riverdale's `Account.website` is
+- **`Account.siteDisplay`** — the camelCase site, e.g. `YoungCDJRRiverdale.com`.
+  It can't be derived: Riverdale's `Account.website` is
   `youngchryslerdodgejeepramriverdale.com`, a different domain from the display
-  form. Proposed: a new `Account` field. Until set, every draft for that account
-  is blocked by `footer.site-url`.
+  form. The field exists (2026-10-14) and is empty everywhere, with no UI to set
+  it yet. Until set, every draft for that account is blocked by `footer.site-url`.
 - **Per-account abbreviations** for `copy.dealer-name-in-full`, beyond the global
   CDJR / YAG / YPS / YUC / T&T list.
 
@@ -372,6 +539,22 @@ drafts without co-op context.
    to design.
 4. Those items are saved as notes on the draft version, beside the warnings from
    §7.2. Nothing blocks.
+
+**Built 2026-10-14** (`src/lib/drafting/guidelines.ts`):
+
+- The make → document map is `GUIDELINE_SOURCES`; a make not in it matches a
+  document filed under its own name, case-insensitively. GMC also gets the GMC
+  Brand Style Guide; the Hyundai claim-status reference is never sent.
+- Pages are chosen by keyword weight within ~40,000 characters (12 pages at
+  most), and pages about email as a channel always go first. Email addresses
+  are ignored when scoring, because a running footer ("Email: saf@ansira") put
+  an email hit on every page of the Subaru guide. Checked against the local
+  documents: Subaru p. 19 and p. 44 and GM p. 21 are all picked.
+- The copywriter returns what it couldn't satisfy with a document, page and
+  quote. The quote is checked with the ad engine's verifier and cited at the
+  page it was actually found on; a quote that can't be found keeps its note,
+  marked as unverified.
+- A co-op request for a make with no document gets a note saying so.
 
 **Not in scope:** eligibility rulings, a signed-off requirements checklist,
 growing per-brand rules from accepted items, claim evidence capture, and any
@@ -420,7 +603,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | monday transport (`src/lib/monday/client.ts`), shared with the help desk | **built** |
 | Development Projects contract — reads, the three writes, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
 | Local smoke script (`scripts/drafting-monday-smoke.ts`) | **built**; needs `MONDAY_API_TOKEN` |
-| Compliance rule registry, 20 rules, fixture tests | **built** |
+| Compliance rule registry, 19 rules, fixture tests (the unsubscribe rule was removed 2026-10-15) | **built** |
 | Co-op warnings: banned phrases + the four cheap pack requirements | **built** |
 | UTM slug and tagging (`src/lib/drafting/utm.ts`) | **built** |
 | `DraftRequest` / `DraftVersion` models | **built** |
@@ -429,13 +612,19 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | monday Client → account resolver (`accounts.ts`) | **built**; calibrated on the real names |
 | Proof Status watcher → freeze (`loomi.drafting.proof-status`, every 15 min) | **built**; read-only against monday |
 | Intake: every 5 minutes, approved creative → request; holds + notices once; bounded quiet retries (`intake.ts`) | **built**; DB-tested |
-| Publish: template in Loomi, proof PNG + HTML to Draft Files, Loomi Template link, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested |
+| Publish: draft blast in Loomi (since 2026-10-15; was a template per send), proof PNG + HTML to Draft Files, Loomi Template link to the blast, update with what was read (`publish.ts`, `notes.ts`) | **built**; DB-tested; live on the TEST Chev request |
 | Client from the subitem (Oz Clients connect → Loomi Account Key) | waiting on monday |
-| Extraction (vision) | next |
-| Co-op documents as drafting context, notes on the draft (§8) | next, with the drafter |
-| Corpus import from Loomi prod | next |
-| Drafting + assembly (the step between fetch and publish) | next |
-| Account → `siteDisplay`, abbreviations | next (needs the field) |
+| Extraction (vision) + classification (`extract.ts`, `extraction.ts`) | **built**; fixture-tested; not yet run on a real creative |
+| Conflict check (`conflicts.ts`) | **built**; fixture-tested |
+| Copywriter (`copywriter.ts`), assembler (`assemble.ts`), stages 3–8 (`draft.ts`) | **built**; every brand's assembled draft clears the registry (`assemble.test.ts`); stages DB-tested with the model stubbed (`draft.db.test.ts`) |
+| Hand-run end to end (`scripts/drafting-run.ts`) | **built** |
+| Corpus builder (`scripts/drafting-build-corpus.ts`) | **built**, not run — the corpus ships empty and the copywriter runs without examples until it is |
+| Co-op documents as drafting context (§8) | **built**; page picking checked on the local documents, not yet on a live draft |
+| `Account.siteDisplay` | field built; values and a place to edit them are not |
+| Button links from the account's custom values, link check (`links.ts`) | **built**; checked with the network stubbed, not yet against real dealer sites |
+| Approved Design intake: mirror chain, unzip, email + store matching (`approved-files.ts`, `monday-board.ts`) | **built**; live read-only dry run picked the Mazda MT Owner Night email graphic |
+| Drafting templates: mark in the library, `{{draft.*}}` slots, built-in fallback (`template-slots.ts`, `drafting-templates.ts`, `assemble.ts::assembleFromTemplate`) | **built**; checked in the library on a local template |
+| Per-account abbreviations | next |
 
 **Retries, without noise.** A request that can't start waits (`needs_account`
 or `failed`) with one notice on the subitem. The intake retries it as soon as
@@ -446,9 +635,10 @@ may bump. A failure with nothing changed is retried quietly at most three times,
 
 **Switched off until turned on.** The intake does nothing unless
 `DRAFTING_INTAKE_ENABLED=true` on the droplet — `MONDAY_API_TOKEN` alone isn't
-enough, because the help desk needs the token too. Turn it on once the drafter
-can finish what the intake starts; until then a started request stops at
-`awaiting_extraction`. No route or page uses any of this.
+enough, because the help desk needs the token too. The drafter now finishes
+what the intake starts, so turning it on drafts every approved email deliverable
+on the board: do it after a hand-run end to end has been reviewed, and after
+the accounts it will see have `siteDisplay` set. No route or page uses any of this.
 
 ---
 
@@ -464,5 +654,17 @@ can finish what the intake starts; until then a started request stops at
   ```
 
   Reads (`--list`, `--subitem <id>`, `--download`) need no nomination.
+- **Drafting one deliverable by hand**, without the worker or the intake flag —
+  the same writes as the pipeline, so the subitem must be nominated:
+
+  ```
+  DRAFTING_MONDAY_WRITE_SUBITEMS=<id> npx tsx --env-file=.env.local \
+    scripts/drafting-run.ts --subitem <id> [--account <key>] [--reread]
+  ```
+
+  Needs `MONDAY_API_TOKEN`, `ANTHROPIC_API_KEY` and the `S3_*` settings: the
+  creative is the email's hero image and needs a URL that outlives monday's.
+- **Building the corpus:** `scripts/drafting-build-corpus.ts`, read-only against
+  the database it is pointed at, dry run unless `--write`; one model call per final.
 - monday's asset `public_url` is a signed S3 link that expires in about an hour.
   It is fetched immediately and never stored.

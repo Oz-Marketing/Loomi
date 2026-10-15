@@ -7,6 +7,7 @@ import { serializeTemplate } from '@/lib/template-serializer';
 import { getStarterTemplate } from '@/lib/template-starters';
 import * as templateService from '@/lib/services/templates';
 import { isVisualEditableTemplate, parseV2Template } from '@/lib/email/types';
+import { parseDraftingFor, templateSlotProblems } from '@/lib/drafting/template-slots';
 
 function extractFrontmatterTitle(content: string): string | undefined {
   const v2 = parseV2Template(content);
@@ -115,6 +116,9 @@ export async function GET(req: NextRequest) {
       editorType: hasVisualTemplateScaffold(t.content) ? 'visual' : 'code',
       type: t.type,
       category: t.category,
+      // Drafting template marking, and what stops it being used (§4.1 of docs/email-drafting.md).
+      draftingFor: parseDraftingFor(t.draftingFor),
+      draftingProblems: t.draftingFor ? templateSlotProblems(parseV2Template(t.content)) : [],
       published: t.published,
       publishedAt: t.publishedAt ? t.publishedAt.toISOString() : null,
       publishedBy: t.publishedByUser?.name || null,

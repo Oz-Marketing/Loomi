@@ -1,4 +1,5 @@
 import { MondayError, mondayRequest, mondayUploadFile } from '@/lib/monday/client';
+import { subitemClient } from './approved-files';
 
 /**
  * The Development Projects board, as email drafting reads and writes it.
@@ -13,13 +14,24 @@ import { MondayError, mondayRequest, mondayUploadFile } from '@/lib/monday/clien
  *
  * ── WHO OWNS WHICH COLUMN ──
  *
- *   Design Assets        design team     the approved creative — drafting's INPUT
- *   Assets Approved      design team     "Approved" = ready to draft (the trigger)
+ *   Approved Design      design team     on the PROJECT: every final graphic for the
+ *                                        request, mirrored from design's own Approved
+ *                                        column — drafting's INPUT and its trigger
  *   Draft Files          LOOMI           the rendered draft, PNG + HTML
  *   Loomi Template       LOOMI           link to the draft's template in Loomi
  *   Proof Status         PageProof sync  "Approved" is final — Loomi only READS it
  *   Proof URL            PageProof sync  read only
  *   Proof Approval Date  PageProof sync  read only
+ *
+ * Approved Design is a mirror of a mirror: design's Approved file column →
+ * the rep's intake board ("Approved Design", per rep board) → this project.
+ * monday answers a two-level mirror query with an internal error, so the files
+ * are read a hop at a time: the project's mirror names the intake item, and
+ * the intake item's mirror holds design's files. Checked against the live
+ * boards 2026-10-15, including downloading a 12 MB zip through the chain.
+ *
+ * The subitem's own Design Assets and Assets Approved columns predate this and
+ * are no longer read.
  *
  * Loomi also posts UPDATES on the subitem: the draft's link, what it read off the
  * creative, and its notes — or why it couldn't draft.
@@ -61,6 +73,8 @@ export const PROJECT_COLUMNS = {
   audience: 'lookup_mm7p3p7s',
   audienceDetails: 'lookup_mm7pap3x',
   jobNumber: 'lookup_mm7parn0',
+  /** Design's final graphics, mirrored through the rep's intake board. */
+  approvedDesign: 'lookup_mm7zrfjk',
 } as const;
 
 /** The columns drafting writes. */
@@ -74,9 +88,6 @@ export const PAGEPROOF_OWNED_COLUMNS = [
   DELIVERABLE_COLUMNS.proofApprovalDate,
 ] as const;
 
-/** Assets Approved → "Approved" is label index 1 on the board. */
-const ASSETS_APPROVED_INDEX = 1;
-export const ASSETS_APPROVED_LABEL = 'Approved';
 export const PROOF_APPROVED_LABEL = 'Approved';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -121,6 +132,10 @@ export interface ProjectRequest {
   audience: string;
   audienceDetails: string;
   jobNumber: string | null;
+  /** Every final graphic design approved for the request — images and zips, all channels. */
+  approvedFiles: DeliverableFile[];
+  /** All the project's deliverables, this one included. */
+  subitems: { id: string; name: string }[];
 }
 
 export interface Deliverable {
@@ -129,8 +144,6 @@ export interface Deliverable {
   kind: DeliverableKind;
   /** ISO time of the subitem's last change on monday. */
   updatedAt: string | null;
-  assetsApproved: boolean;
-  designAssets: DeliverableFile[];
   draftFiles: DeliverableFile[];
   /** The Loomi Template link, once Loomi has written one. */
   templateUrl: string | null;
@@ -147,11 +160,14 @@ export interface ReadyDeliverable {
   updatedAt: string | null;
   projectId: string | null;
   projectName: string | null;
-  /** The project's Client mirror — the account resolution starts here. */
+  /**
+   * The store this deliverable is for, when it can be told — `[store]` — else
+   * every client the project names, which the intake reports as ambiguous.
+   */
   clients: string[];
   coop: CoopFlag;
-  /** The Design Assets on the subitem — part of what the poller fingerprints. */
-  designAssetIds: string[];
+  /** The project's approved graphics — what the poller fingerprints. */
+  approvedAssetIds: string[];
   hasDraftFiles: boolean;
   hasTemplateLink: boolean;
 }
@@ -192,7 +208,10 @@ interface RawColumnValue {
   date?: string | null;
   display_value?: string | null;
   /** A mirror's source values, structured — how a dropdown's labels survive intact. */
-  mirrored_items?: { mirrored_value?: { values?: { label?: string | null }[] | null } | null }[] | null;
+  mirrored_items?: {
+    linked_item?: { id: string } | null;
+    mirrored_value?: { values?: { label?: string | null }[] | null; files?: RawFile[] | null } | null;
+  }[] | null;
   files?: RawFile[] | null;
 }
 
@@ -202,7 +221,8 @@ interface RawItem {
   updated_at?: string | null;
   board?: { id: string } | null;
   column_values: RawColumnValue[];
-  parent_item?: { id: string; name: string; column_values: RawColumnValue[] } | null;
+  parent_item?: { id: string; name: string; column_values: RawColumnValue[]; subitems?: { id: string; name: string }[] | null } | null;
+  subitems?: { id: string; name: string; column_values: RawColumnValue[] }[] | null;
 }
 
 function byId(values: RawColumnValue[]): Map<string, RawColumnValue> {
@@ -276,6 +296,9 @@ export function parseDeliverable(raw: RawItem): Deliverable {
       audience: mirror(p.get(PROJECT_COLUMNS.audience)),
       audienceDetails: mirror(p.get(PROJECT_COLUMNS.audienceDetails)),
       jobNumber: mirror(p.get(PROJECT_COLUMNS.jobNumber)) || null,
+      // Filled by getDeliverable, which follows the mirror to design's files.
+      approvedFiles: [],
+      subitems: (parent.subitems ?? []).map((x) => ({ id: x.id, name: x.name })),
     };
   }
   return {
@@ -283,8 +306,6 @@ export function parseDeliverable(raw: RawItem): Deliverable {
     name: raw.name,
     kind: deliverableKind(raw.name),
     updatedAt: raw.updated_at ?? null,
-    assetsApproved: cols.get(DELIVERABLE_COLUMNS.assetsApproved)?.label === ASSETS_APPROVED_LABEL,
-    designAssets: files(cols.get(DELIVERABLE_COLUMNS.designAssets)),
     draftFiles: files(cols.get(DELIVERABLE_COLUMNS.draftFiles)),
     templateUrl: cols.get(TEMPLATE_LINK_COLUMN)?.url || null,
     proof: proofState(cols),
@@ -300,7 +321,7 @@ const COLUMN_VALUE_FIELDS = `
   ... on StatusValue { label }
   ... on LinkValue { url }
   ... on DateValue { date }
-  ... on MirrorValue { display_value mirrored_items { mirrored_value { ... on DropdownValue { values { label } } } } }
+  ... on MirrorValue { display_value mirrored_items { linked_item { id } mirrored_value { ... on DropdownValue { values { label } } } } }
   ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } }
 `;
 
@@ -316,10 +337,77 @@ const DELIVERABLE_QUERY = `
         id
         name
         column_values(ids: ${JSON.stringify(Object.values(PROJECT_COLUMNS))}) { ${COLUMN_VALUE_FIELDS} }
+        subitems { id name }
       }
     }
   }
 `;
+
+/** The intake items a project's Approved Design mirror points at. */
+export function approvedDesignSources(cv: RawColumnValue | undefined): string[] {
+  return [...new Set((cv?.mirrored_items ?? []).map((m) => m.linked_item?.id).filter((id): id is string => !!id))];
+}
+
+/** Which column on each rep intake board holds design's files — from the mirror's own settings. */
+let intakeColumnsCache: { at: number; byBoard: Record<string, string[]> } | null = null;
+const INTAKE_COLUMNS_TTL_MS = 10 * 60 * 1000;
+
+export function parseIntakeColumns(settingsStr: string | null | undefined): Record<string, string[]> {
+  try {
+    const settings = JSON.parse(settingsStr ?? '{}') as { displayed_linked_columns?: Record<string, string[]> };
+    return settings.displayed_linked_columns ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function intakeColumns(): Promise<Record<string, string[]>> {
+  if (intakeColumnsCache && Date.now() - intakeColumnsCache.at < INTAKE_COLUMNS_TTL_MS) return intakeColumnsCache.byBoard;
+  const data = await mondayRequest<{ boards: { columns: { settings_str: string | null }[] }[] | null }>(
+    `query ($boardId: ID!, $columnId: String!) { boards(ids: [$boardId]) { columns(ids: [$columnId]) { settings_str } } }`,
+    { boardId: DEV_PROJECTS_BOARD_ID, columnId: PROJECT_COLUMNS.approvedDesign },
+  );
+  const byBoard = parseIntakeColumns(data.boards?.[0]?.columns?.[0]?.settings_str);
+  intakeColumnsCache = { at: Date.now(), byBoard };
+  return byBoard;
+}
+
+/** Design's approved files behind each intake item. Missing items map to nothing. */
+export async function approvedFilesByIntakeItem(intakeIds: string[]): Promise<Map<string, DeliverableFile[]>> {
+  const out = new Map<string, DeliverableFile[]>();
+  if (intakeIds.length === 0) return out;
+  const columnIds = [...new Set(Object.values(await intakeColumns()).flat())];
+  if (columnIds.length === 0) return out;
+  const query = `
+    query ($ids: [ID!]) {
+      items(ids: $ids) {
+        id
+        column_values(ids: ${JSON.stringify(columnIds)}) {
+          id
+          ... on MirrorValue {
+            mirrored_items {
+              mirrored_value { ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } } }
+            }
+          }
+        }
+      }
+    }
+  `;
+  for (let i = 0; i < intakeIds.length; i += 100) {
+    const data = await mondayRequest<{ items: RawItem[] | null }>(query, { ids: intakeIds.slice(i, i + 100) });
+    for (const item of data.items ?? []) {
+      const found = item.column_values.flatMap((cv) =>
+        (cv.mirrored_items ?? []).flatMap((m) => files({ id: cv.id, files: m.mirrored_value?.files ?? [] })),
+      );
+      out.set(item.id, dedupeFiles(found));
+    }
+  }
+  return out;
+}
+
+function dedupeFiles(list: DeliverableFile[]): DeliverableFile[] {
+  return list.filter((f, i) => list.findIndex((g) => g.assetId === f.assetId) === i);
+}
 
 function assertDeliverableBoard(item: { id: string; board?: { id: string } | null }): void {
   if (item.board?.id !== DELIVERABLES_BOARD_ID) {
@@ -342,75 +430,90 @@ export async function getDeliverable(subitemId: string): Promise<Deliverable | n
   const raw = data.items?.[0];
   if (!raw) return null;
   assertDeliverableBoard(raw);
-  return parseDeliverable(raw);
+  const deliverable = parseDeliverable(raw);
+  if (deliverable.project && raw.parent_item) {
+    const sources = approvedDesignSources(byId(raw.parent_item.column_values).get(PROJECT_COLUMNS.approvedDesign));
+    const byItem = await approvedFilesByIntakeItem(sources);
+    deliverable.project.approvedFiles = dedupeFiles(sources.flatMap((id) => byItem.get(id) ?? []));
+  }
+  return deliverable;
 }
 
 /** Pages are 100 items; the board turns over long before this cap matters. */
-const MAX_PAGES = 10;
+const MAX_PAGES = 20;
 
 /**
- * Every deliverable whose Assets Approved reads "Approved", any kind. The
- * caller decides what it can draft — the email slice takes `kind: 'email'`
+ * Every deliverable on a project whose Approved Design has files, any kind.
+ * The caller decides what it can draft — the email slice takes `kind: 'email'`
  * without Draft Files yet.
+ *
+ * Reads every project: a mirror column can't be filtered on. Three requests a
+ * page at most — the projects, their intake items' files — every five minutes.
  */
-export async function listReadyDeliverables(): Promise<ReadyDeliverable[]> {
+export async function listApprovedDeliverables(): Promise<ReadyDeliverable[]> {
   const query = `
-    query ($boardId: ID!, $columnId: ID!, $index: CompareValue!, $cursor: String) {
+    query ($boardId: ID!, $cursor: String) {
       boards(ids: [$boardId]) {
-        items_page(
-          limit: 100
-          cursor: $cursor
-          query_params: { rules: [{ column_id: $columnId, compare_value: $index, operator: any_of }] }
-        ) {
+        items_page(limit: 100, cursor: $cursor) {
           cursor
           items {
             id
             name
-            updated_at
-            column_values(ids: ["${DELIVERABLE_COLUMNS.designAssets}", "${DRAFT_OUTPUT_COLUMN}", "${TEMPLATE_LINK_COLUMN}"]) { ${COLUMN_VALUE_FIELDS} }
-            parent_item {
+            column_values(ids: ["${PROJECT_COLUMNS.client}", "${PROJECT_COLUMNS.coop}", "${PROJECT_COLUMNS.approvedDesign}"]) { ${COLUMN_VALUE_FIELDS} }
+            subitems {
               id
               name
-              column_values(ids: ["${PROJECT_COLUMNS.client}", "${PROJECT_COLUMNS.coop}"]) { ${COLUMN_VALUE_FIELDS} }
+              updated_at
+              column_values(ids: ["${DRAFT_OUTPUT_COLUMN}", "${TEMPLATE_LINK_COLUMN}"]) { ${COLUMN_VALUE_FIELDS} }
             }
           }
         }
       }
     }
   `;
-  type Page = {
-    boards: { items_page: { cursor: string | null; items: RawItem[] } }[] | null;
-  };
+  type Page = { boards: { items_page: { cursor: string | null; items: (RawItem & { subitems?: (RawItem)[] | null })[] } }[] | null };
 
-  const out: ReadyDeliverable[] = [];
+  const projects: (RawItem & { subitems?: RawItem[] | null })[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const data: Page = await mondayRequest<Page>(query, {
-      boardId: DELIVERABLES_BOARD_ID,
-      columnId: DELIVERABLE_COLUMNS.assetsApproved,
-      index: [ASSETS_APPROVED_INDEX],
-      cursor,
-    });
+    const data: Page = await mondayRequest<Page>(query, { boardId: DEV_PROJECTS_BOARD_ID, cursor });
     const itemsPage = data.boards?.[0]?.items_page;
     for (const item of itemsPage?.items ?? []) {
-      const cols = byId(item.column_values);
-      const parent = byId(item.parent_item?.column_values ?? []);
-      out.push({
-        id: item.id,
-        name: item.name,
-        kind: deliverableKind(item.name),
-        updatedAt: item.updated_at ?? null,
-        projectId: item.parent_item?.id ?? null,
-        projectName: item.parent_item?.name ?? null,
-        clients: clientLabels(parent.get(PROJECT_COLUMNS.client)),
-        coop: parseCoopFlag(mirror(parent.get(PROJECT_COLUMNS.coop))),
-        designAssetIds: files(cols.get(DELIVERABLE_COLUMNS.designAssets)).map((f) => f.assetId),
-        hasDraftFiles: files(cols.get(DRAFT_OUTPUT_COLUMN)).length > 0,
-        hasTemplateLink: Boolean(cols.get(TEMPLATE_LINK_COLUMN)?.url),
-      });
+      const sources = approvedDesignSources(byId(item.column_values).get(PROJECT_COLUMNS.approvedDesign));
+      if (sources.length && (item.subitems ?? []).length) projects.push(item);
     }
     cursor = itemsPage?.cursor ?? null;
     if (!cursor) break;
+  }
+
+  const allSources = [...new Set(projects.flatMap((p) => approvedDesignSources(byId(p.column_values).get(PROJECT_COLUMNS.approvedDesign))))];
+  const byItem = await approvedFilesByIntakeItem(allSources);
+
+  const out: ReadyDeliverable[] = [];
+  for (const project of projects) {
+    const cols = byId(project.column_values);
+    const approved = dedupeFiles(
+      approvedDesignSources(cols.get(PROJECT_COLUMNS.approvedDesign)).flatMap((id) => byItem.get(id) ?? []),
+    );
+    if (approved.length === 0) continue;
+    const clients = clientLabels(cols.get(PROJECT_COLUMNS.client));
+    for (const sub of project.subitems ?? []) {
+      const subCols = byId(sub.column_values);
+      const store = subitemClient(sub.name, clients);
+      out.push({
+        id: sub.id,
+        name: sub.name,
+        kind: deliverableKind(sub.name),
+        updatedAt: sub.updated_at ?? null,
+        projectId: project.id,
+        projectName: project.name,
+        clients: store ? [store] : clients,
+        coop: parseCoopFlag(mirror(cols.get(PROJECT_COLUMNS.coop))),
+        approvedAssetIds: approved.map((f) => f.assetId),
+        hasDraftFiles: files(subCols.get(DRAFT_OUTPUT_COLUMN)).length > 0,
+        hasTemplateLink: Boolean(subCols.get(TEMPLATE_LINK_COLUMN)?.url),
+      });
+    }
   }
   return out;
 }

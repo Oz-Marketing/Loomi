@@ -191,7 +191,11 @@ interface AssetLookup {
  * after about an hour, so it is fetched here, immediately, and never stored —
  * a URL saved for later is a URL that 403s later.
  */
-export async function downloadMondayAsset(assetId: string): Promise<MondayAssetFile> {
+export async function downloadMondayAsset(
+  assetId: string,
+  /** Larger for a zip of a request's final graphics; images keep the default. */
+  maxBytes = MAX_ASSET_BYTES,
+): Promise<MondayAssetFile> {
   const data = await mondayRequest<AssetLookup>(
     `query ($ids: [ID!]!) { assets(ids: $ids) { id name file_size public_url } }`,
     { ids: [assetId] },
@@ -200,9 +204,9 @@ export async function downloadMondayAsset(assetId: string): Promise<MondayAssetF
   if (!asset?.public_url) {
     throw new MondayError(`monday.com has no downloadable file for asset ${assetId}.`, 'api_error');
   }
-  if (asset.file_size != null && asset.file_size > MAX_ASSET_BYTES) {
+  if (asset.file_size != null && asset.file_size > maxBytes) {
     throw new MondayError(
-      `"${asset.name}" is ${Math.round(asset.file_size / 1024 / 1024)} MB — export a flattened PNG or JPG under ${MAX_ASSET_BYTES / 1024 / 1024} MB.`,
+      `"${asset.name}" is ${Math.round(asset.file_size / 1024 / 1024)} MB — export a flattened PNG or JPG under ${maxBytes / 1024 / 1024} MB.`,
       'api_error',
     );
   }
@@ -224,7 +228,7 @@ export async function downloadMondayAsset(assetId: string): Promise<MondayAssetF
     );
   }
   const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length > MAX_ASSET_BYTES) {
+  if (bytes.length > maxBytes) {
     throw new MondayError(`"${asset.name}" is larger than drafting accepts.`, 'api_error');
   }
   return { id: asset.id, name: asset.name, bytes, contentType: res.headers.get('content-type') };

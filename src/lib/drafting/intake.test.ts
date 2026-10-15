@@ -14,7 +14,7 @@ function ready(overrides: Partial<ReadyDeliverable> = {}): ReadyDeliverable {
     projectName: 'YPS Euro & Ogden',
     clients: ['Young Powersports Euro'],
     coop: 'no',
-    designAssetIds: ['501'],
+    approvedAssetIds: ['501'],
     hasDraftFiles: false,
     hasTemplateLink: false,
     ...overrides,
@@ -48,9 +48,18 @@ describe('intakeAction', () => {
   });
 
   it('retries a stopped request as soon as what it is made from changes', () => {
-    const changed = intakeFingerprint(ready({ designAssetIds: ['502'] }));
+    const changed = intakeFingerprint(ready({ approvedAssetIds: ['502'] }));
     expect(intakeAction(ready(), prior('needs_account', { updatedAt: NOW }), changed, NOW)).toEqual({ kind: 'start' });
     expect(intakeAction(ready(), prior('failed', { updatedAt: NOW }), changed, NOW)).toEqual({ kind: 'start' });
+  });
+
+  it('restarts a conflict or a blocked draft only when the creative is replaced', () => {
+    const changed = intakeFingerprint(ready({ approvedAssetIds: ['502'] }));
+    const longAgo = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+    for (const status of ['conflict', 'blocked']) {
+      expect(intakeAction(ready(), prior(status, { updatedAt: longAgo }), fp, NOW).kind, status).toBe('skip');
+      expect(intakeAction(ready(), prior(status, { updatedAt: NOW }), changed, NOW), status).toEqual({ kind: 'start' });
+    }
   });
 
   it('retries a failure quietly, a bounded number of times, never a missing account', () => {
@@ -63,7 +72,7 @@ describe('intakeAction', () => {
 
 describe('intakeFingerprint', () => {
   it('ignores asset order but not the assets or the client', () => {
-    expect(intakeFingerprint(ready({ designAssetIds: ['1', '2'] }))).toBe(intakeFingerprint(ready({ designAssetIds: ['2', '1'] })));
+    expect(intakeFingerprint(ready({ approvedAssetIds: ['1', '2'] }))).toBe(intakeFingerprint(ready({ approvedAssetIds: ['2', '1'] })));
     expect(intakeFingerprint(ready({ clients: ['Young Powersports Ogden'] }))).not.toBe(fp);
   });
 });

@@ -279,6 +279,10 @@ model Account {
   state                      String?
   postalCode                 String?
   website                    String?
+  // The dealer's site as an email footer prints it, camelCase: "YoungCDJRRiverdale.com".
+  // Not derivable from `website` (Riverdale's is youngchryslerdodgejeepramriverdale.com);
+  // drafted emails are blocked by `footer.site-url` until it's set. See docs/email-drafting.md §7.5.
+  siteDisplay                String?
   timezone                   String?
   logos                      String? // JSON: { light, dark, white?, black? }
   branding                   String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
@@ -517,6 +521,11 @@ model Template {
   category          String? // "service", "sales", "loyalty", etc.
   content           String // full raw HTML template source
   preheader         String?
+  /// Request types this template is the drafting template for, as a JSON
+  /// string[] ("model_offer", "sales_event", …). The email drafter fills its
+  /// {{draft.*}} slots instead of building its own layout. Null = not used for
+  /// drafting. See docs/email-drafting.md §4.1.
+  draftingFor       String?
   published         Boolean   @default(false)
   publishedAt       DateTime?
   publishedByUserId String?
@@ -5795,9 +5804,12 @@ model DraftRequest {
   /// Null while it can't be — the request then waits at `needs_account`.
   accountKey String?
 
-  /// The Loomi email template the drafts are written into, one per deliverable.
-  /// Its own TemplateVersion history keeps every earlier draft.
+  /// The draft's design: a hidden per-blast template (type `campaign`, kept out
+  /// of the library), built from a drafting template in the library.
   templateId String?
+  /// The draft EmailBlast the email lands in — nothing sends until a person
+  /// schedules it. Re-drafts update it while it's still a draft.
+  blastId    String?
 
   /// Where the request is in the pipeline; see src/lib/drafting/status.ts.
   status String @default("queued")

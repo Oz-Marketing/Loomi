@@ -1,29 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DISCLAIMER, blockById, draft } from '../__fixtures__/drafts';
-import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule, unsubscribeRule } from './structure';
-
-describe('footer.unsubscribe', () => {
-  it('requires Loomi’s unsubscribe link in the footer', async () => {
-    const a = await draft((t) => {
-      blockById(t, 'footer-text').props.text = 'YoungChev.com';
-    });
-    expect(unsubscribeRule.check(a)).toEqual([
-      { severity: 'error', message: 'The footer has no unsubscribe link. It must link to {{unsubscribe_link}}.', where: 'footer' },
-    ]);
-  });
-
-  it('accepts no other unsubscribe tag in its place', async () => {
-    const a = await draft((t) => {
-      blockById(t, 'footer-text').props.text = 'YoungChev.com · <a href="{{unsubscribe}}" style="color:#000000">Unsubscribe</a>';
-    });
-    expect(unsubscribeRule.check(a)).toHaveLength(1);
-  });
-
-  it('reports a missing footer block', async () => {
-    const a = await draft(undefined, { footerBlockId: 'nope' });
-    expect(unsubscribeRule.check(a)[0].message).toContain('"nope"');
-  });
-});
+import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule } from './structure';
 
 describe('copy.subject-and-preview-options', () => {
   it('requires an urgent subject line for the follow-up send', async () => {

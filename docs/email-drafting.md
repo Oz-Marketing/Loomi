@@ -251,9 +251,12 @@ buttons side by side, Helvetica — which satisfies Kia's and Honda's palettes,
 YAG's font and VW's square CTAs; VW changes only the surfaces to #eff1f5.
 The utm_campaign is the project name plus the month the draft is made.
 
-The footer logo is the darkest of the account's logos (`logo.ts`), measured,
-not taken from the slot name: "Light Logo" reads both ways, and Young Chev's
-was white artwork that vanished on the white footer. It renders 200px wide.
+The footer logo is the one that contrasts with the footer (`logo.ts`): dark
+artwork on a light footer, white artwork on a dark one (Connor, 2026-10-15). It
+is measured, not taken from the slot name: "Light Logo" reads both ways, and
+Young Chev's was white artwork that vanished on the white footer. The footer
+is light today (white, or VW's #eff1f5); `assemble.ts::footerBackground` is the
+one place that sets it, so a dark footer flips the logo with it. 200px wide.
 
 ### 5.4 Where the buttons go — built 2026-10-14
 

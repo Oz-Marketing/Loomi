@@ -4,7 +4,7 @@ import type { CoopRulePack } from '@/lib/ad-generator/coop-rules';
 import { loadPreviewAccountData } from '@/lib/email/preview-substitute';
 import { getAccountOems } from '@/lib/oems';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
-import { buildDraft, siteUrl, type BuiltDraft } from './assemble';
+import { buildDraft, footerBackground, siteUrl, type BuiltDraft } from './assemble';
 import type { DraftAsset } from './assets';
 import type { DraftAccount } from './compliance/types';
 import { findConflicts, type DraftConflict } from './conflicts';
@@ -75,7 +75,11 @@ async function loadAccount(accountKey: string) {
     siteDisplay: row.siteDisplay,
     website: row.website,
   };
-  return { draftAccount, logoUrl: await footerLogo(logos), links: accountLinks(row.customValues) };
+  return {
+    draftAccount,
+    logoUrl: await footerLogo(logos, footerBackground(draftAccount.oems)),
+    links: accountLinks(row.customValues),
+  };
 }
 
 /** The make whose co-op pack applies: the featured vehicle's, when the store sells it, else the store's only make. */

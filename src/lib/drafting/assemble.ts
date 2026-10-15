@@ -68,6 +68,14 @@ function sells(oems: string[], make: string): boolean {
   return oems.some((o) => o.toLowerCase() === make.toLowerCase());
 }
 
+/**
+ * The footer's background — the page surface. The footer logo is chosen to
+ * contrast with it (`logo.ts`), so this is the one place that decides both.
+ */
+export function footerBackground(oems: string[]): string {
+  return sells(oems, 'Volkswagen') ? VW_BACKGROUND : WHITE;
+}
+
 /** "youngchev.com" / "www.youngchev.com/" → "https://www.youngchev.com/". */
 export function siteUrl(website: string): string {
   const trimmed = website.trim();
@@ -95,7 +103,7 @@ export function assembleDraft(input: {
 }): Assembled {
   const { copy, account, utmCampaign } = input;
   const vw = sells(account.oems, 'Volkswagen');
-  const surface = vw ? VW_BACKGROUND : WHITE;
+  const surface = footerBackground(account.oems);
   const site = siteUrl(account.website);
   const taken = new Set<string>();
   const link = (content: string, url = site) => tagLink(url, utmCampaign, content);

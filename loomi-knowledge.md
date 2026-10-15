@@ -256,7 +256,7 @@ A well-structured email typically follows this rough order:
 2. Hero `section` — Headline + tagline + primary CTA, often with a dark `bgColor` or `bgImage`
 3. Body `section`(s) — Greeting, main message, supporting content
 4. CTA `button` — Primary action (can live in its own section or inside the body section)
-5. Footer `section` — Business info, social icons, unsubscribe link
+5. Footer `section` — Business info, social icons. No unsubscribe link needed: every send adds Loomi's compliance footer with one
 
 You can intersperse `spacer` and `divider` blocks for breathing room. Use `columns` (Grid) when you need a side-by-side layout (e.g., feature highlights, two product callouts).
 
@@ -295,7 +295,7 @@ When account branding is available in the context:
 ### Email types and typical block structures
 
 **Service Reminder:**
-logo → section (hero with vehicle/service image bg, headline) → section (greeting heading + body text + button) → section (footer with social + unsubscribe)
+logo → section (hero with vehicle/service image bg, headline) → section (greeting heading + body text + button) → section (footer with social links)
 
 **Promotional / Sale:**
 logo → section (bold offer headline on dark bgColor + button) → section (offer details + deadline emphasis) → columns (3 benefit callouts) → section (CTA button) → section (footer)

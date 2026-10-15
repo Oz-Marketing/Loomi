@@ -32,8 +32,9 @@ own constraints (always strip DDC's default wrapper padding and use the page's
 own spacing).
 
 **Loomi is the only sending platform.** GoHighLevel is being retired (decided
-2026-10-09). Drafts target Loomi's sender alone: one unsubscribe tag, no send
-platform field, and no ongoing dependency on GHL anywhere in this pipeline.
+2026-10-09). Drafts target Loomi's sender alone: no unsubscribe link in the template
+(Loomi's send-time footer adds it and SendGrid fills in the URL — Connor,
+2026-10-15), no send platform field, and no ongoing dependency on GHL anywhere in this pipeline.
 
 ---
 
@@ -175,7 +176,7 @@ text. Code assembles everything else into a v2 `EmailTemplate`:
 - the hero image (the approved creative);
 - CTA URLs with their UTM tags;
 - the disclaimer, pasted verbatim from the confirmed extraction;
-- the footer (logo, camelCase site, unsubscribe token);
+- the footer (logo, camelCase site — no unsubscribe link, which the send adds);
 - fonts and colors.
 
 The model never writes a disclaimer, a URL or a footer, so it cannot get them
@@ -353,7 +354,6 @@ How rules are organized and run:
 | `copy.subject-and-preview-options` — at least one initial and one urgent subject and preview, none empty or duplicated | all | error |
 | `claims.supported` — every number, date and make in the copy appears in the creative or request (§7.3) | all | error |
 | `disclaimer.verbatim` — the disclaimer block equals the creative's text, whitespace aside, and renders | all | error |
-| `footer.unsubscribe` — the footer links Loomi's `{{unsubscribe_link}}` | all | error |
 | `links.utm` — every http link carries `utm_source=email`, `utm_medium=email`, `utm_campaign={slug}-{month}-{year}`, and a `utm_content` unique to it | all | error |
 | `layout.multi-cta` — several CTAs sit in Columns (side by side), stack on mobile, full width | all | error |
 | `fonts.no-serif` — no serif face anywhere, fallbacks included | all | error |
@@ -555,7 +555,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | monday transport (`src/lib/monday/client.ts`), shared with the help desk | **built** |
 | Development Projects contract — reads, the three writes, the write guard (`src/lib/drafting/monday-board.ts`) | **built**; queries verified against the live board, API version 2024-10 |
 | Local smoke script (`scripts/drafting-monday-smoke.ts`) | **built**; needs `MONDAY_API_TOKEN` |
-| Compliance rule registry, 20 rules, fixture tests | **built** |
+| Compliance rule registry, 19 rules, fixture tests (the unsubscribe rule was removed 2026-10-15) | **built** |
 | Co-op warnings: banned phrases + the four cheap pack requirements | **built** |
 | UTM slug and tagging (`src/lib/drafting/utm.ts`) | **built** |
 | `DraftRequest` / `DraftVersion` models | **built** |

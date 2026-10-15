@@ -1,65 +1,11 @@
 import type { Block } from '@/lib/email/types';
-import { anchors, collapseWhitespace, stripTags, visibleText } from '../html';
+import { collapseWhitespace, stripTags, visibleText } from '../html';
 import { blockText, findBlock, walkBlocks } from '../surfaces';
 import type { CopyOption, DraftRule, Finding } from '../types';
 
 /**
  * Rules about the shape of every draft, whatever the brand.
  */
-
-/**
- * Loomi's unsubscribe merge tag. At send it becomes each recipient's own
- * unsubscribe link (see `buildBlastMergetagContext`), and the send-time footer
- * sees it already placed and doesn't repeat it.
- */
-export const UNSUBSCRIBE_TOKEN = '{{unsubscribe_link}}';
-
-/** Every href a block subtree links to: buttons, linked images, links inside rich text. */
-function linksUnder(root: Block): string[] {
-  const out: string[] = [];
-  walkBlocks([root], (block) => {
-    for (const key of ['url', 'linkUrl']) {
-      const v = block.props[key];
-      if (typeof v === 'string' && v.trim()) out.push(v.trim());
-    }
-    const text = block.props.text;
-    if (typeof text === 'string') {
-      for (const m of text.matchAll(/\bhref\s*=\s*["']([^"']*)["']/gi)) out.push(m[1].trim());
-    }
-  });
-  return out;
-}
-
-export const unsubscribeRule: DraftRule = {
-  id: 'footer.unsubscribe',
-  scope: {},
-  summary: `The footer links to ${UNSUBSCRIBE_TOKEN}.`,
-  check(a) {
-    const footer = findBlock(a.template, a.footerBlockId);
-    if (!footer) {
-      return [{ severity: 'error', message: `The footer block "${a.footerBlockId}" isn't in the email.`, where: 'footer' }];
-    }
-    if (!linksUnder(footer).includes(UNSUBSCRIBE_TOKEN)) {
-      return [
-        {
-          severity: 'error',
-          message: `The footer has no unsubscribe link. It must link to ${UNSUBSCRIBE_TOKEN}.`,
-          where: 'footer',
-        },
-      ];
-    }
-    if (!anchors(a.html).some((l) => l.href === UNSUBSCRIBE_TOKEN)) {
-      return [
-        {
-          severity: 'error',
-          message: 'The unsubscribe link is in the template but missing from the rendered email.',
-          where: 'footer',
-        },
-      ];
-    }
-    return [];
-  },
-};
 
 function optionFindings(label: 'subject' | 'preview', options: CopyOption[]): Finding[] {
   const findings: Finding[] = [];

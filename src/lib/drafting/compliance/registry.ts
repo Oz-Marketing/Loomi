@@ -10,7 +10,7 @@ import {
   vwBackgroundRule,
   vwSquareCtaRule,
 } from './rules/oem';
-import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule, unsubscribeRule } from './rules/structure';
+import { copyOptionsRule, disclaimerVerbatimRule, multiCtaRule } from './rules/structure';
 import type { DraftArtifact, DraftRule, Violation } from './types';
 
 /**
@@ -27,7 +27,6 @@ export const DRAFT_RULES: DraftRule[] = [
   copyOptionsRule,
   claimsRule,
   disclaimerVerbatimRule,
-  unsubscribeRule,
   utmRule,
   multiCtaRule,
   noSerifRule,

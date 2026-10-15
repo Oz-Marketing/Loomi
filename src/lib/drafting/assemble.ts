@@ -3,7 +3,6 @@ import { renderEmailTemplate } from '@/lib/email/render';
 import type { Block, EmailTemplate } from '@/lib/email/types';
 import { evaluateDraft, type DraftEvaluation } from './compliance/registry';
 import { NO_FOOTER_LOGO_OEMS } from './compliance/rules/brand';
-import { UNSUBSCRIBE_TOKEN } from './compliance/rules/structure';
 import type { CopyOption, DraftAccount, DraftArtifact, FactSource } from './compliance/types';
 import type { CreativeReading } from './reading';
 import { escapeHtml } from './notes';
@@ -20,8 +19,8 @@ import { tagLink } from './utm';
  *   - the hero is the approved creative itself, linked;
  *   - every link is tagged, each with its own utm_content;
  *   - the disclaimer is the confirmed reading, verbatim, in its own block;
- *   - the footer is the account's logo, camelCase site and Loomi's
- *     unsubscribe tag;
+ *   - the footer is the account's logo and camelCase site — no unsubscribe
+ *     link, which the send adds;
  *   - one palette for every brand: black on white (white on black buttons),
  *     Helvetica, square full-width buttons side by side in Columns. That one
  *     palette satisfies Kia's and Honda's, YAG's font and VW's square CTAs; VW
@@ -163,16 +162,15 @@ export function assembleDraft(input: {
     // (Young Chev's is 659×134), which at 140 render about 28px tall.
     footer.push({ id: 'footer-logo', type: 'logo', props: { src: account.logoUrl, alt: account.dealer, width: FOOTER_LOGO_WIDTH } });
   }
+  // No unsubscribe link: Loomi's send-time footer adds it, and SendGrid fills
+  // in each recipient's URL (Connor, 2026-10-15). Templates don't carry one.
   const siteText = account.siteDisplay?.trim();
-  const parts = [
-    ...(siteText
-      // The href is URL-serialized, so it carries no quote or angle bracket;
-      // left unescaped, as the rules and the sender read hrefs literally.
-      ? [`<a href="${link(contentKey('footer', 'site', taken))}" style="color:${BLACK}">${escapeHtml(siteText)}</a>`]
-      : []),
-    `<a href="${UNSUBSCRIBE_TOKEN}" style="color:${BLACK}">Unsubscribe</a>`,
-  ];
-  footer.push({ id: 'footer-text', type: 'text', props: { allowHtml: true, color: BLACK, text: parts.join(' · ') } });
+  if (siteText) {
+    // The href is URL-serialized, so it carries no quote or angle bracket;
+    // left unescaped, as the rules and the sender read hrefs literally.
+    const text = `<a href="${link(contentKey('footer', 'site', taken))}" style="color:${BLACK}">${escapeHtml(siteText)}</a>`;
+    footer.push({ id: 'footer-text', type: 'text', props: { allowHtml: true, color: BLACK, text } });
+  }
   blocks.push({ id: 'footer', type: 'section', props: { bgColor: surface }, children: footer });
 
   const initialSubject = copy.subjects.find((s) => s.kind === 'initial')?.text ?? '';

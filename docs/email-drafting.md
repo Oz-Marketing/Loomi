@@ -251,6 +251,10 @@ buttons side by side, Helvetica — which satisfies Kia's and Honda's palettes,
 YAG's font and VW's square CTAs; VW changes only the surfaces to #eff1f5.
 The utm_campaign is the project name plus the month the draft is made.
 
+The footer logo is the darkest of the account's logos (`logo.ts`), measured,
+not taken from the slot name: "Light Logo" reads both ways, and Young Chev's
+was white artwork that vanished on the white footer. It renders 200px wide.
+
 ### 5.4 Where the buttons go — built 2026-10-14
 
 `src/lib/drafting/links.ts`. The copywriter gives each button a label and a

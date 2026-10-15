@@ -13,6 +13,7 @@ import { pickHero } from './approved-files';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
+import { footerLogo } from './logo';
 import { factSources } from './extraction';
 import type { ProjectRequest } from './monday-board';
 import { blockedUpdate, cantDraftUpdate, conflictUpdate } from './notes';
@@ -74,7 +75,7 @@ async function loadAccount(accountKey: string) {
     siteDisplay: row.siteDisplay,
     website: row.website,
   };
-  return { draftAccount, logoUrl: logos?.light || logos?.dark || null, links: accountLinks(row.customValues) };
+  return { draftAccount, logoUrl: await footerLogo(logos), links: accountLinks(row.customValues) };
 }
 
 /** The make whose co-op pack applies: the featured vehicle's, when the store sells it, else the store's only make. */

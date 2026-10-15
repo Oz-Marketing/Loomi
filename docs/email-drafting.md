@@ -184,6 +184,39 @@ wrong.
 
 ---
 
+### 4.1 Drafting templates — built 2026-10-15
+
+A person can give drafted emails a designed layout instead of the built-in
+one: an ordinary drag-and-drop Loomi template, marked for one or more request
+types from the template library (card menu → **Use for drafted emails**). The
+marking is `Template.draftingFor` (JSON string[]); the card shows a
+**Drafting** badge, amber while the template can't be used yet.
+
+**Slots** are tokens typed into blocks in the normal editor — a block whose
+whole content is the token is that slot (`template-slots.ts`):
+
+| Slot | Put it in | Filled with |
+|---|---|---|
+| `{{draft.hero}}` | an Image's image URL | the approved creative, linked where the first button goes — **required** |
+| `{{draft.headline}}` | a Heading or Text | the headline |
+| `{{draft.body}}` | a Text | the body, one block per paragraph, each styled like the slot — **required** |
+| `{{draft.cta1}}`, `{{draft.cta2}}` | a Button's text | label and tagged link; an unused one is removed, and a Columns row left with one button becomes that button |
+| `{{draft.disclaimer}}` | a Text | the creative's disclaimer verbatim; removed when there is none. Without the slot it goes before the footer anyway — it's legal text |
+| `{{draft.footer}}` | a Text | the dealer logo (contrasting) and site name. Without it, the template's last block is the footer the rules check |
+
+Everything else — banners, colors, fonts, spacing — is the template's own.
+
+**Which template:** the account's own, then its group's (nearest first), then
+the shared library; at one level the most recently edited
+(`drafting-templates.ts`). Drafts themselves (category `drafted`) are never
+candidates.
+
+**Fallback to the built-in layout**, with a note on the draft saying why:
+the template lacks a required slot, or its own design breaks a rule for the
+store — a serif font, red for Kia, a non-#eff1f5 background for VW. The copy
+is the same either way; only the layout changes. Copy-rule failures are
+rewritten once as before, whichever layout is used.
+
 ## 5. Extraction — built
 
 Code: `extract.ts` (the vision call), `extraction.ts` (its contract and
@@ -575,6 +608,7 @@ rather than the old offers. Any stale price that leaks into a draft is caught by
 | `Account.siteDisplay` | field built; values and a place to edit them are not |
 | Button links from the account's custom values, link check (`links.ts`) | **built**; checked with the network stubbed, not yet against real dealer sites |
 | Approved Design intake: mirror chain, unzip, email + store matching (`approved-files.ts`, `monday-board.ts`) | **built**; live read-only dry run picked the Mazda MT Owner Night email graphic |
+| Drafting templates: mark in the library, `{{draft.*}}` slots, built-in fallback (`template-slots.ts`, `drafting-templates.ts`, `assemble.ts::assembleFromTemplate`) | **built**; checked in the library on a local template |
 | Per-account abbreviations | next |
 
 **Retries, without noise.** A request that can't start waits (`needs_account`

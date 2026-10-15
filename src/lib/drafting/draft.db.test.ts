@@ -101,7 +101,32 @@ async function cleanup() {
   const rows = await prisma.draftRequest.findMany({ where: { mondaySubitemId: SUB }, select: { templateId: true } });
   await prisma.draftRequest.deleteMany({ where: { mondaySubitemId: SUB } });
   await prisma.template.deleteMany({ where: { id: { in: rows.map((r) => r.templateId).filter((t): t is string => !!t) } } });
+  await prisma.template.deleteMany({ where: { slug: SHELL_SLUG } });
   await prisma.account.deleteMany({ where: { key: ACCOUNT } });
+}
+
+const SHELL_SLUG = 'vitest-drafting-shell';
+/** A designer's model-offer template for the store, slots typed in. */
+function shellContent(fontFamily = 'Helvetica, Arial, sans-serif'): string {
+  return JSON.stringify({
+    version: '2',
+    title: 'Stagewell offer layout',
+    settings: { bodyBg: '#ffffff', contentBg: '#ffffff', contentWidth: 600, fontFamily, textColor: '#000000' },
+    blocks: [
+      { id: 'banner', type: 'heading', props: { text: 'From your friends at the dealership', color: '#000000' } },
+      { id: 'hero-slot', type: 'image', props: { src: '{{draft.hero}}' } },
+      { id: 'headline-slot', type: 'heading', props: { text: '{{draft.headline}}', color: '#000000' } },
+      { id: 'body-slot', type: 'text', props: { text: '{{draft.body}}', color: '#000000' } },
+      { id: 'cta-slot', type: 'button', props: { text: '{{draft.cta1}}', fullWidth: true, borderRadius: 0, bgColor: '#000000', textColor: '#ffffff' } },
+      { id: 'footer-slot', type: 'text', props: { text: '{{draft.footer}}' } },
+    ],
+  });
+}
+async function markShell(fontFamily?: string) {
+  await prisma.template.deleteMany({ where: { slug: SHELL_SLUG } });
+  await prisma.template.create({
+    data: { slug: SHELL_SLUG, title: 'Stagewell offer layout', type: 'design', accountKey: ACCOUNT, content: shellContent(fontFamily), draftingFor: JSON.stringify(['model_offer']) },
+  });
 }
 
 describe.skipIf(!RUN)('drafting stages (DB)', () => {
@@ -204,5 +229,28 @@ describe.skipIf(!RUN)('drafting stages (DB)', () => {
     expect(r.versions[0].uploadedAt).toBeNull();
     expect(stub.writes.uploads).toEqual([]);
     expect(stub.writes.updates[0].body).toContain('$4,000');
+  });
+
+  it("drafts into the store's marked template for the request type", async () => {
+    await seed();
+    await markShell();
+    await runDraftStages((await row()).id);
+    const r = await row();
+    expect(r.status).toBe('in_proofing');
+    const template = JSON.parse(r.versions[0].template) as { blocks: { id: string }[] };
+    expect(template.blocks.map((b) => b.id)).toEqual(expect.arrayContaining(['banner', 'hero-slot', 'headline-slot', 'body-slot-1', 'footer']));
+    expect(JSON.parse(r.versions[0].notes!)).toContain('Built on the "Stagewell offer layout" drafting template.');
+  });
+
+  it("falls back to the built-in layout when the template's design breaks a rule, and says so", async () => {
+    await seed();
+    await markShell('Georgia, serif');
+    await runDraftStages((await row()).id);
+    const r = await row();
+    expect(r.status).toBe('in_proofing');
+    const template = JSON.parse(r.versions[0].template) as { blocks: { id: string }[] };
+    expect(template.blocks.some((b) => b.id === 'banner')).toBe(false);
+    expect(JSON.parse(r.versions[0].notes!)[0]).toMatch(/^The "Stagewell offer layout" drafting template breaks a rule for Stagewell Chevrolet/);
+    await prisma.template.deleteMany({ where: { slug: SHELL_SLUG } });
   });
 });

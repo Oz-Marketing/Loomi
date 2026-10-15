@@ -10,6 +10,7 @@ import type { DraftAccount } from './compliance/types';
 import { findConflicts, type DraftConflict } from './conflicts';
 import { COPY_RULE_IDS, repairCopy, writeCopy, type CopyResult } from './copywriter';
 import { pickHero } from './approved-files';
+import { findDraftingTemplate } from './drafting-templates';
 import { readCreative } from './extract';
 import { coopNotes, loadGuidelineDocs, pickPages, type GuidelineDoc } from './guidelines';
 import { accountLinks, checkLink, resolveCtas, type CtaPurpose } from './links';
@@ -192,15 +193,36 @@ export async function runDraftStages(requestId: string): Promise<void> {
     // 7. Validate, with one rewrite when only the copy is at fault.
     let written: CopyResult = await writeCopy(brief);
     let resolved = await resolveCtas(written.copy.ctas, links, website, checkLink);
-    let built = await buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url) });
+    // §4.1: a marked template's layout when there is one; the built-in otherwise.
+    const marked = await findDraftingTemplate(row.accountKey, reading.requestType ?? 'other');
+    const build = (shell: typeof marked) =>
+      buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url), shell: shell?.template ?? null });
+    let built = await build(marked);
     const copyErrors = (b: BuiltDraft) => b.evaluation.violations.filter((v) => v.severity === 'error' && COPY_RULE_IDS.has(v.ruleId));
     if (built.evaluation.blocked && copyErrors(built).length) {
       written = await repairCopy(written, copyErrors(built));
       resolved = await resolveCtas(written.copy.ctas, links, website, checkLink);
-      built = await buildDraft({ ...common, copy: written.copy, ctaUrls: resolved.map((r) => r.url) });
+      built = await build(marked);
+    }
+    // A template that can't take the draft, or whose own design breaks a rule
+    // for this store (a palette, a font), falls back to the built-in layout —
+    // the copy is the same, so only the layout changes.
+    const layoutNotes: string[] = [];
+    if (marked && built.shellProblem) {
+      layoutNotes.push(`The "${marked.title}" drafting template couldn't be used, so the built-in layout was: ${built.shellProblem}`);
+    } else if (marked && built.usedShell && built.evaluation.blocked && copyErrors(built).length === 0) {
+      const broken = built.evaluation.violations.filter((v) => v.severity === 'error').map((v) => v.message);
+      const fallback = await build(null);
+      if (!fallback.evaluation.blocked) {
+        layoutNotes.push(`The "${marked.title}" drafting template breaks a rule for ${draftAccount.dealer} (${broken.join(' ')}), so the built-in layout was used.`);
+        built = fallback;
+      }
+    } else if (marked && built.usedShell) {
+      layoutNotes.push(`Built on the "${marked.title}" drafting template.`);
     }
 
     const notes = [
+      ...layoutNotes,
       ...check.notes,
       ...built.copy.notes,
       ...coopNotes(written.coopUnmet, guidelineDocs),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildDraft, siteUrl, type DraftCopy } from './assemble';
+import { assembleFromTemplate, buildDraft, siteUrl, type DraftCopy } from './assemble';
+import type { Block, EmailTemplate } from '@/lib/email/types';
 import { DISCLAIMER, YOUNG_CHEVROLET } from './compliance/__fixtures__/drafts';
 import type { DraftAccount } from './compliance/types';
 import { factSources } from './extraction';
@@ -142,5 +143,97 @@ describe('siteUrl', () => {
   it('normalizes a website on file to its origin', () => {
     expect(siteUrl('youngHonda.com')).toBe('https://younghonda.com/');
     expect(siteUrl('https://www.youngchev.com/new?x=1')).toBe('https://www.youngchev.com/');
+  });
+});
+
+/** A designer's template: their own banner and colors, with the drafting slots typed in. */
+function designed(extra: Block[] = []): EmailTemplate {
+  return {
+    version: '2',
+    settings: { bodyBg: '#f4f4f4', contentBg: '#ffffff', contentWidth: 600, fontFamily: 'Helvetica, Arial, sans-serif', textColor: '#111111' },
+    blocks: [
+      { id: 'banner', type: 'heading', props: { text: 'This month at the dealership', color: '#111111' } },
+      { id: 'hero-slot', type: 'image', props: { src: '{{draft.hero}}' } },
+      { id: 'headline-slot', type: 'heading', props: { text: '{{draft.headline}}', color: '#111111', fontSize: 28 } },
+      { id: 'body-slot', type: 'text', props: { text: '{{draft.body}}', color: '#111111', fontSize: 16 } },
+      {
+        id: 'row',
+        type: 'columns',
+        props: { columnCount: 2, stackOnMobile: true },
+        children: [
+          { id: 'c1', type: 'section', props: {}, children: [{ id: 'b1', type: 'button', props: { text: '{{draft.cta1}}', fullWidth: true, borderRadius: 0, bgColor: '#111111', textColor: '#ffffff' } }] },
+          { id: 'c2', type: 'section', props: {}, children: [{ id: 'b2', type: 'button', props: { text: '{{draft.cta2}}', fullWidth: true, borderRadius: 0, bgColor: '#111111', textColor: '#ffffff' } }] },
+        ],
+      },
+      ...extra,
+      { id: 'footer-slot', type: 'text', props: { text: '{{draft.footer}}' } },
+    ],
+  };
+}
+
+const ACCOUNT = { dealer: 'Young Chevrolet', oems: ['Chevrolet'], siteDisplay: 'YoungChev.com', website: 'https://www.youngchev.com/', logoUrl: 'https://cdn.example.com/logo.png' };
+const fill = (shell: EmailTemplate, c = copy('Young Chevrolet'), disclaimer: string | null = DISCLAIMER) =>
+  assembleFromTemplate({ copy: c, disclaimer, heroUrl: 'https://cdn.example.com/creative.png', account: ACCOUNT, utmCampaign: 'x-october-2026', shell });
+
+describe('assembleFromTemplate', () => {
+  it("fills every slot and keeps the designer's own blocks and styles", () => {
+    const r = fill(designed());
+    if ('problem' in r) throw new Error(r.problem);
+    const ids = r.template.blocks.map((b) => b.id);
+    expect(ids).toEqual(['banner', 'hero-slot', 'headline-slot', 'body-slot-1', 'body-slot-2', 'row', 'disclaimer', 'footer']);
+    expect(r.template.blocks[2].props).toMatchObject({ text: 'The 2026 Equinox ACTIV, $3,500 off', fontSize: 28 });
+    expect(r.template.blocks[3].props).toMatchObject({ fontSize: 16 });
+    expect(r.template.settings.bodyBg).toBe('#f4f4f4');
+    expect(r.disclaimerBlockId).toBe('disclaimer');
+    expect(r.footerBlockId).toBe('footer');
+    const b2 = r.template.blocks[5].children![1].children![0];
+    expect(b2.props.text).toBe('Value Your Trade');
+    expect(new URL(b2.props.url as string).searchParams.get('utm_content')).toBe('cta-value-your-trade');
+  });
+
+  it('drops an unused button, and a row left with one button becomes that button', () => {
+    const one = { ...copy('Young Chevrolet'), ctas: [{ label: 'Shop Equinox', purpose: 'new_inventory' }] };
+    const r = fill(designed(), one);
+    if ('problem' in r) throw new Error(r.problem);
+    expect(r.template.blocks.find((b) => b.id === 'row')).toBeUndefined();
+    expect(r.template.blocks.find((b) => b.id === 'b1')?.props.text).toBe('Shop Equinox');
+  });
+
+  it('places the disclaimer in its slot, or before the footer when the template has none, and drops an empty slot', () => {
+    const withSlot = fill(designed([{ id: 'legal', type: 'text', props: { text: '{{draft.disclaimer}}', fontSize: 10 } }]));
+    if ('problem' in withSlot) throw new Error(withSlot.problem);
+    expect(withSlot.disclaimerBlockId).toBe('legal');
+    const none = fill(designed([{ id: 'legal', type: 'text', props: { text: '{{draft.disclaimer}}' } }]), undefined, null);
+    if ('problem' in none) throw new Error(none.problem);
+    expect(none.template.blocks.some((b) => b.id === 'legal')).toBe(false);
+  });
+
+  it("refuses a template without the slots it can't do without", () => {
+    const r = fill({ ...designed(), blocks: designed().blocks.filter((b) => b.id !== 'hero-slot') });
+    expect('problem' in r && r.problem).toContain('{{draft.hero}}');
+  });
+
+  it('a well-made template clears every rule, and one that breaks a brand rule is caught', async () => {
+    const run = (account: typeof YOUNG_CHEVROLET, shell: EmailTemplate) =>
+      buildDraft({
+        copy: copy(account.dealer),
+        reading: READING,
+        account,
+        logoUrl: 'https://cdn.example.com/logo.png',
+        heroUrl: 'https://cdn.example.com/creative.png',
+        website: 'https://www.youngchev.com/',
+        utmCampaign: campaignSlug('Equinox ACTIV Monthly Offer', 10, 2026),
+        facts: factSources(READING, null),
+        coop: false,
+        coopPack: null,
+        shell,
+      });
+    const ok = await run(YOUNG_CHEVROLET, designed());
+    expect(ok.usedShell).toBe(true);
+    expect(errors(ok)).toEqual([]);
+    const red = designed();
+    red.blocks[0].props.color = '#cc0000';
+    const kia = await run({ ...STORES[1] }, red);
+    expect(kia.evaluation.violations.some((v) => v.ruleId === 'oem.kia.palette' && v.severity === 'error')).toBe(true);
   });
 });

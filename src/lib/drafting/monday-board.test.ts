@@ -9,9 +9,8 @@ import {
   deliverableKind,
   getDeliverable,
   parseCoopFlag,
-  approvedDesignSources,
+  approvedDesignFiles,
   parseDeliverable,
-  parseIntakeColumns,
   postDraftUpdate,
   setTemplateLink,
   uploadDraftFile,
@@ -56,10 +55,15 @@ const RAW_SUBITEM: Parameters<typeof parseDeliverable>[0] = {
       { id: 'lookup_mm7pap3x', text: null, display_value: 'Customers who purchased within the past 12 months' },
       { id: 'lookup_mm7parn0', text: null, display_value: 'OZ2610-075' },
       {
-        id: 'lookup_mm7zrfjk',
+        id: 'approved_design',
         text: null,
         display_value: '',
-        mirrored_items: [{ linked_item: { id: '13175653879' } }, { linked_item: { id: '13175653879' } }, { linked_item: null }],
+        // Two design items' Approved files; the same asset twice counts once.
+        mirrored_items: [
+          { linked_item: { id: '13257339011' }, mirrored_value: { files: [{ asset: { id: '3301', name: '10) _ Email _ Text.zip', file_extension: '.zip', file_size: 12_006_274 } }] } },
+          { linked_item: { id: '13257284259' }, mirrored_value: { files: [{ asset: { id: '3302', name: '10) _ Digital.PNG', file_extension: '.PNG', file_size: 800 } }, { asset: { id: '3301', name: '10) _ Email _ Text.zip' } }] } },
+          { linked_item: null },
+        ],
       },
     ],
     subitems: [
@@ -75,8 +79,10 @@ describe('parseDeliverable', () => {
     expect(d.kind).toBe('email');
     expect(d.draftFiles).toEqual([]);
     expect(d.project?.subitems.map((s) => s.name)).toEqual(['Email Blast 1', 'Text Blast 1']);
-    // Filled by getDeliverable, which follows the mirror; parsing alone leaves it empty.
-    expect(d.project?.approvedFiles).toEqual([]);
+    expect(d.project?.approvedFiles).toEqual([
+      { assetId: '3301', name: '10) _ Email _ Text.zip', extension: '.zip', sizeBytes: 12_006_274 },
+      { assetId: '3302', name: '10) _ Digital.PNG', extension: '.png', sizeBytes: 800 },
+    ]);
     expect(d.proof).toEqual({ status: 'No proof', url: null, approvedOn: null, approved: false });
     expect(d.project?.clients).toEqual(['Young Powersports Ogden', 'Young Powersports Euro']);
     expect(d.project?.coop).toBe('no');
@@ -93,19 +99,9 @@ describe('parseDeliverable', () => {
     expect(parseDeliverable(raw).proof.approved).toBe(false);
   });
 
-  it('finds the intake items behind Approved Design, once each', () => {
-    const cv = RAW_SUBITEM.parent_item!.column_values.find((c) => c.id === 'lookup_mm7zrfjk');
-    expect(approvedDesignSources(cv)).toEqual(['13175653879']);
-    expect(approvedDesignSources(undefined)).toEqual([]);
-  });
-
-  it("reads which column holds design's files on each rep board from the mirror's settings", () => {
-    const settings = JSON.stringify({
-      relation_column: { board_relation_mm79kvxr: true },
-      displayed_linked_columns: { '9577266535': ['mirror_mm1'], '18414976097': ['mirror_mkm35fxz'] },
-    });
-    expect(parseIntakeColumns(settings)).toEqual({ '9577266535': ['mirror_mm1'], '18414976097': ['mirror_mkm35fxz'] });
-    expect(parseIntakeColumns('not json')).toEqual({});
+  it('reads no approved files from an empty or missing Approved Design', () => {
+    expect(approvedDesignFiles(undefined)).toEqual([]);
+    expect(approvedDesignFiles({ id: 'approved_design', mirrored_items: [] })).toEqual([]);
   });
 
   it('keeps a store whose name contains a comma in one piece', () => {

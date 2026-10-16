@@ -101,6 +101,26 @@ export function subitemClient(subitemName: string, clients: string[]): string | 
 
 export type EmailPick<T> = { files: T[]; problem: null } | { files: []; problem: string };
 
+/** What the image itself says about whose it is: a client, `several`, or `none`. */
+export type ShownStore = string | 'several' | 'none';
+
+/** Every client of the request a piece of text names, by the words that tell them apart. */
+export function clientsNamedIn(text: string, clients: string[]): string[] {
+  const tokens = pathTokens(text);
+  return clients.filter((c) => contains(tokens, distinguishing(c, clients)));
+}
+
+/**
+ * The email graphics whose file name doesn't settle which store they're for —
+ * it names none of the request's stores, or several ("CDJR Riverdale-Layton"
+ * on both stores' versions). For these the image is looked at instead
+ * (`store-check.ts`). Only a multi-store request has any.
+ */
+export function needsALook<T extends ApprovedFile>(files: T[], clients: string[]): T[] {
+  if (clients.length <= 1) return [];
+  return files.filter((f) => isImagePath(f.path) && isEmailFile(f.path) && clientsNamedIn(f.path, clients).length !== 1);
+}
+
 /**
  * The approved email graphic(s) for one email subitem.
  *
@@ -114,6 +134,8 @@ export function pickEmailFiles<T extends ApprovedFile>(input: {
   files: T[];
   /** Every approved file's name, for the notice when none fits — files a person can recognize, PSDs included. */
   available?: string[];
+  /** For files `needsALook` returned: which store the image itself names. */
+  shown?: Record<string, ShownStore>;
 }): EmailPick<T> {
   const { clients } = input;
   const store = subitemClient(input.subitem.name, clients);
@@ -125,12 +147,29 @@ export function pickEmailFiles<T extends ApprovedFile>(input: {
   }
 
   const email = input.files.filter((f) => isImagePath(f.path) && isEmailFile(f.path));
-  const mine = clients.length > 1 ? email.filter((f) => clientNamedIn(f.path, clients) === store) : email;
+  // Multi-store: the file name decides when it names exactly one store; the
+  // image decides when it doesn't. A graphic naming no store, or several, is
+  // shared — used only when this store has none of its own.
+  let mine = email;
+  if (clients.length > 1) {
+    const own: T[] = [];
+    const shared: T[] = [];
+    for (const f of email) {
+      const named = clientsNamedIn(f.path, clients);
+      const owner = named.length === 1 ? named[0] : input.shown?.[f.path];
+      if (owner === store) own.push(f);
+      else if (!owner || owner === 'several' || owner === 'none') shared.push(f);
+    }
+    mine = own.length ? own : shared;
+  }
   if (mine.length === 0) {
     const what = clients.length > 1 ? `email graphic for ${store}` : 'email graphic';
+    // Name the word(s) that actually pick the store — "Layton", not the full
+    // dealer name, which design's file names never spell out.
+    const words = store ? [...distinguishing(store, clients)].map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
     const rule =
       clients.length > 1
-        ? `Loomi looks for "Email" and "${store}" in the file name.`
+        ? `Loomi looks for "Email" and "${words}" in the file name, on a PNG or JPG, and at the image itself when the name doesn't say.`
         : 'Loomi looks for "Email" in the file name, on a PNG or JPG.';
     const names = input.available ?? input.files.map((f) => f.path);
     const seen = names.length ? ` It found: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}.` : '';

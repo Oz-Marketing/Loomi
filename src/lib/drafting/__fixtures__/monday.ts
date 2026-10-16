@@ -37,9 +37,6 @@ function json(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
-/** The intake column design's files sit in, on every rep board in the stub. */
-const INTAKE_COLUMN = 'mirror_mkm35fxz';
-const intakeId = (s: StubSubitem) => `i-${s.id}`;
 
 function fileValues(s: StubSubitem) {
   return Object.entries(s.assets).map(([id, name]) => ({
@@ -57,10 +54,11 @@ function projectColumns(s: StubSubitem) {
     },
     { id: 'lookup_mm7phjm0', text: null, display_value: s.coop ?? 'No' },
     {
-      id: 'lookup_mm7zrfjk',
+      // Approved Design: design's Approved files, mirrored through the Design Item link.
+      id: 'approved_design',
       text: null,
       display_value: '',
-      mirrored_items: s.approved && Object.keys(s.assets).length ? [{ linked_item: { id: intakeId(s) } }] : [],
+      mirrored_items: s.approved && Object.keys(s.assets).length ? [{ linked_item: { id: `d-${s.id}` }, mirrored_value: { files: fileValues(s) } }] : [],
     },
   ];
 }
@@ -133,20 +131,10 @@ export function mondayStub(board: StubBoard): { fetch: (url: string | URL | Requ
       const ids = variables.ids as string[];
       return json({ data: { assets: ids.map((id) => ({ id, name: `${id}.png`, file_size: 9, public_url: `https://files.example/${id}` })) } });
     }
-    if (query.includes('settings_str')) {
-      const settings = { displayed_linked_columns: { '18414976097': [INTAKE_COLUMN] } };
-      return json({ data: { boards: [{ columns: [{ settings_str: JSON.stringify(settings) }] }] } });
-    }
     if (query.includes('items_page')) {
       return json({ data: { boards: [{ items_page: { cursor: null, items: board.subitems.map(rawProject) } }] } });
     }
     const ids = (variables.ids as string[] | undefined) ?? [];
-    if (ids.length && ids.every((id) => id.startsWith('i-'))) {
-      const items = board.subitems
-        .filter((s) => ids.includes(intakeId(s)))
-        .map((s) => ({ id: intakeId(s), column_values: [{ id: INTAKE_COLUMN, mirrored_items: [{ mirrored_value: { files: fileValues(s) } }] }] }));
-      return json({ data: { items } });
-    }
     const items = ids.map(find).filter((s): s is StubSubitem => Boolean(s)).map(rawSubitem);
     return json({ data: { items } });
   }

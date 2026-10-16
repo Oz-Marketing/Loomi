@@ -7,6 +7,7 @@ export type NotificationCategory =
   | 'Projects'
   | 'Ad Generator'
   | 'Asset Library'
+  | 'Contacts'
   | 'Product Updates';
 
 /**
@@ -28,6 +29,7 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
   // Asset rights expiry — the library lives on Studio alongside the generator
   // that consumes its assets.
   'Asset Library': 'studio',
+  Contacts: 'studio',
   // Changelog entries describe the whole product, and the changelog panel is in
   // the top bar on every surface — so the opt-out has to be reachable from
   // wherever the user happens to be when they decide they've had enough.
@@ -49,7 +51,7 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<
  */
 export interface NotificationCategoryStyle {
   /** Icon key — the panel maps this to a component; this file stays React-free. */
-  icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'sparkles';
+  icon: 'megaphone' | 'chart' | 'clipboard' | 'photo' | 'users' | 'sparkles';
   /** Icon-tile foreground and background classes. */
   accent: string;
   tint: string;
@@ -102,6 +104,13 @@ export const NOTIFICATION_CATEGORY_STYLE: Record<
     icon: 'photo',
     accent: 'text-amber-500 dark:text-amber-400',
     tint: 'bg-amber-500/12',
+    kind: 'tool',
+    sector: 'studio',
+  },
+  Contacts: {
+    icon: 'users',
+    accent: 'text-teal-500 dark:text-teal-400',
+    tint: 'bg-teal-500/12',
     kind: 'tool',
     sector: 'studio',
   },

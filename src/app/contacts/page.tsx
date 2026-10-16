@@ -21,6 +21,7 @@ import {
   PlusIcon,
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
+import { ImportActivity } from '@/components/contacts/import-activity';
 
 interface SingleAccountResponse {
   contacts: Contact[];
@@ -797,6 +798,9 @@ function AccountContactsView({
           </div>
         </div>
       </div>
+
+      {/* Imports run in the background; this is where they show up. */}
+      <ImportActivity accountKey={accountKey} onImportFinished={refresh} />
 
       {activeFilter && (
         <ActiveFilterBar

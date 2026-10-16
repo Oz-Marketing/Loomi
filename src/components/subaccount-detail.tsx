@@ -22,11 +22,15 @@ import {
   TagIcon,
   ChartBarIcon,
   XMarkIcon,
+  VariableIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { ReportAccessTab } from '@/components/settings/report-access-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
+import { CustomValuesTab } from '@/components/settings/custom-values-tab';
+import { customValueProblems } from '@/lib/accounts/custom-values';
+import { expandWithDescendants } from '@/lib/account-hierarchy';
 import {
   canonicalSubaccountSection,
 } from '@/components/settings/use-settings-tabs';
@@ -88,6 +92,7 @@ type DetailTab =
   | 'branding'
   | 'contacts'
   | 'contact-fields'
+  | 'custom-values'
   | 'domains'
   | 'integrations'
   | 'reports';
@@ -120,6 +125,10 @@ const TABS: TabDef[] = [
   // Account-scoped contact fields. The global blueprint library is its own
   // Studio settings tab; this declares what THIS account collects.
   { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
+  // The ACCOUNT's own {{custom_values.*}} merge tags — links, review URLs — as
+  // opposed to Custom Fields, which belong to contacts. A group can copy its
+  // values down to its accounts.
+  { key: 'custom-values', label: 'Custom Values', icon: VariableIcon },
   // The email/SMS engine's per-account config — sender identity, Twilio
   // credentials, the compliance footer and the suppression list. ONE entry with
   // Which reports this account's CLIENT users see.
@@ -243,7 +252,6 @@ export function SubAccountDetailPage({
   // ── Custom Values ──
   type CustomValueDef = { name: string; value: string };
   const [customValues, setCustomValues] = useState<Record<string, CustomValueDef>>({});
-  const [customValueDefaults, setCustomValueDefaults] = useState<Record<string, CustomValueDef>>({});
   const [savedCustomValues, setSavedCustomValues] = useState<Record<string, CustomValueDef>>({});
 
   // ── Populate from fetched data ──
@@ -334,6 +342,7 @@ export function SubAccountDetailPage({
       brandHeadingFont: a.branding?.fonts?.heading || DEFAULT_HEADING_FONT,
       brandBodyFont: a.branding?.fonts?.body || DEFAULT_BODY_FONT,
       brandDefaultFont: a.branding?.fonts?.brandDefault || '',
+      customValues: JSON.stringify(a.customValues || {}),
     };
   }
 
@@ -355,6 +364,7 @@ export function SubAccountDetailPage({
       logoLight, logoDark, logoWhite, logoBlack,
       brandPrimaryColor, brandSecondaryColor, brandAccentColor,
       brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont, brandDefaultFont,
+      customValues: JSON.stringify(customValues),
     };
     return Object.keys(snap).some(k => snap[k] !== current[k]);
   }, [
@@ -364,7 +374,17 @@ export function SubAccountDetailPage({
     logoLight, logoDark, logoWhite, logoBlack,
     brandPrimaryColor, brandSecondaryColor, brandAccentColor,
     brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont, brandDefaultFont,
+    customValues,
   ]);
+
+  // A group's accounts, for copying custom values down to them.
+  const childAccounts = useMemo(() => {
+    const edges = Object.entries(accounts).map(([k, a]) => ({ key: k, parentAccountKey: a.parentAccountKey ?? null }));
+    return expandWithDescendants(edges, [key])
+      .filter((k) => k !== key && accounts[k])
+      .map((k) => ({ key: k, dealer: accounts[k]?.dealer || k }))
+      .sort((a, b) => a.dealer.localeCompare(b.dealer));
+  }, [accounts, key]);
 
   // ── Fetch on mount ──
   useEffect(() => {
@@ -372,12 +392,11 @@ export function SubAccountDetailPage({
 
     (async () => {
       try {
-        const [accountData, cvDefaults, usersData] = await Promise.all([
+        const [accountData, usersData] = await Promise.all([
           fetch(`/api/accounts/${key}`).then(r => {
             if (!r.ok) throw new Error('not found');
             return r.json();
           }),
-          fetch('/api/custom-values').then(r => r.json()).catch(() => ({})),
           fetch('/api/users').then(r => r.ok ? r.json() : []).catch(() => []),
         ]);
         if (cancelled) return;
@@ -385,9 +404,6 @@ export function SubAccountDetailPage({
         const resolvedAccount = accountData as AccountData;
         populateFromAccount(resolvedAccount);
         setAllUsers(usersData as typeof allUsers);
-        if (cvDefaults?.defaults && typeof cvDefaults.defaults === 'object') {
-          setCustomValueDefaults(cvDefaults.defaults);
-        }
       } catch {
         if (cancelled) return;
         toast.error('Account not found');
@@ -417,7 +433,6 @@ export function SubAccountDetailPage({
     const storefrontName =
       nextValues.storefront_image?.name ||
       savedCustomValues.storefront_image?.name ||
-      customValueDefaults.storefront_image?.name ||
       'Storefront Image';
     const trimmedStorefront = storefrontImage.trim();
 
@@ -435,6 +450,12 @@ export function SubAccountDetailPage({
   }
 
   async function handleSave() {
+    const valueProblems = Object.values(customValueProblems(customValues));
+    if (valueProblems.length) {
+      setActiveTab('custom-values');
+      toast.error(`Fix the custom values first: ${valueProblems[0]}`);
+      return;
+    }
     setSaving(true);
     try {
       const customValuesToSave = buildCustomValuesForSave();
@@ -480,7 +501,8 @@ export function SubAccountDetailPage({
             brandDefault: brandDefaultFont || undefined,
           },
         },
-        customValues: Object.keys(customValuesToSave).length > 0 ? customValuesToSave : undefined,
+        // Always sent, so removing the last value actually clears it.
+        customValues: customValuesToSave,
         accountRepId: accountRepId || null,
         // Markup: empty string clears the override on the server.
         // Numeric string passes through as-is (parsed server-side).
@@ -1505,6 +1527,16 @@ export function SubAccountDetailPage({
             engine, CSV importer and contact detail page all surface. The global
             blueprint library is its own Studio settings tab. */}
         {activeTab === 'contact-fields' && <CustomFieldsTab />}
+
+        {activeTab === 'custom-values' && (
+          <CustomValuesTab
+            accountKey={key}
+            values={customValues}
+            savedValues={savedCustomValues}
+            onChange={setCustomValues}
+            childAccounts={childAccounts}
+          />
+        )}
 
 
         {/* ════════════ REPORTS TAB ════════════

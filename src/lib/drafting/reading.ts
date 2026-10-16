@@ -28,6 +28,12 @@ export interface CreativeReading {
   fields: ReadField[];
   /** Verbatim. Null when the creative carries no disclaimer. */
   disclaimer: { text: string; confidence: ReadingConfidence } | null;
+  /** lease | finance | cash | other — null for a non-vehicle offer, or when the creative doesn't say. */
+  offerType?: string | null;
+  /** The featured vehicle, when there is exactly one. */
+  vehicle?: { year: number | null; make: string | null; model: string | null; trim: string | null } | null;
+  /** Text the reader could see but not make out — reported, never guessed at. */
+  unreadable?: string[];
   model: string;
   readAt: string;
 }

@@ -16,7 +16,7 @@ const READING: CreativeReading = {
 
 describe('draftReadyUpdate', () => {
   const html = draftReadyUpdate({
-    templateUrl: 'https://studio.loomilm.com/templates/editor?design=draft-x&a=1',
+    draftUrl: 'https://studio.loomilm.com/messaging/blasts/b1/template?a=1',
     versionNumber: 1,
     subjects: [
       { kind: 'initial', text: '1.9% APR on the new 2026 Mazda CX-90' },
@@ -29,7 +29,7 @@ describe('draftReadyUpdate', () => {
   });
 
   it('links the template and lists what was read, in order', () => {
-    expect(html).toContain('<a href="https://studio.loomilm.com/templates/editor?design=draft-x&amp;a=1">Open the template in Loomi</a>');
+    expect(html).toContain('<a href="https://studio.loomilm.com/messaging/blasts/b1/template?a=1">Open the draft blast in Loomi</a>');
     expect(html.indexOf('Vehicle: 2026 Mazda CX-90')).toBeLessThan(html.indexOf('APR: 1.9%'));
   });
 
@@ -49,7 +49,7 @@ describe('draftReadyUpdate', () => {
 
   it('says so when the creative carried no disclaimer, and lists notes', () => {
     const none = draftReadyUpdate({
-      templateUrl: 'https://x',
+      draftUrl: 'https://x',
       versionNumber: 2,
       subjects: [],
       previews: [],

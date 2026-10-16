@@ -6,7 +6,7 @@
  * Reads (safe — they change nothing):
  *   npx tsx --env-file=.env.local scripts/drafting-monday-smoke.ts --list
  *   npx tsx --env-file=.env.local scripts/drafting-monday-smoke.ts --subitem <id>
- *   npx tsx --env-file=.env.local scripts/drafting-monday-smoke.ts --subitem <id> --download
+ *   npx tsx --env-file=.env.local scripts/drafting-monday-smoke.ts --subitem <id> --download   (the project's approved graphics)
  *
  * The one write — attach a file to the subitem's Draft Files column. Refused
  * unless the subitem is nominated in DRAFTING_MONDAY_WRITE_SUBITEMS:
@@ -18,7 +18,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { downloadMondayAsset, isMondayConfigured } from '../src/lib/monday/client';
-import { getDeliverable, listReadyDeliverables, uploadDraftFile } from '../src/lib/drafting/monday-board';
+import { getDeliverable, listApprovedDeliverables, uploadDraftFile } from '../src/lib/drafting/monday-board';
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -41,8 +41,8 @@ async function main(): Promise<void> {
   }
 
   if (has('list')) {
-    const ready = await listReadyDeliverables();
-    console.log(`${ready.length} deliverable(s) with Assets Approved = Approved:`);
+    const ready = await listApprovedDeliverables();
+    console.log(`${ready.length} deliverable(s) on projects whose Approved Design has files:`);
     for (const d of ready) {
       const state = d.hasDraftFiles ? 'has Draft Files' : 'ready to draft';
       console.log(`  ${d.id}  ${d.kind.padEnd(12)} ${d.name.padEnd(18)} ${state.padEnd(16)} ${d.projectName ?? '(no project)'}`);
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
   console.log(JSON.stringify(d, null, 2));
 
   if (has('download')) {
-    for (const f of d.designAssets) {
+    for (const f of d.project?.approvedFiles ?? []) {
       const file = await downloadMondayAsset(f.assetId);
       console.log(`downloaded ${file.name}: ${file.bytes.length} bytes, ${file.contentType ?? 'unknown type'}`);
     }

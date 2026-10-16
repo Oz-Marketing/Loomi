@@ -128,9 +128,12 @@ export function pickEmailFiles<T extends ApprovedFile>(input: {
   const mine = clients.length > 1 ? email.filter((f) => clientNamedIn(f.path, clients) === store) : email;
   if (mine.length === 0) {
     const what = clients.length > 1 ? `email graphic for ${store}` : 'email graphic';
+    // Name the word(s) that actually pick the store — "Layton", not the full
+    // dealer name, which design's file names never spell out.
+    const words = store ? [...distinguishing(store, clients)].map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') : '';
     const rule =
       clients.length > 1
-        ? `Loomi looks for "Email" and "${store}" in the file name.`
+        ? `Loomi looks for "Email" and "${words}" in the file name, on a PNG or JPG.`
         : 'Loomi looks for "Email" in the file name, on a PNG or JPG.';
     const names = input.available ?? input.files.map((f) => f.path);
     const seen = names.length ? ` It found: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}.` : '';

@@ -71,6 +71,12 @@ describe('pickEmailFiles', () => {
     expect(pickEmailFiles({ subitem: one, siblings: [], clients: YPS, files: [f('Email.png')] }).problem).toContain(
       '"Email Blast 1 - Young Powersports Ogden"',
     );
+    // A two-store request names the word that picks the store, not the full name.
+    const cdjr = ['Young Chrysler Jeep Dodge Ram of Layton', 'Young Chrysler Jeep Dodge Ram in Riverdale'];
+    const layton = { id: '7', name: 'Email Blast 1 - Young Chrysler Jeep Dodge Ram of Layton' };
+    expect(pickEmailFiles({ subitem: layton, siblings: [layton], clients: cdjr, files: [f('Digital.png')] }).problem).toContain(
+      'Loomi looks for "Email" and "Layton" in the file name',
+    );
     // No email graphic at all — and it says what it found.
     const none = pickEmailFiles({ subitem: one, siblings: [], clients: ['Young Kia'], files: [f('Digital.png')] });
     expect(none.problem).toContain('It found: Digital.png');

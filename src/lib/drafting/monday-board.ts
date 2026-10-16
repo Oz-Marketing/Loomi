@@ -23,12 +23,10 @@ import { subitemClient } from './approved-files';
  *   Proof URL            PageProof sync  read only
  *   Proof Approval Date  PageProof sync  read only
  *
- * Approved Design is a mirror of a mirror: design's Approved file column →
- * the rep's intake board ("Approved Design", per rep board) → this project.
- * monday answers a two-level mirror query with an internal error, so the files
- * are read a hop at a time: the project's mirror names the intake item, and
- * the intake item's mirror holds design's files. Checked against the live
- * boards 2026-10-15, including downloading a 12 MB zip through the chain.
+ * Approved Design mirrors design's Approved file column directly, through
+ * the project's Design Item link, so the files' asset ids come back with the
+ * project (checked live 2026-10-16, a zip of every channel's finals). Until
+ * that day it was a mirror of a mirror via the rep's intake board.
  *
  * The subitem's own Design Assets and Assets Approved columns predate this and
  * are no longer read.
@@ -73,8 +71,13 @@ export const PROJECT_COLUMNS = {
   audience: 'lookup_mm7p3p7s',
   audienceDetails: 'lookup_mm7pap3x',
   jobNumber: 'lookup_mm7parn0',
-  /** Design's final graphics, mirrored through the rep's intake board. */
-  approvedDesign: 'lookup_mm7zrfjk',
+  /**
+   * Design's final graphics: a mirror of the Approved file column on design's
+   * board, through the project's Design Item link. Rebuilt on monday by
+   * 2026-10-16 — it had been `lookup_mm7zrfjk`, a mirror of a mirror through
+   * the rep's intake board, which this read a hop at a time.
+   */
+  approvedDesign: 'approved_design',
 } as const;
 
 /** The columns drafting writes. */
@@ -296,8 +299,7 @@ export function parseDeliverable(raw: RawItem): Deliverable {
       audience: mirror(p.get(PROJECT_COLUMNS.audience)),
       audienceDetails: mirror(p.get(PROJECT_COLUMNS.audienceDetails)),
       jobNumber: mirror(p.get(PROJECT_COLUMNS.jobNumber)) || null,
-      // Filled by getDeliverable, which follows the mirror to design's files.
-      approvedFiles: [],
+      approvedFiles: approvedDesignFiles(p.get(PROJECT_COLUMNS.approvedDesign)),
       subitems: (parent.subitems ?? []).map((x) => ({ id: x.id, name: x.name })),
     };
   }
@@ -321,7 +323,7 @@ const COLUMN_VALUE_FIELDS = `
   ... on StatusValue { label }
   ... on LinkValue { url }
   ... on DateValue { date }
-  ... on MirrorValue { display_value mirrored_items { linked_item { id } mirrored_value { ... on DropdownValue { values { label } } } } }
+  ... on MirrorValue { display_value mirrored_items { linked_item { id } mirrored_value { ... on DropdownValue { values { label } } ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } } } } }
   ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } }
 `;
 
@@ -343,66 +345,9 @@ const DELIVERABLE_QUERY = `
   }
 `;
 
-/** The intake items a project's Approved Design mirror points at. */
-export function approvedDesignSources(cv: RawColumnValue | undefined): string[] {
-  return [...new Set((cv?.mirrored_items ?? []).map((m) => m.linked_item?.id).filter((id): id is string => !!id))];
-}
-
-/** Which column on each rep intake board holds design's files — from the mirror's own settings. */
-let intakeColumnsCache: { at: number; byBoard: Record<string, string[]> } | null = null;
-const INTAKE_COLUMNS_TTL_MS = 10 * 60 * 1000;
-
-export function parseIntakeColumns(settingsStr: string | null | undefined): Record<string, string[]> {
-  try {
-    const settings = JSON.parse(settingsStr ?? '{}') as { displayed_linked_columns?: Record<string, string[]> };
-    return settings.displayed_linked_columns ?? {};
-  } catch {
-    return {};
-  }
-}
-
-async function intakeColumns(): Promise<Record<string, string[]>> {
-  if (intakeColumnsCache && Date.now() - intakeColumnsCache.at < INTAKE_COLUMNS_TTL_MS) return intakeColumnsCache.byBoard;
-  const data = await mondayRequest<{ boards: { columns: { settings_str: string | null }[] }[] | null }>(
-    `query ($boardId: ID!, $columnId: String!) { boards(ids: [$boardId]) { columns(ids: [$columnId]) { settings_str } } }`,
-    { boardId: DEV_PROJECTS_BOARD_ID, columnId: PROJECT_COLUMNS.approvedDesign },
-  );
-  const byBoard = parseIntakeColumns(data.boards?.[0]?.columns?.[0]?.settings_str);
-  intakeColumnsCache = { at: Date.now(), byBoard };
-  return byBoard;
-}
-
-/** Design's approved files behind each intake item. Missing items map to nothing. */
-export async function approvedFilesByIntakeItem(intakeIds: string[]): Promise<Map<string, DeliverableFile[]>> {
-  const out = new Map<string, DeliverableFile[]>();
-  if (intakeIds.length === 0) return out;
-  const columnIds = [...new Set(Object.values(await intakeColumns()).flat())];
-  if (columnIds.length === 0) return out;
-  const query = `
-    query ($ids: [ID!]) {
-      items(ids: $ids) {
-        id
-        column_values(ids: ${JSON.stringify(columnIds)}) {
-          id
-          ... on MirrorValue {
-            mirrored_items {
-              mirrored_value { ... on FileValue { files { ... on FileAssetValue { asset { id name file_extension file_size } } } } }
-            }
-          }
-        }
-      }
-    }
-  `;
-  for (let i = 0; i < intakeIds.length; i += 100) {
-    const data = await mondayRequest<{ items: RawItem[] | null }>(query, { ids: intakeIds.slice(i, i + 100) });
-    for (const item of data.items ?? []) {
-      const found = item.column_values.flatMap((cv) =>
-        (cv.mirrored_items ?? []).flatMap((m) => files({ id: cv.id, files: m.mirrored_value?.files ?? [] })),
-      );
-      out.set(item.id, dedupeFiles(found));
-    }
-  }
-  return out;
+/** Design's approved files, read straight off a project's Approved Design mirror. */
+export function approvedDesignFiles(cv: RawColumnValue | undefined): DeliverableFile[] {
+  return dedupeFiles((cv?.mirrored_items ?? []).flatMap((m) => files({ id: cv!.id, files: m.mirrored_value?.files ?? [] })));
 }
 
 function dedupeFiles(list: DeliverableFile[]): DeliverableFile[] {
@@ -430,13 +375,7 @@ export async function getDeliverable(subitemId: string): Promise<Deliverable | n
   const raw = data.items?.[0];
   if (!raw) return null;
   assertDeliverableBoard(raw);
-  const deliverable = parseDeliverable(raw);
-  if (deliverable.project && raw.parent_item) {
-    const sources = approvedDesignSources(byId(raw.parent_item.column_values).get(PROJECT_COLUMNS.approvedDesign));
-    const byItem = await approvedFilesByIntakeItem(sources);
-    deliverable.project.approvedFiles = dedupeFiles(sources.flatMap((id) => byItem.get(id) ?? []));
-  }
-  return deliverable;
+  return parseDeliverable(raw);
 }
 
 /** Pages are 100 items; the board turns over long before this cap matters. */
@@ -447,8 +386,8 @@ const MAX_PAGES = 20;
  * The caller decides what it can draft — the email slice takes `kind: 'email'`
  * without Draft Files yet.
  *
- * Reads every project: a mirror column can't be filtered on. Three requests a
- * page at most — the projects, their intake items' files — every five minutes.
+ * Reads every project: a mirror column can't be filtered on. One request a
+ * page, every five minutes.
  */
 export async function listApprovedDeliverables(): Promise<ReadyDeliverable[]> {
   const query = `
@@ -479,23 +418,18 @@ export async function listApprovedDeliverables(): Promise<ReadyDeliverable[]> {
     const data: Page = await mondayRequest<Page>(query, { boardId: DEV_PROJECTS_BOARD_ID, cursor });
     const itemsPage = data.boards?.[0]?.items_page;
     for (const item of itemsPage?.items ?? []) {
-      const sources = approvedDesignSources(byId(item.column_values).get(PROJECT_COLUMNS.approvedDesign));
-      if (sources.length && (item.subitems ?? []).length) projects.push(item);
+      if (approvedDesignFiles(byId(item.column_values).get(PROJECT_COLUMNS.approvedDesign)).length && (item.subitems ?? []).length) {
+        projects.push(item);
+      }
     }
     cursor = itemsPage?.cursor ?? null;
     if (!cursor) break;
   }
 
-  const allSources = [...new Set(projects.flatMap((p) => approvedDesignSources(byId(p.column_values).get(PROJECT_COLUMNS.approvedDesign))))];
-  const byItem = await approvedFilesByIntakeItem(allSources);
-
   const out: ReadyDeliverable[] = [];
   for (const project of projects) {
     const cols = byId(project.column_values);
-    const approved = dedupeFiles(
-      approvedDesignSources(cols.get(PROJECT_COLUMNS.approvedDesign)).flatMap((id) => byItem.get(id) ?? []),
-    );
-    if (approved.length === 0) continue;
+    const approved = approvedDesignFiles(cols.get(PROJECT_COLUMNS.approvedDesign));
     const clients = clientLabels(cols.get(PROJECT_COLUMNS.client));
     for (const sub of project.subitems ?? []) {
       const subCols = byId(sub.column_values);

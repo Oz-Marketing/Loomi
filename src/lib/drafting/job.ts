@@ -1,7 +1,8 @@
 import { prisma } from '@/lib/prisma';
 import { getBoss } from '@/lib/queue/boss';
 import { MondayError } from '@/lib/monday/client';
-import { pickEmailFiles } from './approved-files';
+import { needsALook, pickEmailFiles } from './approved-files';
+import { storesShownIn } from './store-check';
 import { collectApprovedCreative, sameCreative, storeCreative, type DraftAsset } from './assets';
 import { getDeliverable, type Deliverable } from './monday-board';
 import { runDraftStages } from './draft';
@@ -112,7 +113,11 @@ export async function runDraftingJob(requestId: string): Promise<void> {
 
     // Every approved graphic, zips unpacked; then the email one(s) for this store.
     const collected = await collectApprovedCreative(deliverable.project.approvedFiles);
+    // When a file name doesn't say which store a graphic is for, the image does.
+    const clients = deliverable.project.clients;
+    const shown = await storesShownIn(needsALook(collected, clients), clients);
     const pick = pickEmailFiles({
+      shown,
       subitem: { id: deliverable.id, name: deliverable.name },
       siblings: deliverable.project.subitems,
       clients: deliverable.project.clients,

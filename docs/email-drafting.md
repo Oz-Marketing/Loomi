@@ -89,15 +89,14 @@ Design uploads every final graphic for a request — email, text, landing page,
 web banners — to the **Approved** file column on their own board (Design
 Projects, `7463112018`, column `files_mkm3w9fh`), often as one zip. **Only
 finals go there**, so an upload is the start; nobody sets a status. It reaches
-the project as the **Approved Design** mirror (`lookup_mm7zrfjk`), which is a
-mirror of a mirror: design's column → the rep's intake board ("Approved
-Design", per rep board) → the project.
+the project as the **Approved Design** mirror (`approved_design`), mirrored
+straight from design's item through the project's **Design Item** link — one
+hop, rebuilt on monday by 2026-10-16. (Until then it was `lookup_mm7zrfjk`, a
+mirror of a mirror through the rep's intake board.)
 
-- **Read a hop at a time.** monday answers a two-level mirror query with an
-  internal error, so Loomi reads the project's mirror for the intake item, then
-  the intake item's mirror for design's files. Which column holds them on each
-  rep board comes from the project mirror's own settings. Checked live
-  2026-10-15, including downloading a 12 MB zip through the chain.
+- **Read in one request** with the project: the mirror carries each file's
+  asset id. Checked live 2026-10-16 on the CDJR Layton/Riverdale ticket's
+  12 MB zip.
 - **Unzipped.** Zips are unpacked (folders, `__MACOSX`, dotfiles and non-images
   skipped; at most 500 files, 300 MB unpacked, 150 MB zipped). PDFs and PSDs
   are never downloaded: only an image can be an email's hero.
@@ -110,6 +109,15 @@ Design", per rep board) → the project.
   works with no abbreviation list. A word every store shares tells nothing. The
   subitem says which store it's for the same way, by its name ("Email Blast 1 -
   YPS Ogden").
+- **When the file name doesn't settle it**, the image does (`store-check.ts`,
+  2026-10-16). Design often makes each store's copy from one master and names
+  them alike — the CDJR military zip named every file "CDJR Riverdale-Layton",
+  the store printed only under the Young logo. Any email graphic whose name
+  names none of the request's stores, or several, goes to one model call that
+  reads the store branding off each image (fine print listing several stores
+  doesn't count). A graphic that names no store (a text-free photo) is shared,
+  used only when a store has none of its own. Checked live: Layton got its
+  LAYTON poster, Riverdale its RIVERDALE one.
 - **"Hero"** in the file name marks the email's main image; without one, the
   first email graphic is used. Every email graphic is read for the offer.
 - **Reported, never guessed:** no email graphic (the notice lists what design

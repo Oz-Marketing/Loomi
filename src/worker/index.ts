@@ -39,6 +39,12 @@ import {
   runTemplateSyncJob,
   type TemplateSyncJob,
 } from '@/lib/ad-generator/template-sync-job';
+import {
+  CONTACT_IMPORT_QUEUE,
+  markContactImportFailed,
+  runContactImportJob,
+  type ContactImportJob,
+} from '@/lib/contacts/import-job';
 import { DRAFTING_INTAKE_QUEUE, runDraftingIntake } from '@/lib/drafting/intake';
 import { DRAFTING_RUN_QUEUE, runDraftingJob, type DraftingJob } from '@/lib/drafting/job';
 import { DRAFTING_PROOF_QUEUE, runProofStatusSweep } from '@/lib/drafting/proof-watch';
@@ -423,6 +429,32 @@ async function main(): Promise<void> {
       await runTemplateSyncJob(job.data.runId);
     }
   });
+
+  // CSV contact imports. Event-driven: committing an import creates a
+  // ContactImportRun and enqueues one job. Off the request because a large file
+  // is minutes of upserts and nginx cuts a request at 60 seconds. Retries
+  // resume from the last saved chunk; once they run out, the run is marked
+  // failed so the screen stops showing progress for a job nobody is running.
+  await boss.createQueue(CONTACT_IMPORT_QUEUE);
+  await boss.work<ContactImportJob>(
+    CONTACT_IMPORT_QUEUE,
+    { includeMetadata: true },
+    async (jobs) => {
+      for (const job of jobs) {
+        try {
+          await runContactImportJob(job.data.runId);
+        } catch (err) {
+          if (job.retryCount >= job.retryLimit) {
+            await markContactImportFailed(
+              job.data.runId,
+              err instanceof Error ? err.message : 'Import failed',
+            ).catch((markErr) => console.error('[worker] contact import mark-failed failed', markErr));
+          }
+          throw err;
+        }
+      }
+    },
+  );
 
   // Email drafting (docs/email-drafting.md). The intake pass below starts a
   // request when a deliverable's creative is approved on monday, and enqueues

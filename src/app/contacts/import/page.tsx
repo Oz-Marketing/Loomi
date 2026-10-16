@@ -30,6 +30,7 @@ import {
   type OptOutTarget,
 } from '@/lib/contacts/normalize';
 import { consumePendingImportFile } from '@/lib/contacts/pending-import';
+import { ImportRunCard, useImportRun } from '@/components/contacts/import-activity';
 import type { CustomFieldDto } from '@/lib/contacts/custom-field-types';
 
 // ── Types ──
@@ -448,38 +449,20 @@ export default function ContactsImportPage() {
       // writes the CSV's values over a matched contact.
       form.append('preserveExisting', listTarget ? 'true' : 'false');
 
+      // The commit only queues the import — the worker does the writing, so
+      // this returns in a second however big the file is. See import-job.ts.
       const res = await fetch('/api/contacts/import?mode=commit', {
         method: 'POST',
         body: form,
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      if (!res.ok || typeof data?.runId !== 'string') {
         throw new Error(data?.error || 'Import failed');
       }
-      const summary = data.summary as ImportSummary;
-      const tagNote =
-        applyTags.length > 0
-          ? ` Tagged ${applyTags.map((t) => `"${t}"`).join(', ')}.`
-          : '';
-
-      if (listTarget) {
-        const added = summary.listMembershipsAdded ?? 0;
-        toast.success(
-          `Added ${added.toLocaleString()} contact${added === 1 ? '' : 's'} to "${listTarget.name}".${tagNote}`,
-        );
-        router.push(subHref(`/contacts/lists/${listTarget.id}`));
-      } else {
-        const listNote = selectedList
-          ? ` Added to "${selectedList.name}".`
-          : '';
-        toast.success(
-          `Imported ${summary.imported.toLocaleString()} new, updated ${summary.updated.toLocaleString()} existing.${listNote}${tagNote}`,
-        );
-        router.push(targetListId ? subHref(`/contacts/lists/${targetListId}`) : subHref('/contacts'));
-      }
+      setRunId(data.runId);
+      toast.success("Import started. You can leave this page — you'll get a notification when it's done.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed');
-    } finally {
       setCommitting(false);
     }
   }
@@ -502,6 +485,45 @@ export default function ContactsImportPage() {
     [mapping],
   );
   const mappingValid = hasEmailMapping || hasPhoneMapping;
+
+  // The import this page started, polled until it finishes. Staying on the
+  // page is optional: the Contacts screen and the bell both report it too.
+  const [runId, setRunId] = useState<string | null>(null);
+  const run = useImportRun(runId);
+  const runFinished = run?.status === 'done';
+
+  const doneHref = listTarget
+    ? subHref(`/contacts/lists/${listTarget.id}`)
+    : targetListId
+      ? subHref(`/contacts/lists/${targetListId}`)
+      : subHref('/contacts');
+
+  // If they waited, finish the way the page always did: say what happened
+  // and take them to the contacts.
+  const announcedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!run || !runFinished || announcedRef.current === run.id) return;
+    announcedRef.current = run.id;
+    const tagNote =
+      applyTags.length > 0 ? ` Tagged ${applyTags.map((t) => `"${t}"`).join(', ')}.` : '';
+    if (listTarget) {
+      const added = run.listMembershipsAdded;
+      toast.success(
+        `Added ${added.toLocaleString()} contact${added === 1 ? '' : 's'} to "${listTarget.name}".${tagNote}`,
+      );
+    } else {
+      const listNote = selectedList ? ` Added to "${selectedList.name}".` : '';
+      toast.success(
+        `Imported ${run.imported.toLocaleString()} new, updated ${run.updated.toLocaleString()} existing.${listNote}${tagNote}`,
+      );
+    }
+    router.push(doneHref);
+  }, [run, runFinished, applyTags, listTarget, selectedList, router, doneHref]);
+
+  // A failed run frees the form so they can try again.
+  useEffect(() => {
+    if (run && (run.status === 'failed' || run.stalled)) setCommitting(false);
+  }, [run]);
 
   const backHref = listTarget
     ? subHref(`/contacts/lists/${listTarget.id}`)
@@ -828,6 +850,20 @@ export default function ContactsImportPage() {
               {committing ? 'Importing…' : `Import ${dryRun ? `${dryRun.totalRows - dryRun.skipped} contacts` : ''}`}
             </PrimaryButton>
           </div>
+
+          {run && (
+            <div className="mb-4 animate-fade-in-up space-y-2">
+              <ImportRunCard run={run} />
+              {!runFinished && (
+                <Link
+                  href={doneHref}
+                  className="inline-flex items-center gap-1 text-xs text-[var(--primary)] hover:underline"
+                >
+                  {listTarget ? 'Back to the list' : 'Back to Contacts'} — the import keeps running
+                </Link>
+              )}
+            </div>
+          )}
 
           {/* Restate what step 3 set up, so the list and tags are visible
               at the moment of committing rather than a scroll away. */}

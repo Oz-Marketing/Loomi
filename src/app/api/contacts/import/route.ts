@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requirePermission } from '@/lib/permissions/require';
-import { parseCsv, importContacts, type ImportMapping } from '@/lib/contacts/import';
+import { prisma } from '@/lib/prisma';
+import {
+  parseCsv,
+  parseImportRows,
+  importContacts,
+  type ImportMapping,
+} from '@/lib/contacts/import';
+import { enqueueContactImportJob } from '@/lib/contacts/import-job';
 import {
   CONTACT_FIELDS,
   IGNORE_FIELD,
@@ -16,12 +23,13 @@ import { clientErrorMessage } from '@/lib/api-errors';
 //                   suggested header→field mapping. No DB writes.
 //   ?mode=dryRun  — parse + apply mapping + count. Returns
 //                   "would create N, update M, skip K". No writes.
-//   ?mode=commit  — parse + apply mapping + upsert. Returns the
-//                   actual create/update/skip counts.
+//   ?mode=commit  — stores the file on a ContactImportRun, queues it for
+//                   the worker, and returns { runId } at once. The page
+//                   polls /api/contacts/import/runs/:id for progress.
 //
-// The client re-uploads the CSV on each call. Stateless on purpose:
-// stashing the parsed file server-side would need Redis or a temp
-// table, and dealer CSVs are small (low single-digit MB).
+// The client re-uploads the CSV on each call; parse and dryRun stay
+// stateless. Commit used to upsert inline and return the counts, which
+// outlived nginx's 60-second cut on anything past a few thousand rows.
 //
 // `listId` and `tags` are commit-only — they file the imported contacts
 // into a list and tag them. Neither changes the create/update/skip
@@ -142,7 +150,6 @@ export async function POST(req: NextRequest) {
   const listIdRaw = form.get('listId');
   const listId = typeof listIdRaw === 'string' && listIdRaw.trim() !== '' ? listIdRaw.trim() : undefined;
   if (listId && mode === 'commit') {
-    const { prisma } = await import('@/lib/prisma');
     const list = await prisma.contactList.findUnique({
       where: { id: listId },
       select: { accountKey: true },
@@ -174,18 +181,56 @@ export async function POST(req: NextRequest) {
   const preserveExistingOnMatch =
     typeof preserveRaw === 'string' ? preserveRaw === 'true' : Boolean(listId);
 
-  const summary = await importContacts({
-    accountKey,
-    csvText,
-    mapping,
-    dryRun: mode === 'dryRun',
-    listId: mode === 'commit' ? listId : undefined,
-    applyTags: mode === 'commit' ? applyTags : undefined,
-    preserveExistingOnMatch,
-    importedBy: session!.user.id,
+  if (mode === 'dryRun') {
+    const summary = await importContacts({
+      accountKey,
+      csvText,
+      mapping,
+      dryRun: true,
+      preserveExistingOnMatch,
+      importedBy: session!.user.id,
+    });
+    return NextResponse.json({ summary });
+  }
+
+  // Commit runs on the worker. Upserting a large file row by row outlives
+  // nginx's 60-second request cut, so the file is stored on a run and the
+  // page polls it — and the person is free to leave. See import-job.ts.
+  const run = await prisma.contactImportRun.create({
+    data: {
+      accountKey,
+      startedByUserId: session!.user.id,
+      fileName: file.name || null,
+      csvText,
+      mapping: JSON.stringify(mapping),
+      listId: listId ?? null,
+      applyTags: applyTags.length > 0 ? JSON.stringify(applyTags) : null,
+      preserveExisting: preserveExistingOnMatch,
+      totalRows: parseImportRows(csvText).length,
+    },
+    select: { id: true, totalRows: true },
   });
 
-  return NextResponse.json({ summary });
+  try {
+    await enqueueContactImportJob(run.id);
+  } catch (err) {
+    await prisma.contactImportRun.update({
+      where: { id: run.id },
+      data: {
+        status: 'failed',
+        error: 'The import could not be queued.',
+        csvText: '',
+        finishedAt: new Date(),
+      },
+    });
+    console.error('[contacts/import] enqueue failed', err);
+    return NextResponse.json(
+      { error: 'The import could not be started. Please try again.' },
+      { status: 503 },
+    );
+  }
+
+  return NextResponse.json({ runId: run.id, totalRows: run.totalRows }, { status: 202 });
 }
 
 // ── Applied tags ──

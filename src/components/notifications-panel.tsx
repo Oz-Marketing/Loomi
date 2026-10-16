@@ -16,6 +16,7 @@ import {
   MegaphoneIcon,
   PhotoIcon,
   SparklesIcon,
+  UserGroupIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
@@ -139,6 +140,7 @@ const CATEGORY_ICON = {
   chart: ChartBarIcon,
   clipboard: ClipboardDocumentListIcon,
   photo: PhotoIcon,
+  users: UserGroupIcon,
   sparkles: SparklesIcon,
 } as const;
 

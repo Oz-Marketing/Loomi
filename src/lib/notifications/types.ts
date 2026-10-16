@@ -27,6 +27,8 @@ export type NotificationType =
   | 'incentive_ads_ready'
   | 'coop_guideline_changed'
   | 'template_sync_finished'
+  // Contacts (Studio surface)
+  | 'contact_import_finished'
   // Media Library (Studio surface) — rights management
   | 'asset_rights_expiring'
   | 'asset_rights_expired'
@@ -256,6 +258,19 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     defaultEnabled: true,
     // In-app only by default. You started this yourself and the bell is right
     // there; mailing everyone their own button presses is noise.
+    defaultEmailEnabled: false,
+  },
+  {
+    type: 'contact_import_finished',
+    label: 'Contact import finished',
+    description:
+      'A CSV contact import you started has finished, with how many contacts were added, updated or skipped.',
+    category: 'Contacts',
+    // Immediate: imports run in the background so you can leave the page, and
+    // this is how you find out it's done.
+    channel: 'immediate',
+    defaultEnabled: true,
+    // In-app only by default — you started it, and the bell is right there.
     defaultEmailEnabled: false,
   },
   {

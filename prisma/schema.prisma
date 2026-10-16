@@ -618,23 +618,22 @@ model EmailFolder {
 // ─────────────────────────────────────────────────────
 
 model Audience {
-  id               String   @id @default(cuid())
-  name             String
-  description      String?
-  accountKey       String?
-  account          Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  id                 String     @id @default(cuid())
+  name               String
+  description        String?
+  accountKey         String?
+  account            Account?   @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   /**
    * Visible to the accounts BENEATH `accountKey` as well as the account
    * itself. Only meaningful on a group (an account with children): a leaf
    * has nothing below it to share with.
-   *
    * This is the middle tier `accountKey` alone cannot express. Null
    * accountKey is platform-wide and privileged; a key with this flag off
    * is that one account only; a group key with it on is that group and
    * its rooftops. Shared-down segments are READ-ONLY to the rooftops that
    * receive them — see `canWriteSegment` in lib/segments/visibility.ts.
    */
-  sharedWithChildren Boolean @default(false)
+  sharedWithChildren Boolean    @default(false)
   /**
    * The segment this one was copied from by "Also create in…", when the
    * same segment is made in several accounts at once. Those copies are
@@ -642,21 +641,20 @@ model Audience {
    * next — see lib/segments/fan-out.ts), so editing the original changes
    * nothing by itself; the link is what lets the original PUSH its saved
    * name, description and filter to its copies on request.
-   *
    * SetNull on delete: deleting the original leaves the copies standing,
    * just no longer linked to anything.
    */
-  sourceAudienceId String?
-  sourceAudience   Audience?  @relation("AudienceCopies", fields: [sourceAudienceId], references: [id], onDelete: SetNull)
-  copies           Audience[] @relation("AudienceCopies")
-  createdByUserId  String?
-  filters          String // JSON: FilterDefinition
-  icon             String?
-  color            String?
-  sortOrder        Int      @default(0)
-  providerMetadata String? // JSON map for provider-specific audience refs
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  sourceAudienceId   String?
+  sourceAudience     Audience?  @relation("AudienceCopies", fields: [sourceAudienceId], references: [id], onDelete: SetNull)
+  copies             Audience[] @relation("AudienceCopies")
+  createdByUserId    String?
+  filters            String // JSON: FilterDefinition
+  icon               String?
+  color              String?
+  sortOrder          Int        @default(0)
+  providerMetadata   String? // JSON map for provider-specific audience refs
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
 
   syncs AudienceSync[]
 
@@ -1076,6 +1074,58 @@ model IngestRun {
 // is stored in an explicit join table so a contact can belong to many
 // lists and we can keep a per-membership addedAt timestamp.
 // ─────────────────────────────────────────────────────
+
+// A CSV contact import, run on the worker.
+//
+// The commit used to happen inside the upload request, one upsert per row, so
+// anything past a few thousand rows outlived nginx's 60-second upstream cut and
+// the page reported "Import failed" while the server carried on writing. The
+// route now stores the file here, enqueues a job, and returns; the page and
+// the Contacts screen poll this row for progress.
+model ContactImportRun {
+  id String @id @default(cuid())
+
+  accountKey      String
+  startedByUserId String?
+  fileName        String?
+
+  /// queued | running | done | failed
+  status String @default("queued")
+
+  /// The uploaded CSV. Cleared once the run finishes so a finished import
+  /// doesn't keep a second copy of everyone's contact details.
+  csvText          String  @db.Text
+  /// JSON ImportMapping, frozen at commit — the mapping the person reviewed.
+  mapping          String  @db.Text
+  listId           String?
+  /// JSON string[] of tags applied to every row.
+  applyTags        String? @db.Text
+  preserveExisting Boolean @default(false)
+
+  totalRows            Int     @default(0)
+  /// Rows handled so far. Written once per chunk, and where a retried job
+  /// resumes — upserts are idempotent, so redoing part of a chunk is harmless.
+  processedRows        Int     @default(0)
+  imported             Int     @default(0)
+  updated              Int     @default(0)
+  skipped              Int     @default(0)
+  optedOutEmail        Int     @default(0)
+  optedOutSms          Int     @default(0)
+  listMembershipsAdded Int     @default(0)
+  /// JSON RowIssue[], capped.
+  issues               String? @db.Text
+  /// Set only when the run itself failed, as opposed to individual rows.
+  error                String? @db.Text
+
+  startedAt  DateTime  @default(now())
+  /// Moves on every chunk, so a `running` row the worker died in can be told
+  /// apart from a slow one.
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  @@index([accountKey, startedAt])
+  @@index([status, startedAt])
+}
 
 model ContactList {
   id              String   @id @default(cuid())
@@ -4585,7 +4635,7 @@ model AdTemplateSyncRun {
   id String @id @default(cuid())
 
   /// The AdTemplateDoc whose design is being pushed out.
-  templateId String
+  templateId      String
   /// Scope the run was started in, for the audit trail. The ads themselves are
   /// re-authorized per id when the run is created, never from this.
   accountKey      String?
@@ -4619,7 +4669,7 @@ model AdTemplateSyncRun {
   /// Set only when the run itself failed, as opposed to individual ads failing.
   error   String? @db.Text
 
-  startedAt DateTime @default(now())
+  startedAt  DateTime  @default(now())
   /// Moves on every progress write, which is once per ad. This is what lets a
   /// `running` row be told apart from one the worker died in the middle of —
   /// without it, a pm2 restart mid-run leaves a row that polls as "in progress"

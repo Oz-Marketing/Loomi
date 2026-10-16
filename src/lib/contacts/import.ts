@@ -142,6 +142,54 @@ interface ImportContactsOptions {
 
 const MAX_ISSUES_RETURNED = 50;
 
+/** Parse an uploaded CSV into the rows an import walks. */
+export function parseImportRows(csvText: string): Record<string, string>[] {
+  return Papa.parse<Record<string, string>>(csvText, {
+    header: true,
+    skipEmptyLines: 'greedy',
+    transformHeader: (header) => header.trim(),
+  }).data;
+}
+
+/**
+ * Date-typed custom fields for this account. Values mapped into these
+ * keys are coerced to canonical ISO date-only (UTC), so the flow date
+ * triggers — which read the stored value with getUTC* — see a consistent
+ * calendar day no matter what date format the source CSV used.
+ * Unparseable values are left as-is.
+ */
+export async function loadDateCustomFieldKeys(accountKey: string): Promise<Set<string>> {
+  const fields = await prisma.contactCustomField.findMany({
+    where: { accountKey, type: 'date' },
+    select: { key: true },
+  });
+  return new Set(fields.map((f) => f.key));
+}
+
+/**
+ * Normalise one CSV row: map it, and coerce date custom fields. Returns
+ * the issue instead when the row can't be imported.
+ */
+function prepareRow(
+  raw: Record<string, string>,
+  mapping: ImportMapping,
+  rowNumber: number,
+  dateCustomFieldKeys: ReadonlySet<string>,
+): { row: ParsedContact; issue: null } | { row: null; issue: RowIssue | null } {
+  const result = normaliseRow(raw, mapping, rowNumber);
+  if (!result.row) return { row: null, issue: result.issue };
+
+  const parsedRow = result.row;
+  if (parsedRow.customFields && dateCustomFieldKeys.size > 0) {
+    for (const key of Object.keys(parsedRow.customFields)) {
+      if (!dateCustomFieldKeys.has(key)) continue;
+      const d = parseDateCell(parsedRow.customFields[key]);
+      if (d) parsedRow.customFields[key] = d.toISOString().slice(0, 10);
+    }
+  }
+  return { row: parsedRow, issue: null };
+}
+
 export async function importContacts({
   accountKey,
   csvText,
@@ -152,73 +200,151 @@ export async function importContacts({
   preserveExistingOnMatch = false,
   importedBy,
 }: ImportContactsOptions): Promise<ImportSummary> {
-  const tagsToApply = mergeTags(applyTags);
-  const parsed = Papa.parse<Record<string, string>>(csvText, {
-    header: true,
-    skipEmptyLines: 'greedy',
-    transformHeader: (header) => header.trim(),
-  });
-
-  const rows = parsed.data;
+  const rows = parseImportRows(csvText);
   const totalRows = rows.length;
+  const dateCustomFieldKeys = await loadDateCustomFieldKeys(accountKey);
 
-  // Date-typed custom fields for this account. Values mapped into these
-  // keys are coerced to canonical ISO date-only (UTC) below, so the flow
-  // date triggers — which read the stored value with getUTC* — see a
-  // consistent calendar day no matter what date format the source CSV
-  // used. Unparseable values are left as-is.
-  const dateCustomFieldKeys = new Set(
-    (
-      await prisma.contactCustomField.findMany({
-        where: { accountKey, type: 'date' },
-        select: { key: true },
-      })
-    ).map((f) => f.key),
-  );
+  if (!dryRun) {
+    const chunk = await commitContactRows({
+      accountKey,
+      rows,
+      firstRowIndex: 0,
+      mapping,
+      dateCustomFieldKeys,
+      listId,
+      applyTags,
+      preserveExistingOnMatch,
+      importedBy,
+    });
+    return {
+      totalRows,
+      imported: chunk.imported,
+      updated: chunk.updated,
+      skipped: chunk.skipped,
+      issues: chunk.issues.slice(0, MAX_ISSUES_RETURNED),
+      listMembershipsAdded: listId ? chunk.listMembershipsAdded : undefined,
+      optedOut: chunk.optedOut,
+    };
+  }
 
   const issues: RowIssue[] = [];
   let imported = 0;
   let updated = 0;
   let skipped = 0;
-  // Collected during commit so we can bulk-attach to a list at the end.
-  // Skipped when the caller didn't ask for list attachment.
+  const optedOut = { email: 0, sms: 0 };
+
+  // Pre-fetch existing contacts for this account so we know whether
+  // each row is a create or update without hitting the DB per row.
+  // For accounts under ~100k contacts this fits comfortably in memory.
+  const existing = await prisma.contact.findMany({
+    where: { accountKey },
+    select: { id: true, email: true, phone: true },
+  });
+
+  const emailToId = new Map<string, string>();
+  const phoneToId = new Map<string, string>();
+  for (const row of existing) {
+    if (row.email) emailToId.set(row.email, row.id);
+    if (row.phone) phoneToId.set(row.phone, row.id);
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    const prepared = prepareRow(rows[i], mapping, i + 2, dateCustomFieldKeys); // +2: header row + 1-indexed
+    if (!prepared.row) {
+      skipped += 1;
+      if (prepared.issue && issues.length < MAX_ISSUES_RETURNED) {
+        issues.push(prepared.issue);
+      }
+      continue;
+    }
+
+    const parsedRow = prepared.row;
+    if (parsedRow.dnd?.email && rowEmails(parsedRow).length > 0) optedOut.email += 1;
+    if (parsedRow.dnd?.sms && parsedRow.phone) optedOut.sms += 1;
+
+    // Count create vs update against the snapshot we pre-fetched.
+    const matchedId =
+      (parsedRow.email && emailToId.get(parsedRow.email)) ||
+      (parsedRow.phone && phoneToId.get(parsedRow.phone));
+    if (matchedId) {
+      updated += 1;
+    } else {
+      imported += 1;
+      // Tentatively register the new identifier so subsequent rows
+      // in the same dry-run don't double-count.
+      if (parsedRow.email) emailToId.set(parsedRow.email, '__pending');
+      if (parsedRow.phone) phoneToId.set(parsedRow.phone, '__pending');
+    }
+  }
+
+  return { totalRows, imported, updated, skipped, issues, optedOut };
+}
+
+// ── Commit (one chunk) ──
+
+export interface CommitChunkOptions {
+  accountKey: string;
+  /** The rows to write — the whole file, or one slice of it. */
+  rows: Record<string, string>[];
+  /** Index of `rows[0]` in the whole file, so issue row numbers stay true. */
+  firstRowIndex: number;
+  mapping: ImportMapping;
+  dateCustomFieldKeys: ReadonlySet<string>;
+  listId?: string;
+  applyTags?: string[];
+  preserveExistingOnMatch?: boolean;
+  importedBy?: string;
+}
+
+export interface CommitChunkResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  /** Every issue in the chunk — the caller caps what it keeps. */
+  issues: RowIssue[];
+  listMembershipsAdded: number;
+  optedOut: { email: number; sms: number };
+}
+
+/**
+ * Write a run of CSV rows: upsert each contact, then record the chunk's
+ * opt-outs and list memberships. Self-contained per chunk, so the worker
+ * can save progress after each one and a retried job can pick up from the
+ * last saved chunk — every step here is idempotent.
+ */
+export async function commitContactRows({
+  accountKey,
+  rows,
+  firstRowIndex,
+  mapping,
+  dateCustomFieldKeys,
+  listId,
+  applyTags,
+  preserveExistingOnMatch = false,
+  importedBy,
+}: CommitChunkOptions): Promise<CommitChunkResult> {
+  const tagsToApply = mergeTags(applyTags);
+  const issues: RowIssue[] = [];
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
   const upsertedContactIds: string[] = [];
-  // Addresses the file opts out, written to the suppression list in one
+  // Addresses the chunk opts out, written to the suppression list in one
   // set-based pass after the loop.
   const optedOut = { email: 0, sms: 0 };
   const optOutEmails: string[] = [];
   const optOutPhones: string[] = [];
 
-  // Pre-fetch existing contacts for this account so we know whether
-  // each row is a create or update without hitting the DB per row.
-  // For accounts under ~100k contacts this fits comfortably in memory.
-  const existing = dryRun
-    ? await prisma.contact.findMany({
-        where: { accountKey },
-        select: { id: true, email: true, phone: true },
-      })
-    : null;
-
-  const emailToId = new Map<string, string>();
-  const phoneToId = new Map<string, string>();
-  if (existing) {
-    for (const row of existing) {
-      if (row.email) emailToId.set(row.email, row.id);
-      if (row.phone) phoneToId.set(row.phone, row.id);
-    }
-  }
-
   for (let i = 0; i < rows.length; i++) {
-    const result = normaliseRow(rows[i], mapping, i + 2); // +2: header row + 1-indexed
-    if (!result.row) {
+    const rowNumber = firstRowIndex + i + 2; // +2: header row + 1-indexed
+    const prepared = prepareRow(rows[i], mapping, rowNumber, dateCustomFieldKeys);
+    if (!prepared.row) {
       skipped += 1;
-      if (result.issue && issues.length < MAX_ISSUES_RETURNED) {
-        issues.push(result.issue);
-      }
+      if (prepared.issue) issues.push(prepared.issue);
       continue;
     }
 
-    const parsedRow = result.row;
+    const parsedRow = prepared.row;
 
     // Collected whether or not the upsert below succeeds: the opt-out belongs
     // to the address, and a contact row that failed to save (a phone already
@@ -235,32 +361,6 @@ export async function importContacts({
       optOutPhones.push(parsedRow.phone);
     }
 
-    // Normalize date-typed custom-field values to ISO date-only (UTC).
-    if (parsedRow.customFields && dateCustomFieldKeys.size > 0) {
-      for (const key of Object.keys(parsedRow.customFields)) {
-        if (!dateCustomFieldKeys.has(key)) continue;
-        const d = parseDateCell(parsedRow.customFields[key]);
-        if (d) parsedRow.customFields[key] = d.toISOString().slice(0, 10);
-      }
-    }
-
-    if (dryRun) {
-      // Count create vs update against the snapshot we pre-fetched.
-      const matchedId =
-        (parsedRow.email && emailToId.get(parsedRow.email)) ||
-        (parsedRow.phone && phoneToId.get(parsedRow.phone));
-      if (matchedId) {
-        updated += 1;
-      } else {
-        imported += 1;
-        // Tentatively register the new identifier so subsequent rows
-        // in the same dry-run don't double-count.
-        if (parsedRow.email) emailToId.set(parsedRow.email, '__pending');
-        if (parsedRow.phone) phoneToId.set(parsedRow.phone, '__pending');
-      }
-      continue;
-    }
-
     try {
       const result = await upsertContact(accountKey, parsedRow, {
         overwriteOnMatch: !preserveExistingOnMatch,
@@ -271,31 +371,29 @@ export async function importContacts({
       if (listId) upsertedContactIds.push(result.id);
     } catch (err) {
       skipped += 1;
-      if (issues.length < MAX_ISSUES_RETURNED) {
-        issues.push({
-          rowNumber: i + 2,
-          reason: err instanceof Error ? err.message : 'Upsert failed',
-        });
-      }
+      issues.push({
+        rowNumber,
+        reason: err instanceof Error ? err.message : 'Upsert failed',
+      });
     }
   }
 
   // Reason 'manual' (a deliberate opt-out, not a bounce), source 'import' — an
   // export can't say whether the person opted out themselves, so the contact
   // toggle won't clear these. See OPT_OUT_SOURCE.import.
-  if (!dryRun && (optOutEmails.length > 0 || optOutPhones.length > 0)) {
+  if (optOutEmails.length > 0 || optOutPhones.length > 0) {
     const raw = JSON.stringify({ via: 'contact-import', ...(importedBy ? { userId: importedBy } : {}) });
     const shared = { accountKey, reason: 'manual' as const, source: OPT_OUT_SOURCE.import, raw };
     if (optOutEmails.length > 0) await recordEmailOptOuts({ ...shared, emails: optOutEmails });
     if (optOutPhones.length > 0) await recordSmsOptOuts({ ...shared, phones: optOutPhones });
   }
 
-  let listMembershipsAdded: number | undefined;
+  let listMembershipsAdded = 0;
   if (listId && upsertedContactIds.length > 0) {
     listMembershipsAdded = await addContactsToList(listId, upsertedContactIds);
   }
 
-  return { totalRows, imported, updated, skipped, issues, listMembershipsAdded, optedOut };
+  return { imported, updated, skipped, issues, listMembershipsAdded, optedOut };
 }
 
 /**

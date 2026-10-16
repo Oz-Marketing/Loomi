@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { clientNamedIn, isEmailFile, pickEmailFiles, pickHero, subitemClient } from './approved-files';
+import { clientNamedIn, isEmailFile, needsALook, pickEmailFiles, pickHero, subitemClient } from './approved-files';
 import { imagesInZip } from './assets';
 
 const f = (path: string) => ({ path });
@@ -111,5 +111,34 @@ describe('imagesInZip', () => {
     const bytes = await zip.generateAsync({ type: 'nodebuffer' });
     const images = await imagesInZip('900', bytes);
     expect(images.map((i) => [i.id, i.path, i.bytes.toString()])).toEqual([['900#Email/Young Kia.png', 'Email/Young Kia.png', 'png-bytes']]);
+  });
+});
+
+describe('when the file name does not say the store', () => {
+  const cdjr = ['Young Chrysler Jeep Dodge Ram of Layton', 'Young Chrysler Jeep Dodge Ram in Riverdale'];
+  const layton = { id: 'l', name: 'Email Blast 1 - Young Chrysler Jeep Dodge Ram of Layton' };
+  const riverdale = { id: 'r', name: 'Email Blast 1 - Young Chrysler Jeep Dodge Ram of Riverdale' };
+  // The real CDJR military zip: every file names both stores.
+  const files = [
+    f('10 OCT - CDJR Riverdale-Layton - Military Discount - Email_Email - Hero-02.png'),
+    f('10 OCT - CDJR Riverdale-Layton - Military Discount - Email_Email - Hero-10.png'),
+    f('10 OCT - CDJR Riverdale-Layton - Military Discount - Email_Email - Hero-12.png'),
+  ];
+  const shown = { [files[0].path]: cdjr[1], [files[1].path]: 'none', [files[2].path]: cdjr[0] };
+
+  it('asks for a look at exactly those files, and only on a multi-store request', () => {
+    expect(needsALook(files, cdjr)).toEqual(files);
+    expect(needsALook([f('Email - Layton.png'), ...files], cdjr)).toEqual(files);
+    expect(needsALook(files, ['Young Kia'])).toEqual([]);
+  });
+
+  it("takes each store's own graphic from what the image says", () => {
+    expect(pickEmailFiles({ subitem: layton, siblings: [layton, riverdale], clients: cdjr, files, shown }).files).toEqual([files[2]]);
+    expect(pickEmailFiles({ subitem: riverdale, siblings: [layton, riverdale], clients: cdjr, files, shown }).files).toEqual([files[0]]);
+  });
+
+  it('falls back to the shared graphics only when a store has none of its own', () => {
+    const noLayton = { ...shown, [files[2].path]: cdjr[1] };
+    expect(pickEmailFiles({ subitem: layton, siblings: [layton], clients: cdjr, files, shown: noLayton }).files).toEqual([files[1]]);
   });
 });

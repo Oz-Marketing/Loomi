@@ -109,6 +109,15 @@ mirror of a mirror through the rep's intake board.)
   works with no abbreviation list. A word every store shares tells nothing. The
   subitem says which store it's for the same way, by its name ("Email Blast 1 -
   YPS Ogden").
+- **When the file name doesn't settle it**, the image does (`store-check.ts`,
+  2026-10-16). Design often makes each store's copy from one master and names
+  them alike — the CDJR military zip named every file "CDJR Riverdale-Layton",
+  the store printed only under the Young logo. Any email graphic whose name
+  names none of the request's stores, or several, goes to one model call that
+  reads the store branding off each image (fine print listing several stores
+  doesn't count). A graphic that names no store (a text-free photo) is shared,
+  used only when a store has none of its own. Checked live: Layton got its
+  LAYTON poster, Riverdale its RIVERDALE one.
 - **"Hero"** in the file name marks the email's main image; without one, the
   first email graphic is used. Every email graphic is read for the offer.
 - **Reported, never guessed:** no email graphic (the notice lists what design
